@@ -29,7 +29,7 @@ DATAFILES= \
 
 KERNELFILES= \
 	kpi_interface.h kpi_interfacefilter.h kpi_protocol.h \
-	if_ether.h init.h
+	if_ether.h init.h radix.h
 
 PRIVATE_DATAFILES = \
 	if_atm.h if_vlan_var.h if_ppp.h firewire.h \
@@ -37,7 +37,7 @@ PRIVATE_DATAFILES = \
 	raw_cb.h etherdefs.h iso88025.h
 
 PRIVATE_KERNELFILES = ${KERNELFILES} \
-	bpfdesc.h dlil_pvt.h if_faith.h ppp_comp.h \
+	bpfdesc.h dlil_pvt.h ppp_comp.h \
 	zlib.h bpf_compat.h net_osdep.h
 
 INSTALL_MI_LIST	= ${DATAFILES}

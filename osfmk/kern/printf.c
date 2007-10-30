@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -166,6 +172,7 @@
 #ifdef  MACH_BSD
 #include <sys/msgbuf.h>
 #endif
+#include <console/serial_protos.h>
 
 #ifdef __ppc__
 #include <ppc/Firmware.h>
@@ -177,15 +184,20 @@
 #define MAXBUF (sizeof(long long int) * 8)	/* enough for binary */
 static char digs[] = "0123456789abcdef";
 
+
+#if CONFIG_NO_PRINTF_STRINGS
+#undef printf(x, ...)
+#endif
+
 static int
 printnum(
-	register unsigned long long int	u,	/* number to print */
-	register int		base,
+	unsigned long long int	u,	/* number to print */
+	int		base,
 	void			(*putc)(int, void *),
 	void                    *arg)
 {
 	char	buf[MAXBUF];	/* build number here */
-	register char *	p = &buf[MAXBUF-1];
+	char *	p = &buf[MAXBUF-1];
 	int nprinted = 0;
 
 	do {
@@ -205,7 +217,7 @@ boolean_t	_doprnt_truncates = FALSE;
 
 int
 __doprnt(
-	register const char	*fmt,
+	const char	*fmt,
 	va_list			*argp,
 						/* character output routine */
 	void			(*putc)(int, void *arg),
@@ -222,7 +234,7 @@ __doprnt(
 	int		sign_char;
 	boolean_t	altfmt, truncate;
 	int		base;
-	register char	c;
+	char	c;
 	int		capitals;
 	int		long_long;
 	int             nprinted = 0;
@@ -394,15 +406,15 @@ __doprnt(
 
 		case 's':
 		{
-		    register char *p;
-		    register char *p2;
+		    register const char *p;
+		    register const char *p2;
 
 		    if (prec == -1)
 			prec = 0x7fffffff;	/* MAXINT */
 
 		    p = va_arg(*argp, char *);
 
-		    if (p == (char *)0)
+		    if (p == NULL)
 			p = "";
 
 		    if (length > 0 && !ladjust) {
@@ -545,7 +557,7 @@ __doprnt(
 		    char	buf[MAXBUF];	/* build number here */
 		    register char *	p = &buf[MAXBUF-1];
 		    static char digits[] = "0123456789abcdef0123456789ABCDEF";
-		    char *prefix = 0;
+		    const char *prefix = NULL;
 
 		    if (truncate) u = (long long)((int)(u));
 
@@ -566,7 +578,7 @@ __doprnt(
 		    if (sign_char)
 			length--;
 		    if (prefix)
-			length -= strlen((const char *) prefix);
+			length -= strlen(prefix);
 
 		    if (padc == ' ' && !ladjust) {
 			/* blank padding goes before prefix */
@@ -646,7 +658,6 @@ boolean_t	new_printf_cpu_number = FALSE;
 
 decl_simple_lock_data(,printf_lock)
 decl_simple_lock_data(,bsd_log_spinlock)
-decl_mutex_data(,sprintf_lock)
 extern void bsd_log_init(void);
 void bsd_log_lock(void);
 void bsd_log_unlock(void);
@@ -660,17 +671,16 @@ printf_init(void)
 	simple_lock_init(&printf_lock, 0);
 	simple_lock_init(&bsd_log_spinlock, 0);
 	bsd_log_init();
-	mutex_init(&sprintf_lock, 0);
 }
 
 void
-bsd_log_lock()
+bsd_log_lock(void)
 {
 	simple_lock(&bsd_log_spinlock);
 }
 
 void
-bsd_log_unlock()
+bsd_log_unlock(void)
 {
 	simple_unlock(&bsd_log_spinlock);
 }
@@ -724,13 +734,13 @@ safe_gets(
 	}
 }
 
+extern int disableConsoleOutput;
+
 void
 conslog_putc(
 	char c)
 {
-	extern unsigned int debug_mode, disableDebugOuput, disableConsoleOutput;
-
-	if ((debug_mode && !disableDebugOuput) || !disableConsoleOutput)
+	if ((debug_mode && !disable_debug_output) || !disableConsoleOutput)
 		cnputc(c);
 
 #ifdef	MACH_BSD
@@ -738,13 +748,15 @@ conslog_putc(
 #endif
 }
 
+#if	MACH_KDB
+extern void db_putchar(char c);
+#endif
+
 void
-dbugprintf(const char *fmt, ...)
+dbugprintf(__unused const char *fmt, ...)
 {
 
 #if	MACH_KDB
-
-	extern void db_putchar(char c);
 	va_list	listp;
 
 	va_start(listp, fmt);
@@ -754,37 +766,35 @@ dbugprintf(const char *fmt, ...)
 	return;
 }
 
-void
+int
 printf(const char *fmt, ...)
 {
 	va_list	listp;
 
-	disable_preemption();
-	va_start(listp, fmt);
-	_doprnt(fmt, &listp, conslog_putc, 16);
-	va_end(listp);
-	enable_preemption();
+	if (fmt) {
+		disable_preemption();
+		va_start(listp, fmt);
+		_doprnt(fmt, &listp, conslog_putc, 16);
+		va_end(listp);
+		enable_preemption();
+	}
+	return 0;
 }
 
-extern unsigned int disableSerialOuput;
-
 void
-consdebug_putc(
-	char c)
+consdebug_putc(char c)
 {
-	extern unsigned int debug_mode, disableDebugOuput, disableConsoleOutput;
-
-	if ((debug_mode && !disableDebugOuput) || !disableConsoleOutput)
+	if ((debug_mode && !disable_debug_output) || !disableConsoleOutput)
 		cnputc(c);
 
 	debug_putc(c);
 
 	if (!console_is_serial())
-		if (!disableSerialOuput)
+		if (!disable_serial_output)
 			PE_kputc(c);
 }
 
-void
+int
 kdb_printf(const char *fmt, ...)
 {
 	va_list	listp;
@@ -792,28 +802,37 @@ kdb_printf(const char *fmt, ...)
 	va_start(listp, fmt);
 	_doprnt(fmt, &listp, consdebug_putc, 16);
 	va_end(listp);
+	return 0;
 }
-
-static char *copybyte_str;
 
 static void
-copybyte(
-        char byte)
+copybyte(int c, void *arg)
 {
-  *copybyte_str++ = byte;
-  *copybyte_str = '\0';
+	/*
+	 * arg is a pointer (outside pointer) to the pointer
+	 * (inside pointer) which points to the character.
+	 * We pass a double pointer, so that we can increment
+	 * the inside pointer.
+	 */
+	char** p = arg;	/* cast outside pointer */
+	**p = c;	/* store character */
+	(*p)++;		/* increment inside pointer */
 }
 
+/*
+ * Deprecation Warning:
+ *	sprintf() is being deprecated. Please use snprintf() instead.
+ */
 int
 sprintf(char *buf, const char *fmt, ...)
 {
         va_list listp;
+	char *copybyte_str;
 
         va_start(listp, fmt);
-	mutex_lock(&sprintf_lock);
         copybyte_str = buf;
-        _doprnt(fmt, &listp, copybyte, 16);
-	mutex_unlock(&sprintf_lock);
+        __doprnt(fmt, &listp, copybyte, &copybyte_str, 16);
         va_end(listp);
+	*copybyte_str = '\0';
         return strlen(buf);
 }

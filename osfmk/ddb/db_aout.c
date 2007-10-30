@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -127,37 +133,37 @@ aout_db_compare_symbols(
 
 int db_sorting_limit = 50000;
 
+extern boolean_t getsymtab(char *, vm_offset_t *, int *, vm_offset_t *,
+		vm_size_t *);
+
 boolean_t
 aout_db_sym_init(
 	char *	symtab,		/* pointer to start of symbol table */
-	char *	esymtab,	/* pointer to end of string table,
+	__unused char *esymtab,	/* pointer to end of string table,
 				   for checking - may be rounded up to
 				   integer boundary */
-	char *	name,
+	const char *name,
 	char *	task_addr)	/* use for this task only */
 {
 	struct nlist	*sym_start, *sym_end, *dbsym_start, *dbsym_end;
 	struct nlist	*sp;
 	char *strtab, *dbstrtab;
-	int	strlen;
+	int	db_strlen;
 	char *estrtab, *dbestrtab;
 	unsigned long	minsym = ~0;
 	unsigned long	maxsym = 0;
 	boolean_t	sorted;
 	boolean_t	sorting;
-	extern boolean_t getsymtab(char *, 
-		vm_offset_t *, int *,
-        	vm_offset_t *,  vm_size_t *);
 	int nsyms;
 
 
 	if (!getsymtab(symtab, 
 		(vm_offset_t *)&sym_start, &nsyms, 
-		(vm_offset_t *)&strtab, (vm_size_t *)&strlen)) {
+		(vm_offset_t *)&strtab, (vm_size_t *)&db_strlen)) {
 		return(FALSE);
 	}
 	sym_end = sym_start + nsyms;
-	estrtab = strtab + strlen;
+	estrtab = strtab + db_strlen;
 	
 /*
  *	We haven't actually started up VM yet, so we can just steal some pages to 
@@ -171,7 +177,7 @@ aout_db_sym_init(
 	bcopy(strtab, dbstrtab, (unsigned int)estrtab - (unsigned int)strtab);	/* Copy strings */
 
 	dbsym_end = dbsym_start + nsyms;
-	dbestrtab = dbstrtab + strlen;
+	dbestrtab = dbstrtab + db_strlen;
 
 	sorting = ((dbsym_end - dbsym_start) < db_sorting_limit);
 	
@@ -179,7 +185,7 @@ aout_db_sym_init(
 	    register long strx;
 	    strx = sp->n_un.n_strx;
 	    if (strx != 0) {
-		if (strx > strlen) {
+		if (strx > db_strlen) {
 		    sp->n_un.n_name = 0;
 		    continue;
 		}
@@ -198,7 +204,7 @@ aout_db_sym_init(
 
 	if (sorting) {
 		db_qsort((char *) dbsym_start, dbsym_end - dbsym_start,
-		         sizeof (struct nlist), aout_db_order_symbols);
+		         sizeof(struct nlist), aout_db_order_symbols);
 		sorted = TRUE;
 	} else
 		sorted = FALSE;
@@ -363,7 +369,7 @@ aout_db_qualified_print_completion(
 	struct nlist	*sp;
 	struct nlist	*sp1;
 	struct nlist	*ep;
-	struct nlist	*ep1;
+	struct nlist	*ep1 = NULL;
 	struct nlist	*fp = 0;
 	int		symlen;
 	int		nsym = 0;
@@ -398,8 +404,9 @@ aout_db_qualified_print_completion(
 		if (cur->n_other) {
 		   if (sp1 == sp)
 			sp1 = cur;
-		   if (strcmp(&cur->n_un.n_name[cur->n_other - 1],
-			      &new->n_un.n_name[new->n_other - 1]) < 0)
+		   if (strncmp(&cur->n_un.n_name[cur->n_other - 1],
+			      &new->n_un.n_name[new->n_other - 1],
+			      symlen) < 0)
 			new = cur;
 		   else
 			ep1 = cur;
@@ -676,8 +683,8 @@ aout_db_search_symbol(
 	    target.n_value = off;
 	    target.n_un.n_name = (char *) 0;
 	    target.n_other = (char) 0;
-	    db_qsort_limit_search((char *) &target, (char **) &sp, (char **) &ep,
-			          sizeof (struct nlist), aout_db_compare_symbols);
+	    db_qsort_limit_search((char *)&target, (char **)&sp, (char **)&ep,
+			          sizeof(struct nlist), aout_db_compare_symbols);
 	    first_pass = TRUE;
 	}
 
@@ -738,7 +745,7 @@ aout_db_symbol_values(
 }
 
 #define X_DB_MAX_DIFF	8	/* maximum allowable diff at the end of line */
-extern int 	db_search_maxoff;	/* maximum acceptable offset */
+extern unsigned int db_search_maxoff;	/* maximum acceptable offset */
 
 /*
  * search symbol by value
@@ -779,8 +786,8 @@ aout_db_search_by_addr(
 		target.n_value = addr;
 		target.n_un.n_name = (char *) 0;
 		target.n_other = (char) 0;
-		db_qsort_limit_search((char *) &target, (char **) &sp,
-				      (char **) &ep, sizeof (struct nlist),
+		db_qsort_limit_search((char *)&target, (char **)&sp,
+				      (char **)&ep, sizeof(struct nlist),
 				      aout_db_compare_symbols);
 		first_pass = TRUE;
 	}
@@ -926,7 +933,7 @@ aout_db_search_by_addr(
 boolean_t
 aout_db_line_at_pc(
 	db_symtab_t	*stab,
-	db_sym_t	sym,
+	__unused db_sym_t	sym,
 	char		**file,
 	int		*line,
 	db_expr_t	pc)
@@ -942,14 +949,13 @@ aout_db_line_at_pc(
 	return(found && func && *file);
 }
 
+extern struct mach_header _mh_execute_header;
 /*
  * Initialization routine for a.out files.
  */
 void
 aout_db_init(void)
 {
-	extern struct mach_header _mh_execute_header;
-
 	aout_db_sym_init((char *) &_mh_execute_header,
 		(char *)0, "mach", (char *)0);
 }

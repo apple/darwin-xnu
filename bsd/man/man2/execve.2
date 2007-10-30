@@ -42,7 +42,11 @@
 .Sh SYNOPSIS
 .Fd #include <unistd.h>
 .Ft int
-.Fn execve "const char *path" "char *const argv[]" "char *const envp[]"
+.Fo execve
+.Fa "const char *path"
+.Fa "char *const argv[]"
+.Fa "char *const envp[]"
+.Fc
 .Sh DESCRIPTION
 .Fn Execve
 transforms the calling process into a new process.
@@ -64,26 +68,26 @@ An interpreter file begins with a line of the form:
 .Bd -filled -offset indent -compact
 .Sy \&#!
 .Em interpreter
-.Bq Em arg
+.Bq Em arg ...
 .Ed
 .Pp
 When an interpreter file is
 .Fn execve Ap d ,
-the system
-.Fn execve Ap s
-runs the specified
+the system runs the specified
 .Em interpreter .
-If the optional
-.Em arg
-is specified, it becomes the first argument to the
-.Em interpreter ,
-and the name of the originally
+If any optional
+.Em args
+are specified, they become the first (second, ...) argument to the
+.Em interpreter.
+The name of the originally
 .Fn execve Ap d
-file becomes the second argument;
+file becomes the subsequent argument;
 otherwise, the name of the originally
 .Fn execve Ap d
-file becomes the first argument.  The original arguments are shifted over to
-become the subsequent arguments.  The zeroth argument, normally the name of the
+file is the first argument.
+The original arguments to the invocation of the interpreter
+are shifted over to become the final arguments.
+The zeroth argument, normally the name of the
 .Fn execve Ap d
 file, is left unchanged.
 .Pp
@@ -183,53 +187,19 @@ to the arguments themselves.
 .Sh RETURN VALUES
 As the
 .Fn execve
-function overlays the current process image 
-with a new process image the successful call
-has no process to return to.
+function overlays the current process image  with a new process image,
+the successful call has no process to return to.
 If
 .Fn execve
-does return to the calling process an error has occurred; the
-return value will be -1 and the global variable
+does return to the calling process, an error has occurred;
+the return value will be -1 and the global variable
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
 .Fn Execve
 will fail and return to the calling process if:
 .Bl -tag -width Er
-.It Bq Er ENOTDIR
-A component of the path prefix is not a directory.
-.It Bq Er ENAMETOOLONG
-A component of a pathname exceeded 
-.Dv {NAME_MAX}
-characters, or an entire path name exceeded 
-.Dv {PATH_MAX}
-characters.
-.It Bq Er ENOENT
-The new process file does not exist.
-.It Bq Er ELOOP
-Too many symbolic links were encountered in translating the pathname.
-.It Bq Er EACCES
-Search permission is denied for a component of the path prefix.
-.It Bq Er EACCES
-The new process file is not an ordinary file.
-.It Bq Er EACCES
-The new process file mode denies execute permission.
-.It Bq Er EACCES
-The new process file is on a filesystem mounted with execution
-disabled
-.Pf ( Dv MNT_NOEXEC
-in
-.Ao Pa sys/mount.h Ac ) .
-.It Bq Er ENOEXEC
-The new process file has the appropriate access
-permission, but has an invalid magic number in its header.
-.It Bq Er ETXTBSY
-The new process file is a pure procedure (shared text)
-file that is currently open for writing or reading by some process.
-.It Bq Er ENOMEM
-The new process requires more virtual memory than
-is allowed by the imposed maximum
-.Pq Xr getrlimit 2 .
+.\" ==========
 .It Bq Er E2BIG
 The number of bytes in the new process's argument list
 is larger than the system-imposed limit.
@@ -237,9 +207,27 @@ This limit is specified by the
 .Xr sysctl 3
 MIB variable
 .Dv KERN_ARGMAX .
+.\" ==========
+.It Bq Er EACCES
+Search permission is denied for a component of the path prefix.
+.\" ==========
+.It Bq Er EACCES
+The new process file is not an ordinary file.
+.\" ==========
+.It Bq Er EACCES
+The new process file mode denies execute permission.
+.\" ==========
+.It Bq Er EACCES
+The new process file is on a filesystem mounted
+with execution disabled
+.Pf ( Dv MNT_NOEXEC
+in
+.Ao Pa sys/mount.h Ac ) .
+.\" ==========
 .It Bq Er EFAULT
 The new process file is not as long as indicated by
 the size values in its header.
+.\" ==========
 .It Bq Er EFAULT
 .Fa Path ,
 .Fa argv ,
@@ -247,8 +235,40 @@ or
 .Fa envp
 point
 to an illegal address.
+.\" ==========
 .It Bq Er EIO
 An I/O error occurred while reading from the file system.
+.\" ==========
+.It Bq Er ELOOP
+Too many symbolic links were encountered in translating the pathname.
+This is taken to be indicative of a looping symbolic link.
+.\" ==========
+.It Bq Er ENAMETOOLONG
+A component of a pathname exceeded 
+.Dv {NAME_MAX}
+characters, or an entire path name exceeded 
+.Dv {PATH_MAX}
+characters.
+.\" ==========
+.It Bq Er ENOENT
+The new process file does not exist.
+.\" ==========
+.It Bq Er ENOEXEC
+The new process file has the appropriate access
+permission, but has an unrecognized format
+(e.g., an invalid magic number in its header).
+.\" ==========
+.It Bq Er ENOMEM
+The new process requires more virtual memory than
+is allowed by the imposed maximum
+.Pq Xr getrlimit 2 .
+.\" ==========
+.It Bq Er ENOTDIR
+A component of the path prefix is not a directory.
+.\" ==========
+.It Bq Er ETXTBSY
+The new process file is a pure procedure (shared text)
+file that is currently open for writing or reading by some process.
 .El
 .Sh CAVEAT
 If a program is
@@ -262,6 +282,7 @@ of a super-user as well.
 .Xr exit 2 ,
 .Xr fork 2 ,
 .Xr execl 3 ,
+.Xr sysctl 3 ,
 .Xr environ 7
 .Sh HISTORY
 The

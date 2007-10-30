@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995, 1997 Apple Computer, Inc. All Rights Reserved */
 /*-
@@ -153,7 +159,7 @@ struct extern_proc {
 #define	SSTOP	4		/* Process debugging or suspension. */
 #define	SZOMB	5		/* Awaiting collection by parent. */
 
-/* These flags are kept in p_flags. */
+/* These flags are kept in extern_proc.p_flag. */
 #define	P_ADVLOCK	0x00000001	/* Process may hold POSIX adv. lock */
 #define	P_CONTROLT	0x00000002	/* Has a controlling terminal */
 #define	P_LP64		0x00000004	/* Process is LP64 */
@@ -169,8 +175,8 @@ struct extern_proc {
 #define	P_TIMEOUT	0x00000400	/* Timing out during sleep */
 #define	P_TRACED	0x00000800	/* Debugged process being traced */
 
-#define	P_WAITED	0x00001000	/* Debugging prc has waited for child */
-#define	P_WEXIT		0x00002000	/* Working on exiting. */
+#define	P_RESV3 	0x00001000	/* (P_WAITED)Debugging prc has waited for child */
+#define	P_WEXIT		0x00002000	/* Working on exiting */
 #define	P_EXEC		0x00004000	/* Process called exec. */
 
 /* Should be moved to machine-dependent areas. */
@@ -184,18 +190,18 @@ struct extern_proc {
 #define	P_SSTEP		0x20000	/ * process needs single-step fixup ??? * /
 */
 
-#define	P_WAITING	0x00040000	/* process has a wait() in progress */
-#define	P_KDEBUG	0x00080000	/* kdebug tracing on for this process */
+#define	P_RESV5 	0x00040000	/* (P_WAITING) process has a wait() in progress */
+#define	P_CHECKOPENEVT 	0x00080000	/* check if a vnode has the OPENEVT flag set on open */
 
-#define	P_TTYSLEEP	0x00100000	/* blocked due to SIGTTOU or SIGTTIN */
+#define	P_DEPENDENCY_CAPABLE	0x00100000	/* process is ok to call vfs_markdependency() */
 #define	P_REBOOT	0x00200000	/* Process called reboot() */
 #define	P_TBE		0x00400000	/* Process is TBE */
-#define	P_SIGEXC	0x00800000	/* signal exceptions */
+#define	P_RESV7		0x00800000	/* (P_SIGEXC)signal exceptions */
 
-#define	P_BTRACE	0x01000000	/* process is being branch traced */
-#define	P_VFORK		0x02000000	/* process has vfork children */
-#define	P_NOATTACH	0x04000000
-#define	P_INVFORK	0x08000000	/* proc in vfork */
+#define	P_THCWD		0x01000000	/* process has thread cwd  */
+#define	P_RESV9		0x02000000	/* (P_VFORK)process has vfork children */
+#define	P_RESV10 	0x04000000	/* used to be P_NOATTACH */
+#define	P_RESV11	0x08000000	/* (P_INVFORK) proc in vfork */
 
 #define	P_NOSHLIB	0x10000000	/* no shared libs are in use for proc */
 					/* flag set on exec */
@@ -216,11 +222,11 @@ __BEGIN_DECLS
 
 extern proc_t kernproc;
 
-extern int proc_is_classic(struct proc *p);
-struct proc *current_proc_EXTERNAL(void);
+extern int proc_is_classic(proc_t p);
+proc_t current_proc_EXTERNAL(void);
 
 extern int	msleep(void *chan, lck_mtx_t *mtx, int pri, const char *wmesg, struct timespec * ts );
-extern void	unsleep(struct proc *);
+extern void	unsleep(proc_t);
 extern void	wakeup(void *chan);
 extern void wakeup_one(caddr_t chan);
 
@@ -262,17 +268,24 @@ extern int proc_forcequota(proc_t);
 extern int proc_is64bit(proc_t);
 /* is this process exiting? */
 extern int proc_exiting(proc_t);
-/* this routine returns error is the process is not one with super user privileges */
-int proc_suser(struct proc *p);
-/* returns the ucred assicaited with the process; temporary api */
-struct ucred * proc_ucred(struct proc *p);
+/* this routine returns error if the process is not one with super user privileges */
+int proc_suser(proc_t p);
+/* returns the cred assicaited with the process; temporary api */
+kauth_cred_t proc_ucred(proc_t p);
+#ifdef __APPLE_API_UNSTABLE
+/* returns the first thread_t in the process, or NULL XXX for NFS, DO NOT USE */
+thread_t proc_thread(proc_t);
+#endif
+// mark a process as being allowed to call vfs_markdependency()
+void bsd_set_dependency_capable(task_t task);
 
-/* LP64todo - figure out how to identify 64-bit processes if NULL procp */
-extern int IS_64BIT_PROCESS(proc_t);
-extern int proc_pendingsignals(struct proc *, sigset_t);
-extern int proc_tbe(struct proc *);
+extern int proc_pendingsignals(proc_t, sigset_t);
+extern int proc_tbe(proc_t);
 
 #ifdef KERNEL_PRIVATE
+/* LP64todo - figure out how to identify 64-bit processes if NULL procp */
+extern int IS_64BIT_PROCESS(proc_t);
+
 extern int	tsleep(void *chan, int pri, const char *wmesg, int timo);
 extern int	msleep1(void *chan, lck_mtx_t *mtx, int pri, const char *wmesg, u_int64_t timo);
 #endif

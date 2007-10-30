@@ -216,7 +216,7 @@ nd6_ns_input(
 		tsin6.sin6_family = AF_INET6;
 		tsin6.sin6_addr = taddr6;
 
-		rt = rtalloc1((struct sockaddr *)&tsin6, 0, 0);
+		rt = rtalloc1((struct sockaddr *)&tsin6, 0, 0UL);
 		if (rt && (rt->rt_flags & RTF_ANNOUNCE) != 0 &&
 		    rt->rt_gateway->sa_family == AF_LINK) {
 			/*
@@ -367,7 +367,7 @@ nd6_ns_output(
 		return;
 	}
 
-	MGETHDR(m, M_DONTWAIT, MT_DATA);
+	MGETHDR(m, M_DONTWAIT, MT_DATA);	/* XXXMAC: mac_create_mbuf_linklayer() probably */
 	if (m && max_linkhdr + maxlen >= MHLEN) {
 		MCLGET(m, M_DONTWAIT);
 		if ((m->m_flags & M_EXT) == 0) {
@@ -776,7 +776,6 @@ nd6_na_input(
 			 */
 			struct nd_defrouter *dr;
 			struct in6_addr *in6;
-			int s;
 
 			in6 = &((struct sockaddr_in6 *)rt_key(rt))->sin6_addr;
 
@@ -868,7 +867,7 @@ nd6_na_output(
 		return;
 	}
 
-	MGETHDR(m, M_DONTWAIT, MT_DATA);
+	MGETHDR(m, M_DONTWAIT, MT_DATA);	/* XXXMAC: mac_create_mbuf_linklayer() probably */
 	if (m && max_linkhdr + maxlen >= MHLEN) {
 		MCLGET(m, M_DONTWAIT);
 		if ((m->m_flags & M_EXT) == 0) {
@@ -1053,7 +1052,7 @@ nd6_dad_stoptimer(
 void
 nd6_dad_start(
 	struct ifaddr *ifa,
-	int *tick)	/* minimum delay ticks for IFF_UP event */
+	int *tick_delay)	/* minimum delay ticks for IFF_UP event */
 {
 	struct in6_ifaddr *ia = (struct in6_ifaddr *)ifa;
 	struct dadq *dp;
@@ -1121,18 +1120,18 @@ nd6_dad_start(
 	dp->dad_count = ip6_dad_count;
 	dp->dad_ns_icount = dp->dad_na_icount = 0;
 	dp->dad_ns_ocount = dp->dad_ns_tcount = 0;
-	if (tick == NULL) {
+	if (tick_delay == NULL) {
 		nd6_dad_ns_output(dp, ifa);
 		timeout((void (*)(void *))nd6_dad_timer, (void *)ifa,
 			nd_ifinfo[ifa->ifa_ifp->if_index].retrans * hz / 1000);
 	} else {
 		int ntick;
 
-		if (*tick == 0)
+		if (*tick_delay == 0)
 			ntick = random() % (MAX_RTR_SOLICITATION_DELAY * hz);
 		else
-			ntick = *tick + random() % (hz / 2);
-		*tick = ntick;
+			ntick = *tick_delay + random() % (hz / 2);
+		*tick_delay = ntick;
 		timeout((void (*)(void *))nd6_dad_timer, (void *)ifa,
 			ntick);
 	}
@@ -1170,11 +1169,8 @@ static void
 nd6_dad_timer(
 	struct ifaddr *ifa)
 {
-	int s;
 	struct in6_ifaddr *ia = (struct in6_ifaddr *)ifa;
 	struct dadq *dp;
-
-	s = splnet();		/* XXX */
 
 	/* Sanity check */
 	if (ia == NULL) {
@@ -1297,7 +1293,7 @@ nd6_dad_timer(
 	}
 
 done:
-	splx(s);
+	return;
 }
 
 void

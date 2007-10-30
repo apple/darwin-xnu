@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 1999, 2000-2001 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 /*
@@ -61,7 +67,8 @@ By Steve Reid <steve@edmweb.com>
 
 /* Hash a single 512-bit block. This is the core of the algorithm. */
 
-void SHA1Transform(unsigned long state[5], const unsigned char buffer[64])
+__private_extern__ void
+YSHA1Transform(unsigned long state[5], const unsigned char buffer[64])
 {
 unsigned long a, b, c, d, e;
 typedef union {
@@ -114,9 +121,10 @@ static unsigned char workspace[64];
 }
 
 
-/* SHA1Init - Initialize new context */
+/* YSHA1Init - Initialize new context */
 
-void SHA1Init(SHA1_CTX* context)
+__private_extern__ void
+YSHA1Init(YSHA1_CTX* context)
 {
     /* SHA1 initialization constants */
     context->state[0] = 0x67452301;
@@ -130,7 +138,8 @@ void SHA1Init(SHA1_CTX* context)
 
 /* Run your data through this. */
 
-void SHA1Update(SHA1_CTX* context, const unsigned char* data, unsigned int len)
+__private_extern__ void
+YSHA1Update(YSHA1_CTX* context, const unsigned char* data, unsigned int len)
 {
 unsigned int i, j;
 
@@ -139,9 +148,9 @@ unsigned int i, j;
     context->count[1] += (len >> 29);
     if ((j + len) > 63) {
         memcpy(&context->buffer[j], data, (i = 64-j));
-        SHA1Transform(context->state, context->buffer);
+        YSHA1Transform(context->state, context->buffer);
         for ( ; i + 63 < len; i += 64) {
-            SHA1Transform(context->state, &data[i]);
+            YSHA1Transform(context->state, &data[i]);
         }
         j = 0;
     }
@@ -152,7 +161,8 @@ unsigned int i, j;
 
 /* Add padding and return the message digest. */
 
-void SHA1Final(unsigned char digest[20], SHA1_CTX* context)
+__private_extern__ void
+YSHA1Final(unsigned char digest[20], YSHA1_CTX* context)
 {
 unsigned long i, j;
 unsigned char finalcount[8];
@@ -161,11 +171,11 @@ unsigned char finalcount[8];
         finalcount[i] = (unsigned char)((context->count[(i >= 4 ? 0 : 1)]
          >> ((3-(i & 3)) * 8) ) & 255);  /* Endian independent */
     }
-    SHA1Update(context, "\200", 1);
+    YSHA1Update(context, (unsigned char *)"\200", 1);
     while ((context->count[0] & 504) != 448) {
-        SHA1Update(context, "\0", 1);
+        YSHA1Update(context, (unsigned char *)"\0", 1);
     }
-    SHA1Update(context, finalcount, 8);  /* Should cause a SHA1Transform() */
+    YSHA1Update(context, finalcount, 8);  /* Should cause a YSHA1Transform() */
     for (i = 0; i < 20; i++) {
         digest[i] = (unsigned char)
          ((context->state[i>>2] >> ((3-(i & 3)) * 8) ) & 255);
@@ -176,8 +186,8 @@ unsigned char finalcount[8];
     memset(context->state, 0, 20);
     memset(context->count, 0, 8);
     memset(finalcount, 0, 8);
-#ifdef SHA1HANDSOFF  /* make SHA1Transform overwrite it's own static vars */
-    SHA1Transform(context->state, context->buffer);
+#ifdef SHA1HANDSOFF  /* make YSHA1Transform overwrite it's own static vars */
+    YSHA1Transform(context->state, context->buffer);
 #endif
 }
 
@@ -191,7 +201,7 @@ unsigned char finalcount[8];
 int main(int argc, char** argv)
 {
 int i, j;
-SHA1_CTX context;
+YSHA1_CTX context;
 unsigned char digest[20], buffer[16384];
 FILE* file;
 
@@ -209,12 +219,12 @@ FILE* file;
             exit(-1);
         }
     } 
-    SHA1Init(&context);
+    YSHA1Init(&context);
     while (!feof(file)) {  /* note: what if ferror(file) */
         i = fread(buffer, 1, 16384, file);
-        SHA1Update(&context, buffer, i);
+        YSHA1Update(&context, buffer, i);
     }
-    SHA1Final(digest, &context);
+    YSHA1Final(digest, &context);
     fclose(file);
     for (i = 0; i < 5; i++) {
         for (j = 0; j < 4; j++) {

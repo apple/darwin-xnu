@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <sys/errno.h>
@@ -33,6 +39,7 @@
 #include <mach/upl.h>
 #include <mach/thread_act.h>
 
+#include <kern/assert.h>
 #include <kern/host.h>
 #include <kern/thread.h>
 
@@ -47,6 +54,8 @@
 #include <vm/memory_object.h>
 #include <vm/vm_pageout.h>
 #include <vm/vm_protos.h>
+#include <vm/vm_purgeable_internal.h>
+
 
 /* BSD VM COMPONENT INTERFACES */
 int
@@ -213,10 +222,10 @@ macx_triggers(
 		return EINVAL;
 	}
 
-       if (default_pager_init_flag == 0) {
+	if (default_pager_init_flag == 0) {
                start_def_pager(NULL);
                default_pager_init_flag = 1;
-       }
+	}
 
 	if (flags & SWAP_ENCRYPT_ON) {
 		/* ENCRYPTED SWAP: tell default_pager to encrypt */
@@ -319,7 +328,8 @@ memory_object_control_uiomove(
 	void		*	uio,
 	int			start_offset,
 	int			io_requested,
-	int			mark_dirty)
+	int			mark_dirty,
+	int			take_reference)
 {
 	vm_object_t		object;
 	vm_page_t		dst_page;
@@ -328,8 +338,9 @@ memory_object_control_uiomove(
 	int			cur_run;
 	int			cur_needed;
 	int			i;
+	int			orig_offset;
+	boolean_t		make_lru = FALSE;
 	vm_page_t		page_run[MAX_RUN];
-
 
 	object = memory_object_control_to_vm_object(control);
 	if (object == VM_OBJECT_NULL) {
@@ -349,6 +360,7 @@ memory_object_control_uiomove(
 		vm_object_unlock(object);
 		return 0;
 	}
+	orig_offset = start_offset;
 	    
 	while (io_requested && retval == 0) {
 
@@ -416,11 +428,42 @@ memory_object_control_uiomove(
 		}
 		vm_object_lock(object);
 
+		/*
+		 * if we have more than 1 page to work on
+		 * in the current run, or the original request
+		 * started at offset 0 of the page, or we're
+		 * processing multiple batches, we will move
+		 * the pages to the tail of the inactive queue
+		 * to implement an LRU for read/write accesses
+		 *
+		 * the check for orig_offset == 0 is there to 
+		 * mitigate the cost of small (< page_size) requests
+		 * to the same page (this way we only move it once)
+		 */
+		if (take_reference && (cur_run > 1 || orig_offset == 0)) {
+			vm_page_lockspin_queues();
+			make_lru = TRUE;
+		}
 		for (i = 0; i < cur_run; i++) {
 		        dst_page = page_run[i];
 
+			/*
+			 * someone is explicitly referencing this page...
+			 * update clustered and speculative state
+			 * 
+			 */
+			VM_PAGE_CONSUME_CLUSTERED(dst_page);
+
+			if (make_lru == TRUE)
+				vm_page_lru(dst_page);
+
 			PAGE_WAKEUP_DONE(dst_page);
 		}
+		if (make_lru == TRUE) {
+			vm_page_unlock_queues();
+			make_lru = FALSE;
+		}
+		orig_offset = 0;
 	}
 	vm_object_unlock(object);
 
@@ -588,7 +631,7 @@ vnode_pager_get_object_pathname(
 kern_return_t
 vnode_pager_get_object_filename(
 	memory_object_t	mem_obj,
-	char		**filename)
+	const char	**filename)
 {
 	vnode_pager_t	vnode_object;
 
@@ -602,6 +645,24 @@ vnode_pager_get_object_filename(
 					filename);
 }
 
+kern_return_t
+vnode_pager_get_object_cs_blobs(
+	memory_object_t	mem_obj,
+	void		**blobs)
+{
+	vnode_pager_t	vnode_object;
+
+	if (mem_obj == MEMORY_OBJECT_NULL ||
+	    mem_obj->mo_pager_ops != &vnode_pager_ops) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	vnode_object = vnode_pager_lookup(mem_obj);
+
+	return vnode_pager_get_cs_blobs(vnode_object->vnode_handle,
+					blobs);
+}
+
 /*
  *
  */
@@ -609,21 +670,27 @@ kern_return_t
 vnode_pager_data_request(
 	memory_object_t		mem_obj,
 	memory_object_offset_t	offset,
-	vm_size_t		length,
-#if !DEBUG
-	__unused
-#endif
-vm_prot_t		protection_required)
+	__unused vm_size_t	length,
+	__unused vm_prot_t	desired_access,
+	memory_object_fault_info_t	fault_info)
 {
 	register vnode_pager_t	vnode_object;
-
-	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_data_request: %x, %x, %x, %x\n", mem_obj, offset, length, protection_required));
+	vm_size_t		size;
+#if MACH_ASSERT
+	memory_object_offset_t	original_offset = offset;
+#endif /* MACH_ASSERT */
 
 	vnode_object = vnode_pager_lookup(mem_obj);
 
-	PAGER_DEBUG(PAGER_PAGEIN, ("vnode_pager_data_request: %x, %x, %x, %x, vnode_object %x\n", mem_obj, offset, length, protection_required, vnode_object));
-		
-	return vnode_pager_cluster_read(vnode_object, offset, length);
+	size = MAX_UPL_TRANSFER * PAGE_SIZE;
+
+	if (memory_object_cluster_size(vnode_object->control_handle, &offset, &size, fault_info) != KERN_SUCCESS)
+	        size = PAGE_SIZE;
+
+	assert(original_offset >= offset &&
+	       original_offset < offset + size);
+
+	return vnode_pager_cluster_read(vnode_object, offset, size);
 }
 
 /*
@@ -650,7 +717,7 @@ vnode_pager_deallocate(
 {
 	register vnode_pager_t	vnode_object;
 
-	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_deallocate: %x\n", mem_obj));
+	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_deallocate: %p\n", mem_obj));
 
 	vnode_object = vnode_pager_lookup(mem_obj);
 
@@ -673,7 +740,7 @@ vnode_pager_terminate(
 #endif
 	memory_object_t	mem_obj)
 {
-	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_terminate: %x\n", mem_obj));
+	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_terminate: %p\n", mem_obj));
 
 	return(KERN_SUCCESS);
 }
@@ -690,7 +757,7 @@ vnode_pager_synchronize(
 {
 	register vnode_pager_t	vnode_object;
 
-	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_synchronize: %x\n", mem_obj));
+	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_synchronize: %p\n", mem_obj));
 
 	vnode_object = vnode_pager_lookup(mem_obj);
 
@@ -708,7 +775,7 @@ vnode_pager_unmap(
 {
 	register vnode_pager_t	vnode_object;
 
-	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_unmap: %x\n", mem_obj));
+	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_unmap: %p\n", mem_obj));
 
 	vnode_object = vnode_pager_lookup(mem_obj);
 
@@ -771,8 +838,6 @@ vnode_pager_cluster_write(
 	        vm_object_offset_t      vnode_size;
 	        vm_object_offset_t	base_offset;
 		vm_object_t             object;
-		vm_page_t               target_page;
-		int                     ticket;
 
 	        /*
 		 * this is the pageout path
@@ -810,20 +875,6 @@ vnode_pager_cluster_write(
 		request_flags = UPL_NOBLOCK | UPL_FOR_PAGEOUT | UPL_CLEAN_IN_PLACE |
 		                UPL_RET_ONLY_DIRTY | UPL_COPYOUT_FROM |
 		                UPL_SET_INTERNAL | UPL_SET_LITE;
-
-		vm_object_lock(object);
-
-		if ((target_page = vm_page_lookup(object, offset)) != VM_PAGE_NULL) {
-		        /*
-			 * only pick up pages whose ticket number matches
-			 * the ticket number of the page orginally targeted
-			 * for pageout
-			 */
-			ticket = target_page->page_ticket;
-
-			request_flags |= ((ticket << UPL_PAGE_TICKET_SHIFT) & UPL_PAGE_TICKET_MASK);
-		}
-		vm_object_unlock(object);
 
 		vm_object_upl_request(object, base_offset, size,
 				      &upl, NULL, NULL, request_flags);

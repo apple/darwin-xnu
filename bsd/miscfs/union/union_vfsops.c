@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -77,12 +83,13 @@
 #include <sys/queue.h>
 #include <miscfs/union/union.h>
 
-static	int union_itercallback(__unused vnode_t, void *);
+static	int union_itercallback(vnode_t, void *);
+static int union_root(mount_t, vnode_t *, vfs_context_t);
 
 /*
  * Mount union filesystem
  */
-int
+static int
 union_mount(mount_t mp, __unused vnode_t devvp, user_addr_t data, vfs_context_t context)
 {
 	proc_t p = vfs_context_proc(context);
@@ -90,9 +97,10 @@ union_mount(mount_t mp, __unused vnode_t devvp, user_addr_t data, vfs_context_t 
 	struct user_union_args args;
 	struct vnode *lowerrootvp = NULLVP;
 	struct vnode *upperrootvp = NULLVP;
-	struct union_mount *um = 0;
+	struct union_mount *um = NULL;
 	kauth_cred_t cred = NOCRED;
-	char *cp;
+	const char *cp = NULL;
+	char *vcp;
 	int len;
 	u_int size;
 	struct nameidata nd;
@@ -152,8 +160,6 @@ union_mount(mount_t mp, __unused vnode_t devvp, user_addr_t data, vfs_context_t 
 		goto bad;
 	}
 	
-//	um = (struct union_mount *) malloc(sizeof(struct union_mount),
-//				M_UFSMNT, M_WAITOK);	/* XXX */
 	MALLOC(um, struct union_mount *, sizeof(struct union_mount),
 				M_UFSMNT, M_WAITOK);
 
@@ -185,16 +191,32 @@ union_mount(mount_t mp, __unused vnode_t devvp, user_addr_t data, vfs_context_t 
 		um->um_lowervp = lowerrootvp;
 		break;
 
+#ifdef FAULTFS
+	case UNMNT_FAULTIN:
+		um->um_lowervp = upperrootvp;
+		um->um_uppervp = lowerrootvp;
+		break;
+#endif
+
 	default:
 		error = EINVAL;
 		goto bad;
 	}
 
+	if (um->um_lowervp != NULLVP)
+		um->um_lowervid = vnode_vid(um->um_lowervp);
+	if (um->um_uppervp != NULLVP)
+		um->um_uppervid = vnode_vid(um->um_uppervp);
 	/*
 	 * Unless the mount is readonly, ensure that the top layer
 	 * supports whiteout operations
 	 */
-	if ((mp->mnt_flag & MNT_RDONLY) == 0) {
+#ifdef FAULTFS
+	if ((um->um_op != UNMNT_FAULTIN) && (mp->mnt_flag & MNT_RDONLY) == 0)
+#else
+	if ((mp->mnt_flag & MNT_RDONLY) == 0)
+#endif
+	{
 		error = VNOP_WHITEOUT(um->um_uppervp, (struct componentname *) 0,
 		                      LOOKUP, context);
 		if (error)
@@ -243,15 +265,23 @@ union_mount(mount_t mp, __unused vnode_t devvp, user_addr_t data, vfs_context_t 
 	case UNMNT_REPLACE:
 		cp = "";
 		break;
+#ifdef FAULTFS
+	case UNMNT_FAULTIN:
+		cp = "/FaultingFS/";
+		break;
+#endif
 	}
 	len = strlen(cp);
 	bcopy(cp, mp->mnt_vfsstat.f_mntfromname, len);
 
-	cp = mp->mnt_vfsstat.f_mntfromname + len;
+	vcp = mp->mnt_vfsstat.f_mntfromname + len;
 	len = MNAMELEN - len;
 
-	(void) copyinstr(args.target, cp, len - 1, (size_t *)&size);
-	bzero(cp + size, len - size);
+	(void) copyinstr(args.target, vcp, len - 1, (size_t *)&size);
+	bzero(vcp + size, len - size);
+
+	/* mark the filesystem thred safe */
+	 mp->mnt_vtable->vfc_threadsafe = TRUE;
 
 #ifdef UNION_DIAGNOSTIC
 	printf("union_mount: from %s, on %s\n",
@@ -276,7 +306,7 @@ bad:
  * on the underlying filesystem(s) will have been called
  * when that filesystem was mounted.
  */
-int
+static int
 union_start(__unused struct mount *mp, __unused int flags, __unused vfs_context_t context)
 {
 
@@ -297,15 +327,14 @@ union_itercallback(__unused vnode_t vp, void *args)
 /*
  * Free reference to union layer
  */
-int
-union_unmount(mount_t mp, int mntflags, __unused vfs_context_t context)
+static int
+union_unmount(mount_t mp, int mntflags, vfs_context_t context)
 {
 	struct union_mount *um = MOUNTTOUNIONMOUNT(mp);
 	struct vnode *um_rootvp;
 	int error;
 	int freeing;
 	int flags = 0;
-	kauth_cred_t cred;
 
 #ifdef UNION_DIAGNOSTIC
 	printf("union_unmount(mp = %x)\n", mp);
@@ -314,7 +343,7 @@ union_unmount(mount_t mp, int mntflags, __unused vfs_context_t context)
 	if (mntflags & MNT_FORCE)
 		flags |= FORCECLOSE;
 
-	if ((error = union_root(mp, &um_rootvp)))
+	if ((error = union_root(mp, &um_rootvp, context)))
 		return (error);
 
 	/*
@@ -369,11 +398,11 @@ union_unmount(mount_t mp, int mntflags, __unused vfs_context_t context)
 	 * Finally, throw away the union_mount structure
 	 */
 	_FREE(mp->mnt_data, M_UFSMNT);	/* XXX */
-	mp->mnt_data = 0;
+	mp->mnt_data = NULL;
 	return (0);
 }
 
-int
+static int
 union_root(mount_t mp, vnode_t *vpp, __unused vfs_context_t context)
 {
 	struct union_mount *um = MOUNTTOUNIONMOUNT(mp);
@@ -385,6 +414,8 @@ union_root(mount_t mp, vnode_t *vpp, __unused vfs_context_t context)
 	vnode_get(um->um_uppervp);
 	if (um->um_lowervp)
 		vnode_get(um->um_lowervp);
+
+	union_lock();
 	error = union_allocvp(vpp, mp,
 			      (struct vnode *) 0,
 			      (struct vnode *) 0,
@@ -392,6 +423,7 @@ union_root(mount_t mp, vnode_t *vpp, __unused vfs_context_t context)
 			      um->um_uppervp,
 			      um->um_lowervp,
 			      1);
+	union_unlock();
 
 	if (error) {
 	        vnode_put(um->um_uppervp);
@@ -507,10 +539,9 @@ union_vfs_getattr(mount_t mp, struct vfs_attr *fsap, vfs_context_t context)
 /*
  * XXX - Assumes no data cached at union layer.
  */
-#define union_sync (int (*) (mount_t, int, ucred_t, vfs_context_t))nullop
+#define union_sync (int (*) (mount_t, int, vfs_context_t))nullop
 
 #define union_fhtovp (int (*) (mount_t, int, unsigned char *, vnode_t *, vfs_context_t))eopnotsupp
-int union_init (struct vfsconf *);
 #define union_sysctl (int (*) (int *, u_int, user_addr_t, size_t *, user_addr_t, size_t, vfs_context_t))eopnotsupp
 #define union_vget (int (*) (mount_t, ino64_t, vnode_t *, vfs_context_t))eopnotsupp
 #define union_vptofh (int (*) (vnode_t, int *, unsigned char *, vfs_context_t))eopnotsupp
@@ -527,5 +558,9 @@ struct vfsops union_vfsops = {
 	union_fhtovp,
 	union_vptofh,
 	union_init,
-	union_sysctl
+	union_sysctl,
+	NULL,
+	{NULL}
 };
+
+

@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #ifndef __HFS_MACOS_TYPES__
@@ -29,11 +35,10 @@
 #ifdef __APPLE_API_PRIVATE
 
 #include <sys/param.h>
-	#ifdef KERNEL
-	#include <libkern/libkern.h>
-	#include <sys/systm.h>
-	#endif
 
+#include <libkern/OSTypes.h>
+#include <libkern/libkern.h>
+#include <sys/systm.h>
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/proc.h>
@@ -105,31 +110,16 @@
 	#define nil NULL
 #endif
 
-
-typedef u_int8_t 		UInt8;
-typedef int8_t		 	SInt8;
-typedef u_int16_t 		UInt16;
-typedef int16_t 		SInt16;
-typedef u_int32_t 		UInt32;
-typedef int32_t 		SInt32;
-typedef u_int64_t  		UInt64;
-typedef int64_t 		SInt64;
-
 typedef char *			Ptr;
 typedef long 			Size;
 
-typedef SInt16 			OSErr;
-typedef SInt32 			OSStatus;
-typedef UInt32 			ItemCount;
-typedef void *			LogicalAddress;
-typedef UInt32 			ByteCount;
-typedef UInt8 *			BytePtr;
-typedef UInt32 			ByteOffset;
-typedef UInt32 			OptionBits;
-typedef unsigned long 		FourCharCode;
-typedef FourCharCode 		OSType;
+typedef int16_t 			OSErr;
+typedef u_int32_t 			ItemCount;
+typedef u_int32_t 			ByteCount;
+typedef u_int8_t *			BytePtr;
+typedef u_int32_t 			ByteOffset;
 
-typedef UInt16 			UniChar;
+typedef u_int16_t 			UniChar;
 typedef unsigned char 		Str255[256];
 typedef unsigned char 		Str31[32];
 typedef unsigned char *		StringPtr;
@@ -137,10 +127,10 @@ typedef const unsigned char *	ConstStr255Param;
 typedef const unsigned char *	ConstStr31Param;
 typedef const unsigned char *	ConstUTF8Param;
 
-typedef UInt8 			Byte;
+typedef u_int8_t 			Byte;
 
-typedef UInt32 			TextEncoding;
-typedef UniChar *		UniCharArrayPtr;
+typedef u_int32_t 			TextEncoding;
+typedef UniChar *			UniCharArrayPtr;
 typedef const UniChar *		ConstUniCharArrayPtr;
 
 
@@ -167,10 +157,6 @@ enum {
 };
 
 #endif  /*  !TYPE_BOOL */
-
-typedef unsigned char 				Boolean;
-
-
 
 
 EXTERN_API( void ) DebugStr(ConstStr255Param debuggerMsg);
@@ -298,7 +284,7 @@ BlockMoveData(const void * srcPtr, void * destPtr, Size byteCount);
 #define BlockMoveData(src, dest, len)	bcopy((src), (dest), (len))
 
 EXTERN_API_C( void )
-ClearMemory(void * start, UInt32 length);
+ClearMemory(void * start, u_int32_t length);
 
 #define ClearMemory(start, length)	bzero((start), (size_t)(length));
 

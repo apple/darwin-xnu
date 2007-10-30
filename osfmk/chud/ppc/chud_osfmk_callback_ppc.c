@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
- *
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- *
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- *
- * @APPLE_LICENSE_HEADER_END@
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <stdint.h>
@@ -49,8 +55,8 @@ void chudxnu_cancel_all_callbacks(void)
     chudxnu_perfmon_ast_callback_cancel();
     chudxnu_cpusig_callback_cancel();
     chudxnu_kdebug_callback_cancel();
-    chudxnu_thread_timer_callback_cancel();
 	chudxnu_syscall_callback_cancel();
+	chudxnu_dtrace_callback_cancel();
 }
 
 static chudcpu_data_t chudcpu_boot_cpu;
@@ -81,7 +87,9 @@ void chudxnu_per_proc_free(void *per_proc_chud)
 	}
 }
 
-static void chudxnu_private_cpu_timer_callback(timer_call_param_t param0, timer_call_param_t param1)
+static void
+chudxnu_private_cpu_timer_callback(__unused timer_call_param_t param0,
+				   __unused timer_call_param_t param1)
 {
     chudcpu_data_t	*chud_proc_info;
     boolean_t oldlevel;
@@ -192,7 +200,10 @@ static chudxnu_trap_callback_func_t trap_callback_fn = NULL;
                              (t==T_INSTRUMENTATION) ? 0x2000 : \
                              0x0)
 
-static kern_return_t chudxnu_private_trap_callback(int trapno, struct savearea *ssp, unsigned int dsisr, unsigned int dar)
+static kern_return_t
+chudxnu_private_trap_callback(int trapno, struct savearea *ssp,
+			      __unused unsigned int dsisr,
+			      __unused addr64_t dar)
 {
     boolean_t oldlevel = ml_set_interrupts_enabled(FALSE);
     kern_return_t retval = KERN_FAILURE;
@@ -236,7 +247,11 @@ kern_return_t chudxnu_trap_callback_cancel(void)
 #pragma mark **** ast ****
 static chudxnu_perfmon_ast_callback_func_t perfmon_ast_callback_fn = NULL;
 
-static kern_return_t chudxnu_private_chud_ast_callback(int trapno, struct savearea *ssp, unsigned int dsisr, unsigned int dar)
+static kern_return_t
+chudxnu_private_chud_ast_callback(__unused int trapno,
+				  __unused struct savearea *ssp,
+				  __unused unsigned int dsisr,
+				  __unused addr64_t dar)
 {
     boolean_t oldlevel = ml_set_interrupts_enabled(FALSE);
     ast_t *myast = ast_pending();
@@ -332,7 +347,10 @@ kern_return_t chudxnu_perfmon_ast_send(void)
 static chudxnu_interrupt_callback_func_t interrupt_callback_fn = NULL;
 //extern perfCallback perfIntHook; /* function hook into interrupt() */
 
-static kern_return_t chudxnu_private_interrupt_callback(int trapno, struct savearea *ssp, unsigned int dsisr, unsigned int dar)
+static kern_return_t
+chudxnu_private_interrupt_callback(int trapno, struct savearea *ssp,
+				   __unused unsigned int dsisr,
+				   __unused addr64_t dar)
 {
     chudxnu_interrupt_callback_func_t fn = interrupt_callback_fn;
     
@@ -370,7 +388,10 @@ kern_return_t chudxnu_interrupt_callback_cancel(void)
 static chudxnu_cpusig_callback_func_t cpusig_callback_fn = NULL;
 extern perfCallback perfCpuSigHook; /* function hook into cpu_signal_handler() */
 
-static kern_return_t chudxnu_private_cpu_signal_handler(int request, struct savearea *ssp, unsigned int arg0, unsigned int arg1)
+static kern_return_t
+chudxnu_private_cpu_signal_handler(int request, struct savearea *ssp,
+				   __unused unsigned int arg0,
+				   __unused addr64_t arg1)
 {
     chudxnu_cpusig_callback_func_t fn = cpusig_callback_fn;
     

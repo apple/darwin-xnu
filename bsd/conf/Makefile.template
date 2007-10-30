@@ -46,7 +46,7 @@ include $(MakeInc_def)
 CFLAGS+= -imacros meta_features.h -DARCH_PRIVATE -DKERNEL -DDRIVER_PRIVATE \
 	-D_KERNEL_BUILD -DKERNEL_BUILD -DMACH_KERNEL -DBSD_BUILD \
 	-DBSD_KERNEL_PRIVATE -DNCPUS=1 -Wno-four-char-constants -fpascal-strings \
-	-D__APPLE__ -DLP64KERN=1 -DLP64_DEBUG=0  -I.
+	-D__APPLE__ -DLP64KERN=1 -DLP64_DEBUG=0  -I. $(CFLAGS_INLINE_CONFIG)
 
 # XXX: ld flags for bsd.o
 export LDFLAGS_COMPONENT += -keep_private_externs
@@ -103,12 +103,11 @@ ${OBJS}: ${OBJSDEPS}
 LDOBJS = $(OBJS)
 
 $(COMPONENT).o: $(LDOBJS)
-	@echo "[ creating $(COMPONENT).o ]"
-	@echo [ updating $(COMPONENT).o ${BSD_KERNEL_CONFIG} ]
-	$(LD)  $(LDFLAGS_COMPONENT) -o $(COMPONENT).o ${LDOBJS} 
+	@echo LD $(COMPONENT)
+	$(_v)$(LD)  $(LDFLAGS_COMPONENT) -o $(COMPONENT).o ${LDOBJS} 
 
 do_depend: do_all
-	${MD} -u Makedep -f -d `ls *.d`;
+	$(_v)${MD} -u Makedep -f -d `ls *.d`;
 	
 do_all: $(COMPONENT).o
 
@@ -118,4 +117,3 @@ do_build_all: do_depend
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-

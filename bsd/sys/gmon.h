@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000, 2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*-
@@ -57,19 +63,37 @@
 
 #ifndef _SYS_GMON_H_
 #define _SYS_GMON_H_
+#include <stdint.h>
 
 /*
  * Structure prepended to gmon.out profiling data file.
  */
 struct gmonhdr {
-	u_long	lpc;		/* base pc address of sample buffer */
-	u_long	hpc;		/* max pc address of sampled buffer */
-	int	ncnt;		/* size of sample buffer (plus this header) */
-	int	version;	/* version number */
-	int	profrate;	/* profiling clock rate */
-	int	spare[3];	/* reserved */
+	uint32_t lpc;		/* base pc address of sample buffer */
+	uint32_t hpc;		/* max pc address of sampled buffer */
+	uint32_t ncnt;		/* size of sample buffer (plus this header) */
+	int32_t version;	/* version number */
+	int32_t profrate;	/* profiling clock rate */
+	int32_t spare[3];	/* reserved */
 };
 #define GMONVERSION	0x00051879
+
+struct gmonhdr_64 {
+	uint64_t lpc;		/* base pc address of sample buffer */
+	uint64_t hpc;		/* max pc address of sampled buffer */
+	uint32_t ncnt;		/* size of sample buffer (plus this header) */
+	int32_t version;	/* version number */
+	int32_t profrate;	/* profiling clock rate */
+	int32_t spare[3];	/* reserved */
+};
+
+typedef struct
+#ifndef __LP64__
+        gmonhdr
+#else
+        gmonhdr_64
+#endif
+gmonhdr_t;
 
 /*
  * histogram counters are unsigned shorts (according to the kernel).
@@ -119,21 +143,50 @@ struct gmonhdr {
 #define MAXARCS		((1 << (8 * sizeof(HISTCOUNTER))) - 2)
 
 struct tostruct {
-	u_long	selfpc;
-	long	count;
-	u_short	link;
-	u_short order;
+	uint32_t	selfpc;
+	int32_t		count;
+	uint16_t	link;
+	uint16_t	order;
 };
+
+struct tostruct_64 {
+	uint64_t	selfpc;
+	int32_t		count;
+	uint16_t	link;
+	uint16_t	order;
+};
+
+typedef struct
+#ifndef __LP64__
+        tostruct
+#else
+        tostruct_64
+#endif
+tostruct_t;
 
 /*
  * a raw arc, with pointers to the calling site and 
  * the called site and a count.
  */
 struct rawarc {
-	u_long	raw_frompc;
-	u_long	raw_selfpc;
-	long	raw_count;
+	uint32_t	raw_frompc;
+	uint32_t	raw_selfpc;
+	int32_t		raw_count;
 };
+
+struct rawarc_64 {
+	uint64_t	raw_frompc;
+	uint64_t	raw_selfpc;
+	int32_t		raw_count;
+};
+
+typedef struct
+#ifndef __LP64__
+        rawarc
+#else
+        rawarc_64
+#endif
+rawarc_t;
 
 /*
  * general rounding functions.
@@ -150,7 +203,7 @@ struct gmonparam {
 	u_long		kcountsize;
 	u_short		*froms;
 	u_long		fromssize;
-	struct tostruct	*tos;
+	tostruct_t	*tos;
 	u_long		tossize;
 	long		tolimit;
 	u_long		lowpc;
@@ -177,21 +230,38 @@ extern struct gmonparam _gmonparam;
 #define	GPROF_TOS	3	/* struct: destination/count structure */
 #define	GPROF_GMONPARAM	4	/* struct: profiling parameters (see above) */
 
+
+/*
+ * Declarations for various profiling related functions from
+ * bsd/kern/subr_prof.c
+ */
+#ifdef GPROF
+#ifdef XNU_KERNEL_PRIVATE
+
+void kmstartup(void);
+void cfreemem(caddr_t, int);  /* Currently only a stub function. */
+void mcount(u_long, u_long);
+
+#endif /* XNU_KERNEL_PRIVATE */
+#endif /* GPROF */
+
+
 /*
  * In order to support more information than in the original mon.out and
  * gmon.out files there is an alternate gmon.out file format.  The alternate
  * gmon.out file format starts with a magic number then separates the
- * information with gmon_data structs.
+ * information with gmon_data_t's.
  */
 #define GMON_MAGIC 0xbeefbabe
-struct gmon_data {
-    unsigned long type; /* constant for type of data following this struct */
-    unsigned long size; /* size in bytes of the data following this struct */
-};
+#define GMON_MAGIC_64 0xbeefbabf
+typedef struct gmon_data {
+    uint32_t type; /* constant for type of data following this struct */
+    uint32_t size; /* size in bytes of the data following this struct */
+} gmon_data_t;
 
 /*
  * The GMONTYPE_SAMPLES gmon_data.type is for the histogram counters described
- * above and has a struct gmonhdr followed by the counters.
+ * above and has a gmonhdr_t followed by the counters.
  */
 #define GMONTYPE_SAMPLES	1
 /*
@@ -202,24 +272,54 @@ struct gmon_data {
  * The GMONTYPE_ARCS_ORDERS gmon_data.type is for the raw arcs with a call
  * order field.  The order is the order is a sequence number for the order each
  * call site was executed.  Raw_order values start at 1 not zero.  Other than
- * the raw_order field this is the same information as in the struct rawarc.
+ * the raw_order field this is the same information as in the rawarc_t.
  */
 #define GMONTYPE_ARCS_ORDERS	3
 struct rawarc_order {
-    unsigned long	raw_frompc;
-    unsigned long	raw_selfpc;
-    unsigned long	raw_count;
-    unsigned long	raw_order;
+    uint32_t	raw_frompc;
+    uint32_t	raw_selfpc;
+    uint32_t	raw_count;
+    uint32_t	raw_order;
+
+}; struct rawarc_order_64 {
+    uint64_t	raw_frompc;
+    uint64_t	raw_selfpc;
+    uint32_t	raw_count;
+    uint32_t	raw_order;
 };
+
+typedef struct
+#ifndef __LP64__
+        rawarc_order
+#else
+        rawarc_order_64
+#endif
+rawarc_order_t;
+
 /*
  * The GMONTYPE_DYLD_STATE gmon_data.type is for the dynamic link editor state
  * of the program.
- * The informations starts with an unsigned long with the count of states:
+ * The informations starts with an uint32_t with the count of states:
+ *      image_count
+ * Then each state follows in the file.  The state is made up of 
+ *      vmaddr_slide (the amount dyld slid this image from it's vmaddress)
+ *      name (the file name dyld loaded this image from)
+ * The vmaddr_slide is a 32-bit value for 32-bit programs and 64-bit value for
+ * 64-bit programs.
+ */
+#define GMONTYPE_DYLD_STATE     4
+
+/*
+ * The GMONTYPE_DYLD2_STATE gmon_data.type is for the dynamic link editor state
+ * of the program.
+ * The informations starts with an uint32_t with the count of states:
  *      image_count
  * Then each state follows in the file.  The state is made up of 
  *      image_header (the address where dyld loaded this image)
- *      vmaddr_slide (the amount dyld slid this image from it's vmaddress)
  *      name (the file name dyld loaded this image from)
+ * The image_header is a 32-bit value for 32-bit programs and 64-bit value for
+ * 64-bit programs.
  */
-#define GMONTYPE_DYLD_STATE     4
+#define GMONTYPE_DYLD2_STATE     5
+
 #endif /* !_SYS_GMON_H_ */

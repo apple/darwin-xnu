@@ -1,11 +1,13 @@
 ######################################################################
 #
-#  RELEASE = [intel mach libkerncpp]
-#  PROFILE = [RELEASE profile]
-#  DEBUG = [intel mach libkerncpp debug]
+#  RELEASE	= [ intel mach libkerncpp networking config_dtrace crypto zlib ]
+#  PROFILE	= [ RELEASE profile ]
+#  DEBUG	= [ RELEASE debug ]
+#
+#  EMBEDDED	= [ intel mach libkerncpp networking crypto zlib ]
+#  DEVELOPMENT	= [ EMBEDDED config_dtrace ]
 #
 ######################################################################
 
 machine		"i386"					# <intel>
 cpu		"i386"					# <intel>
-

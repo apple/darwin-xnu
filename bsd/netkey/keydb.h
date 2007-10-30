@@ -101,6 +101,7 @@ struct secasvar {
 	/* Nat Traversal related bits */
 	u_int32_t	natt_last_activity;
 	u_int16_t	remote_ike_port;
+	u_int16_t	natt_encapsulated_src_port;	/* network byte order */
 };
 
 /* replay prevention */
@@ -148,17 +149,17 @@ extern struct secpolicy *keydb_newsecpolicy(void);
 extern void keydb_delsecpolicy(struct secpolicy *);
 /* secashead */
 extern struct secashead *keydb_newsecashead(void);
-extern void keydb_delsecashead(struct secashead *);
+// extern void keydb_delsecashead(struct secashead *);	// not used
 /* secasvar */
-extern struct secasvar *keydb_newsecasvar(void);
-extern void keydb_refsecasvar(struct secasvar *);
-extern void keydb_freesecasvar(struct secasvar *);
+// extern struct secasvar *keydb_newsecasvar(void);		// not used
+// extern void keydb_refsecasvar(struct secasvar *);	// not used
+// extern void keydb_freesecasvar(struct secasvar *);	// not used
 /* secreplay */
 extern struct secreplay *keydb_newsecreplay(size_t);
 extern void keydb_delsecreplay(struct secreplay *);
 /* secreg */
-extern struct secreg *keydb_newsecreg(void);
-extern void keydb_delsecreg(struct secreg *);
+// extern struct secreg *keydb_newsecreg(void);			// not used
+// extern void keydb_delsecreg(struct secreg *);		// not used
 
 #endif /* KERNEL_PRIVATE */
 #endif /* KERNEL */

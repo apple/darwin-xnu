@@ -198,7 +198,10 @@ call requested write access.
 The size of a file exceeded the maximum (about
 .if t 2\u\s-231\s+2\d
 .if n 2.1E9
-bytes).
+bytes on some filesystems including UFS,
+.if t 2\u\s-231\s+2\d
+.if n 1.8E19
+bytes on HFS+ and others).
 .It Er 28 ENOSPC Em "Device out of space" .
 A
 .Xr write

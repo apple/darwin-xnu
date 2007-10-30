@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1988 Stephen Deering.
@@ -57,6 +63,12 @@
  *
  *	@(#)igmp.c	8.1 (Berkeley) 7/19/93
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 /*
  * Internet Group Management Protocol (IGMP) routines.
@@ -89,6 +101,10 @@
 #include <netinet/igmp.h>
 #include <netinet/igmp_var.h>
 
+#if CONFIG_MACF_NET
+#include <security/mac_framework.h>
+#endif
+
 #ifndef __APPLE__
 static MALLOC_DEFINE(M_IGMP, "igmp", "igmp state");
 #endif
@@ -110,7 +126,7 @@ static struct router_info *Head;
 static void igmp_sendpkt(struct in_multi *, int, unsigned long);
 
 void
-igmp_init()
+igmp_init(void)
 {
 	struct ipoption *ra;
 
@@ -374,8 +390,7 @@ igmp_input(
 }
 
 int
-igmp_joingroup(inm)
-	struct in_multi *inm;
+igmp_joingroup(struct in_multi *inm)
 {
 
 	if (inm->inm_addr.s_addr == igmp_all_hosts_group
@@ -395,8 +410,7 @@ igmp_joingroup(inm)
 }
 
 void
-igmp_leavegroup(inm)
-	struct in_multi *inm;
+igmp_leavegroup(struct in_multi *inm)
 {
 	if (inm->inm_state == IGMP_IREPORTEDLAST &&
 	    inm->inm_addr.s_addr != igmp_all_hosts_group &&
@@ -406,7 +420,7 @@ igmp_leavegroup(inm)
 }
 
 void
-igmp_fasttimo()
+igmp_fasttimo(void)
 {
 	struct in_multi *inm;
 	struct in_multistep step;
@@ -435,7 +449,7 @@ igmp_fasttimo()
 }
 
 void
-igmp_slowtimo()
+igmp_slowtimo(void)
 {
 	struct router_info *rti =  Head;
 
@@ -459,21 +473,21 @@ igmp_slowtimo()
 static struct route igmprt;
 
 static void
-igmp_sendpkt(inm, type, addr)
-	struct in_multi *inm;
-	int type;
-	unsigned long addr;
+igmp_sendpkt(struct in_multi *inm, int type, unsigned long addr)
 {
         struct mbuf *m;
         struct igmp *igmp;
         struct ip *ip;
         struct ip_moptions imo;
 
-        MGETHDR(m, M_DONTWAIT, MT_HEADER);
+        MGETHDR(m, M_DONTWAIT, MT_HEADER);	/* MAC-OK */
         if (m == NULL)
                 return;
 
-	m->m_pkthdr.rcvif = loif;
+	m->m_pkthdr.rcvif = lo_ifp;
+#if CONFIG_MACF_NET
+	mac_mbuf_label_associate_linklayer(inm->inm_ifp, m);
+#endif
 	m->m_pkthdr.len = sizeof(struct ip) + IGMP_MINLEN;
 	MH_ALIGN(m, IGMP_MINLEN + sizeof(struct ip));
 	m->m_data += sizeof(struct ip);
@@ -499,18 +513,23 @@ igmp_sendpkt(inm, type, addr)
 
         imo.imo_multicast_ifp  = inm->inm_ifp;
         imo.imo_multicast_ttl  = 1;
-	imo.imo_multicast_vif  = -1;
+		imo.imo_multicast_vif  = -1;
+#if MROUTING
         /*
          * Request loopback of the report if we are acting as a multicast
          * router, so that the process-level routing demon can hear it.
          */
         imo.imo_multicast_loop = (ip_mrouter != NULL);
+#else
+        imo.imo_multicast_loop = 0;
+#endif
 
 	/*
 	 * XXX
 	 * Do we have to worry about reentrancy here?  Don't think so.
 	 */
-        ip_output(m, router_alert, &igmprt, 0, &imo);
+        ip_output(m, router_alert, &igmprt, 0, &imo, NULL);
 
         ++igmpstat.igps_snd_reports;
 }
+

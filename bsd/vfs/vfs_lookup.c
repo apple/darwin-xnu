@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -59,6 +65,12 @@
  *
  *	@(#)vfs_lookup.c	8.10 (Berkeley) 5/27/95
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -79,12 +91,25 @@
 
 #include <bsm/audit_kernel.h>
 
-#if KTRACE
-#include <sys/ktrace.h>
+#if CONFIG_MACF
+#include <security/mac_framework.h>
 #endif
+
+#if NAMEDRSRCFORK
+#include <sys/xattr.h>
+#endif
+/*
+ * The minimum volfs-style pathname is 9.
+ * Example:  "/.vol/1/2"
+ */
+#define VOLFS_MIN_PATH_LEN  9
 
 
 static	void kdebug_lookup(struct vnode *dp, struct componentname *cnp);
+
+#if CONFIG_VOLFS
+static int vfs_getrealpath(const char * path, char * realpath, size_t bufsize, vfs_context_t ctx);
+#endif
 
 /*
  * Convert a pathname into a pointer to a locked inode.
@@ -105,20 +130,33 @@ static	void kdebug_lookup(struct vnode *dp, struct componentname *cnp);
  *		call lookup to search path.
  *		if symbolic link, massage name in buffer and continue
  *	}
+ *
+ * Returns:	0			Success
+ *		ENOENT			No such file or directory
+ *		ELOOP			Too many levels of symbolic links
+ *		ENAMETOOLONG		Filename too long
+ *		copyinstr:EFAULT	Bad address
+ *		copyinstr:ENAMETOOLONG	Filename too long
+ *		lookup:EBADF		Bad file descriptor
+ *		lookup:EROFS
+ *		lookup:EACCES
+ *		lookup:EPERM
+ *		lookup:???
+ *		VNOP_READLINK:???
  */
-
 int
-namei(ndp)
-	register struct nameidata *ndp;
+namei(struct nameidata *ndp)
 {
-	register struct filedesc *fdp;	/* pointer to file descriptor state */
-	register char *cp;		/* pointer into pathname argument */
-	register struct vnode *dp;	/* the directory we are searching */
+	struct filedesc *fdp;	/* pointer to file descriptor state */
+	char *cp;		/* pointer into pathname argument */
+	struct vnode *dp;	/* the directory we are searching */
 	uio_t auio;
 	int error;
 	struct componentname *cnp = &ndp->ni_cnd;
 	vfs_context_t ctx = cnp->cn_context;
-	struct proc *p = vfs_context_proc(ctx);
+	proc_t p = vfs_context_proc(ctx);
+/* XXX ut should be from context */
+	uthread_t ut = (struct uthread *)get_bsdthread_info(current_thread());
 	char *tmppn;
 	char uio_buf[ UIO_SIZEOF(1) ];
 
@@ -137,7 +175,7 @@ namei(ndp)
 	 * name into the buffer.
 	 */
 	if ((cnp->cn_flags & HASBUF) == 0) {
-		cnp->cn_pnbuf = &ndp->ni_pathbuf;
+		cnp->cn_pnbuf = ndp->ni_pathbuf;
 		cnp->cn_pnlen = PATHBUFLEN;
 	}
 #if LP64_DEBUG
@@ -147,16 +185,19 @@ namei(ndp)
 #endif /* LP64_DEBUG */
 
 retry_copy:
-	if (UIO_SEG_IS_USER_SPACE(ndp->ni_segflg))
+	if (UIO_SEG_IS_USER_SPACE(ndp->ni_segflg)) {
 		error = copyinstr(ndp->ni_dirp, cnp->cn_pnbuf,
 			    cnp->cn_pnlen, (size_t *)&ndp->ni_pathlen);
-	else
+	} else {
 		error = copystr(CAST_DOWN(void *, ndp->ni_dirp), cnp->cn_pnbuf,
 			    cnp->cn_pnlen, (size_t *)&ndp->ni_pathlen);
-
+	}
 	if (error == ENAMETOOLONG && !(cnp->cn_flags & HASBUF)) {
-	        MALLOC_ZONE(cnp->cn_pnbuf, caddr_t,
-			    MAXPATHLEN, M_NAMEI, M_WAITOK);
+		MALLOC_ZONE(cnp->cn_pnbuf, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
+		if (cnp->cn_pnbuf == NULL) {
+			error = ENOMEM;
+			goto error_out;
+		}
 
 		cnp->cn_flags |= HASBUF;
 		cnp->cn_pnlen = MAXPATHLEN;
@@ -166,24 +207,58 @@ retry_copy:
 	if (error)
 	        goto error_out;
 
+#if CONFIG_VOLFS
+ 	/*
+	 * Check for legacy volfs style pathnames.
+	 *
+	 * For compatibility reasons we currently allow these paths,
+	 * but future versions of the OS may not support them.
+	 */
+	if (ndp->ni_pathlen >= VOLFS_MIN_PATH_LEN &&
+	    cnp->cn_pnbuf[0] == '/' &&
+	    cnp->cn_pnbuf[1] == '.' &&
+	    cnp->cn_pnbuf[2] == 'v' &&
+	    cnp->cn_pnbuf[3] == 'o' &&
+	    cnp->cn_pnbuf[4] == 'l' &&
+	    cnp->cn_pnbuf[5] == '/' ) {
+		char * realpath;
+		int realpath_err;
+		/* Attempt to resolve a legacy volfs style pathname. */
+		MALLOC_ZONE(realpath, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
+		if (realpath) {
+			if ((realpath_err= vfs_getrealpath(&cnp->cn_pnbuf[6], realpath, MAXPATHLEN, ctx))) {
+				FREE_ZONE(realpath, MAXPATHLEN, M_NAMEI);
+				if (realpath_err == ENOSPC){
+					error = ENAMETOOLONG;
+					goto error_out;
+				}
+			} else {
+				if (cnp->cn_flags & HASBUF) {
+					FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
+				}
+				cnp->cn_pnbuf = realpath;
+				cnp->cn_pnlen = MAXPATHLEN;
+				ndp->ni_pathlen = strlen(realpath) + 1;
+				cnp->cn_flags |= HASBUF | CN_VOLFSPATH;
+			}
+		}
+	}
+ #endif /* CONFIG_VOLFS */
+
 	/* If we are auditing the kernel pathname, save the user pathname */
 	if (cnp->cn_flags & AUDITVNPATH1)
-		AUDIT_ARG(upath, p, cnp->cn_pnbuf, ARG_UPATH1); 
+		AUDIT_ARG(upath, ut->uu_cdir, cnp->cn_pnbuf, ARG_UPATH1); 
 	if (cnp->cn_flags & AUDITVNPATH2)
-		AUDIT_ARG(upath, p, cnp->cn_pnbuf, ARG_UPATH2); 
+		AUDIT_ARG(upath, ut->uu_cdir, cnp->cn_pnbuf, ARG_UPATH2); 
 
 	/*
 	 * Do not allow empty pathnames
 	 */
 	if (*cnp->cn_pnbuf == '\0') {
 		error = ENOENT;
-	        goto error_out;
+		goto error_out;
 	}
 	ndp->ni_loopcnt = 0;
-#if KTRACE
-	if (KTRPOINT(p, KTR_NAMEI))
-		ktrnamei(p->p_tracep, cnp->cn_pnbuf);
-#endif
 
 	/*
 	 * determine the starting point for the translation.
@@ -206,9 +281,9 @@ retry_copy:
 	        dp = ndp->ni_dvp;
 		ndp->ni_usedvp = dp;
 	} else
-	        dp = fdp->fd_cdir;
+	        dp = vfs_context_cwd(ctx);
 
-	if (dp == NULLVP) {
+	if (dp == NULLVP || (dp->v_lflag & VL_DEAD)) {
 	        error = ENOENT;
 		goto error_out;
 	}
@@ -238,6 +313,10 @@ retry_copy:
 			error = ELOOP;
 			break;
 		}
+#if CONFIG_MACF
+		if ((error = mac_vnode_check_readlink(ctx, ndp->ni_vp)) != 0)
+			break;
+#endif /* MAC */
 		if (ndp->ni_pathlen > 1 || !(cnp->cn_flags & HASBUF))
 		        need_newpathbuf = 1;
 		else
@@ -245,6 +324,10 @@ retry_copy:
 
 		if (need_newpathbuf) {
 			MALLOC_ZONE(cp, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
+			if (cp == NULL) {
+				error = ENOMEM;
+				break;
+			}
 		} else {
 			cp = cnp->cn_pnbuf;
 		}
@@ -294,7 +377,7 @@ retry_copy:
 		 * get rid of references returned via 'lookup'
 		 */
 		vnode_put(ndp->ni_vp);
-	        vnode_put(ndp->ni_dvp);
+		vnode_put(ndp->ni_dvp);
 
 		ndp->ni_vp = NULLVP;
 		ndp->ni_dvp = NULLVP;
@@ -325,7 +408,7 @@ retry_copy:
 	        vnode_put(ndp->ni_vp);
  error_out:
 	if ( (cnp->cn_flags & HASBUF) ) {
-	        cnp->cn_flags &= ~HASBUF;
+		cnp->cn_flags &= ~HASBUF;
 		FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
 	}
 	cnp->cn_pnbuf = NULL;
@@ -372,12 +455,29 @@ retry_copy:
  *	return the answer in ni_vp, locked if LOCKLEAF set
  *	    if LOCKPARENT set, return locked parent in ni_dvp
  *	    if WANTPARENT set, return unlocked parent in ni_dvp
+ *
+ * Returns:	0			Success
+ *		ENOENT			No such file or directory
+ *		EBADF			Bad file descriptor
+ *		ENOTDIR			Not a directory
+ *		EROFS			Read-only file system [CREATE]
+ *		EISDIR			Is a directory [CREATE]
+ *		cache_lookup_path:ENOENT
+ *		vnode_authorize:EROFS
+ *		vnode_authorize:EACCES
+ *		vnode_authorize:EPERM
+ *		vnode_authorize:???
+ *		VNOP_LOOKUP:ENOENT	No such file or directory
+ *		VNOP_LOOKUP:EJUSTRETURN	Restart system call (INTERNAL)
+ *		VNOP_LOOKUP:???
+ *		VFS_ROOT:ENOTSUP
+ *		VFS_ROOT:ENOENT
+ *		VFS_ROOT:???
  */
 int
-lookup(ndp)
-	register struct nameidata *ndp;
+lookup(struct nameidata *ndp)
 {
-	register char	*cp;		/* pointer into pathname argument */
+	char	*cp;		/* pointer into pathname argument */
 	vnode_t		tdp;		/* saved dp */
 	vnode_t		dp;		/* the directory we are searching */
 	mount_t		mp;		/* mount table entry */
@@ -389,6 +489,12 @@ lookup(ndp)
 	int error = 0;
 	struct componentname *cnp = &ndp->ni_cnd;
 	vfs_context_t ctx = cnp->cn_context;
+	int mounted_on_depth = 0;
+	int dont_cache_mp = 0;
+	vnode_t	mounted_on_dp = NULLVP;
+	int current_mount_generation = 0;
+	int vbusyflags = 0;
+	int nc_generation = 0;
 
 	/*
 	 * Setup: break out flag bits into variables.
@@ -405,6 +511,8 @@ lookup(ndp)
 	dp = ndp->ni_startdir;
 	ndp->ni_startdir = NULLVP;
 
+	if ((cnp->cn_flags & CN_NBMOUNTLOOK) != 0)
+			vbusyflags = LK_NOWAIT;
 	cp = cnp->cn_nameptr;
 
 	if (*cp == '\0') {
@@ -435,7 +543,15 @@ dirloop:
 		 * cache_lookup_path returned a non-NULL ni_vp then,
 		 * we're guaranteed that the dp is a VDIR, it's 
 		 * been authorized, and vp is not ".."
+		 *
+		 * make sure we don't try to enter the name back into
+		 * the cache if this vp is purged before we get to that
+		 * check since we won't have serialized behind whatever
+		 * activity is occurring in the FS that caused the purge
 		 */
+	        if (dp != NULLVP)
+		        nc_generation = dp->v_nc_generation - 1;
+
 	        goto returned_from_lookup_path;
 	}
 
@@ -500,10 +616,21 @@ unionlookup:
 	        error = ENOTDIR;
 	        goto lookup_error;
 	}
-	if ( !(dp_authorized || (cnp->cn_flags & DONOTAUTH)) ) {
-	        if ( (error = vnode_authorize(dp, NULL, KAUTH_VNODE_SEARCH, ctx)) )
-		        goto lookup_error;
+	if ( (cnp->cn_flags & DONOTAUTH) != DONOTAUTH ) {
+		if (!dp_authorized) {
+			error = vnode_authorize(dp, NULL, KAUTH_VNODE_SEARCH, ctx);
+			if (error)
+				goto lookup_error;
+		}
+#if CONFIG_MACF
+		error = mac_vnode_check_lookup(ctx, dp, cnp);
+		if (error)
+			goto lookup_error;
+#endif /* CONFIG_MACF */
 	}
+
+        nc_generation = dp->v_nc_generation;
+
 	if ( (error = VNOP_LOOKUP(dp, &ndp->ni_vp, cnp, ctx)) ) {
 lookup_error:
 		if ((error == ENOENT) &&
@@ -594,7 +721,6 @@ returned_from_lookup_path:
 				        vnode_update_identity(dp, ndp->ni_dvp, cnp->cn_nameptr, cnp->cn_namelen, cnp->cn_hash, update_flags);
 			}
 		}
-
 		if ( (cnp->cn_flags & MAKEENTRY) && (dp->v_flag & VNCACHEABLE) && LIST_FIRST(&dp->v_nclinks) == NULL) {
 		        /*
 			 * missing from name cache, but should
@@ -604,12 +730,20 @@ returned_from_lookup_path:
 			 * vnode didn't...
 			 * check to make sure that ni_dvp is valid
 			 * cache_lookup_path may return a NULL
+			 * do a quick check to see if the generation of the
+			 * directory matches our snapshot... this will get
+			 * rechecked behind the name cache lock, but if it
+			 * already fails to match, no need to go any further
 			 */
-		        if (ndp->ni_dvp != NULL)
-			        cache_enter(ndp->ni_dvp, dp, cnp);
+		        if (ndp->ni_dvp != NULLVP && (nc_generation == ndp->ni_dvp->v_nc_generation))
+			        cache_enter_with_gen(ndp->ni_dvp, dp, cnp, nc_generation);
 		}
 	}
 
+	mounted_on_dp = dp;
+	mounted_on_depth = 0;
+	dont_cache_mp = 0;
+	current_mount_generation = mount_generation;
 	/*
 	 * Check to see if the vnode has been mounted on...
 	 * if so find the root of the mounted file system.
@@ -621,15 +755,37 @@ check_mounted_on:
 	        vnode_lock(dp);
 
 		if ((dp->v_type == VDIR) && (mp = dp->v_mountedhere)) {
+			struct uthread *uth = (struct uthread *)get_bsdthread_info(current_thread());
 
 			mp->mnt_crossref++;
 			vnode_unlock(dp);
 
-			if (vfs_busy(mp, 0)) {
+				
+			if (vfs_busy(mp, vbusyflags)) {
 				mount_dropcrossref(mp, dp, 0);
+				if (vbusyflags == LK_NOWAIT) {
+					error = ENOENT;
+					goto bad2;	
+				}
 				goto check_mounted_on;
 			}
+
+			/*
+			 * XXX - if this is the last component of the
+			 * pathname, and it's either not a lookup operation
+			 * or the NOTRIGGER flag is set for the operation,
+			 * set a uthread flag to let VFS_ROOT() for autofs
+			 * know it shouldn't trigger a mount.
+			 */
+			if ((cnp->cn_flags & ISLASTCN) &&
+			    (cnp->cn_nameiop != LOOKUP ||
+			     (cnp->cn_flags & NOTRIGGER))) {
+				uth->uu_notrigger = 1;
+				dont_cache_mp = 1;
+			}
 			error = VFS_ROOT(mp, &tdp, ctx);
+			/* XXX - clear the uthread flag */
+			uth->uu_notrigger = 0;
 			/*
 			 * mount_dropcrossref does a vnode_put
 			 * on dp if the 3rd arg is non-zero
@@ -642,10 +798,32 @@ check_mounted_on:
 				goto bad2;
 			}
 			ndp->ni_vp = dp = tdp;
+			mounted_on_depth++;
 			
 			goto check_mounted_on;
 		} 
 		vnode_unlock(dp);
+	}
+
+#if CONFIG_MACF
+	if (vfs_flags(vnode_mount(dp)) & MNT_MULTILABEL) {
+		error = vnode_label(vnode_mount(dp), NULL, dp, NULL,
+		    VNODE_LABEL_NEEDREF, ctx);
+		if (error)
+		        goto bad2;
+	}
+#endif
+
+	if (mounted_on_depth && !dont_cache_mp) {
+	        mp = mounted_on_dp->v_mountedhere;
+
+		if (mp) {
+		        mount_lock(mp);
+			mp->mnt_realrootvp_vid = dp->v_id;
+			mp->mnt_realrootvp = dp;
+			mp->mnt_generation = current_mount_generation;
+			mount_unlock(mp);
+		}
 	}
 
 	/*
@@ -712,14 +890,80 @@ nextname:
 		}
 		ndp->ni_startdir = ndp->ni_dvp;
 	}
-	if (!wantparent && ndp->ni_dvp)
+	if (!wantparent && ndp->ni_dvp) {
 		vnode_put(ndp->ni_dvp);
+		ndp->ni_dvp = NULLVP;
+	}
 
 	if (cnp->cn_flags & AUDITVNPATH1)
 		AUDIT_ARG(vnpath, dp, ARG_VNODE1);
 	else if (cnp->cn_flags & AUDITVNPATH2)
 		AUDIT_ARG(vnpath, dp, ARG_VNODE2);
 
+#if NAMEDRSRCFORK
+	/*
+	 * Caller wants the resource fork.
+	 */
+	if ((cnp->cn_flags & CN_WANTSRSRCFORK) && (dp != NULLVP)) {
+		vnode_t svp = NULLVP;
+		enum nsoperation nsop;
+
+		if (dp->v_type != VREG) {
+			error = ENOENT;
+			goto bad2;
+		}
+		switch (cnp->cn_nameiop) {
+		case DELETE:
+			nsop = NS_DELETE;
+			break;
+		case CREATE:
+			nsop = NS_CREATE;
+			break;
+		case LOOKUP:
+			/* Make sure our lookup of "/..namedfork/rsrc" is allowed. */
+			if (cnp->cn_flags & CN_ALLOWRSRCFORK) {
+				nsop = NS_OPEN;
+			} else {
+				error = EPERM;
+				goto bad2;
+			}
+			break;
+		default:
+			error = EPERM;
+			goto bad2;
+		}
+		/* Ask the file system for the resource fork. */
+		error = vnode_getnamedstream(dp, &svp, XATTR_RESOURCEFORK_NAME, nsop, 0, ctx);
+
+		/* During a create, it OK for stream vnode to be missing. */
+		if (error == ENOATTR || error == ENOENT) {
+			error = (nsop == NS_CREATE) ? 0 : ENOENT;
+		}		
+		if (error) {
+			goto bad2;
+		}
+		/* The "parent" of the stream is the file. */
+		if (wantparent) {
+			if (ndp->ni_dvp) {
+				if (ndp->ni_cnd.cn_flags & FSNODELOCKHELD) {
+					ndp->ni_cnd.cn_flags &= ~FSNODELOCKHELD;
+					unlock_fsnode(ndp->ni_dvp, NULL);
+				}	
+				vnode_put(ndp->ni_dvp);
+			}
+			ndp->ni_dvp = dp;
+		} else {
+			vnode_put(dp);
+		}
+		ndp->ni_vp = dp = svp;  /* on create this may be null */
+
+		/* Restore the truncated pathname buffer (for audits). */
+		if (ndp->ni_pathlen == 1 && ndp->ni_next[0] == '\0') {
+			ndp->ni_next[0] = '/';
+		}
+		cnp->cn_flags  &= ~MAKEENTRY;
+	}
+#endif
 	if (kdebug_enable)
 	        kdebug_lookup(dp, cnp);
 	return (0);
@@ -798,11 +1042,9 @@ bad:
  *    Used by lookup to re-aquire things.
  */
 int
-relookup(dvp, vpp, cnp)
-	struct vnode *dvp, **vpp;
-	struct componentname *cnp;
+relookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp)
 {
-	struct vnode *dp = 0;		/* the directory we are searching */
+	struct vnode *dp = NULL;		/* the directory we are searching */
 	int wantparent;			/* 1 => wantparent or lockparent flag */
 	int rdonly;			/* lookup read-only flag bit */
 	int error = 0;
@@ -927,76 +1169,158 @@ nameidone(struct nameidata *ndp)
 
 #define NUMPARMS 23
 
+/*
+ * Log (part of) a pathname using the KERNEL_DEBUG_CONSTANT mechanism, as used
+ * by fs_usage.  The path up to and including the current component name are
+ * logged.  Up to NUMPARMS*4 bytes of pathname will be logged.  If the path
+ * to be logged is longer than that, then the last NUMPARMS*4 bytes are logged.
+ * That is, the truncation removes the leading portion of the path.
+ *
+ * The logging is done via multiple KERNEL_DEBUG_CONSTANT calls.  The first one
+ * is marked with DBG_FUNC_START.  The last one is marked with DBG_FUNC_END
+ * (in addition to DBG_FUNC_START if it is also the first).  There may be
+ * intermediate ones with neither DBG_FUNC_START nor DBG_FUNC_END.
+ *
+ * The first KERNEL_DEBUG_CONSTANT passes the vnode pointer and 12 bytes of
+ * pathname.  The remaining KERNEL_DEBUG_CONSTANT calls add 16 bytes of pathname
+ * each.  The minimum number of KERNEL_DEBUG_CONSTANT calls required to pass
+ * the path are used.  Any excess padding in the final KERNEL_DEBUG_CONSTANT
+ * (because not all of the 12 or 16 bytes are needed for the remainder of the
+ * path) is set to zero bytes, or '>' if there is more path beyond the
+ * current component name (usually because an intermediate component was not
+ * found).
+ *
+ * NOTE: If the path length is greater than NUMPARMS*4, or is not of the form
+ * 12+N*16, there will be no padding.
+ *
+ * TODO: If there is more path beyond the current component name, should we
+ * force some padding?  For example, a lookup for /foo_bar_baz/spam that
+ * fails because /foo_bar_baz is not found will only log "/foo_bar_baz", with
+ * no '>' padding.  But /foo_bar/spam would log "/foo_bar>>>>".
+ */
 static void
-kdebug_lookup(dp, cnp)
-	struct vnode *dp;
-	struct componentname *cnp;
+kdebug_lookup(struct vnode *dp, struct componentname *cnp)
 {
-	register unsigned int i, n, code;
-	register int dbg_namelen;
-	register int save_dbg_namelen;
-	register char *dbg_nameptr;
+	unsigned int i;
+	int code;
+	int dbg_namelen;
+	char *dbg_nameptr;
 	long dbg_parms[NUMPARMS];
-	char dbg_buf[4];
-	static char *dbg_filler = ">>>>";
 
 	/* Collect the pathname for tracing */
 	dbg_namelen = (cnp->cn_nameptr - cnp->cn_pnbuf) + cnp->cn_namelen;
 	dbg_nameptr = cnp->cn_nameptr + cnp->cn_namelen;
 
-	if (dbg_namelen > sizeof(dbg_parms))
-	    dbg_namelen = sizeof(dbg_parms);
+	if (dbg_namelen > (int)sizeof(dbg_parms))
+		dbg_namelen = sizeof(dbg_parms);
 	dbg_nameptr -= dbg_namelen;
-	save_dbg_namelen = dbg_namelen;
-
-	i = 0;
-
-	while (dbg_namelen > 0) {
-	    if (dbg_namelen >= 4) {
-	        dbg_parms[i++] = *(long *)dbg_nameptr;
-		dbg_nameptr += sizeof(long);
-		dbg_namelen -= sizeof(long);
-	    } else {
-	        for (n = 0; n < dbg_namelen; n++)
-		    dbg_buf[n] = *dbg_nameptr++;
-		while (n <= 3) {
-		    if (*dbg_nameptr)
-		        dbg_buf[n++] = '>';
-		    else
-		        dbg_buf[n++] = 0;
-		}
-		dbg_parms[i++] = *(long *)&dbg_buf[0];
-
-		break;
-	    }
+	
+	/* Copy the (possibly truncated) path itself */
+	memcpy(dbg_parms, dbg_nameptr, dbg_namelen);
+	
+	/* Pad with '\0' or '>' */
+	if (dbg_namelen < (int)sizeof(dbg_parms)) {
+		memset((char *)dbg_parms + dbg_namelen,
+		       *(cnp->cn_nameptr + cnp->cn_namelen) ? '>' : 0,
+		       sizeof(dbg_parms) - dbg_namelen);
 	}
-	while (i < NUMPARMS) {
-	    if (*dbg_nameptr)
-	        dbg_parms[i++] = *(long *)dbg_filler;
-	    else
-	        dbg_parms[i++] = 0;
-	}
-	dbg_namelen = save_dbg_namelen - 12;
-
+	
 	/*
 	 * In the event that we collect multiple, consecutive pathname
-	 * entries, we must mark the start of the path's string and the end
+	 * entries, we must mark the start of the path's string and the end.
 	 */
 	code = (FSDBG_CODE(DBG_FSRW,36)) | DBG_FUNC_START;
 
-	if (dbg_namelen <= 0)
-	        code |= DBG_FUNC_END;
+	if (dbg_namelen <= 12)
+		code |= DBG_FUNC_END;
 
 	KERNEL_DEBUG_CONSTANT(code, (unsigned int)dp, dbg_parms[0], dbg_parms[1], dbg_parms[2], 0);
 
 	code &= ~DBG_FUNC_START;
 
-	for (i = 3; dbg_namelen > 0; i += 4) {
+	for (i=3, dbg_namelen -= 12; dbg_namelen > 0; i+=4, dbg_namelen -= 16) {
+		if (dbg_namelen <= 16)
+			code |= DBG_FUNC_END;
 
-	        dbg_namelen -= (4 * sizeof(long));
-	        if (dbg_namelen <= 0)
-		        code |= DBG_FUNC_END;
-
-	        KERNEL_DEBUG_CONSTANT(code, dbg_parms[i], dbg_parms[i+1], dbg_parms[i+2], dbg_parms[i+3], 0);
+		KERNEL_DEBUG_CONSTANT(code, dbg_parms[i], dbg_parms[i+1], dbg_parms[i+2], dbg_parms[i+3], 0);
 	}
 }
+
+/*
+ * Obtain the real path from a legacy volfs style path.
+ *
+ * Valid formats of input path:
+ *
+ *	"555/@"
+ *	"555/2"
+ *	"555/123456"
+ *	"555/123456/foobar"
+ *
+ * Where:
+ *	555 represents the volfs file system id
+ *	'@' and '2' are aliases to the root of a file system
+ *	123456 represents a file id
+ *	"foobar" represents a file name
+ */
+#if CONFIG_VOLFS
+static int
+vfs_getrealpath(const char * path, char * realpath, size_t bufsize, vfs_context_t ctx)
+{
+	vnode_t vp;
+	struct mount *mp = NULL;
+	char  *str;
+	char ch;
+	unsigned long  id;
+	ino64_t ino;
+	int error;
+	int length;
+
+	/* Get file system id and move str to next component. */
+	id = strtoul(path, &str, 10);
+	if (id == 0 || str[0] != '/') {
+		return (EINVAL);
+	}
+	while (*str == '/') {
+		str++;
+	}
+	ch = *str;
+
+	mp = mount_lookupby_volfsid(id, 1);
+	if (mp == NULL) {
+		return (EINVAL);  /* unexpected failure */
+	}
+	/* Check for an alias to a file system root. */
+	if (ch == '@' && str[1] == '\0') {
+		ino = 2;
+		str++;
+	} else {
+		/* Get file id and move str to next component. */
+	    ino = strtouq(str, &str, 10);
+	}
+
+	/* Get the target vnode. */
+	if (ino == 2) {
+		error = VFS_ROOT(mp, &vp, ctx);
+	} else {
+		error = VFS_VGET(mp, ino, &vp, ctx);
+	}
+	vfs_unbusy(mp);
+	if (error) {
+		goto out;
+	}
+	realpath[0] = '\0';
+
+	/* Get the absolute path to this vnode. */
+	error = build_path(vp, realpath, bufsize, &length, 0, ctx);
+	vnode_put(vp);
+
+	if (error == 0 && *str != '\0') {
+		int attempt = strlcat(realpath, str, MAXPATHLEN);
+		if (attempt > MAXPATHLEN){
+			error = ENAMETOOLONG;
+		}
+	}
+out:
+	return (error);
+}
+#endif

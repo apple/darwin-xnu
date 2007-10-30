@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1988, 1991, 1993
@@ -76,11 +82,11 @@
 
 #include <machine/spl.h>
 
-extern void m_copydata(struct mbuf *, int, int, caddr_t);
-extern void m_copyback(struct mbuf *, int, int, caddr_t);
-
 extern struct rtstat rtstat;
 extern int rttrash;
+extern u_long route_generation;
+extern int use_routegenid;
+extern int check_routeselfref;
 
 MALLOC_DEFINE(M_RTABLE, "routetbl", "routing tables");
 
@@ -158,7 +164,7 @@ rts_attach(struct socket *so, int proto, __unused struct proc *p)
 	rp = sotorawcb(so);
 	if (error) {
 		FREE(rp, M_PCB);
-		so->so_pcb = 0;
+		so->so_pcb = NULL;
 		so->so_flags |= SOF_PCBCLEARING;
 		return error;
 	}
@@ -189,20 +195,16 @@ rts_attach(struct socket *so, int proto, __unused struct proc *p)
 static int
 rts_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 {
-	int s, error;
-	s = splnet();
+	int error;
 	error = raw_usrreqs.pru_bind(so, nam, p); /* xxx just EINVAL */
-	splx(s);
 	return error;
 }
 
 static int
 rts_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 {
-	int s, error;
-	s = splnet();
+	int error;
 	error = raw_usrreqs.pru_connect(so, nam, p); /* XXX just EINVAL */
-	splx(s);
 	return error;
 }
 
@@ -213,9 +215,8 @@ static int
 rts_detach(struct socket *so)
 {
 	struct rawcb *rp = sotorawcb(so);
-	int s, error;
+	int error;
 
-	s = splnet();
 	if (rp != 0) {
 		switch(rp->rcb_proto.sp_protocol) {
 		case AF_INET:
@@ -234,17 +235,14 @@ rts_detach(struct socket *so)
 		route_cb.any_count--;
 	}
 	error = raw_usrreqs.pru_detach(so);
-	splx(s);
 	return error;
 }
 
 static int
 rts_disconnect(struct socket *so)
 {
-	int s, error;
-	s = splnet();
+	int error;
 	error = raw_usrreqs.pru_disconnect(so);
-	splx(s);
 	return error;
 }
 
@@ -253,10 +251,8 @@ rts_disconnect(struct socket *so)
 static int
 rts_peeraddr(struct socket *so, struct sockaddr **nam)
 {
-	int s, error;
-	s = splnet();
+	int error;
 	error = raw_usrreqs.pru_peeraddr(so, nam);
-	splx(s);
 	return error;
 }
 
@@ -267,10 +263,8 @@ static int
 rts_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 	 struct mbuf *control, struct proc *p)
 {
-	int s, error;
-	s = splnet();
+	int error;
 	error = raw_usrreqs.pru_send(so, flags, m, nam, control, p);
-	splx(s);
 	return error;
 }
 
@@ -279,20 +273,16 @@ rts_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 static int
 rts_shutdown(struct socket *so)
 {
-	int s, error;
-	s = splnet();
+	int  error;
 	error = raw_usrreqs.pru_shutdown(so);
-	splx(s);
 	return error;
 }
 
 static int
 rts_sockaddr(struct socket *so, struct sockaddr **nam)
 {
-	int s, error;
-	s = splnet();
+	int error;
 	error = raw_usrreqs.pru_sockaddr(so, nam);
-	splx(s);
 	return error;
 }
 
@@ -306,17 +296,15 @@ static struct pr_usrreqs route_usrreqs = {
 
 /*ARGSUSED*/
 static int
-route_output(m, so)
-	struct mbuf *m;
-	struct socket *so;
+route_output(struct mbuf *m, struct socket *so)
 {
-	struct rt_msghdr *rtm = 0;
-	struct rtentry *rt = 0;
-	struct rtentry *saved_nrt = 0;
+	struct rt_msghdr *rtm = NULL;
+	struct rtentry *rt = NULL;
+	struct rtentry *saved_nrt = NULL;
 	struct radix_node_head *rnh;
 	struct rt_addrinfo info;
 	int len, error = 0;
-	struct ifnet *ifp = 0;
+	struct ifnet *ifp = NULL;
 #ifndef __APPLE__
 	struct proc  *curproc = current_proc();
 #endif
@@ -406,7 +394,6 @@ route_output(m, so)
  * confusing the routing table with a wrong route to the previous default gateway
  */
 {
-			extern int check_routeselfref;
 #define satosinaddr(sa) (((struct sockaddr_in *)sa)->sin_addr.s_addr)
 	
 			if (check_routeselfref && (dst && dst->sa_family == AF_INET) && 
@@ -470,8 +457,7 @@ route_output(m, so)
 			error = rtrequest_locked(RTM_DELETE, dst, gate, netmask,
 					rtm->rtm_flags, &saved_nrt);
 			if (error == 0) {
-				if ((rt = saved_nrt))
-					rtref(rt);
+				rt = saved_nrt;
 				goto report;
 			}
 			break;
@@ -634,9 +620,7 @@ flush:
 }
 
 static void
-rt_setmetrics(which, in, out)
-	u_long which;
-	struct rt_metrics *in, *out;
+rt_setmetrics(u_long which, struct rt_metrics *in, struct rt_metrics *out)
 {
 #define metric(f, e) if (which & (f)) out->e = in->e;
 	metric(RTV_RPIPE, rmx_recvpipe);
@@ -664,6 +648,10 @@ rt_setif(
 	struct ifnet  *ifp = 0;
 
 	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_OWNED);
+
+	/* trigger route cache reevaluation */
+	if (use_routegenid)
+		route_generation++;
 
 	/* new gateway could require new ifaddr, ifp;
 	   flags may also be different; ifp may be specified
@@ -694,7 +682,7 @@ rt_setif(
 		else if (Ifaaddr && (ifa = ifa_ifwithaddr(Ifaaddr))) {
 			ifp = ifa->ifa_ifp;
 		}
-		else if (Gate && (ifa = ifa_ifwithroute(rt->rt_flags,
+		else if (Gate && (ifa = ifa_ifwithroute_locked(rt->rt_flags,
 						rt_key(rt), Gate))) {
 			ifp = ifa->ifa_ifp;
 		}
@@ -735,9 +723,7 @@ rt_setif(
  * This data is derived straight from userland.
  */
 static int
-rt_xaddrs(cp, cplim, rtinfo)
-	caddr_t cp, cplim;
-	struct rt_addrinfo *rtinfo;
+rt_xaddrs(caddr_t cp, caddr_t cplim, struct rt_addrinfo *rtinfo)
 {
 	struct sockaddr *sa;
 	int i;
@@ -838,11 +824,7 @@ rt_msg1(
 }
 
 static int
-rt_msg2(type, rtinfo, cp, w)
-	int type;
-	struct rt_addrinfo *rtinfo;
-	caddr_t cp;
-	struct walkarg *w;
+rt_msg2(int type, struct rt_addrinfo *rtinfo, caddr_t cp, struct walkarg *w)
 {
 	int i;
 	int len, dlen, second_time = 0;
@@ -933,9 +915,7 @@ again:
  * destination.
  */
 void
-rt_missmsg(type, rtinfo, flags, error)
-	int type, flags, error;
-	struct rt_addrinfo *rtinfo;
+rt_missmsg(int type, struct rt_addrinfo *rtinfo, int flags, int error)
 {
 	struct rt_msghdr *rtm;
 	struct mbuf *m;
@@ -977,7 +957,7 @@ rt_ifmsg(
 	ifm = mtod(m, struct if_msghdr *);
 	ifm->ifm_index = ifp->if_index;
 	ifm->ifm_flags = (u_short)ifp->if_flags;
-	if_data_internal_to_if_data(&ifp->if_data, &ifm->ifm_data);
+	if_data_internal_to_if_data(ifp, &ifp->if_data, &ifm->ifm_data);
 	ifm->ifm_addrs = 0;
 	route_proto.sp_protocol = 0;
 	raw_input(m, &route_proto, &route_src, &route_dst);
@@ -995,10 +975,7 @@ rt_ifmsg(
  * interface will be locked.
  */
 void
-rt_newaddrmsg(cmd, ifa, error, rt)
-	int cmd, error;
-	struct ifaddr *ifa;
-	struct rtentry *rt;
+rt_newaddrmsg(int cmd, struct ifaddr *ifa, int error, struct rtentry *rt)
 {
 	struct rt_addrinfo info;
 	struct sockaddr *sa = 0;
@@ -1055,9 +1032,7 @@ rt_newaddrmsg(cmd, ifa, error, rt)
  * there is no route state to worry about.
  */
 void
-rt_newmaddrmsg(cmd, ifma)
-	int cmd;
-	struct ifmultiaddr *ifma;
+rt_newmaddrmsg(int cmd, struct ifmultiaddr *ifma)
 {
 	struct rt_addrinfo info;
 	struct mbuf *m = 0;
@@ -1091,9 +1066,7 @@ rt_newmaddrmsg(cmd, ifma)
  * This is used in dumping the kernel table via sysctl().
  */
 int
-sysctl_dumpentry(rn, vw)
-	struct radix_node *rn;
-	void *vw;
+sysctl_dumpentry(struct radix_node *rn, void *vw)
 {
 	struct walkarg *w = vw;
 	struct rtentry *rt = (struct rtentry *)rn;
@@ -1175,7 +1148,7 @@ sysctl_iflist(
 			ifm = (struct if_msghdr *)w->w_tmem;
 			ifm->ifm_index = ifp->if_index;
 			ifm->ifm_flags = (u_short)ifp->if_flags;
-			if_data_internal_to_if_data(&ifp->if_data, &ifm->ifm_data);
+			if_data_internal_to_if_data(ifp, &ifp->if_data, &ifm->ifm_data);
 			ifm->ifm_addrs = info.rti_addrs;
 			error = SYSCTL_OUT(w->w_req,(caddr_t)ifm, len);
 			if (error) {
@@ -1186,10 +1159,6 @@ sysctl_iflist(
 		while ((ifa = ifa->ifa_link.tqe_next) != 0) {
 			if (af && af != ifa->ifa_addr->sa_family)
 				continue;
-#ifndef __APPLE__
-			if (curproc->p_prison && prison_if(curproc, ifa->ifa_addr))
-				continue;
-#endif
 			ifaaddr = ifa->ifa_addr;
 			netmask = ifa->ifa_netmask;
 			brdaddr = ifa->ifa_dstaddr;
@@ -1247,7 +1216,7 @@ sysctl_iflist2(
 			ifm->ifm_snd_maxlen = ifp->if_snd.ifq_maxlen;
 			ifm->ifm_snd_drops = ifp->if_snd.ifq_drops;
 			ifm->ifm_timer = ifp->if_timer;
-			if_data_internal_to_if_data64(&ifp->if_data, &ifm->ifm_data);
+			if_data_internal_to_if_data64(ifp, &ifp->if_data, &ifm->ifm_data);
 			error = SYSCTL_OUT(w->w_req, w->w_tmem, len);
 			if (error) {
 				ifnet_lock_done(ifp);
@@ -1415,7 +1384,7 @@ static struct protosw routesw[] = {
 struct domain routedomain =
     { PF_ROUTE, "route", route_init, 0, 0,
       routesw, 
-      0, 0, 0, 0, 0, 0, 0, 0, 
+      NULL, NULL, 0, 0, 0, 0, NULL, 0, 
       { 0, 0 } };
 
 DOMAIN_SET(route);

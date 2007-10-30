@@ -83,7 +83,7 @@ extern int ah_hdrlen(struct secasvar *);
 
 extern size_t ah_hdrsiz(struct ipsecrequest *);
 extern void ah4_input(struct mbuf *, int);
-extern int ah4_output(struct mbuf *, struct ipsecrequest *);
+extern int ah4_output(struct mbuf *, struct secasvar *);
 extern int ah4_calccksum(struct mbuf *, caddr_t, size_t,
 	const struct ah_algorithm *, struct secasvar *);
 #endif KERNEL_PRIVATE

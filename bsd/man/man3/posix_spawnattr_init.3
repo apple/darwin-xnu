@@ -1,0 +1,126 @@
+.\"
+.\" Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+.\"
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+.\" 
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. The rights granted to you under the License
+.\" may not be used to create, or enable the creation or redistribution of,
+.\" unlawful or unlicensed copies of an Apple operating system, or to
+.\" circumvent, violate, or enable the circumvention or violation of, any
+.\" terms of an Apple operating system software license agreement.
+.\" 
+.\" Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this file.
+.\" 
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\" 
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+.\"
+.\"     @(#)posix_spawnattr_init.3
+.
+.Dd August 22, 2007
+.Dt POSIX_SPAWNATTR_INIT 3
+.Os "Mac OS X"
+.Sh NAME
+.Nm posix_spawnattr_init
+.Nm posix_spawnattr_destroy
+.Nd initialize or destroy a spawn attributes object
+.Sh SYNOPSIS
+.Fd #include <spawn.h>
+.Ft int
+.Fo posix_spawnattr_init
+.Fa "posix_spawnattr_t *attr"
+.Fc
+.Ft int
+.Fo posix_spawnattr_destroy
+.Fa "posix_spawnattr_t *attr"
+.Fc
+.Sh DESCRIPTION
+The
+.Fn posix_spawnattr_init
+function initializes the object referenced by
+.Em attr ,
+to an empty set of spawn attributes for subsequent use in a call to
+.Xr posix_spawn 2
+or
+.Xr posix_spawnp 2 .
+.Pp
+A
+.Em posix_spawnattr_t
+object is an opaque type that is used to collect set of spawn attributes
+specified by calls to
+.Xr posix_spawnattr_setflags 3 ,
+.Xr posix_spawnattr_setpgroup 3 ,
+.Xr posix_spawnattr_setsigdefault 3 ,
+.Xr posix_spawnattr_setsigmask 3 ,
+.Xr posix_spawnattr_setbinpref_np 3 ,
+.Xr posix_spawnattr_setspecialport_np 3 ,
+or
+.Xr posix_spawnattr_setexceptionports_np 3
+such that once the spawn operation is complete, the child process will
+have a different set of attributes than the parent.  The order of these
+operations is unspecified and may change; programs should not depend on
+their ordering.
+.Pp
+The
+.Fn posix_spawnattr_destroy
+function destroys the object referenced by
+.Em attr 
+which was previously intialized by
+.Fn posix_spawnattr_init ,
+returning any resources obtained at the time of initialization to the
+system for subsequent reuse.  A
+.Em posix_spawnattr_t
+may be reinitialized after having been destroyed, but
+.Em must not
+be reused after destruction, unless it has been reinitialized.
+.Sh RETURN VALUES
+On success, these functions return 0; on failure they return an error
+number from
+.In errno.h .
+.Sh ERRORS
+The
+.Fn posix_spawnattr_init
+and
+.Fn posix_spawnattr_destroy
+functions will fail and return an error if:
+.Bl -tag -width Er
+.\" ==========
+.It Bq Er ENOMEM
+Insufficient resources to initialize the
+.Fa posix_spawnattr_t
+object.
+.\" ==========
+.It Bq Er EINVAL
+The 
+.Fa posix_spawnattr_t
+being destroyed is invalid.
+.El
+.Sh SEE ALSO
+.Xr posix_spawn 2 ,
+.Xr posix_spawnp 2 ,
+.Xr posix_spawnattr_setflags 3 ,
+.Xr posix_spawnattr_setpgroup 3 ,
+.Xr posix_spawnattr_setsigdefault 3 ,
+.Xr posix_spawnattr_setsigmask 3 ,
+.Xr posix_spawnattr_setbinpref_np 3 ,
+.Xr posix_spawnattr_setspecialport_np 3 ,
+.Xr posix_spawnattr_setexceptionports_np 3
+.Sh STANDARDS
+.St -susv3 [SPN]
+.Sh HISTORY
+The
+.Fn posix_spawn
+and
+.Fn posix_spawnp
+function calls appeared in
+.St -susv3 [SPN] .

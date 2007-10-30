@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -82,6 +88,13 @@ __BEGIN_DECLS
 
 extern void	vm_map_reference(vm_map_t	map);
 extern vm_map_t current_map(void);
+
+/* Setup reserved areas in a new VM map */
+extern kern_return_t	vm_map_exec(
+				vm_map_t		new_map,
+				task_t			task,
+				void			*fsroot,
+				cpu_type_t		cpu);
 
 __END_DECLS
 
@@ -207,7 +220,8 @@ struct vm_map_entry {
 	/* vm_inherit_t */	inheritance:2,	/* inheritance */
 	/* boolean_t */		use_pmap:1,	/* nested pmaps */
 	/* unsigned char */	alias:8,	/* user alias */
-	/* unsigned char */	pad:8;		/* available bits */
+	/* boolean_t */		no_cache:1,	/* should new pages be cached? */
+	/* unsigned char */	pad:7;		/* available bits */
 	unsigned short		wired_count;	/* can be paged if = 0 */
 	unsigned short		user_wired_count; /* for vm_wire */
 };
@@ -248,19 +262,21 @@ struct vm_map_header {
  *		insertion, or removal.  Another hint is used to
  *		quickly find free space.
  */
-struct vm_map {
+struct _vm_map {
 	lock_t			lock;		/* uni- and smp-lock */
 	struct vm_map_header	hdr;		/* Map entry header */
 #define min_offset		hdr.links.start	/* start of range */
 #define max_offset		hdr.links.end	/* end of range */
 	pmap_t			pmap;		/* Physical map */
 	vm_map_size_t		size;		/* virtual size */
+	vm_map_size_t		user_wire_limit;/* rlimit on user locked memory */
+	vm_map_size_t		user_wire_size; /* current size of user locked memory in this map */
 	int			ref_count;	/* Reference count */
 #if	TASK_SWAPPER
 	int			res_count;	/* Residence count (swap) */
 	int			sw_state;	/* Swap state */
 #endif	/* TASK_SWAPPER */
-	decl_mutex_data(,	s_lock)		/* Lock ref, res, hint fields */
+	decl_mutex_data(,	s_lock)		/* Lock ref, res fields */
 	vm_map_entry_t		hint;		/* hint for quick lookups */
 	vm_map_entry_t		first_free;	/* First free space hint */
 	boolean_t		wait_for_space;	/* Should callers wait
@@ -269,6 +285,7 @@ struct vm_map {
 	boolean_t		no_zero_fill;	/* No zero fill absent pages */
 	boolean_t		mapped;		/* has this map been mapped */
 	unsigned int		timestamp;	/* Version number */
+	unsigned int		color_rr;	/* next color (not protected by a lock) */
 } ;
 
 #define vm_map_to_entry(map)	((struct vm_map_entry *) &(map)->hdr.links)
@@ -388,14 +405,17 @@ struct vm_map_copy {
 #define vm_map_unlock_read(map)		lock_read_done(&(map)->lock)
 #define vm_map_lock_write_to_read(map)					\
 		((map)->timestamp++ ,	lock_write_to_read(&(map)->lock))
-#define vm_map_lock_read_to_write(map)	lock_read_to_write(&(map)->lock)
+/* lock_read_to_write() returns FALSE on failure.  Macro evaluates to 
+ * zero on success and non-zero value on failure.
+ */
+#define vm_map_lock_read_to_write(map)	(lock_read_to_write(&(map)->lock) != TRUE)
 
 /*
  *	Exported procedures that operate on vm_map_t.
  */
 
 /* Initialize the module */
-extern void		vm_map_init(void);
+extern void		vm_map_init(void) __attribute__((section("__TEXT, initcode")));
 
 /* Allocate a range in the specified virtual address map and
  * return the entry allocated for that range. */
@@ -419,14 +439,13 @@ extern kern_return_t	vm_map_lookup_locked(
 				vm_map_t		*var_map,	/* IN/OUT */
 				vm_map_address_t	vaddr,
 				vm_prot_t		fault_type,
+				int			object_lock_type,
 				vm_map_version_t 	*out_version,	/* OUT */
 				vm_object_t		*object,	/* OUT */
 				vm_object_offset_t 	*offset,	/* OUT */
 				vm_prot_t		*out_prot,	/* OUT */
 				boolean_t		*wired,		/* OUT */
-				int			*behavior,	/* OUT */
-				vm_map_offset_t		*lo_offset,	/* OUT */
-				vm_map_offset_t		*hi_offset,	/* OUT */
+				vm_object_fault_info_t	fault_info,	/* OUT */
 				vm_map_t		*real_map);	/* OUT */
 
 /* Verifies that the map has not changed since the given version. */
@@ -448,7 +467,8 @@ extern vm_map_entry_t	vm_map_entry_insert(
 				vm_prot_t		max_protection,
 				vm_behavior_t		behavior,
 				vm_inherit_t		inheritance,
-				unsigned		wired_count);
+				unsigned		wired_count,
+				boolean_t		no_cache);
 
 
 /*
@@ -757,6 +777,13 @@ extern vm_object_t convert_port_entry_to_object(
 	ipc_port_t	port);
 
 
+/* definitions related to overriding the NX behavior */
+
+#define VM_ABI_32	0x1
+#define VM_ABI_64	0x2
+
+extern int override_nx(vm_map_t map, uint32_t user_tag);
+
 #endif /* MACH_KERNEL_PRIVATE */
 
 __BEGIN_DECLS
@@ -770,7 +797,9 @@ extern vm_map_t		vm_map_create(
 
 /* Get rid of a map */
 extern void		vm_map_destroy(
-				vm_map_t		map);
+				vm_map_t		map,
+				int			flags);
+
 /* Lose a reference */
 extern void		vm_map_deallocate(
 				vm_map_t		map);
@@ -808,6 +837,20 @@ extern kern_return_t	vm_map_unwire(
 				vm_map_offset_t		end,
 				boolean_t		user_wire);
 
+/* Enter a mapping of a memory object */
+extern kern_return_t	vm_map_enter_mem_object(
+				vm_map_t		map,
+				vm_map_offset_t		*address,
+				vm_map_size_t		size,
+				vm_map_offset_t		mask,
+				int			flags,
+				ipc_port_t		port,
+				vm_object_offset_t	offset,
+				boolean_t		needs_copy,
+				vm_prot_t		cur_protection,
+				vm_prot_t		max_protection,
+				vm_inherit_t		inheritance);
+
 /* Deallocate a region */
 extern kern_return_t	vm_map_remove(
 				vm_map_t		map,
@@ -832,6 +875,13 @@ extern kern_return_t	vm_map_copyout(
 				vm_map_address_t	*dst_addr,	/* OUT */
 				vm_map_copy_t		copy);
 
+extern kern_return_t	vm_map_copyin(
+				vm_map_t			src_map,
+				vm_map_address_t	src_addr,
+				vm_map_size_t		len,
+				boolean_t			src_destroy,
+				vm_map_copy_t		*copy_result);	/* OUT */
+
 extern kern_return_t	vm_map_copyin_common(
 				vm_map_t		src_map,
 				vm_map_address_t	src_addr,
@@ -850,6 +900,9 @@ extern void		vm_map_set_64bit(
 extern void		vm_map_set_32bit(
 			        vm_map_t		map);
 
+extern boolean_t	vm_map_is_64bit(
+			        vm_map_t		map);
+
 extern boolean_t	vm_map_has_4GB_pagezero(
 		       		vm_map_t		map);
 
@@ -865,6 +918,12 @@ extern kern_return_t	vm_map_raise_min_offset(
 
 extern vm_map_offset_t	vm_compute_max_offset(
 				unsigned		is64);
+
+extern void		vm_map_set_user_wire_limit(
+				vm_map_t		map,
+				vm_size_t		limit);
+
+#ifdef	MACH_KERNEL_PRIVATE
 
 /*
  *	Macros to invoke vm_map_copyin_common.  vm_map_copyin is the
@@ -884,6 +943,8 @@ extern vm_map_offset_t	vm_compute_max_offset(
 		vm_map_copyin_common(src_map, src_addr, len, src_destroy, \
 					FALSE, copy_result, TRUE)
 
+#endif /* MACH_KERNEL_PRIVATE */
+
 /*
  * Macros for rounding and truncation of vm_map offsets and sizes
  */
@@ -898,18 +959,7 @@ extern vm_map_offset_t	vm_compute_max_offset(
 #define	VM_MAP_REMOVE_INTERRUPTIBLE  	0x2
 #define	VM_MAP_REMOVE_WAIT_FOR_KWIRE  	0x4
 #define VM_MAP_REMOVE_SAVE_ENTRIES	0x8
-
-/* Support for shared regions */
-extern kern_return_t vm_region_clone(
-				ipc_port_t		src_region,
-				ipc_port_t		dst_region);
-
-extern kern_return_t vm_map_region_replace(
-				vm_map_t		target_map,
-				ipc_port_t		old_region,
-				ipc_port_t		new_region,
-				vm_map_offset_t		start,  
-				vm_map_offset_t		end);
+#define VM_MAP_REMOVE_NO_PMAP_CLEANUP	0x10
 
 /* Support for UPLs from vm_maps */
 

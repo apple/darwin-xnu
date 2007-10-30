@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
  
 #include <IOKit/system.h>
@@ -139,6 +145,13 @@ static OSArray *		gIOFinalizeList;
 
 static SInt32			gIOConsoleUsersSeed;
 static OSData *			gIOConsoleUsersSeedValue;
+
+extern const OSSymbol *		gIODTPHandleKey;
+
+const OSSymbol *		gIOPlatformSleepActionKey;
+const OSSymbol *		gIOPlatformWakeActionKey;
+const OSSymbol *		gIOPlatformQuiesceActionKey;
+const OSSymbol *		gIOPlatformActiveActionKey;
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -269,6 +282,11 @@ void IOService::initialize( void )
     gIOConsoleSessionOnConsoleKey = OSSymbol::withCStringNoCopy( kIOConsoleSessionOnConsoleKey);
     gIOConsoleSessionSecureInputPIDKey = OSSymbol::withCStringNoCopy( kIOConsoleSessionSecureInputPIDKey);
     gIOConsoleUsersSeedValue	= OSData::withBytesNoCopy(&gIOConsoleUsersSeed, sizeof(gIOConsoleUsersSeed));
+
+    gIOPlatformSleepActionKey	= OSSymbol::withCStringNoCopy(kIOPlatformSleepActionKey);
+    gIOPlatformWakeActionKey	= OSSymbol::withCStringNoCopy(kIOPlatformWakeActionKey);
+    gIOPlatformQuiesceActionKey	= OSSymbol::withCStringNoCopy(kIOPlatformQuiesceActionKey);
+    gIOPlatformActiveActionKey	= OSSymbol::withCStringNoCopy(kIOPlatformActiveActionKey);
 
     gNotificationLock	 	= IORecursiveLockAlloc();
 
@@ -1342,7 +1360,8 @@ void IOService::applyToInterested( const OSSymbol * typeOfInterest,
                                    OSObjectApplierFunction applier,
                                    void * context )
 {
-    applyToClients( (IOServiceApplierFunction) applier, context );
+    if (gIOGeneralInterest == typeOfInterest)
+	applyToClients( (IOServiceApplierFunction) applier, context );
     applyToInterestNotifiers(this, typeOfInterest, applier, context);
 }
 
@@ -2352,6 +2371,10 @@ void IOService::probeCandidates( OSOrderedSet * matches )
     OSObject 		*	nextMatch = 0;
     bool			started;
     bool			needReloc = false;
+#if CONFIG_MACF_KEXT
+    OSBoolean		*	isSandbox = 0;
+    bool			useSandbox = false;
+#endif
 #if IOMATCHDEBUG
     SInt64			debugFlags;
 #endif
@@ -2460,6 +2483,8 @@ void IOService::probeCandidates( OSOrderedSet * matches )
                 if( !symbol)
                     continue;
     
+                //IOLog("%s alloc (symbol %p props %p)\n", symbol->getCStringNoCopy(), symbol, props);
+
                 // alloc the driver instance
                 inst = (IOService *) OSMetaClass::allocClassWithName( symbol);
     
@@ -2486,7 +2511,10 @@ void IOService::probeCandidates( OSOrderedSet * matches )
                 if( 0 == category)
                     category = gIODefaultMatchCategoryKey;
                 inst->setProperty( gIOMatchCategoryKey, (OSObject *) category );
-    
+#if CONFIG_MACF_KEXT
+		isSandbox = OSDynamicCast(OSBoolean,
+                            props->getObject("IOKitForceMatch"));
+#endif
                 // attach driver instance
                 if( !(inst->attach( this )))
                         continue;
@@ -2503,6 +2531,21 @@ void IOService::probeCandidates( OSOrderedSet * matches )
     
                 newInst = inst->probe( this, &score );
                 inst->detach( this );
+#if CONFIG_MACF_KEXT
+		/*
+		 * If this is the Sandbox driver and it matched, this is a
+		 * disallowed device; toss any drivers that were already
+		 * matched.
+		 */
+		if (isSandbox && isSandbox->isTrue() && newInst != 0) {
+		    if (startDict != 0) {
+			startDict->flushCollection();
+			startDict->release();
+			startDict = 0;
+		    }
+		    useSandbox = true;
+		}
+#endif
                 if( 0 == newInst) {
 #if IOMATCHDEBUG
                     if( debugFlags & kIOLogProbe)
@@ -2541,6 +2584,13 @@ void IOService::probeCandidates( OSOrderedSet * matches )
             props->release();
             if( inst)
                 inst->release();
+#if CONFIG_MACF_KEXT
+	    /*
+	     * If we're forcing the sandbox, drop out of the loop.
+	     */
+	    if (isSandbox && isSandbox->isTrue() && useSandbox)
+		    break;
+#endif
         }
         familyMatches->release();
         familyMatches = 0;
@@ -2923,8 +2973,10 @@ UInt32 IOService::_adjustBusy( SInt32 delta )
 	    applyToInterestNotifiers( next, gIOBusyInterest, 
 				     &messageClientsApplier, &context );
 
+#if !NO_KEXTD
             if( nowQuiet && (next == gIOServiceRoot))
                 OSMetaClass::considerUnloads();
+#endif
         }
 
         delta = nowQuiet ? -1 : +1;
@@ -3009,9 +3061,18 @@ bool IOService::serializeProperties( OSSerialize * s ) const
 
 void _IOConfigThread::main( _IOConfigThread * self )
 {
-    _IOServiceJob *	job;
-    IOService 	*	nub;
-    bool		alive = true;
+    _IOServiceJob * job;
+    IOService 	*   nub;
+    bool	    alive = true;
+    kern_return_t   kr;
+    thread_precedence_policy_data_t precedence = { -1 };
+
+    kr = thread_policy_set(current_thread(), 
+			    THREAD_PRECEDENCE_POLICY, 
+			    (thread_policy_t) &precedence, 
+			    THREAD_PRECEDENCE_POLICY_COUNT);
+    if (KERN_SUCCESS != kr)
+	IOLog("thread_policy_set(%d)\n", kr);
 
     do {
 
@@ -3339,7 +3400,7 @@ IONotifier * IOService::addNotification(
 			void * target, void * ref,
 			SInt32 priority )
 {
-    OSIterator *		existing;
+    OSIterator *		existing = NULL;
     _IOServiceNotifier *	notify;
     IOService *			next;
 
@@ -3563,6 +3624,26 @@ OSDictionary * IOService::resourceMatching( const char * name,
 
     table = resourceMatching( str, table );
     str->release();
+
+    return( table );
+}
+
+OSDictionary * IOService::propertyMatching( const OSSymbol * key, const OSObject * value,
+			OSDictionary * table )
+{
+    OSDictionary * properties;
+
+    properties = OSDictionary::withCapacity( 2 );
+    if( !properties)
+	return( 0 );
+    properties->setObject( key, value );
+
+    if( !table)
+	table = OSDictionary::withCapacity( 2 );
+    if( table)
+        table->setObject( gIOPropertyMatchKey, properties );
+
+    properties->release();
 
     return( table );
 }
@@ -3993,6 +4074,12 @@ bool IOService::passiveMatch( OSDictionary * table, bool changesOK )
             }
 
             if( !(match = where->compareProperty( table, kIOBSDNameKey )))
+                break;
+            if( !(match = where->compareProperty( table, kIOBSDMajorKey )))
+                break;
+            if( !(match = where->compareProperty( table, kIOBSDMinorKey )))
+                break;
+            if( !(match = where->compareProperty( table, kIOBSDUnitKey )))
                 break;
 
             matchParent = false;
@@ -4572,8 +4659,8 @@ OSMetaClassDefineReservedUsed(IOService, 0);
 OSMetaClassDefineReservedUsed(IOService, 1);
 OSMetaClassDefineReservedUsed(IOService, 2);
 OSMetaClassDefineReservedUsed(IOService, 3);
+OSMetaClassDefineReservedUsed(IOService, 4);
 
-OSMetaClassDefineReservedUnused(IOService, 4);
 OSMetaClassDefineReservedUnused(IOService, 5);
 OSMetaClassDefineReservedUnused(IOService, 6);
 OSMetaClassDefineReservedUnused(IOService, 7);

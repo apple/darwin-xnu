@@ -1,0 +1,14 @@
+_in6_cksum:_inet6_cksum
+_mbuf_data
+_mbuf_inet6_cksum
+_mbuf_len
+_mbuf_next
+_mbuf_nextpkt
+_mbuf_pkthdr_header
+_mbuf_pkthdr_len
+_mbuf_pkthdr_rcvif
+_mbuf_pkthdr_setheader
+_mbuf_setlen
+_mbuf_setnextpkt
+_mbuf_type
+_nd6_lookup_ipv6

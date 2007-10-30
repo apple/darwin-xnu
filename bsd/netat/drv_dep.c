@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright 1994 Apple Computer, Inc.
@@ -46,7 +52,9 @@
 #include <net/if.h>
 #include <net/if_types.h>
 #include <net/if_dl.h>
+#include <net/dlil.h>
 #include <net/ethernet.h>
+#include <net/kpi_protocol.h>
 
 #include <netat/sysglue.h>
 #include <netat/appletalk.h>
@@ -55,11 +63,10 @@
 #include <netat/ddp.h>
 #include <netat/at_aarp.h>
 #include <netat/at_pat.h>
+#include <netat/atp.h>
 #include <netat/debug.h>
 
 #define DSAP_SNAP 0xaa
-
-extern void gref_init(), atp_init(), atp_link(), atp_unlink();
 
 extern int adspInited;
 
@@ -70,19 +77,20 @@ static unsigned char snap_proto_aarp[5] = SNAP_PROTO_AARP;
 
 static void at_input_packet(protocol_family_t protocol, mbuf_t m);
 
-int pktsIn, pktsOut;
-
 struct ifqueue atalkintrq; 	/* appletalk and aarp packet input queue */
 
 short appletalk_inited = 0;
 
+void atalk_load(void);
+void atalk_unload(void);
+
+extern lck_mtx_t *domain_proto_mtx;
+
+extern int pktsIn, pktsOut;
 
 
 void atalk_load()
 {
-	extern lck_mtx_t *domain_proto_mtx;
-
-
 	atp_init();
 	atp_link();
 	adspInited = 0;
@@ -92,36 +100,37 @@ void atalk_load()
 		this happens in adsp_open and is undone on ADSP_UNLINK 
 */
 	lck_mtx_unlock(domain_proto_mtx);
-	proto_register_input(PF_APPLETALK, at_input_packet, NULL);
+	proto_register_input(PF_APPLETALK, at_input_packet, NULL, 0);
 	lck_mtx_lock(domain_proto_mtx);
 } /* atalk_load */
 
 /* Undo everything atalk_load() did. */
 void atalk_unload()  /* not currently used */
 {
-	extern gbuf_t *scb_resource_m;
-	extern gbuf_t *atp_resource_m;
-
 	atp_unlink();
 
 #ifdef NOT_YET
-	if (scb_resource_m) { 
-		gbuf_freem(scb_resource_m);
-		scb_resource_m = 0;
-		scb_free_list = 0;
-	}
-	/* allocated in atp_trans_alloc() */
-	if (atp_resource_m) {
-		gbuf_freem(atp_resource_m);
-		atp_resource_m = 0;
-		atp_trans_free_list = 0;
+	{
+		extern gbuf_t *scb_resource_m;
+		extern gbuf_t *atp_resource_m;
+		if (scb_resource_m) { 
+			gbuf_freem(scb_resource_m);
+			scb_resource_m = 0;
+			scb_free_list = 0;
+		}
+		/* allocated in atp_trans_alloc() */
+		if (atp_resource_m) {
+			gbuf_freem(atp_resource_m);
+			atp_resource_m = 0;
+			atp_trans_free_list = 0;
+		}
 	}
 #endif
 
 	appletalk_inited = 0;
 } /* atalk_unload */
 
-void appletalk_hack_start()
+void appletalk_hack_start(void)
 {
 	if (!appletalk_inited) {
 		atalk_load();
@@ -293,7 +302,7 @@ at_input_packet(
 				ifID->stats.rcv_bytes += m1->m_len;
 
 			if (!MULTIPORT_MODE)
-				ddp_glean(m, ifID, src);
+				ddp_glean(m, ifID, (struct etalk_addr *)src);
 
 			ddp_input(m, ifID);
 		} else {

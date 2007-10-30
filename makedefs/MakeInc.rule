@@ -50,11 +50,17 @@ ifndef INSTALL_KF_MD_GEN_LIST
     INSTALL_KF_MD_GEN_LIST = $(EXPORT_MD_GEN_LIST)
 endif
 
+ifneq ($(MACHINE_CONFIG), DEFAULT)
+	OBJPATH = $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)_$(MACHINE_CONFIG)
+else
+	OBJPATH = $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)
+endif
+
 INSTALL_MI_GEN_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_GEN_LIST))
 
 $(INSTALL_MI_GEN_FILES): $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/% : %
-	@true echo Installing $< in $(dir $@);			\
-	[ -d $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR) ] ||$(MKDIR) $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR);	\
+	@true echo Installing $< in $(dir $@)
+	$(_v)[ -d $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR) ] ||$(MKDIR) $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR);	\
 	filename=`$(BASENAME) $<`;				\
 	filename_strip=$(addsuffix .strip,$${filename});	\
 	$(RM) $(RMFLAGS) $@;					\
@@ -75,8 +81,8 @@ $(INSTALL_MI_GEN_FILES): $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/% : %
 INSTALL_KF_MI_GEN_FILES = $(addprefix  $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR)/, $(INSTALL_KF_MI_GEN_LIST))
 
 $(INSTALL_KF_MI_GEN_FILES): $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR)/% : %
-	@true echo Installing $< in $(midir $@);			\
-	[ -d $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR) ] ||$(MKDIR) $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR);	\
+	@true echo Installing $< in $(midir $@)
+	$(_v)[ -d $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR) ] ||$(MKDIR) $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR);	\
 	filename=`$(BASENAME) $<`;				\
 	filename_strip=$(addsuffix .strip,$${filename});	\
 	$(RM) $(RMFLAGS) $@;					\
@@ -97,8 +103,8 @@ $(INSTALL_KF_MI_GEN_FILES): $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR)/% : %
 INSTALL_MI_GEN_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_GEN_LIST))
 
 $(INSTALL_MI_GEN_LCL_FILES): $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/% : %
-	@true echo Installing $< in $(dir $@);			\
-	[ -d $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR) ] ||$(MKDIR) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR);	\
+	@true echo Installing $< in $(dir $@)
+	$(_v)[ -d $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR) ] ||$(MKDIR) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR);	\
 	filename=`$(BASENAME) $<`;				\
 	filename_strip=$(addsuffix .strip,$${filename});	\
 	$(RM) $(RMFLAGS) $@;					\
@@ -119,8 +125,8 @@ $(INSTALL_MI_GEN_LCL_FILES): $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/% : %
 INSTALL_KF_MI_LCL_GEN_FILES = $(addprefix  $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR)/, $(INSTALL_KF_MI_LCL_GEN_LIST))
 
 $(INSTALL_KF_MI_LCL_GEN_FILES): $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR)/% : %
-	@true echo Installing $< in $(dir $@);			\
-	[ -d $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR) ] ||$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR);	\
+	@true echo Installing $< in $(dir $@)
+	$(_v)[ -d $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR) ] ||$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR);	\
 	filename=`$(BASENAME) $<`;				\
 	filename_strip=$(addsuffix .strip,$${filename});	\
 	$(RM) $(RMFLAGS) $@;					\
@@ -141,8 +147,8 @@ $(INSTALL_KF_MI_LCL_GEN_FILES): $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR)/% : %
 INSTALL_MD_GEN_INC_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_GEN_LIST))
 
 $(INSTALL_MD_GEN_INC_FILES): $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/% : %
-	@true echo Installing $< in $(dir $@);			\
-	[ -d $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR) ] ||$(MKDIR) $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR);	\
+	@true echo Installing $< in $(dir $@)
+	$(_v)[ -d $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR) ] ||$(MKDIR) $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR);	\
 	filename=`$(BASENAME) $<`;				\
 	filename_strip=$(addsuffix .strip,$${filename});	\
 	$(RM) $(RMFLAGS) $@;					\
@@ -163,8 +169,8 @@ $(INSTALL_MD_GEN_INC_FILES): $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/% : %
 INSTALL_KF_MD_GEN_FILES = $(addprefix $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR)/, $(INSTALL_KF_MD_GEN_LIST))
 
 $(INSTALL_KF_MD_GEN_FILES): $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR)/% : %
-	@true echo Installing $< in $(dir $@);			\
-	[ -d $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR) ] ||$(MKDIR) $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR);	\
+	@true echo Installing $< in $(dir $@)
+	$(_v)[ -d $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR) ] ||$(MKDIR) $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR);	\
 	filename=`$(BASENAME) $<`;				\
 	filename_strip=$(addsuffix .strip,$${filename});	\
 	$(RM) $(RMFLAGS) $@;					\
@@ -186,8 +192,8 @@ INSTALL_MD_LCL_FILES = $(addprefix $(SOURCE), $(INSTALL_MD_LCL_LIST))
 INSTALL_MD_GEN_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LCL_GEN_LIST))
 
 $(INSTALL_MD_GEN_LCL_FILES): $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/% : %
-	@true echo Installing $< in $(dir $@);			\
-	[ -d $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR) ] ||$(MKDIR) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR);	\
+	@true echo Installing $< in $(dir $@)
+	$(_v)[ -d $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR) ] ||$(MKDIR) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR);	\
 	filename=`$(BASENAME) $<`;				\
 	filename_strip=$(addsuffix .strip,$${filename});	\
 	$(RM) $(RMFLAGS) $@;					\
@@ -209,8 +215,8 @@ INSTALL_KF_MD_LCL_FILES = $(addprefix $(SOURCE), $(INSTALL_KF_MD_LCL_LIST))
 INSTALL_KF_MD_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR)/, $(INSTALL_KF_MD_LCL_GEN_LIST))
 
 $(INSTALL_KF_MD_LCL_GEN_FILES): $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR)/% : %
-	@true echo Installing $< in $(dir $@);			\
-	[ -d $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR) ] ||$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR);	\
+	@true echo Installing $< in $(dir $@)
+	$(_v)[ -d $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR) ] ||$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR);	\
 	filename=`$(BASENAME) $<`;				\
 	filename_strip=$(addsuffix .strip,$${filename});	\
 	$(RM) $(RMFLAGS) $@;					\
@@ -229,11 +235,10 @@ $(INSTALL_KF_MD_LCL_GEN_FILES): $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR)/% : %
 	fi;
 
 setup_installhdrs_mi: 
-	@echo "[ $(SOURCE) ] make setup_installhdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 do_installhdrs_mi: $(INSTALL_MI_GEN_FILES) $(INSTALL_MI_GEN_LCL_FILES) $(INSTALL_KF_MI_GEN_FILES) $(INSTALL_KF_MI_LCL_GEN_FILES)
-	@true echo "[ $(SOURCE) ] make do_installhdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";	\
-	$(MKDIR) ./incmidir ./pincmidir ./kincmidir ./kpincmidir;				\
+	@true echo "[ $(SOURCE) ] make do_installhdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
+	$(_v)$(MKDIR) ./incmidir ./pincmidir ./kincmidir ./kpincmidir;				\
 	if [ -n "$(strip $(INSTALL_MI_LIST))" ]; then			\
 	    if [ -d $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR) ]; then	\
 		(cd $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR);$(RM) $(RMFLAGS) $(INSTALL_MI_LIST) );       \
@@ -325,11 +330,10 @@ do_installhdrs_mi: $(INSTALL_MI_GEN_FILES) $(INSTALL_MI_GEN_LCL_FILES) $(INSTALL
 	$(RM) -rf ./incmidir ./pincmidir ./kincmidir ./kpincmidir;
 
 setup_installhdrs_md:
-	@echo "[ $(SOURCE) ] make setup_installhdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 do_installhdrs_md: $(INSTALL_MD_GEN_INC_FILES) $(INSTALL_MD_GEN_LCL_FILES) $(INSTALL_KF_MD_GEN_FILES) $(INSTALL_KF_MD_LCL_GEN_FILES)
-	@true echo "[ $(SOURCE) ] make do_installhdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";	\
-	$(MKDIR) ./incdir ./pincdir ./kincdir ./kpincdir;				\
+	@true echo "[ $(SOURCE) ] make do_installhdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
+	$(_v)$(MKDIR) ./incdir ./pincdir ./kincdir ./kpincdir;				\
 	if [ -n "$(strip $(INSTALL_MD_LIST))" ]; then			\
 	    if [ -d $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR) ]; then	\
 		(cd $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR);$(RM) $(RMFLAGS) $(INSTALL_MD_LIST) );       \
@@ -430,8 +434,8 @@ EXPORT_MI_INC_FILES = $(addprefix $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)/, $(EXPO
 EXPORT_MI_GEN_INC_FILES = $(addprefix $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)/, $(EXPORT_MI_GEN_LIST))
 
 $(EXPORT_MI_INC_FILES) $(EXPORT_MI_GEN_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)/% : %
-	@true echo Exporting $< in $(dir $@);			\
-	[ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR) ] ||$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR);	\
+	@true echo Exporting $< in $(dir $@)
+	$(_v)[ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR) ] ||$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR);	\
 	${CP} -p $< $(dir $@);	\
 
 
@@ -439,18 +443,16 @@ EXPORT_MD_INC_FILES = $(addprefix $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/, $(EXPO
 EXPORT_MD_GEN_INC_FILES = $(addprefix $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/, $(EXPORT_MD_GEN_LIST))
 
 $(EXPORT_MD_INC_FILES) $(EXPORT_MD_GEN_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/% : %
-	@true echo Exporting $< in $(dir $@);			\
-	[ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR) ] ||$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR);	\
+	@true echo Exporting $< in $(dir $@)
+	$(_v)[ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR) ] ||$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR);	\
 	${CP} -p $< $(dir $@);	\
 
 setup_exporthdrs_mi:
-	@echo "[ $(SOURCE) ] make setup_exporthdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 do_exporthdrs_mi: $(EXPORT_MI_INC_FILES) $(EXPORT_MI_GEN_INC_FILES)
 	@true echo "[ $(SOURCE) ] make do_exporthdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 setup_exporthdrs_md:
-	@echo "[ $(SOURCE) ] make setup_exporthdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 do_exporthdrs_md: $(EXPORT_MD_INC_FILES) $(EXPORT_MD_GEN_INC_FILES)
 	@true echo "[ $(SOURCE) ] make do_exporthdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
@@ -461,8 +463,8 @@ EXPORT_MI_INC_FILES = $(addprefix $(SOURCE), $(EXPORT_MI_LIST))
 EXPORT_MI_GEN_INC_FILES = $(addprefix $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)/, $(EXPORT_MI_GEN_LIST))
 
 $(EXPORT_MI_GEN_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)/% : %
-	@true echo Exporting $< in $(dir $@);			\
-	[ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR) ] ||$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR);	\
+	@true echo Exporting $< in $(dir $@)
+	$(_v)[ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR) ] ||$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR);	\
 	${CP} -p $< $(dir $@);	\
 
 
@@ -470,16 +472,15 @@ EXPORT_MD_INC_FILES = $(addprefix $(SOURCE), $(EXPORT_MD_LIST))
 EXPORT_MD_GEN_INC_FILES = $(addprefix $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/, $(EXPORT_MD_GEN_LIST))
 
 $(EXPORT_MD_GEN_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/% : %
-	@true echo Exporting $< in $(dir $@);			\
-	[ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR) ] ||$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR);	\
+	@true echo Exporting $< in $(dir $@)
+	$(_v)[ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR) ] ||$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR);	\
 	${CP} -p $< $(dir $@);	\
 
 setup_exporthdrs_mi:
-	@echo "[ $(SOURCE) ] make setup_exporthdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 do_exporthdrs_mi: $(EXPORT_MI_GEN_INC_FILES)
 	@true echo "[ $(SOURCE) ] make do_exporthdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
-	@if [ -n "$(strip $(EXPORT_MI_LIST))" ]; then					\
+	$(_v)if [ -n "$(strip $(EXPORT_MI_LIST))" ]; then					\
 		if [ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR) ]; then			\
 			(cd $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR);$(RM) $(RMFLAGS) $(EXPORT_MI_LIST) );       \
 		else								\
@@ -489,11 +490,10 @@ do_exporthdrs_mi: $(EXPORT_MI_GEN_INC_FILES)
 	fi
 
 setup_exporthdrs_md:
-	@echo "[ $(SOURCE) ] make setup_exporthdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 do_exporthdrs_md: $(EXPORT_MD_GEN_INC_FILES)
 	@true echo "[ $(SOURCE) ] make do_exporthdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
-	@if [ -n "$(strip $(EXPORT_MD_LIST))" ]; then					\
+	$(_v)if [ -n "$(strip $(EXPORT_MD_LIST))" ]; then					\
 		if [ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR) ]; then			\
 			(cd $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR);$(RM) $(RMFLAGS) $(EXPORT_MD_LIST) );       \
 		else								\
@@ -512,6 +512,7 @@ endif
 #
 # Compilation rules to generate .o from .s
 #
+
 COMP_SOBJ_FILES = $(addprefix $(TARGET)$(COMP_OBJ_DIR), $(COMP_SOBJ_LIST))
 
 $(COMP_SOBJ_FILES): $(TARGET)$(COMP_OBJ_DIR)%.o : %.s
@@ -522,27 +523,29 @@ $(COMP_SOBJ_FILES): $(TARGET)$(COMP_OBJ_DIR)%.o : %.s
 
 S_RULE_1A=@ls /
 S_RULE_1B= ${patsubst %.o,%.s,${@}} > /dev/null
-S_RULE_2= ${S_KCC} -E -MD ${SFLAGS} -DASSEMBLER $(INCFLAGS) $< \
+S_RULE_2=$(_v)${S_KCC} -E -MD ${SFLAGS} -DASSEMBLER $(INCFLAGS) $< \
                > $(patsubst %.o, %.pp, ${@}); \
 	sed '/^\#/d' $(patsubst %.o, %.pp, ${@}) > $(patsubst %.o, %.s, ${@});
-S_RULE_3= ${S_KCC} ${SFLAGS} ${_HOST_AS_FLAGS}  -c $(patsubst %.o, %.s, ${@});\
-       ${RM} ${_RMFLAGS_} $(patsubst %.o, %.pp, ${@}) $(patsubst %.o,%.s,${@})
-
-#
-# Compilation rules to generate .o from .c
-#
-COMP_COBJ_FILES = $(addprefix $(TARGET)$(COMP_OBJ_DIR), $(COMP_COBJ_LIST))
-
-$(COMP_COBJ_FILES): $(TARGET)$(COMP_OBJ_DIR)%.o : %.c
-	${KCC} -c ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS}} -MD ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} $<
+ifeq    ($(BUILD_STABS),1)
+S_RULE_3=$(_v)${S_KCC} ${SFLAGS} ${_HOST_AS_FLAGS}  -c $(patsubst %.o, %.s, ${@});\
+       ${RM} ${_RMFLAGS_} $(patsubst %.o, %.pp, ${@}) $(patsubst %.o,%.s,${@});
+else
+S_RULE_3=$(_v)${S_KCC} ${SFLAGS} ${_HOST_AS_FLAGS}  -c $(patsubst %.o, %.s, ${@});\
+       ${RM} ${_RMFLAGS_} $(patsubst %.o, %.pp, ${@}) $(patsubst %.o,%.s,${@});\
+  ${CTFCONVERT} -l xnu -v -o $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$@.ctf $@ > /dev/null && $(CTFSCRUB) `cat $(SRCROOT)/config/DtraceIgnored.symbols` $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$@.ctf || true;
+S_RULE_4=@echo ASM $@
+endif
 
 #
 # Compilation rules to generate .o from .c for normal files
-#
-C_RULE_1A=${KCC} -c ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS} ${CWARNFLAGS}} -MD ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
+C_RULE_1A=$(_v)${KCC} -c ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS} ${CWARNFLAGS}} -MD ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
 C_RULE_1B=$*.c
-C_RULE_2=
+C_RULE_2=@echo CC $@
+ifeq    ($(BUILD_STABS),1)
 C_RULE_3=
+else
+C_RULE_3=$(_v)${CTFCONVERT} -l xnu -v -o $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$@.ctf $@ > /dev/null && $(CTFSCRUB) `cat $(SRCROOT)/config/DtraceIgnored.symbols` $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$@.ctf || true;
+endif
 C_RULE_4=
 
 #
@@ -557,9 +560,9 @@ C_RULE_4_D=${C_RULE_4}
 #
 # Compilation rules to generate .o from .m
 #
-M_RULE_1A=${KCC} -c ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS} ${MWARNFLAGS}} -MD ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
+M_RULE_1A=$(_v)${KCC} -c ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS} ${MWARNFLAGS}} -MD ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
 M_RULE_1B=$*.m
-M_RULE_2=
+M_RULE_2=@echo CC $@
 M_RULE_3=
 M_RULE_4=
 
@@ -567,11 +570,15 @@ M_RULE_4=
 # Compilation rules to generate .co from .cp or .cpo from .cpp
 #   The config tool slickly changes the last source filename char to 'o'
 #   for the object filename.
-#
-P_RULE_1A=${KC++} -o $@ -c ${CXXFLAGS} ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS} ${CXXWARNFLAGS}} -MD ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
+P_RULE_1A=$(_v)${KC++} -o $@ -c ${CXXFLAGS} ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS} ${CXXWARNFLAGS}} -MD ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
 P_RULE_1B=$(<F)
-P_RULE_2=@sed 's/.c.o: /.cpo: /' $(@:.cpo=.d) > $(@:.cpo=.d~) && mv $(@:.cpo=.d~) $(@:.cpo=.d)
-P_RULE_3=
+P_RULE_2=$(_v)sed 's/.c.o: /.cpo: /' $(@:.cpo=.d) > $(@:.cpo=.d~) && mv $(@:.cpo=.d~) $(@:.cpo=.d)
+P_RULE_3=@echo C++ $@
+ifeq    ($(BUILD_STABS),1)
+P_RULE_4=
+else
+P_RULE_4=$(_v)${CTFCONVERT} -l xnu -v -o $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$@.ctf $@ > /dev/null && $(CTFSCRUB) `cat $(SRCROOT)/config/DtraceIgnored.symbols` $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$@.ctf || true;
+endif
 P_RULE_4=
 
 #
@@ -582,15 +589,13 @@ LD_COMPONENT_OBJ_FILES = $(addprefix $(TARGET)$(COMP_OBJ_DIR), $(LD_COMPONENT_OB
 COMPONENT_IMAGE_FILE = $(addprefix $(TARGET), $(COMPONENT_IMAGE))
 
 $(COMPONENT_IMAGE_FILE): $(LD_COMPONENT_OBJ_FILES)
-	@echo "[ creating $(COMPONENT_IMAGE) ]"
-	$(LD)  $(LDFLAGS_COMPONENT) -o $(COMPONENT_IMAGE_FILE) ${LD_COMPONENT_OBJ_FILES};
-	(cd $(TARGET)$(COMP_OBJ_DIR); ${MD} -u Makedep -f -d `ls *.d`);
+	@echo LD $@
+	$(_v)$(LD)  $(LDFLAGS_COMPONENT) -o $(COMPONENT_IMAGE_FILE) ${LD_COMPONENT_OBJ_FILES};
+	$(_v)(cd $(TARGET)$(COMP_OBJ_DIR); ${MD} -u Makedep -f -d `ls *.d`);
 
 setup_build_all: 
-	@echo "[ $(SOURCE) ] make setup_build_all $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 do_build_all: $(COMP_FILES) $(COMP_COBJ_FILES) $(COMP_SOBJ_FILES) $(COMPONENT_IMAGE_FILE)
-	@true echo "[ $(SOURCE) ] make do_build_all $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 ifeq ($(COMPONENT), .)
 do_build_all: do_build_mach_kernel
@@ -599,32 +604,33 @@ endif
 #
 # mach_kernel building rules
 #
-do_build_mach_kernel: $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/kgmacros
-	@echo "[ building mach_kernel ]";
-	@install $(DATA_INSTALL_FLAGS) $(SRCROOT)/config/version.c $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/version.c;
-	@$(SRCROOT)/config/newvers.pl $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/version.c;
-	${KCC} -c ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS}} ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/version.c -o $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/version.o
-	$(LD) $(LDFLAGS_KERNEL) $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST), $(addprefix $(component)/$(firstword $($(addsuffix _KERNEL_CONFIG, $(shell printf "%s" "$(component)" | tr a-z A-Z))) $(KERNEL_CONFIG))/, $(addsuffix .o, $(component))))) $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/version.o -o $(TARGET)/mach_kernel.sys $(LD_KERNEL_LIBS);	\
-	$(STRIP) $(STRIP_FLAGS) $(TARGET)/mach_kernel.sys -o $(TARGET)/mach_kernel;
+do_build_mach_kernel: $(OBJPATH)/kgmacros
+	$(_v)install $(DATA_INSTALL_FLAGS) $(SRCROOT)/config/version.c $(OBJPATH)/version.c;
+	$(_v)$(SRCROOT)/config/newvers.pl $(OBJPATH)/version.c > /dev/null;
+	@echo CC version.o
+	$(_v)${KCC} -c ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS}} ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} $(OBJPATH)/version.c -o $(OBJPATH)/version.o
+	@echo LD mach_kernel.sys
+	$(_v)$(LD) $(LDFLAGS_KERNEL) $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST), $(addprefix $(component)/$(firstword $($(addsuffix _KERNEL_CONFIG, $(shell printf $(component) | tr a-z A-Z))) $(KERNEL_CONFIG))/, $(addsuffix .o, $(component))))) $(OBJPATH)/version.o -o $(TARGET)/mach_kernel.sys $(LD_KERNEL_LIBS)
+	@echo DSYMUTIL mach_kernel.sys
+	$(_v)if [ $(BUILD_DWARF)  -eq  1 ]; then \
+		$(DSYMUTIL) $(DSYMUTIL_FLAGS) $(TARGET)/mach_kernel.sys -o $(TARGET)/mach_kernel.sys.dSYM > /dev/null; \
+	fi;
+	@echo STRIP mach_kernel
+	$(_v)$(STRIP) $(STRIP_FLAGS) $(TARGET)/mach_kernel.sys -o $(TARGET)/mach_kernel
 
-$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/kgmacros: $(SRCROOT)/kgmacros
-	cp $? $@
+$(OBJPATH)/kgmacros: $(SRCROOT)/kgmacros
+	$(_v)$(CP) $? $@
 
-#
-# Generic Install rules
-#
-INSTALL_FILE_FILES = $(addprefix $(DSTROOT)$(INSTALL_FILE_DIR), $(INSTALL_FILE_LIST))
+# Special rules to install machine configuration variants
 
-force_file_install:
-
-$(INSTALL_FILE_FILES): $(DSTROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/% force_file_install
+$(DSTROOT)$(INSTALL_FILE_DIR)mach.$(KERNEL_CONFIG_LC).$(MACHINE_CONFIG_LC): $(TARGET)/mach_kernel force_file_install
 	@echo Installing $< in $@;
 	@if [ ! -e $(DSTROOT)$(INSTALL_FILE_DIR) ]; then	\
 		$(MKDIR) $(DSTROOT)$(INSTALL_FILE_DIR);		\
 	fi;							\
 	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then	\
 		$(RM) $(RMFLAGS) $@;				\
-		install $(FILE_INSTALL_FLAGS) $< $(dir $@);		\
+		install $(FILE_INSTALL_FLAGS) $< $@;		\
 	else							\
 		if [ ! -e $@ ]; then				\
 			echo >empty_file_$(notdir $@);			\
@@ -635,34 +641,133 @@ $(INSTALL_FILE_FILES): $(DSTROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/% force_file_i
 		$(LIPO) $@ -replace $(ARCH_CONFIG_LC)  $< -o $@;	\
 	fi
 
-INSTALL_FILESYS_FILES = $(addprefix $(SYMROOT)$(INSTALL_FILE_DIR), $(INSTALL_FILE_LIST))
-
-force_filesys_install:
-
-$(INSTALL_FILESYS_FILES): $(SYMROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/%.sys force_filesys_install
+$(SYMROOT)$(INSTALL_FILE_DIR)mach.$(KERNEL_CONFIG_LC).$(MACHINE_CONFIG_LC): $(TARGET)/mach_kernel.sys force_file_install
 	@echo Installing $< in $@;
 	@if [ ! -e $(SYMROOT)$(INSTALL_FILE_DIR) ]; then	\
 		$(MKDIR) $(SYMROOT)$(INSTALL_FILE_DIR);		\
 	fi;							\
 	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then	\
 		$(RM) $(RMFLAGS) $@;				\
-		install $(INSTALL_FLAGS) $< $(dir $@);		\
+		install $(FILE_INSTALL_FLAGS) $< $@;		\
 	else							\
 		if [ ! -e $@ ]; then				\
-			echo >empty_filesys_$(notdir $@);			\
-			lipo_arg="$(subst _empty_file, empty_filesys_$(notdir $@),$(foreach lipo_arch,$(INSTALL_ARCHS_LC), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
+			echo >empty_file_$(notdir $@);			\
+			lipo_arg="$(subst _empty_file, empty_file_$(notdir $@),$(foreach lipo_arch,$(INSTALL_ARCHS_LC), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
 			$(LIPO) $${lipo_arg} -create -output $@;	\
-			$(RM) $(RMFLAGS) empty_filesys_$(notdir $@);		\
+			$(RM) $(RMFLAGS) empty_file_$(notdir $@);		\
 		fi;							\
 		$(LIPO) $@ -replace $(ARCH_CONFIG_LC)  $< -o $@;	\
 	fi
-	cp $(SOURCE)kgmacros $(SYMROOT)$(INSTALL_FILE_DIR)
+
+
+#
+# Generic Install rules
+#
+INSTALL_FILE_FILES = $(addprefix $(DSTROOT)$(INSTALL_FILE_DIR), $(INSTALL_FILE_LIST))
+INSTALL_FILE_FILES_GENERIC = $(filter-out $(DSTROOT)$(INSTALL_FILE_DIR)mach.$(KERNEL_CONFIG_LC).$(MACHINE_CONFIG_LC), $(INSTALL_FILE_FILES))
+
+force_file_install:
+
+$(INSTALL_FILE_FILES_GENERIC): $(DSTROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/% force_file_install
+	@echo Installing $< in $@;
+	$(_v)if [ ! -e $(DSTROOT)$(INSTALL_FILE_DIR) ]; then		\
+		$(MKDIR) $(DSTROOT)$(INSTALL_FILE_DIR);			\
+	fi;								\
+	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then		\
+		$(RM) $(RMFLAGS) $@;					\
+		install $(FILE_INSTALL_FLAGS) $< $@;		\
+	else								\
+		if [ ! -e $@ ]; then					\
+			echo >empty_file_$(notdir $@);			\
+			lipo_arg="$(subst _empty_file, empty_file_$(notdir $@),$(foreach lipo_arch,$(INSTALL_ARCHS_LC), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
+			$(LIPO) $${lipo_arg} -create -output $@;	\
+			$(RM) $(RMFLAGS) empty_file_$(notdir $@);	\
+		fi;							\
+		$(LIPO) $@ -replace $(ARCH_CONFIG_LC)  $< -o $@;	\
+	fi;								\
+	if [ $(BUILD_DWARF) -eq 1 ]; then				\
+		if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then	\
+			$(CP) -f $< $<.ctfsys;				\
+			$(FIND) $(OBJPATH)/ -name \*.ctf -size 0	\
+				-exec $(RM) -rf {} \;	;		\
+			$(CTFMERGE) -l xnu -o $<.ctfsys 		\
+				$(OBJPATH)/*/$(KERNEL_CONFIG)/*.*o.ctf || true;	\
+			install $(FILE_INSTALL_FLAGS) $<.ctfsys $(dir $@); \
+		else							\
+			if [ ! -e $@.ctfsys ]; then			\
+				echo >empty_file_$(notdir $@);		\
+				lipo_arg="$(subst _empty_file, empty_file_$(notdir $@),$(foreach lipo_arch,$(INSTALL_ARCHS_LC), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
+				$(LIPO) $${lipo_arg} -create -output $@.ctfsys;\
+				$(RM) $(RMFLAGS) empty_file_$(notdir $@);\
+			fi;						\
+			$(FIND) $(OBJPATH)/ -name \*.ctf -size 0	\
+				-exec $(RM) -rf {} \;	;		\
+			$(CP) -f $< $<.ctfsys;				\
+			$(CTFMERGE) -l xnu -o $<.ctfsys			\
+				$(OBJPATH)/*/$(KERNEL_CONFIG)/*.*o.ctf || true;	\
+			$(LIPO) $@.ctfsys -replace $(ARCH_CONFIG_LC)	\
+				$<.ctfsys -o $@.ctfsys;			\
+		fi;							\
+	fi
+
+INSTALL_FILESYS_FILES = $(addprefix $(SYMROOT)$(INSTALL_FILE_DIR), $(INSTALL_FILE_LIST))
+INSTALL_FILESYS_FILES_GENERIC = $(filter-out $(SYMROOT)$(INSTALL_FILE_DIR)mach.$(KERNEL_CONFIG_LC).$(MACHINE_CONFIG_LC), $(INSTALL_FILESYS_FILES))
+
+force_filesys_install:
+
+$(INSTALL_FILESYS_FILES_GENERIC): $(SYMROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/%.sys force_filesys_install
+	@echo Installing $< in $@;
+	$(_v)if [ ! -e $(SYMROOT)$(INSTALL_FILE_DIR) ]; then	\
+		$(MKDIR) $(SYMROOT)$(INSTALL_FILE_DIR);		\
+	fi;							\
+	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then	\
+		$(RM) $(RMFLAGS) $@;				\
+		install $(INSTALL_FLAGS) $< $@;			\
+		if [ $(BUILD_DWARF) -eq 1 ]; then			\
+			$(DSYMUTIL) $(DSYMUTIL_FLAGS)			\
+				$(TARGET)/mach_kernel.sys		\
+				-o $(TARGET)/mach_kernel.sys.dSYM;	\
+			$(RM) -rf $@.dSYM;				\
+			$(MKDIR) -p -m 0755 $@.dSYM/$(DSYMBUILDDIR);	\
+			install $(INSTALL_FLAGS)			\
+				$<.dSYM/$(DSYMBUILDDIR)/$(notdir $<)	\
+				$@.dSYM/$(DSYMBUILDDIR)/$(notdir $@);	\
+		fi;							\
+	else							\
+		if [ ! -e $@ ]; then				\
+			echo >empty_filesys_$(notdir $@);	\
+			lipo_arg="$(subst _empty_file, empty_filesys_$(notdir $@),$(foreach lipo_arch,$(INSTALL_ARCHS_LC), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
+			$(LIPO) $${lipo_arg} -create -output $@;	\
+			$(RM) $(RMFLAGS) empty_filesys_$(notdir $@);	\
+		fi;							\
+		$(LIPO) $@ -replace $(ARCH_CONFIG_LC)  $< -o $@;	\
+									\
+		if [ $(BUILD_DWARF) -eq 1 ]; then			       \
+			if [ ! -e $@.dSYM/$(DSYMBUILDDIR)/$(notdir $@) ]; then \
+				echo >empty_filesys_$(notdir $@);	       \
+				lipo_arg="$(subst _empty_file, empty_filesys_$(notdir $@),$(foreach lipo_arch,$(INSTALL_ARCHS_LC), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
+				$(MKDIR) -p -m 0755 $@.dSYM/$(DSYMBUILDDIR);   \
+				$(LIPO) $${lipo_arg} -create		       \
+					-output				       \
+					$@.dSYM/$(DSYMBUILDDIR)/$(notdir $@);  \
+				$(RM) $(RMFLAGS) empty_filesys_$(notdir $@);   \
+			fi;						       \
+			$(DSYMUTIL) $(DSYMUTIL_FLAGS)			\
+				$(TARGET)/mach_kernel.sys		\
+				-o $(TARGET)/mach_kernel.sys.dSYM;	\
+			$(LIPO) $@.dSYM/$(DSYMBUILDDIR)/$(notdir $@)	       \
+				-replace $(ARCH_CONFIG_LC)		       \
+				$<.dSYM/$(DSYMBUILDDIR)/$(notdir $<)	       \
+				-o $@.dSYM/$(DSYMBUILDDIR)/$(notdir $@);       \
+		fi;							       \
+	fi
+	$(CP) $(SOURCE)kgmacros $(SYMROOT)$(INSTALL_FILE_DIR)
 
 INSTALL_DATA_FILES = $(addprefix $(DSTROOT)$(INSTALL_DATA_DIR), $(INSTALL_DATA_LIST))
 
 $(INSTALL_DATA_FILES): $(DSTROOT)$(INSTALL_DATA_DIR)% : $(SOURCE)/%
 	@echo Installing $< in $@;
-	@[ -d $(dir $@) ] ||$(MKDIR) $(dir $@);		\
+	$(_v)[ -d $(dir $@) ] ||$(MKDIR) $(dir $@);		\
 	$(RM) $(RMFLAGS) $@;		\
 	install $(DATA_INSTALL_FLAGS) $< $(dir $@);
 
@@ -676,13 +781,11 @@ INSTALL_MAN_FILES = $(addprefix $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR)/, $(INST
 
 do_installman: $(INSTALL_MAN_FILES)
 	@echo "[ $(SOURCE) ] make do_installman"
-	@if [ -n "$(strip $(INSTALL_MAN_LIST))" ]; then \
+	$(_v)if [ -n "$(strip $(INSTALL_MAN_LIST))" ]; then \
 		man_dir=$(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR); \
 		if [ -d $$man_dir ]; then       \
-			cur_dir=`pwd`;  \
-			cd $$man_dir;   \
-			$(RM) $(RMFLAGS) $(INSTALL_MAN_LIST) $(INSTALL_MAN_LINKS); \
-			cd $$cur_dir;   \
+			( cd $$man_dir;   \
+			$(RM) $(RMFLAGS) $(INSTALL_MAN_LIST) $(INSTALL_MAN_LINKS)); \
 		else                    \
 			$(MKDIR) $$man_dir;     \
 		fi;                             \
@@ -703,8 +806,8 @@ do_installman: $(INSTALL_MAN_FILES)
 	fi
 
 $(INSTALL_MAN_FILES): $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR)/% : %
-	@true echo Installing $< in $(dir $@);                  \
-	$(MKDIR) $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR);       \
+	@true echo Installing $< in $(dir $@)
+	$(_v)$(MKDIR) $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR);       \
 	$(RM) $(RMFLAGS) $@;                                    \
 	install $(INSTALL_FLAGS) $< $(dir $@);
 
@@ -712,3 +815,4 @@ ifeq    ($(INCL_MAKEDEP), TRUE)
 -include Makedep
 endif
 
+# vim: set ft=make:

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -46,6 +52,13 @@
  * 
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
+ */
+/*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ * Copyright (c) 2005-2006 SPARTA, Inc.
  */
 /*
  */
@@ -82,7 +95,11 @@
 #include <ipc/ipc_pset.h>
 #include <ipc/ipc_right.h>
 #include <ipc/ipc_kmsg.h>
+#include <ipc/ipc_labelh.h>
 #include <kern/misc_protos.h>
+#include <security/mac_mach_internal.h>
+
+#include <mach/security_server.h>
 
 /*
  * Forward declarations
@@ -1775,3 +1792,177 @@ task_set_port_space(
 	return kr;
 }
 
+/*
+ * Get a (new) label handle representing the given port's port label.
+ */
+#if CONFIG_MACF_MACH
+kern_return_t
+mach_get_label(
+	ipc_space_t		space,
+	mach_port_name_t	name,
+	mach_port_name_t	*outlabel)
+{
+	ipc_entry_t entry;
+	ipc_port_t port;
+	struct label outl;
+	kern_return_t kr;
+	int dead;
+
+	if (!MACH_PORT_VALID(name))
+		return KERN_INVALID_NAME;
+
+	/* Lookup the port name in the task's space. */
+	kr = ipc_right_lookup_write(space, name, &entry);
+	if (kr != KERN_SUCCESS)
+		return kr;
+
+	port = (ipc_port_t) entry->ie_object;
+	dead = ipc_right_check(space, port, name, entry);
+	if (dead) {
+		is_write_unlock(space);
+		return KERN_INVALID_RIGHT;
+	}
+	/* port is now locked */
+
+	is_write_unlock(space);
+	/* Make sure we are not dealing with a label handle. */
+	if (ip_kotype(port) == IKOT_LABELH) {
+		/* already is a label handle! */
+		ip_unlock(port);
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	/* Copy the port label and stash it in a new label handle. */
+	mac_port_label_init(&outl);
+	mac_port_label_copy(&port->ip_label, &outl); 
+	kr = labelh_new_user(space, &outl, outlabel);
+	ip_unlock(port);
+
+	return KERN_SUCCESS;
+}
+#else
+kern_return_t
+mach_get_label(
+	 __unused ipc_space_t		space,
+	 __unused mach_port_name_t	name,
+	 __unused mach_port_name_t	*outlabel)
+{
+	return KERN_INVALID_ARGUMENT;
+}
+#endif
+
+/*
+ * also works on label handles
+ */
+#if CONFIG_MACF_MACH
+kern_return_t
+mach_get_label_text(
+	ipc_space_t		space,
+	mach_port_name_t	name,
+	labelstr_t		policies,
+	labelstr_t		outlabel)
+{
+	ipc_entry_t entry;
+	kern_return_t kr;
+	struct label *l;
+	int dead;
+
+	if (space == IS_NULL || space->is_task == NULL)
+		return KERN_INVALID_TASK;
+
+	if (!MACH_PORT_VALID(name))
+		return KERN_INVALID_NAME;
+
+	kr = ipc_right_lookup_write(space, name, &entry);
+	if (kr != KERN_SUCCESS)
+		return kr;
+
+	dead = ipc_right_check(space, (ipc_port_t) entry->ie_object, name,
+	    entry);
+	if (dead) {
+		is_write_unlock(space);
+		return KERN_INVALID_RIGHT;
+	}
+	/* object (port) is now locked */
+
+	is_write_unlock (space);
+	l = io_getlabel(entry->ie_object);
+
+	mac_port_label_externalize(l, policies, outlabel, 512, 0);
+
+	io_unlocklabel(entry->ie_object);
+	io_unlock(entry->ie_object);
+	return KERN_SUCCESS;
+}
+#else
+kern_return_t
+mach_get_label_text(
+	__unused ipc_space_t		space,
+	__unused mach_port_name_t	name,
+	__unused labelstr_t		policies,
+	__unused labelstr_t		outlabel)
+{
+	return KERN_INVALID_ARGUMENT;
+}
+#endif
+
+
+#if CONFIG_MACF_MACH
+kern_return_t
+mach_set_port_label(
+	ipc_space_t		space,
+	mach_port_name_t	name,
+	labelstr_t		labelstr)
+{
+	ipc_entry_t entry;
+	kern_return_t kr;
+	struct label inl;
+	ipc_port_t port;
+	int rc;
+
+	if (space == IS_NULL || space->is_task == NULL)
+		return KERN_INVALID_TASK;
+
+	if (!MACH_PORT_VALID(name))
+		return KERN_INVALID_NAME;
+
+	mac_port_label_init(&inl);
+	rc = mac_port_label_internalize(&inl, labelstr);
+	if (rc)
+		return KERN_INVALID_ARGUMENT;
+
+	kr = ipc_right_lookup_write(space, name, &entry);
+	if (kr != KERN_SUCCESS)
+		return kr;
+
+	if (io_otype(entMACry->ie_object) != IOT_PORT) {
+		is_write_unlock(space);
+		return KERN_INVALID_RIGHT;
+	}
+
+	port = (ipc_port_t) entry->ie_object;
+	ip_lock(port);
+
+	tasklabel_lock(space->is_task);
+	rc = mac_port_check_label_update(&space->is_task->maclabel,
+				    &port->ip_label, &inl);
+	tasklabel_unlock(space->is_task);
+	if (rc)
+		kr = KERN_NO_ACCESS;
+	else
+		mac_port_label_copy(&inl, &port->ip_label);
+
+	ip_unlock(port);
+	is_write_unlock(space);
+	return kr;
+}
+#else
+kern_return_t
+mach_set_port_label(
+	ipc_space_t		space __unused,
+	mach_port_name_t	name __unused,
+	labelstr_t		labelstr __unused)
+{
+	return KERN_INVALID_ARGUMENT;
+}
+#endif

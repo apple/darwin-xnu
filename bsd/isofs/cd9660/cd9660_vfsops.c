@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*	$NetBSD: cd9660_vfsops.c,v 1.18 1995/03/09 12:05:36 mycroft Exp $	*/
 
@@ -131,7 +137,9 @@ struct vfsops cd9660_vfsops = {
 	cd9660_fhtovp,
 	cd9660_vptofh,
 	cd9660_init,
-	cd9660_sysctl
+	cd9660_sysctl,
+	NULL,
+	{NULL}
 };
 
 /*
@@ -183,11 +191,11 @@ cd9660_mount(mount_t mp, vnode_t devvp, user_addr_t data, vfs_context_t context)
 	struct iso_mnt *imp = NULL;
 
 	if (vfs_context_is64bit(context)) {
-		error = copyin(data, (caddr_t)&args, sizeof (args));
+		error = copyin(data, (caddr_t)&args, sizeof(args));
 	}
 	else {
 		struct iso_args temp;
-		error = copyin(data, (caddr_t)&temp, sizeof (temp));
+		error = copyin(data, (caddr_t)&temp, sizeof(temp));
 		args.flags = temp.flags;
 		args.ssector = temp.ssector;
 		args.toc_length = temp.toc_length;
@@ -253,7 +261,7 @@ cd9660_phys_device(mount_t mp, vfs_context_t context)
 		return (NULL);
 
 	/* Make a copy of the mount from name, then remove trailing "s...". */
-	strncpy(whole_path, sfs->f_mntfromname, sizeof(whole_path)-1); 
+	strlcpy(whole_path, sfs->f_mntfromname, sizeof(whole_path)); 
 	
 	/*
 	 * I would use strrchr or rindex here, but those are declared __private_extern__,
@@ -299,7 +307,6 @@ cd9660_find_video_dir(struct iso_mnt *isomp)
 	struct vnode *rvp = NULL;
 	struct vnode *videovp = NULL;
 	struct componentname cn;
-	struct vfs_context context;
 	char dirname[] = "MPEGAV";
 	
 	result = 0;		/* Assume not a video CD */
@@ -310,18 +317,15 @@ cd9660_find_video_dir(struct iso_mnt *isomp)
 		return 0;	/* couldn't find video dir */
 	}
 	
-	context.vc_proc = current_proc();
-	context.vc_ucred = kauth_cred_get();
-
 	cn.cn_nameiop = LOOKUP;
 	cn.cn_flags = ISLASTCN;
-	cn.cn_context = &context;
+	cn.cn_context = vfs_context_current();
 	cn.cn_pnbuf = dirname;
 	cn.cn_pnlen = sizeof(dirname)-1;
 	cn.cn_nameptr = cn.cn_pnbuf;
 	cn.cn_namelen = cn.cn_pnlen;
 	
-	err = VNOP_LOOKUP(rvp, &videovp, &cn, &context);
+	err = VNOP_LOOKUP(rvp, &videovp, &cn, cn.cn_context);
 	if (err == 0) {
 		struct iso_node *ip = VTOI(videovp);
 		result = 1;		/* Looks like video CD */
@@ -340,20 +344,16 @@ cd9660_find_video_dir(struct iso_mnt *isomp)
  * Common code for mount and mountroot
  */
 static int
-iso_mountfs(devvp, mp, argp, context)
-	register struct vnode *devvp;
-	struct mount *mp;
-	struct user_iso_args *argp;
-	vfs_context_t context;
+iso_mountfs(struct vnode *devvp, struct mount *mp, struct user_iso_args *argp,
+	    vfs_context_t context)
 {
-	struct proc *p;
-	register struct iso_mnt *isomp = (struct iso_mnt *)0;
+	struct iso_mnt *isomp = (struct iso_mnt *)0;
 	struct buf *bp = NULL;
 	struct buf *pribp = NULL, *supbp = NULL;
 	dev_t dev = vnode_specrdev(devvp);
 	int error = EINVAL;
 	int breaderr = 0;
-	u_long iso_bsize;
+	u_long iso_bsize, orig_bsize;
 	int iso_blknum;
 	int joliet_level;
 	struct iso_volume_descriptor *vdp = NULL;
@@ -367,6 +367,16 @@ iso_mountfs(devvp, mp, argp, context)
 	if (vfs_isrdwr(mp))
 		return (EROFS);
 
+	/* Advisory locking should be handled at the VFS layer */
+	vfs_setlocklocal(mp);
+
+	/* Finish initializing hash tables */
+	cd9660_hashinit();
+
+	if ((error = VNOP_IOCTL(devvp, DKIOCGETBLOCKSIZE,
+	     (caddr_t)&orig_bsize, 0, context)))
+		return (error);
+	
 	/* This is the "logical sector size".  The standard says this
 	 * should be 2048 or the physical sector size on the device,
 	 * whichever is greater.  For now, we'll just use a constant.
@@ -391,7 +401,7 @@ iso_mountfs(devvp, mp, argp, context)
 			continue;
 		}
 
-		vdp = (struct iso_volume_descriptor *)buf_dataptr(bp);
+		vdp = (struct iso_volume_descriptor *)((char *)0 + buf_dataptr(bp));
 		if (bcmp (vdp->volume_desc_id, ISO_STANDARD_ID, sizeof(vdp->volume_desc_id)) != 0) {
 #ifdef DEBUG
 		        printf("cd9660_vfsops.c: iso_mountfs: "
@@ -474,8 +484,8 @@ iso_mountfs(devvp, mp, argp, context)
 	
 	rootp = (struct iso_directory_record *)pri->root_directory_record;
 	
-	MALLOC(isomp, struct iso_mnt *, sizeof *isomp, M_ISOFSMNT, M_WAITOK);
-	bzero((caddr_t)isomp, sizeof *isomp);
+	MALLOC(isomp, struct iso_mnt *, sizeof(*isomp), M_ISOFSMNT, M_WAITOK);
+	bzero((caddr_t)isomp, sizeof(*isomp));
 	isomp->im_sector_size = ISO_DEFAULT_BLOCK_SIZE;
 	isomp->logical_block_size = logical_block_size;
 	isomp->volume_space_size = isonum_733 (pri->volume_space_size);
@@ -488,7 +498,7 @@ iso_mountfs(devvp, mp, argp, context)
 	 * filehandle validation.
 	 */
 	isomp->volume_space_size += blkoff;
-	bcopy (rootp, isomp->root, sizeof isomp->root);
+	bcopy (rootp, isomp->root, sizeof(isomp->root));
 	isomp->root_extent = isonum_733 (rootp->extent);
 	isomp->root_size = isonum_733 (rootp->size);
 
@@ -508,7 +518,7 @@ iso_mountfs(devvp, mp, argp, context)
 	}
 
 	if (pri->volume_id[0] == 0)
-		strcpy(isomp->volume_id, ISO_DFLT_VOLUME_ID);
+		strlcpy(isomp->volume_id, ISO_DFLT_VOLUME_ID, sizeof(isomp->volume_id));
 	else
 		bcopy(pri->volume_id, isomp->volume_id, sizeof(isomp->volume_id));
 	cd9660_tstamp_conv17(pri->creation_date, &isomp->creation_date);
@@ -563,7 +573,7 @@ iso_mountfs(devvp, mp, argp, context)
 			argp->flags |= ISOFSMNT_NORRIP;
 			goto skipRRIP;
 		}
-		rootp = (struct iso_directory_record *)buf_dataptr(bp);
+		rootp = (struct iso_directory_record *)((char *)0 + buf_dataptr(bp));
 		
 		if ((isomp->rr_skip = cd9660_rrip_offset(rootp,isomp)) < 0) {
 			argp->flags  |= ISOFSMNT_NORRIP;
@@ -609,9 +619,7 @@ skipRRIP:
 		 *
 		 * This name can have up to 16 UCS-2 chars.
 		 */
-		convflags = UTF_DECOMPOSED;
-		if (BYTE_ORDER != BIG_ENDIAN)
-			convflags |= UTF_REVERSE_ENDIAN;
+		convflags = UTF_DECOMPOSED | UTF_BIG_ENDIAN;
 		uchp = (u_int16_t *)sup->volume_id;
 		for (i = 0; i < 16 && uchp[i]; ++i);
 		if ((utf8_encodestr((u_int16_t *)sup->volume_id, (i * 2), vol_id,
@@ -628,7 +636,7 @@ skipRRIP:
 
 		rootp = (struct iso_directory_record *)
 			sup->root_directory_record;
-		bcopy (rootp, isomp->root, sizeof isomp->root);
+		bcopy (rootp, isomp->root, sizeof(isomp->root));
 		isomp->root_extent = isonum_733 (rootp->extent);
 		isomp->root_size = isonum_733 (rootp->size);
 		buf_markaged(supbp);
@@ -658,6 +666,11 @@ skipRRIP:
 
 	return (0);
 out:
+	if (orig_bsize != iso_bsize) {
+		(void)VNOP_IOCTL(devvp, DKIOCSETBLOCKSIZE,
+			(caddr_t)&orig_bsize, FWRITE, context);
+	}
+
 	if (bp)
 		buf_brelse(bp);
 	if (pribp)
@@ -693,7 +706,7 @@ cd9660_start(__unused struct mount *mp, __unused int flags,
 int
 cd9660_unmount(struct mount *mp, int mntflags, vfs_context_t context)
 {
-	register struct iso_mnt *isomp;
+	struct iso_mnt *isomp;
 	int error, flags = 0;
 	int force = 0;
 	
@@ -749,10 +762,10 @@ cd9660_root(struct mount *mp, struct vnode **vpp, __unused vfs_context_t context
  */
 /* ARGSUSED */
 int
-cd9660_statfs(struct mount *mp, register struct vfsstatfs *sbp,
+cd9660_statfs(struct mount *mp, struct vfsstatfs *sbp,
 	      __unused vfs_context_t context)
 {
-	register struct iso_mnt *isomp;
+	struct iso_mnt *isomp;
 	
 	isomp = VFSTOISOFS(mp);
 
@@ -791,7 +804,7 @@ cd9660_statfs(struct mount *mp, register struct vfsstatfs *sbp,
 	return (0);
 }
 
-int cd9660_vfs_getattr(struct mount *mp, struct vfs_attr *fsap, vfs_context_t context)
+int cd9660_vfs_getattr(struct mount *mp, struct vfs_attr *fsap, __unused vfs_context_t context)
 {
 	struct iso_mnt *imp;
 	struct vfsstatfs *stats = vfs_statfs(mp);
@@ -847,11 +860,7 @@ int cd9660_vfs_getattr(struct mount *mp, struct vfs_attr *fsap, vfs_context_t co
 			VOL_CAP_INT_SEARCHFS |
 			VOL_CAP_INT_ATTRLIST |
 			VOL_CAP_INT_NFSEXPORT |
-			VOL_CAP_INT_READDIRATTR |
-			VOL_CAP_INT_EXCHANGEDATA |
-			VOL_CAP_INT_COPYFILE |
 			VOL_CAP_INT_ALLOCATE |
-			VOL_CAP_INT_VOL_RENAME |
 			VOL_CAP_INT_ADVLOCK |
 			VOL_CAP_INT_FLOCK;
 		fsap->f_capabilities.valid[VOL_CAPABILITIES_RESERVED1] = 0;
@@ -867,15 +876,19 @@ int cd9660_vfs_getattr(struct mount *mp, struct vfs_attr *fsap, vfs_context_t co
 		 * VFS has implemented.
 		 */
 
-		fsap->f_attributes.validattr.commonattr = ATTR_CMN_VALIDMASK;
-        fsap->f_attributes.validattr.volattr = ATTR_VOL_VALIDMASK;
-        fsap->f_attributes.validattr.dirattr = ATTR_DIR_VALIDMASK;
+#define ISOFS_ATTR_CMN_VALIDMASK	(ATTR_CMN_VALIDMASK & ~(ATTR_CMN_PAROBJID | ATTR_CMN_CRTIME | ATTR_CMN_BKUPTIME | ATTR_CMN_PARENTID))
+#define ISOFS_ATTR_VOL_VALIDMASK	(ATTR_VOL_VALIDMASK & ~(ATTR_VOL_OBJCOUNT | ATTR_VOL_FILECOUNT | ATTR_VOL_DIRCOUNT | ATTR_VOL_MAXOBJCOUNT | ATTR_VOL_NAME))
+#define ISOFS_ATTR_DIR_VALIDMASK	(ATTR_DIR_VALIDMASK & ~(ATTR_DIR_ENTRYCOUNT))
+
+		fsap->f_attributes.validattr.commonattr = ISOFS_ATTR_CMN_VALIDMASK;
+        fsap->f_attributes.validattr.volattr = ISOFS_ATTR_VOL_VALIDMASK;
+        fsap->f_attributes.validattr.dirattr = ISOFS_ATTR_DIR_VALIDMASK;
         fsap->f_attributes.validattr.fileattr = ATTR_FILE_VALIDMASK;
         fsap->f_attributes.validattr.forkattr = ATTR_FORK_VALIDMASK;
 
-		fsap->f_attributes.nativeattr.commonattr = ATTR_CMN_VALIDMASK;
-        fsap->f_attributes.nativeattr.volattr = ATTR_VOL_VALIDMASK;
-        fsap->f_attributes.nativeattr.dirattr = ATTR_DIR_VALIDMASK;
+		fsap->f_attributes.nativeattr.commonattr = ISOFS_ATTR_CMN_VALIDMASK;
+        fsap->f_attributes.nativeattr.volattr = ISOFS_ATTR_VOL_VALIDMASK;
+        fsap->f_attributes.nativeattr.dirattr = ISOFS_ATTR_DIR_VALIDMASK;
         fsap->f_attributes.nativeattr.fileattr = ATTR_FILE_VALIDMASK;
         fsap->f_attributes.nativeattr.forkattr = ATTR_FORK_VALIDMASK;
 
@@ -919,7 +932,7 @@ int
 cd9660_fhtovp(mount_t mp, int fhlen, unsigned char *fhp, vnode_t *vpp, vfs_context_t context)
 {
 	struct ifid *ifhp = (struct ifid *)fhp;
-	register struct iso_node *ip;
+	struct iso_node *ip;
 	struct vnode *nvp;
 	int error;
 	
@@ -1050,7 +1063,7 @@ cd9660_vget_internal(mount_t mp, ino_t ino, vnode_t *vpp, vnode_t dvp,
 		     struct componentname *cnp, int relocated,
 		     struct iso_directory_record *isodir, proc_t p)
 {
-	register struct iso_mnt *imp;
+	struct iso_mnt *imp;
 	struct iso_node *ip;
 	buf_t	bp = NULL;
 	vnode_t	vp;
@@ -1144,7 +1157,7 @@ cd9660_vget_internal(mount_t mp, ino_t ino, vnode_t *vpp, vnode_t dvp,
 			struct iso_directory_record *pdp;
 
 			pdp = (struct iso_directory_record *)
-					((char *)buf_dataptr(bp) + isonum_711(isodir->length));
+					((char *)0 + buf_dataptr(bp) + isonum_711(isodir->length));
 			if ((isonum_711(pdp->flags) & directoryBit)
 					&& (pdp->name[0] == 1))
 				ip->i_parent = isodirino(pdp, imp);
@@ -1177,7 +1190,7 @@ cd9660_vget_internal(mount_t mp, ino_t ino, vnode_t *vpp, vnode_t dvp,
 		if ((error = (int)buf_bread(imp->im_devvp, lbn, imp->im_sector_size, NOCRED, &bp)))
 		        goto errout;
 
-		isodir = (struct iso_directory_record *)buf_dataptr(bp);
+		isodir = (struct iso_directory_record *)((char *)0 + buf_dataptr(bp));
 	}
 
 	/*
@@ -1583,8 +1596,8 @@ DoneLooking:
 int
 cd9660_vptofh(struct vnode *vp, int *fhlenp, unsigned char *fhp, __unused vfs_context_t context)
 {
-	register struct iso_node *ip = VTOI(vp);
-	register struct ifid *ifhp;
+	struct iso_node *ip = VTOI(vp);
+	struct ifid *ifhp;
 
 	if (*fhlenp < (int)sizeof(struct ifid))
 		return (EOVERFLOW);

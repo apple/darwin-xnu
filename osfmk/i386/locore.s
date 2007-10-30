@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -217,99 +223,146 @@ Entry(timer_grab)
  */
 
 /*
- * Low 32-bits of nanotime returned in %eax.
+ * Nanotime returned in %edx:%eax.
  * Computed from tsc based on the scale factor
  * and an implicit 32 bit shift.
  *
- * Uses %esi, %edi, %ebx, %ecx and %edx.
+ * Uses %eax, %ebx, %ecx, %edx, %esi, %edi.
  */
 #define RNT_INFO		_rtc_nanotime_info
-#define NANOTIME32											  \
-0:	movl	RNT_INFO+RNT_TSC_BASE,%esi						 ;\
-	movl	RNT_INFO+RNT_TSC_BASE+4,%edi					 ;\
-	rdtsc													 ;\
-	subl	%esi,%eax					/* tsc - tsc_base */ ;\
-	sbbl	%edi,%edx										 ;\
-	movl	RNT_INFO+RNT_SCALE,%ecx							 ;\
-	movl	%edx,%ebx					/* delta * scale */  ;\
-	mull	%ecx											 ;\
-	movl	%ebx,%eax										 ;\
-	movl	%edx,%ebx										 ;\
-	mull	%ecx											 ;\
-	addl	%ebx,%eax										 ;\
-	addl	RNT_INFO+RNT_NS_BASE,%eax	/* add ns_base */	 ;\
-	cmpl	RNT_INFO+RNT_TSC_BASE,%esi						 ;\
-	jne		0b												 ;\
-	cmpl	RNT_INFO+RNT_TSC_BASE+4,%edi					 ;\
-	jne		0b
+#define NANOTIME														  \
+0:	movl	RNT_INFO+RNT_TSC_BASE,%esi									; \
+	movl	RNT_INFO+RNT_TSC_BASE+4,%edi								; \
+	rdtsc																; \
+	subl	%esi,%eax						/* tsc - tsc_base */		; \
+	sbbl	%edi,%edx													; \
+	movl	RNT_INFO+RNT_SCALE,%ecx										; \
+	movl	%edx,%ebx						/* delta * scale */			; \
+	mull	%ecx														; \
+	movl	%ebx,%eax													; \
+	movl	%edx,%ebx													; \
+	mull	%ecx														; \
+	addl	%ebx,%eax													; \
+	adcl	$0,%edx							/* add carry into hi */		; \
+	addl	RNT_INFO+RNT_NS_BASE,%eax		/* add ns_base lo */		; \
+	adcl	RNT_INFO+RNT_NS_BASE+4,%edx		/* add ns_base hi */		; \
+	cmpl	RNT_INFO+RNT_TSC_BASE,%esi									; \
+	jne	0b									/* repeat if changed */		; \
+	cmpl	RNT_INFO+RNT_TSC_BASE+4,%edi								; \
+	jne	0b
 
 /*
- * Add 32-bit ns delta in register dreg to timer pointed to by register treg.
+ * Add 64-bit delta in register dreg : areg to timer pointed to by register treg.
  */
-#define TIMER_UPDATE(treg,dreg)						      \
-	addl	TIMER_LOW(treg),dreg		/* add delta low bits     */ ;\
-	adcl	$0,TIMER_HIGHCHK(treg)		/* add carry check bits   */ ;\
-	movl	dreg,TIMER_LOW(treg)		/* store updated low bit  */ ;\
-	movl	TIMER_HIGHCHK(treg),dreg	/* copy high check bits	  */ ;\
-	movl    dreg,TIMER_HIGH(treg)		/*   to high bita         */
+#define TIMER_UPDATE(treg,dreg,areg)									  \
+	addl	TIMER_LOW(treg),areg		/* add low bits */				; \
+	adcl	dreg,TIMER_HIGH(treg)		/* add carry high bits */		; \
+	movl	areg,TIMER_LOW(treg)		/* store updated low bit */		; \
+	movl	TIMER_HIGH(treg),dreg		/* copy high bits */			; \
+	movl    dreg,TIMER_HIGHCHK(treg)	/* to high check */
 
 /*
  * Add time delta to old timer and start new.
  */
-#define TIMER_EVENT(old,new)                                                  \
-	NANOTIME32				/* eax low bits nanosecs  */ ;\
-	movl	%gs:CPU_PROCESSOR,%ecx		/* get current processor  */ ;\
-	movl 	CURRENT_TIMER(%ecx),%ecx	/* get current timer      */ ;\
-	movl	%eax,%edx			/* save timestamp in %edx */ ;\
-	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time   */ ;\
-	TIMER_UPDATE(%ecx,%eax)			/* update timer struct    */ ;\
-	addl	$(new##_TIMER-old##_TIMER),%ecx	/* point to new timer     */ ;\
-	movl	%edx,TIMER_TSTAMP(%ecx)		/* set timestamp          */ ;\
-	movl	%gs:CPU_PROCESSOR,%edx		/* get current processor  */ ;\
-	movl	%ecx,CURRENT_TIMER(%edx)	/* set current timer      */
-
+#define TIMER_EVENT(old,new)											  \
+	NANOTIME							/* edx:eax nanosecs */			; \
+	movl	%eax,%esi					/* save timestamp */			; \
+	movl	%edx,%edi					/* save timestamp */			; \
+	movl	%gs:CPU_PROCESSOR,%ebx		/* get current processor */		; \
+	movl 	THREAD_TIMER(%ebx),%ecx		/* get current timer */			; \
+	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */		; \
+	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */		; \
+	TIMER_UPDATE(%ecx,%edx,%eax)		/* update timer */				; \
+	addl	$(new##_TIMER-old##_TIMER),%ecx	/* point to new timer */	; \
+	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */				; \
+	movl	%edi,TIMER_TSTAMP+4(%ecx)	/* set timestamp */				; \
+	movl	%ecx,THREAD_TIMER(%ebx)		/* set current timer */			; \
+	movl	%esi,%eax					/* restore timestamp */			; \
+	movl	%edi,%edx					/* restore timestamp */			; \
+	movl	CURRENT_STATE(%ebx),%ecx	/* current state */				; \
+	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */		; \
+	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */		; \
+	TIMER_UPDATE(%ecx,%edx,%eax)		/* update timer */				; \
+	addl	$(new##_STATE-old##_STATE),%ecx /* point to new state */	; \
+	movl	%ecx,CURRENT_STATE(%ebx)	/* set current state */			; \
+	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */				; \
+	movl	%edi,TIMER_TSTAMP+4(%ecx)	/* set timestamp */
 
 /*
  * Update time on user trap entry.
- * Uses %eax,%ecx,%edx,%esi.
+ * Uses %eax,%ebx,%ecx,%edx,%esi,%edi.
  */
 #define	TIME_TRAP_UENTRY	TIMER_EVENT(USER,SYSTEM)
 
 /*
  * update time on user trap exit.
- * Uses %eax,%ecx,%edx,%esi.
+ * Uses %eax,%ebx,%ecx,%edx,%esi,%edi.
  */
 #define	TIME_TRAP_UEXIT		TIMER_EVENT(SYSTEM,USER)
 
 /*
  * update time on interrupt entry.
- * Uses %eax,%ecx,%edx,%esi.
+ * Uses %eax,%ebx,%ecx,%edx,%esi,%edi.
+ * Saves processor state info on stack.
  */
-#define	TIME_INT_ENTRY \
-	NANOTIME32				/* eax low bits nanosecs  */ ;\
-	movl	%gs:CPU_PROCESSOR,%ecx		/* get current processor  */ ;\
-	movl 	CURRENT_TIMER(%ecx),%ecx	/* get current timer      */ ;\
-	movl	%eax,%edx			/* save timestamp in %edx */ ;\
-	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time   */ ;\
-	TIMER_UPDATE(%ecx,%eax)			/* update timer struct    */ ;\
-	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */ ;\
-	addl	$(SYSTEM_TIMER),%ecx		/* point to sys timer     */ ;\
-	movl	%edx,TIMER_TSTAMP(%ecx)		/* set timestamp          */
+#define	TIME_INT_ENTRY													  \
+	NANOTIME							/* edx:eax nanosecs */			; \
+	movl	%eax,%gs:CPU_INT_EVENT_TIME		/* save in cpu data */		; \
+	movl	%edx,%gs:CPU_INT_EVENT_TIME+4	/* save in cpu data */		; \
+	movl	%eax,%esi					/* save timestamp */			; \
+	movl	%edx,%edi					/* save timestamp */			; \
+	movl	%gs:CPU_PROCESSOR,%ebx		/* get current processor */		; \
+	movl 	THREAD_TIMER(%ebx),%ecx		/* get current timer */			; \
+	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */		; \
+	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */		; \
+	TIMER_UPDATE(%ecx,%edx,%eax)		/* update timer */				; \
+	movl	KERNEL_TIMER(%ebx),%ecx		/* point to kernel timer */		; \
+	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */				; \
+	movl	%edi,TIMER_TSTAMP+4(%ecx)	/* set timestamp */				; \
+	movl	%esi,%eax					/* restore timestamp */			; \
+	movl	%edi,%edx					/* restore timestamp */			; \
+	movl	CURRENT_STATE(%ebx),%ecx	/* get current state */			; \
+	pushl	%ecx						/* save state */				; \
+	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */		; \
+	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */		; \
+	TIMER_UPDATE(%ecx,%edx,%eax)		/* update timer */				; \
+	leal	IDLE_STATE(%ebx),%eax		/* get idle state */			; \
+	cmpl	%eax,%ecx					/* compare current state */		; \
+	je		0f							/* skip if equal */				; \
+	leal	SYSTEM_STATE(%ebx),%ecx		/* get system state */			; \
+	movl	%ecx,CURRENT_STATE(%ebx)	/* set current state */			; \
+0:	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */				; \
+	movl	%edi,TIMER_TSTAMP+4(%ecx)	/* set timestamp */
 
 /*
  * update time on interrupt exit.
- * Uses %eax, %ecx, %edx, %esi.
+ * Uses %eax,%ebx,%ecx,%edx,%esi,%edi.
+ * Restores processor state info from stack.
  */
-#define	TIME_INT_EXIT \
-	NANOTIME32				/* eax low bits nanosecs  */ ;\
-	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */ ;\
-	addl	$(SYSTEM_TIMER),%ecx		/* point to sys timer 	  */ ;\
-	movl	%eax,%edx			/* save timestamp in %edx */ ;\
-	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time   */ ;\
-	TIMER_UPDATE(%ecx,%eax)			/* update timer struct    */ ;\
-	movl	%gs:CPU_PROCESSOR,%ecx		/* get current processor  */ ;\
-	movl	CURRENT_TIMER(%ecx),%ecx	/* interrupted timer      */ ;\
-	movl	%edx,TIMER_TSTAMP(%ecx)		/* set timestamp          */
+#define	TIME_INT_EXIT													  \
+	NANOTIME							/* edx:eax nanosecs */			; \
+	movl	%eax,%gs:CPU_INT_EVENT_TIME		/* save in cpu data */		; \
+	movl	%edx,%gs:CPU_INT_EVENT_TIME+4	/* save in cpu data */		; \
+	movl	%eax,%esi					/* save timestamp */			; \
+	movl	%edx,%edi					/* save timestamp */			; \
+	movl	%gs:CPU_PROCESSOR,%ebx		/* get current processor */		; \
+	movl	KERNEL_TIMER(%ebx),%ecx		/* point to kernel timer */		; \
+	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */		; \
+	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */		; \
+	TIMER_UPDATE(%ecx,%edx,%eax)		/* update timer */				; \
+	movl	THREAD_TIMER(%ebx),%ecx		/* interrupted timer */			; \
+	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */				; \
+	movl	%edi,TIMER_TSTAMP+4(%ecx)	/* set timestamp */				; \
+	movl	%esi,%eax					/* restore timestamp */			; \
+	movl	%edi,%edx					/* restore timestamp */			; \
+	movl	CURRENT_STATE(%ebx),%ecx	/* get current state */			; \
+	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */		; \
+	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */		; \
+	TIMER_UPDATE(%ecx,%edx,%eax)		/* update timer */				; \
+	popl	%ecx						/* restore state */				; \
+	movl	%ecx,CURRENT_STATE(%ebx)	/* set current state */			; \
+	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */				; \
+	movl	%edi,TIMER_TSTAMP+4(%ecx)	/* set timestamp */
 
 #endif /* STAT_TIME */
 
@@ -407,7 +460,7 @@ Entry(db_task_gen_prot)
 Entry(db_task_start)
 	movl	%esp,%edx
 	subl	$(ISS32_SIZE),%edx
-	movl	%edx,%esp		/* allocate i386_saved_state on stack */
+	movl	%edx,%esp		/* allocate x86_saved_state on stack */
 	movl	%eax,R_ERR(%esp)
 	movl	%ebx,R_TRAPNO(%esp)
 	pushl	%edx
@@ -454,10 +507,10 @@ Entry(call_continuation)
 	pushl	%eax
 	call	EXT(thread_terminate)
 	
-
+	
 	
 /*******************************************************************************************************
- *	
+ *
  * All 64 bit task 'exceptions' enter lo_alltraps:
  *	esp	-> x86_saved_state_t
  * 
@@ -477,11 +530,26 @@ Entry(lo_alltraps)
 	jne	1f
 	movl	R64_CS(%esp),%eax	/* 64-bit user mode */
 1:
-	testb	$3,%eax
+	testb	$3,%al
 	jz	trap_from_kernel
 						/* user mode trap */
 	TIME_TRAP_UENTRY
 
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx
+	movl	ACT_TASK(%ecx),%ebx
+
+	/* Check for active vtimers in the current task */
+	cmpl	$0,TASK_VTIMERS(%ebx)
+	jz		1f
+
+	/* Set a pending AST */
+	orl		$(AST_BSD),%gs:CPU_PENDING_AST
+
+	/* Set a thread AST (atomic) */
+	lock
+	orl		$(AST_BSD),ACT_AST(%ecx)
+	
+1:
 	movl	%gs:CPU_KERNEL_STACK,%ebx
 	xchgl	%ebx,%esp			/* switch to kernel stack */
 	sti
@@ -504,6 +572,7 @@ LEXT(return_from_trap)
 	sti				/* interrupts always enabled on return to user mode */
 
 	pushl	%ebx			/* save PCB stack */
+	xorl	%ebp,%ebp		/* Clear framepointer */
 	CCALL1(i386_astintr, $0)	/* take the AST */
 	cli
 	popl	%esp			/* switch back to PCB stack (w/exc link) */
@@ -518,7 +587,7 @@ LEXT(ret_to_user)
 	jmp	EXT(lo64_ret_to_user)
 
 
-	
+
 /*
  * Trap from kernel mode.  No need to switch stacks.
  * Interrupts must be off here - we will set them to state at time of trap
@@ -526,7 +595,12 @@ LEXT(ret_to_user)
  */
 trap_from_kernel:
 	movl	%esp, %eax		/* saved state addr */
-	CCALL1(kernel_trap, %eax)	/* to kernel trap routine */
+	pushl	R_EIP(%esp)		/* Simulate a CALL from fault point */
+	pushl   %ebp			/* Extend framepointer chain */
+	movl	%esp, %ebp
+	CCALL1(kernel_trap, %eax)	/* Call kernel trap handler */
+	popl	%ebp
+	addl	$4, %esp
 	cli
 
 	movl	%gs:CPU_PENDING_AST,%eax		/* get pending asts */
@@ -591,6 +665,21 @@ Entry(lo_allintrs)
 	
 	TIME_INT_ENTRY			/* do timing */
 
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx
+	movl	ACT_TASK(%ecx),%ebx
+
+	/* Check for active vtimers in the current task */
+	cmpl	$0,TASK_VTIMERS(%ebx)
+	jz		1f
+
+	/* Set a pending AST */
+	orl		$(AST_BSD),%gs:CPU_PENDING_AST
+
+	/* Set a thread AST (atomic) */
+	lock
+	orl		$(AST_BSD),ACT_AST(%ecx)
+	
+1:
 	incl	%gs:CPU_PREEMPTION_LEVEL
 	incl	%gs:CPU_INTERRUPT_LEVEL
 
@@ -600,9 +689,6 @@ Entry(lo_allintrs)
 	cli				/* just in case we returned with intrs enabled */
 	xorl	%eax,%eax
 	movl	%eax,%gs:CPU_INT_STATE	/* clear intr state pointer */
-
-	.globl	EXT(return_to_iret)
-LEXT(return_to_iret)			/* (label for kdb_kintr and hardclock) */
 
 	decl	%gs:CPU_INTERRUPT_LEVEL
 	decl	%gs:CPU_PREEMPTION_LEVEL
@@ -632,7 +718,7 @@ LEXT(return_to_iret)			/* (label for kdb_kintr and hardclock) */
 	jne	3f
 	movl	R64_CS(%esp),%eax	/* 64-bit user mode */
 3:
-	testb	$3,%eax			/* user mode, */
+	testb	$3,%al			/* user mode, */
 	jnz	ast_from_interrupt_user	/* go handle potential ASTs */
 	/*
 	 * we only want to handle preemption requests if
@@ -670,7 +756,7 @@ int_from_intstack:
 	incl	%gs:CPU_PREEMPTION_LEVEL
 	incl	%gs:CPU_INTERRUPT_LEVEL
 
-	movl	%esp, %edx		/* i386_saved_state */
+	movl	%esp, %edx		/* x86_saved_state */
 	CCALL1(PE_incoming_interrupt, %edx)
 
 	decl	%gs:CPU_INTERRUPT_LEVEL
@@ -696,7 +782,7 @@ ast_from_interrupt_user:
  * 32bit Tasks
  * System call entries via INTR_GATE or sysenter:
  *
- *	esp	 -> i386_saved_state_t
+ *	esp	 -> x86_saved_state32_t
  *	cr3	 -> kernel directory
  *	esp	 -> low based stack
  *	gs	 -> CPU_DATA_GS
@@ -718,42 +804,83 @@ Entry(lo_sysenter)
 						/* > 0 => unix */
 	
 Entry(lo_unix_scall)
-        TIME_TRAP_UENTRY
+	TIME_TRAP_UENTRY
 
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
+	movl	ACT_TASK(%ecx),%ebx			/* point to current task  */
+	addl	$1,TASK_SYSCALLS_UNIX(%ebx)	/* increment call count   */
+
+	/* Check for active vtimers in the current task */
+	cmpl	$0,TASK_VTIMERS(%ebx)
+	jz		1f
+
+	/* Set a pending AST */
+	orl		$(AST_BSD),%gs:CPU_PENDING_AST
+
+	/* Set a thread AST (atomic) */
+	lock
+	orl		$(AST_BSD),ACT_AST(%ecx)
+	
+1:
 	movl	%gs:CPU_KERNEL_STACK,%ebx
 	xchgl	%ebx,%esp		/* switch to kernel stack */
 
 	sti
-	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
-	movl	ACT_TASK(%ecx),%ecx		/* point to current task  */
-	addl	$1,TASK_SYSCALLS_UNIX(%ecx)	/* increment call count   */
 
 	CCALL1(unix_syscall, %ebx)
 	/*
 	 * always returns through thread_exception_return
 	 */
-	
+
 
 Entry(lo_mach_scall)
 	TIME_TRAP_UENTRY
 
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
+	movl	ACT_TASK(%ecx),%ebx			/* point to current task  */
+	addl	$1,TASK_SYSCALLS_MACH(%ebx)	/* increment call count   */
+
+	/* Check for active vtimers in the current task */
+	cmpl	$0,TASK_VTIMERS(%ebx)
+	jz		1f
+
+	/* Set a pending AST */
+	orl		$(AST_BSD),%gs:CPU_PENDING_AST
+
+	/* Set a thread AST (atomic) */
+	lock
+	orl		$(AST_BSD),ACT_AST(%ecx)
+	
+1:
 	movl	%gs:CPU_KERNEL_STACK,%ebx
 	xchgl	%ebx,%esp		/* switch to kernel stack */
 
 	sti
-	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
-	movl	ACT_TASK(%ecx),%ecx		/* point to current task  */
-	addl	$1,TASK_SYSCALLS_MACH(%ecx)	/* increment call count   */
 
 	CCALL1(mach_call_munger, %ebx)
 	/*
 	 * always returns through thread_exception_return
 	 */
 
-	
-Entry(lo_mdep_scall)
-        TIME_TRAP_UENTRY
 
+Entry(lo_mdep_scall)
+	TIME_TRAP_UENTRY
+
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
+	movl	ACT_TASK(%ecx),%ebx			/* point to current task  */
+
+	/* Check for active vtimers in the current task */
+	cmpl	$0,TASK_VTIMERS(%ebx)
+	jz		1f
+
+	/* Set a pending AST */
+	orl		$(AST_BSD),%gs:CPU_PENDING_AST
+
+	/* Set a thread AST (atomic) */
+	lock
+	orl		$(AST_BSD),ACT_AST(%ecx)
+	
+1:
 	movl	%gs:CPU_KERNEL_STACK,%ebx
 	xchgl	%ebx,%esp		/* switch to kernel stack */
 
@@ -763,21 +890,37 @@ Entry(lo_mdep_scall)
 	/*
 	 * always returns through thread_exception_return
 	 */
-	
+
 
 Entry(lo_diag_scall)
 	TIME_TRAP_UENTRY
 
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
+	movl	ACT_TASK(%ecx),%ebx			/* point to current task  */
+
+	/* Check for active vtimers in the current task */
+	cmpl	$0,TASK_VTIMERS(%ebx)
+	jz		1f
+
+	/* Set a pending AST */
+	orl		$(AST_BSD),%gs:CPU_PENDING_AST
+
+	/* Set a thread AST (atomic) */
+	lock
+	orl		$(AST_BSD),ACT_AST(%ecx)
+	
+1:
 	movl	%gs:CPU_KERNEL_STACK,%ebx	// Get the address of the kernel stack
 	xchgl	%ebx,%esp		// Switch to it, saving the previous
 
 	CCALL1(diagCall, %ebx)		// Call diagnostics
-	cli				// Disable interruptions just in case they were enabled
-	popl	%esp			// Get back the original stack
 	
 	cmpl	$0,%eax			// What kind of return is this?
-	jne	EXT(return_to_user)	// Normal return, do not check asts...
-				
+	je	2f
+	cli				// Disable interruptions just in case they were enabled
+	popl	%esp			// Get back the original stack
+	jmp	EXT(return_to_user)	// Normal return, do not check asts...
+2:	
 	CCALL3(i386_exception, $EXC_SYSCALL, $0x6000, $1)
 		// pass what would be the diag syscall
 		// error return - cause an exception
@@ -818,47 +961,94 @@ Entry(lo_syscall)
 	cmpl	$(SYSCALL_CLASS_DIAG<<SYSCALL_CLASS_SHIFT), %ebx
 	je	EXT(lo64_diag_scall)
 
-	/* Syscall class unknown */
-	CCALL3(i386_exception, $(EXC_SYSCALL), %eax, $1)
-	/* no return */
-
-Entry(lo64_unix_scall)
-        TIME_TRAP_UENTRY
-
 	movl	%gs:CPU_KERNEL_STACK,%ebx
 	xchgl	%ebx,%esp		/* switch to kernel stack */
 
 	sti
+
+	/* Syscall class unknown */
+	CCALL3(i386_exception, $(EXC_SYSCALL), %eax, $1)
+	/* no return */
+
+
+Entry(lo64_unix_scall)
+	TIME_TRAP_UENTRY
+
 	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
-	movl	ACT_TASK(%ecx),%ecx		/* point to current task  */
-	addl	$1,TASK_SYSCALLS_UNIX(%ecx)	/* increment call count   */
+	movl	ACT_TASK(%ecx),%ebx			/* point to current task  */
+	addl	$1,TASK_SYSCALLS_UNIX(%ebx)	/* increment call count   */
+
+	/* Check for active vtimers in the current task */
+	cmpl	$0,TASK_VTIMERS(%ebx)
+	jz		1f
+
+	/* Set a pending AST */
+	orl		$(AST_BSD),%gs:CPU_PENDING_AST
+
+	/* Set a thread AST (atomic) */
+	lock
+	orl		$(AST_BSD),ACT_AST(%ecx)
+	
+1:
+	movl	%gs:CPU_KERNEL_STACK,%ebx
+	xchgl	%ebx,%esp		/* switch to kernel stack */
+
+	sti
 
 	CCALL1(unix_syscall64, %ebx)
 	/*
 	 * always returns through thread_exception_return
 	 */
-	
+
 
 Entry(lo64_mach_scall)
 	TIME_TRAP_UENTRY
 
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
+	movl	ACT_TASK(%ecx),%ebx			/* point to current task  */
+	addl	$1,TASK_SYSCALLS_MACH(%ebx)	/* increment call count   */
+
+	/* Check for active vtimers in the current task */
+	cmpl	$0,TASK_VTIMERS(%ebx)
+	jz		1f
+
+	/* Set a pending AST */
+	orl		$(AST_BSD),%gs:CPU_PENDING_AST
+
+	lock
+	orl		$(AST_BSD),ACT_AST(%ecx)
+	
+1:
 	movl	%gs:CPU_KERNEL_STACK,%ebx
 	xchgl	%ebx,%esp		/* switch to kernel stack */
 
 	sti
-	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
-	movl	ACT_TASK(%ecx),%ecx		/* point to current task  */
-	addl	$1,TASK_SYSCALLS_MACH(%ecx)	/* increment call count   */
 
 	CCALL1(mach_call_munger64, %ebx)
 	/*
 	 * always returns through thread_exception_return
 	 */
 
-	
-Entry(lo64_mdep_scall)
-        TIME_TRAP_UENTRY
 
+
+Entry(lo64_mdep_scall)
+	TIME_TRAP_UENTRY
+
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
+	movl	ACT_TASK(%ecx),%ebx			/* point to current task  */
+
+	/* Check for active vtimers in the current task */
+	cmpl	$0,TASK_VTIMERS(%ebx)
+	jz		1f
+
+	/* Set a pending AST */
+	orl		$(AST_BSD),%gs:CPU_PENDING_AST
+
+	/* Set a thread AST (atomic) */
+	lock
+	orl		$(AST_BSD),ACT_AST(%ecx)
+	
+1:
 	movl	%gs:CPU_KERNEL_STACK,%ebx
 	xchgl	%ebx,%esp		/* switch to kernel stack */
 
@@ -868,29 +1058,42 @@ Entry(lo64_mdep_scall)
 	/*
 	 * always returns through thread_exception_return
 	 */
-	
+
 
 Entry(lo64_diag_scall)
 	TIME_TRAP_UENTRY
 
-	movl	%gs:CPU_KERNEL_STACK,%ebx	// Get the address of the kernel stack
-	xchgl	%ebx,%esp		// Switch to it, saving the previous
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
+	movl	ACT_TASK(%ecx),%ebx			/* point to current task  */
+
+	/* Check for active vtimers in the current task */
+	cmpl	$0,TASK_VTIMERS(%ebx)
+	jz		1f
+
+	/* Set a pending AST */
+	orl		$(AST_BSD),%gs:CPU_PENDING_AST
+
+	/* Set a thread AST (atomic) */
+	lock
+	orl		$(AST_BSD),ACT_AST(%ecx)
 	
-	pushl	%ebx			// Push the previous stack
+1:
+	movl	%gs:CPU_KERNEL_STACK,%ebx // Get the address of the kernel stack
+	xchgl	%ebx,%esp		// Switch to it, saving the previous
+
 	CCALL1(diagCall64, %ebx)	// Call diagnostics
+		
+	cmpl	$0,%eax			// What kind of return is this?
+	je	2f
 	cli				// Disable interruptions just in case they were enabled
 	popl	%esp			// Get back the original stack
-	
-	cmpl	$0,%eax			// What kind of return is this?
-	jne	EXT(return_to_user)	// Normal return, do not check asts...
-				
+	jmp	EXT(return_to_user)	// Normal return, do not check asts...
+2:	
 	CCALL3(i386_exception, $EXC_SYSCALL, $0x6000, $1)
+		// pass what would be the diag syscall
+		// error return - cause an exception
 	/* no return */
-	
 
-			
-/******************************************************************************************************
-			
 /**/
 /*
  * Utility routines.
@@ -903,20 +1106,20 @@ Entry(lo64_diag_scall)
  * arg1:	kernel address
  * arg2:	byte count
  */
-ENTRY(copyinphys_user)
+Entry(copyinphys_user)
 	movl	$(USER_WINDOW_SEL),%ecx	/* user data segment access through kernel window */
 	mov	%cx,%ds
 
-ENTRY(copyinphys_kern)
+Entry(copyinphys_kern)
 	movl	$(PHYS_WINDOW_SEL),%ecx	/* physical access through kernel window */
 	mov	%cx,%es
 	jmp	copyin_common
 
-ENTRY(copyin_user)
+Entry(copyin_user)
 	movl	$(USER_WINDOW_SEL),%ecx	/* user data segment access through kernel window */
 	mov	%cx,%ds
 
-ENTRY(copyin_kern)
+Entry(copyin_kern)
 
 copyin_common:
 	pushl	%esi
@@ -1067,7 +1270,6 @@ copyout_ret:
 copyout_fail:
 	movl	$(EFAULT),%eax		/* return error for failure */
 	jmp	copyout_ret		/* pop frame and return */
-
 
 /*
  * io register must not be used on slaves (no AT bus)
@@ -1351,70 +1553,6 @@ rdmsr_fail:
 	RECOVERY_SECTION
 	RECOVER_TABLE_END
 
-
-
-ENTRY(dr6)
-	movl	%db6, %eax
-	ret
-
-/*	dr<i>(address, type, len, persistence)
- */
-ENTRY(dr0)
-	movl	S_ARG0, %eax
-	movl	%eax,EXT(dr_addr)
-	movl	%eax, %db0
-	movl	$0, %ecx
-	jmp	0f
-ENTRY(dr1)
-	movl	S_ARG0, %eax
-	movl	%eax,EXT(dr_addr)+1*4
-	movl	%eax, %db1
-	movl	$2, %ecx
-	jmp	0f
-ENTRY(dr2)
-	movl	S_ARG0, %eax
-	movl	%eax,EXT(dr_addr)+2*4
-	movl	%eax, %db2
-	movl	$4, %ecx
-	jmp	0f
-
-ENTRY(dr3)
-	movl	S_ARG0, %eax
-	movl	%eax,EXT(dr_addr)+3*4
-	movl	%eax, %db3
-	movl	$6, %ecx
-
-0:
-	pushl	%ebp
-	movl	%esp, %ebp
-
-	movl	%db7, %edx
-	movl	%edx,EXT(dr_addr)+4*4
-	andl	dr_msk(,%ecx,2),%edx	/* clear out new entry */
-	movl	%edx,EXT(dr_addr)+5*4
-	movzbl	B_ARG3, %eax
-	andb	$3, %al
-	shll	%cl, %eax
-	orl	%eax, %edx
-
-	movzbl	B_ARG1, %eax
-	andb	$3, %al
-	addb	$0x10, %cl
-	shll	%cl, %eax
-	orl	%eax, %edx
-
-	movzbl	B_ARG2, %eax
-	andb	$3, %al
-	addb	$0x2, %cl
-	shll	%cl, %eax
-	orl	%eax, %edx
-
-	movl	%edx, %db7
-	movl	%edx,EXT(dr_addr)+7*4
-	movl	%edx, %eax
-	leave
-	ret
-
 	.data
 dr_msk:
 	.long	~0x000f0003
@@ -1426,15 +1564,6 @@ ENTRY(dr_addr)
 	.long	0,0,0,0
 
 	.text
-
-ENTRY(get_cr0)
-	movl	%cr0, %eax
-	ret
-
-ENTRY(set_cr0)
-	movl	4(%esp), %eax
-	movl	%eax, %cr0
-	ret
 
 #ifndef	SYMMETRY
 

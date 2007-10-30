@@ -1,0 +1,76 @@
+/*
+ * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
+
+#include <mach/std_types.defs>
+#include <mach/mach_types.defs>
+
+#ifdef KERNEL
+import <lockd/lockd_mach_types.h>;
+#else
+import "lockd_mach_types.h";
+#endif
+
+type sock_storage = array [32] of uint32_t;
+type xcred = array [19] of uint32_t;
+type nfs_handle = array [64] of uint8_t;
+
+subsystem
+#ifdef KERNEL_USER
+KernelUser
+#endif
+lockd_mach 1023;
+
+serverprefix svc_;
+
+simpleroutine lockd_request(
+	server		: mach_port_t;
+	vers		: uint32_t;
+	flags		: uint32_t;
+	xid		: uint64_t;
+	flk_start	: int64_t;
+	flk_len		: int64_t;
+	flk_pid		: int32_t;
+	flk_type		: int32_t;
+	flk_whence	: int32_t;
+	sock_address	: sock_storage;
+	cred		: xcred;
+	fh_len		: uint32_t;
+	fh		: nfs_handle
+);
+
+/* Ping lockd, have launchd start it if its not running */
+routine lockd_ping(
+	server		: mach_port_t
+);
+
+/* Shutdown lockd */
+simpleroutine lockd_shutdown(
+	server		: mach_port_t
+);
+

@@ -1,3 +1,30 @@
+/*
+ * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
 /* IPFW2 Backward Compatibility */
 
 /* Convert to and from IPFW2 structures. */
@@ -239,8 +266,8 @@ ipfw_print_vers1_struct(struct ip_fw_compat *vers1_rule)
 	
 	ipfw_print_fw_flags(vers1_rule->fw_flg);
 	
-	printf("fw_pcnt: %d\n", vers1_rule->fw_pcnt);
-	printf("fw_bcnt: %d\n", vers1_rule->fw_bcnt);
+	printf("fw_pcnt: %llu\n", vers1_rule->fw_pcnt);
+	printf("fw_bcnt: %llu\n", vers1_rule->fw_bcnt);
 	printf("fw_src: %s\n",
 		inet_ntop(AF_INET, &vers1_rule->fw_src, ipv4str, sizeof(ipv4str)));
 	printf("fw_dst: %s\n",
@@ -302,7 +329,7 @@ ipfw_print_vers1_struct(struct ip_fw_compat *vers1_rule)
 	printf("fw_tcpnopt: %d\n", vers1_rule->fw_tcpnopt);
 	printf("fw_tcpf: %d\n", vers1_rule->fw_tcpf);
 	printf("fw_tcpnf: %d\n", vers1_rule->fw_tcpnf);
-	printf("timestamp: %d\n", vers1_rule->timestamp);
+	printf("timestamp: %ld\n", vers1_rule->timestamp);
 
 	if ((vers1_rule->fw_flg & IF_FW_F_VIAHACK_COMPAT) == IF_FW_F_VIAHACK_COMPAT) {
 		printf("fw_in_if: ");
@@ -332,11 +359,11 @@ ipfw_print_vers1_struct(struct ip_fw_compat *vers1_rule)
 	
 	printf("fw_prot: %d\n", vers1_rule->fw_prot);
 	printf("fw_nports: %d\n", vers1_rule->fw_nports);
-	printf("pipe_ptr: %x\n", vers1_rule->pipe_ptr);
-	printf("next_rule_ptr: %x\n", vers1_rule->next_rule_ptr);
+	printf("pipe_ptr: %p\n", vers1_rule->pipe_ptr);
+	printf("next_rule_ptr: %p\n", vers1_rule->next_rule_ptr);
 	printf("fw_uid: %d\n", vers1_rule->fw_uid);
 	printf("fw_logamount: %d\n", vers1_rule->fw_logamount);
-	printf("fw_loghighest: %d\n", vers1_rule->fw_loghighest);
+	printf("fw_loghighest: %llu\n", vers1_rule->fw_loghighest);
 }
 
 static void
@@ -476,8 +503,8 @@ ipfw_print_vers2_struct(struct ip_fw *vers2_rule)
 	printf("cmd_len: %d\n", vers2_rule->cmd_len);
 	printf("rulenum: %d\n", vers2_rule->rulenum);
 	printf("set: %d\n", vers2_rule->set);
-	printf("pcnt: %d\n", vers2_rule->pcnt);
-	printf("bcnt: %d\n", vers2_rule->bcnt);
+	printf("pcnt: %llu\n", vers2_rule->pcnt);
+	printf("bcnt: %llu\n", vers2_rule->bcnt);
 	printf("timestamp: %d\n", vers2_rule->timestamp);
 	
 	/*
@@ -777,11 +804,11 @@ ipfw_print_vers2_struct(struct ip_fw *vers2_rule)
 						break;
 		
 					case O_TCPACK:
-						printf(" tcpack %ld", ntohl(cmd32->d[0]));
+						printf(" tcpack %u", ntohl(cmd32->d[0]));
 						break;
 		
 					case O_TCPSEQ:
-						printf(" tcpseq %ld", ntohl(cmd32->d[0]));
+						printf(" tcpseq %u", ntohl(cmd32->d[0]));
 						break;
 		
 					case O_UID:
@@ -1486,9 +1513,7 @@ ipfw_convert_to_cmds(struct ip_fw *curr_rule, struct ip_fw_compat *compat_rule)
 	int			k;	
 	uint32_t	actbuf[255], cmdbuf[255];
 	ipfw_insn	*action, *cmd, *src, *dst;
-	ipfw_insn	*have_state = NULL,	/* track check-state or keep-state */
-				*end_action = NULL, 
-				*end_cmd = NULL;
+	ipfw_insn	*have_state = NULL;	/* track check-state or keep-state */
 	
 	if (!compat_rule || !curr_rule || !(curr_rule->cmd)) {
 		return;
@@ -2126,7 +2151,7 @@ ipfw_version_zero_to_latest(struct sockopt *sopt, struct ip_fw *curr_rule)
 
 	if (sopt->sopt_name == IP_OLD_FW_GET || 
 		sopt->sopt_name == IP_OLD_FW_FLUSH || 
-		sopt->sopt_val == NULL) {
+		sopt->sopt_val == USER_ADDR_NULL) {
 		/* In the old-style API, it was legal to not pass in a rule 
 		 * structure for certain firewall operations (e.g. flush, 
 		 * reset log).  If that's the situation, we pretend we received 

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_FREE_COPYRIGHT@
@@ -96,8 +102,6 @@
 #include <cputypes.h>
 
 #include <mach_assert.h>
-#include <mach_host.h>
-#include <mach_prof.h>
 #include <mach_ldebug.h>
 
 #include <ipc/ipc_types.h>
@@ -114,6 +118,7 @@
 #include <kern/timer_call.h>
 #include <kern/task.h>
 #include <kern/exception.h>
+#include <kern/affinity.h>
 
 #include <ipc/ipc_kmsg.h>
 
@@ -123,9 +128,9 @@
 struct thread {
 	/*
 	 *	NOTE:	The runq field in the thread structure has an unusual
-	 *	locking protocol.  If its value is RUN_QUEUE_NULL, then it is
+	 *	locking protocol.  If its value is PROCESSOR_NULL, then it is
 	 *	locked by the thread_lock, but if its value is something else
-	 *	(i.e. a run_queue) then it is locked by that run_queue's lock.
+	 *	then it is locked by the associated run queue lock.
 	 *
 	 *	When the thread is on a wait queue, these first three fields
 	 *	are treated as an unofficial union with a wait_queue_element.
@@ -134,19 +139,18 @@ struct thread {
 	 */
   	/* Items examined often, modified infrequently */
 	queue_chain_t	links;				/* run/wait queue links */
-	run_queue_t		runq;				/* run queue thread is on SEE BELOW */
+	processor_t		runq;				/* run queue assignment */
 	wait_queue_t	wait_queue;			/* wait queue we are currently on */
 	event64_t		wait_event;			/* wait queue event */
 	integer_t		options;			/* options set by thread itself */
 #define TH_OPT_INTMASK		0x03		/* interrupt / abort level */
 #define TH_OPT_VMPRIV		0x04		/* may allocate reserved memory */
-#define TH_OPT_DELAYIDLE	0x08		/* performing delayed idle */
-#define TH_OPT_CALLOUT		0x10		/* executing as callout */
+#define TH_OPT_DTRACE		0x08		/* executing under dtrace_probe */
 
 	/* Data updated during assert_wait/thread_wakeup */
 	decl_simple_lock_data(,sched_lock)	/* scheduling lock (thread_lock()) */
-	decl_simple_lock_data(,wake_lock)	/* covers wake_active (wake_lock())*/
-	boolean_t			wake_active;	/* Someone is waiting for this */
+	decl_simple_lock_data(,wake_lock)	/* for thread stop / wait (wake_lock()) */
+	boolean_t			wake_active;	/* wake event on stop */
 	int					at_safe_point;	/* thread_abort_safely allowed */
 	ast_t				reason;			/* why we blocked */
 	wait_result_t		wait_result;	/* outcome of wait -
@@ -175,12 +179,7 @@ struct thread {
 #define TH_UNINT		0x08			/* waiting uninteruptibly */
 #define	TH_TERMINATE	0x10			/* halted at termination */
 
-#define TH_ABORT		0x20			/* abort interruptible waits */
-#define TH_ABORT_SAFELY	0x40			/* ... but only those at safe point */
-
-#define TH_IDLE			0x80			/* processor idle thread */
-
-#define	TH_SCHED_STATE	(TH_WAIT|TH_SUSP|TH_RUN|TH_UNINT)
+#define TH_IDLE			0x80			/* idling processor */
 
 	/* Scheduling information */
 	integer_t			sched_mode;			/* scheduling mode bits */
@@ -189,8 +188,11 @@ struct thread {
 #define TH_MODE_PREEMPT			0x0004		/* can preempt kernel contexts */
 #define TH_MODE_FAILSAFE		0x0008		/* fail-safe has tripped */
 #define	TH_MODE_PROMOTED		0x0010		/* sched pri has been promoted */
-#define	TH_MODE_DEPRESS			0x0020		/* normal depress yield */
-#define TH_MODE_POLLDEPRESS		0x0040		/* polled depress yield */
+#define TH_MODE_ABORT			0x0020		/* abort interruptible waits */
+#define TH_MODE_ABORTSAFELY		0x0040		/* ... but only those at safe point */
+#define TH_MODE_ISABORTED		(TH_MODE_ABORT | TH_MODE_ABORTSAFELY)
+#define	TH_MODE_DEPRESS			0x0080		/* normal depress yield */
+#define TH_MODE_POLLDEPRESS		0x0100		/* polled depress yield */
 #define TH_MODE_ISDEPRESSED		(TH_MODE_DEPRESS | TH_MODE_POLLDEPRESS)
 
 	integer_t			sched_pri;			/* scheduled (current) priority */
@@ -218,7 +220,6 @@ struct thread {
 
   /* Data used during setrun/dispatch */
 	timer_data_t		system_timer;		/* system mode timer */
-	processor_set_t		processor_set;		/* assigned processor set */
 	processor_t			bound_processor;	/* bound to a processor? */
 	processor_t			last_processor;		/* processor last dispatched on */
 	uint64_t			last_switch;		/* time of last context switch */
@@ -229,17 +230,28 @@ struct thread {
 	integer_t			safe_mode;		/* saved mode during fail-safe */
 	natural_t			safe_release;	/* when to release fail-safe */
 
+	/* Call out from scheduler */
+	void				(*sched_call)(
+							int			type,
+							thread_t	thread);
+
 	/* Statistics and timesharing calculations */
 	natural_t			sched_stamp;	/* last scheduler tick */
 	natural_t			sched_usage;	/* timesharing cpu usage [sched] */
 	natural_t			pri_shift;		/* usage -> priority from pset */
 	natural_t			cpu_usage;		/* instrumented cpu usage [%cpu] */
 	natural_t			cpu_delta;		/* accumulated cpu_usage delta */
+	uint32_t			c_switch;		/* total context switches */
+	uint32_t			p_switch;		/* total processor switches */
+	uint32_t			ps_switch;		/* total pset switches */
 
 	/* Timing data structures */
 	timer_data_t		user_timer;			/* user mode timer */
-	uint64_t			system_timer_save;	/* saved system timer value */
 	uint64_t			user_timer_save;	/* saved user timer value */
+	uint64_t			system_timer_save;	/* saved system timer value */
+	uint64_t			vtimer_user_save;	/* saved values for vtimers */
+	uint64_t			vtimer_prof_save;
+	uint64_t			vtimer_rlim_save;
 
 	/* Timed wait expiration */
 	timer_call_data_t	wait_timer;
@@ -249,6 +261,13 @@ struct thread {
 	/* Priority depression expiration */
 	timer_call_data_t	depress_timer;
 	integer_t			depress_timer_active;
+
+	/*
+	 * Processor/cache affinity
+	 * - affinity_threads links task threads with the same affinity set
+	 */
+	affinity_set_t			affinity_set;
+	queue_chain_t			affinity_threads;
 
 	/* Various bits of stashed state */
 	union {
@@ -282,14 +301,9 @@ struct thread {
 
 	/* Ast/Halt data structures */
 	vm_offset_t			recover;		/* page fault recover(copyin/out) */
-	int					ref_count;		/* number of references to me */
+	uint32_t					ref_count;		/* number of references to me */
 
-	/* Processor set info */
-	queue_chain_t		pset_threads;	/* list of all threads in pset */
-#if	MACH_HOST
-	boolean_t			may_assign;		/* may assignment change? */
-	boolean_t			assign_active;	/* waiting for may_assign */
-#endif	/* MACH_HOST */
+	queue_chain_t		threads;		/* global list of all threads */
 
 	/* Activation */
 		queue_chain_t			task_threads;
@@ -314,12 +328,10 @@ struct thread {
 
 		/* Miscellaneous bits guarded by mutex */
 		uint32_t
-		/* Indicates that the thread has not been terminated */
-						active:1,
-
-	   /* Indicates that the thread has been started after creation */
-						started:1,
-						:0;
+			active:1,				/* Thread is active and has not been terminated */
+			started:1,				/* Thread has been started after creation */
+			static_param:1,			/* Disallow policy parameter changes */
+			:0;
 
 		/* Return Handers */
 		struct ReturnHandler {
@@ -337,16 +349,16 @@ struct thread {
 		/* Owned ulocks (a lock set element) */
 		queue_head_t			held_ulocks;
 
-#if	MACH_PROF
-		/* Profiling */
-		boolean_t				profiled;
-		boolean_t				profiled_own;
-		struct prof_data		*profil_buffer;
-#endif	/* MACH_PROF */
-
 #ifdef	MACH_BSD
 		void					*uthread;
 #endif
+
+#if CONFIG_DTRACE
+		uint32_t t_dtrace_predcache;/* DTrace per thread predicate value hint */
+		int64_t t_dtrace_tracing;       /* Thread time under dtrace_probe() */
+		int64_t t_dtrace_vtime;
+#endif
+		uint32_t t_chud;	/* CHUD flags, used for Shark */
 };
 
 #define ith_state		saved.receive.state
@@ -365,14 +377,14 @@ struct thread {
 #define sth_result		saved.sema.result
 #define sth_continuation	saved.sema.continuation
 
-extern void			thread_bootstrap(void);
+extern void			thread_bootstrap(void) __attribute__((section("__TEXT, initcode")));
 
-extern void			thread_init(void);
+extern void			thread_init(void) __attribute__((section("__TEXT, initcode")));
 
 extern void			thread_daemon_init(void);
 
 #define	thread_reference_internal(thread)	\
-			hw_atomic_add(&(thread)->ref_count, 1)
+			(void)hw_atomic_add(&(thread)->ref_count, 1)
 
 #define thread_deallocate_internal(thread)	\
 			hw_atomic_sub(&(thread)->ref_count, 1)
@@ -380,7 +392,7 @@ extern void			thread_daemon_init(void);
 #define thread_reference(thread)					\
 MACRO_BEGIN											\
 	if ((thread) != THREAD_NULL)					\
-		thread_reference_internal(thread);			\
+		thread_reference_internal(thread);		\
 MACRO_END
 
 extern void			thread_deallocate(
@@ -390,6 +402,9 @@ extern void			thread_terminate_self(void);
 
 extern kern_return_t	thread_terminate_internal(
 							thread_t		thread);
+
+extern void			thread_start_internal(
+							thread_t			thread) __attribute__ ((noinline));
 
 extern void			thread_terminate_enqueue(
 						thread_t		thread);
@@ -406,14 +421,12 @@ extern void			thread_release(
 #define	thread_lock_init(th)	simple_lock_init(&(th)->sched_lock, 0)
 #define thread_lock(th)			simple_lock(&(th)->sched_lock)
 #define thread_unlock(th)		simple_unlock(&(th)->sched_lock)
-#define thread_lock_try(th)		simple_lock_try(&(th)->sched_lock)
-
-#define thread_should_halt_fast(thread)		(!(thread)->active)
 
 #define wake_lock_init(th)		simple_lock_init(&(th)->wake_lock, 0)
 #define wake_lock(th)			simple_lock(&(th)->wake_lock)
 #define wake_unlock(th)			simple_unlock(&(th)->wake_lock)
-#define wake_lock_try(th)		simple_lock_try(&(th)->wake_lock)
+
+#define thread_should_halt_fast(thread)		(!(thread)->active)
 
 extern void				stack_alloc(
 							thread_t		thread);
@@ -429,7 +442,7 @@ extern boolean_t		stack_alloc_try(
 
 extern void				stack_collect(void);
 
-extern void				stack_init(void);
+extern void				stack_init(void) __attribute__((section("__TEXT, initcode")));
 
 extern kern_return_t    thread_state_initialize(
 							thread_t				thread);
@@ -516,8 +529,7 @@ extern kern_return_t	machine_thread_create(
 							thread_t		thread,
 							task_t			task);
 extern void		machine_thread_switch_addrmode(
-						       thread_t			thread,
-						       int			oldmode_is64bit);
+						       thread_t			thread);
 
 extern void 		    machine_thread_destroy(
 							thread_t		thread);
@@ -560,6 +572,8 @@ extern void			install_special_handler(
 extern void			special_handler(
 						ReturnHandler	*rh,
 						thread_t		thread);
+
+void act_machine_sv_free(thread_t, int);
 
 #else	/* MACH_KERNEL_PRIVATE */
 
@@ -614,6 +628,9 @@ __BEGIN_DECLS
 
 #ifdef	XNU_KERNEL_PRIVATE
 
+extern	void	thread_yield_internal(
+	mach_msg_timeout_t	interval);
+
 /*
  * XXX Funnel locks XXX
  */
@@ -643,7 +660,7 @@ extern void			thread_setentrypoint(
 						thread_t		thread,
 						mach_vm_offset_t	entry);
 
-extern void		thread_setsinglestep(
+extern kern_return_t	thread_setsinglestep(
 						thread_t		thread,
 						int			on);
 
@@ -653,11 +670,22 @@ extern kern_return_t	thread_wire_internal(
 							boolean_t		wired,
 							boolean_t		*prev_state);
 
-/* JMM - These are only temporary */
-extern boolean_t	is_thread_running(thread_t); /* True is TH_RUN */
-extern boolean_t	is_thread_idle(thread_t); /* True is TH_IDLE */
-
 extern kern_return_t	thread_dup(thread_t);
+
+typedef void	(*sched_call_t)(
+					int				type,
+					thread_t		thread);
+
+#define SCHED_CALL_BLOCK		0x1
+#define SCHED_CALL_UNBLOCK		0x2
+
+extern void		thread_sched_call(
+					thread_t		thread,
+					sched_call_t	call);
+
+extern void		thread_static_param(
+					thread_t		thread,
+					boolean_t		state);
 
 extern task_t	get_threadtask(thread_t);
 #define thread_is_64bit(thd)	\
@@ -667,10 +695,38 @@ extern task_t	get_threadtask(thread_t);
 extern void		*get_bsdthread_info(thread_t);
 extern void		set_bsdthread_info(thread_t, void *);
 extern void		*uthread_alloc(task_t, thread_t);
-extern void		uthread_free(task_t, void *, void *); 
+extern void		uthread_cleanup(task_t, void *, void *); 
+extern void		uthread_zone_free(void *); 
+extern void		uthread_cred_free(void *); 
 
 extern boolean_t	thread_should_halt(
 						thread_t		thread);
+
+extern int is_64signalregset(void);
+
+void act_set_apc(thread_t);
+
+extern uint32_t dtrace_get_thread_predcache(thread_t);
+extern int64_t dtrace_get_thread_vtime(thread_t);
+extern int64_t dtrace_get_thread_tracing(thread_t);
+extern boolean_t dtrace_get_thread_reentering(thread_t);
+extern vm_offset_t dtrace_get_kernel_stack(thread_t);
+extern void dtrace_set_thread_predcache(thread_t, uint32_t);
+extern void dtrace_set_thread_vtime(thread_t, int64_t);
+extern void dtrace_set_thread_tracing(thread_t, int64_t);
+extern void dtrace_set_thread_reentering(thread_t, boolean_t);
+extern vm_offset_t dtrace_set_thread_recover(thread_t, vm_offset_t);
+
+extern int64_t dtrace_calc_thread_recent_vtime(thread_t);
+
+
+extern void		thread_set_wq_state32(
+					      thread_t          thread,
+					      thread_state_t    tstate);
+
+extern void		thread_set_wq_state64(
+					      thread_t          thread,
+					      thread_state_t    tstate);
 
 #endif	/* XNU_KERNEL_PRIVATE */
 

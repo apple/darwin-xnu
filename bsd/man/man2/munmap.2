@@ -40,16 +40,18 @@
 .Nm munmap
 .Nd remove a mapping
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
 .Fd #include <sys/mman.h>
 .Ft int
-.Fn munmap "caddr_t addr" "size_t len"
+.Fo munmap
+.Fa "void *addr"
+.Fa "size_t len"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn munmap
 system call
 deletes the mappings for the specified address range,
-and causes further references to addresses within the range
+causing further references to addresses within the range
 to generate invalid memory references.
 .Sh RETURN VALUES
 Upon successful completion,
@@ -62,22 +64,47 @@ is set to indicate the error.
 .Fn Munmap
 will fail if:
 .Bl -tag -width Er
+.\" ===========
 .It Bq Er EINVAL
 The
 .Fa addr
-parameter was not page aligned, the
+parameter was not page aligned (i.e., a multiple of the page size).
+.\" ===========
+.It Bq Er EINVAL
+The
 .Fa len
-parameter was negative, or
-some part of the region being unmapped is not part of the currently
+parameter was negative or zero.
+.\" ===========
+.It Bq Er EINVAL
+Some part of the region being unmapped is not part of the currently
 valid address space.
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/mman.h>
+.Pp
+The include file
+.In sys/types.h
+is necessary.
+.Pp
+.Ft int
+.br
+.Fo munmap
+.Fa "caddr_t addr"
+.Fa "size_t len"
+.Fc ;
+.Pp
+The type of
+.Fa addr
+has changed.
 .Sh "SEE ALSO"
 .Xr getpagesize 3 ,
 .Xr msync 2 ,
 .Xr munmap 2 ,
 .Xr mprotect 2 ,
 .Xr madvise 2 ,
-.Xr mincore 2
+.Xr mincore 2 ,
+.Xr compat 5
 .Sh HISTORY
 The
 .Fn munmap

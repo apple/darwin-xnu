@@ -1,0 +1,114 @@
+.\"
+.\" Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+.\"
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+.\" 
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. The rights granted to you under the License
+.\" may not be used to create, or enable the creation or redistribution of,
+.\" unlawful or unlicensed copies of an Apple operating system, or to
+.\" circumvent, violate, or enable the circumvention or violation of, any
+.\" terms of an Apple operating system software license agreement.
+.\" 
+.\" Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this file.
+.\" 
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\" 
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+.\"
+.\"     @(#)posix_spawnattr_setpgroup.3
+.
+.Dd August 22, 2007
+.Dt POSIX_SPAWNATTR_SETPGROUP 3
+.Os "Mac OS X"
+.Sh NAME
+.Nm posix_spawnattr_setpgroup
+.Nm posix_spawnattr_getpgroup
+.Nd set or get the
+.Em spawn-pgroup
+attribute on a
+.Em posix_spawnattr_t
+.Sh SYNOPSIS
+.Fd #include <spawn.h>
+.Ft int
+.Fo posix_spawnattr_setpgroup
+.Fa "posix_spawnattr_t *attr"
+.Fa "pid_t pgroup"
+.Fc
+.Ft int
+.Fo posix_spawnattr_getpgroup
+.Fa "const posix_spawnattr_t *restrict attr"
+.Fa "pid_t *restrict pgroup"
+.Fc
+.Sh DESCRIPTION
+The
+.Fn posix_spawnattr_setpgroup
+function sets the
+.Fa pgroup
+on the attributes object referenced by
+.Fa attr .
+.Pp
+The
+.Fn posix_spawnattr_getpgroup
+function retrieves the
+.Fa pgroup
+on the attributes object referenced by
+.Fa attr .
+.Pp
+The argument
+.Fa pgroup
+is the process group to be joined or created when the new process is
+created if the
+.Em POSIX_SPAWN_SETPGROUP
+flag is set in the
+.Em posix_spawnattr_t
+via a call to
+.Xr posix_spawnattr_setflags 3 ;
+its default value is 0, which means a new process group will be created.
+.Sh RETURN VALUES
+On success, these functions return 0; on failure they return an error
+number from
+.In errno.h .
+Additionally, if successful,
+.Fn posix_spawnattr_getpgroup
+will modify the contents of the
+.Fa pgroup
+parameter with the current attribute value.
+.Sh ERRORS
+These functions may fail if:
+.Bl -tag -width Er
+.\" ==========
+.It Bq Er EINVAL
+The value specified by
+.Fa attr
+is invalid.
+.\" ==========
+.It Bq Er EINVAL
+The value of
+.Fa attr
+is invalid.
+.El
+.Sh SEE ALSO
+.Xr posix_spawn 2 ,
+.Xr posix_spawnp 2 ,
+.Xr posix_spawnattr_init 3 ,
+.Xr posix_spawnattr_destroy 3 ,
+.Xr posix_spawnattr_setflags 3
+.Sh STANDARDS
+.St -susv3 [SPN]
+.Sh HISTORY
+The
+.Fn posix_spawnattr_setpgroup
+and
+.Fn posix_spawnattr_getpgroup
+function calls appeared in
+.St -susv3 [SPN] .

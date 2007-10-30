@@ -68,7 +68,12 @@
  *
  *	@(#)igmp.c	8.1 (Berkeley) 7/19/93
  */
-
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -87,6 +92,10 @@
 #include <netinet6/mld6_var.h>
 
 #include <net/net_osdep.h>
+
+#if CONFIG_MACF_NET
+#include <security/mac.h>
+#endif /* MAC_NET */
 
 /*
  * Protocol constants
@@ -141,8 +150,6 @@ void
 mld6_start_listening(
 	struct in6_multi *in6m)
 {
-	int s = splnet();
-
 	/*
 	 * RFC2710 page 10:
 	 * The node never sends a Report or Done for the link-scope all-nodes
@@ -163,7 +170,6 @@ mld6_start_listening(
 		in6m->in6m_state = MLD6_IREPORTEDLAST;
 		mld6_timers_are_running = 1;
 	}
-	splx(s);
 }
 
 void
@@ -418,6 +424,11 @@ mld6_sendpkt(
 	mh->m_next = md;
 
 	mh->m_pkthdr.rcvif = NULL;
+#ifdef __darwin8_notyet
+#if CONFIG_MACF_NET
+	mac_create_mbuf_linklayer(in6m->in6m_ifp, m);
+#endif
+#endif
 	mh->m_pkthdr.len = sizeof(struct ip6_hdr) + sizeof(struct mld6_hdr);
 	mh->m_len = sizeof(struct ip6_hdr);
 	MH_ALIGN(mh, sizeof(struct ip6_hdr));
@@ -478,3 +489,4 @@ mld6_sendpkt(
 		}
 	}
 }
+

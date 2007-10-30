@@ -1,26 +1,39 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
  */
 
 #include <sys/systm.h>
+#include <sys/sysent.h>
 #include <sys/types.h>
 #include <sys/proc_internal.h>
 #include <sys/vnode_internal.h>
@@ -32,6 +45,8 @@
 #include <bsm/audit_kernel.h>
 #include <bsm/audit_kevents.h>
 #include <bsm/audit_klib.h>
+
+#include <kern/kalloc.h>
 
 /*
  * Initialize the system call to audit event mapping table. This table 
@@ -92,7 +107,7 @@ au_event_t sys_au_event[] = {
 	AUE_PIPE,			/*  42 = pipe */
 	AUE_NULL,			/*  43 = getegid */
 	AUE_NULL,			/*  44 = profil */
-	AUE_KTRACE,			/*  45 = ktrace */
+	AUE_NULL,			/*  45 = old ktrace */
 	AUE_NULL,			/*  46 = sigaction */
 	AUE_NULL,			/*  47 = getgid */
 	AUE_NULL,			/*  48 = sigprocmask */
@@ -352,9 +367,9 @@ au_event_t sys_au_event[] = {
 	AUE_NULL,			/* 293 */
 	AUE_NULL,			/* 294 */
 	AUE_NULL,			/* 295 */
-	AUE_LOADSHFILE,			/* 296 = load_shared_file */
-	AUE_RESETSHFILE,		/* 297 = reset_shared_file */
-	AUE_NEWSYSTEMSHREG,		/* 298 = new_system_shared_regions */
+	AUE_NULL,			/* 296 */
+	AUE_NULL,			/* 297 */
+	AUE_NULL,			/* 298 */
 	AUE_NULL,			/* 299 */
 	AUE_NULL,			/* 300 */
 	AUE_NULL,			/* 301 */
@@ -425,9 +440,73 @@ au_event_t sys_au_event[] = {
 	AUE_NULL,			/* 366 */
 	AUE_NULL,			/* 367 */
 	AUE_NULL,			/* 368 */
-	AUE_NULL			/* 369 */
+	AUE_NULL,			/* 369 */
+	AUE_NULL,			/* 370 */
+	AUE_NULL,			/* 371 */
+	AUE_NULL,			/* 372 */
+	AUE_NULL,			/* 373 */
+	AUE_NULL,			/* 374 */
+	AUE_NULL,			/* 375 */
+	AUE_NULL,			/* 376 */
+	AUE_NULL,			/* 377 */
+	AUE_NULL,			/* 378 */
+	AUE_NULL,			/* 379 */
+	AUE_MAC_EXECVE,			/* 380 = __mac_execve */
+	AUE_MAC_SYSCALL,       		/* 381 = __mac_syscall */
+	AUE_MAC_GET_FILE,	       	/* 382 = __mac_get_file */
+	AUE_MAC_SET_FILE,	       	/* 383 = __mac_set_file */
+	AUE_MAC_GET_LINK,	       	/* 384 = __mac_get_link */
+	AUE_MAC_SET_LINK,	       	/* 385 = __mac_set_link */
+	AUE_MAC_GET_PROC,			/* 386 = __mac_get_proc */
+	AUE_MAC_SET_PROC,      		/* 387 = __mac_set_proc */
+	AUE_MAC_GET_FD,			/* 388 = __mac_get_fd */
+	AUE_MAC_SET_FD,			/* 389 = __mac_set_fd */
+	AUE_MAC_GET_PID,		/* 390 = __mac_get_pid */
+	AUE_MAC_GET_LCID,		/* 391 = __mac_get_lcid */
+	AUE_MAC_GET_LCTX,		/* 392 = __mac_get_lctx */
+	AUE_MAC_SET_LCTX,		/* 393 = __mac_set_lctx */
+	AUE_SETLCID,			/* 394 = setlcid */
+	AUE_GETLCID,			/* 395 = getlcid */
+	AUE_NULL,			/* 396 = read_nocancel */
+	AUE_NULL,			/* 397 = write_nocancel */
+	AUE_OPEN_RWTC,			/* 398 = open_nocancel */
+	AUE_CLOSE,			/* 399 = close_nocancel */
+	AUE_NULL,			/* 400 = wait4_nocancel */
+	AUE_RECVMSG,			/* 401 = recvmsg_nocancel */
+	AUE_SENDMSG,			/* 402 = sendmsg_nocancel */
+	AUE_RECVFROM,			/* 403 = recvfrom_nocancel */
+	AUE_ACCEPT,			/* 404 = accept_nocancel */
+	AUE_NULL,			/* 405 = msync_nocancel */
+	AUE_FCNTL,			/* 406 = fcntl_nocancel */
+	AUE_NULL,			/* 407 = select_nocancel */
+	AUE_NULL,			/* 408 = fsync_nocancel */
+	AUE_CONNECT,			/* 409 = connect_nocancel */
+	AUE_NULL,			/* 410 = sigsuspend_nocancel */
+	AUE_NULL,			/* 411 = readv_nocancel */
+	AUE_NULL,			/* 412 = writev_nocancel */
+	AUE_SENDTO,			/* 413 = sendto_nocancel */
+	AUE_NULL,			/* 414 = pread_nocancel */
+	AUE_NULL,			/* 415 = pwrite_nocancel */
+	AUE_NULL,			/* 416 = waitid_nocancel */
+	AUE_NULL,			/* 417 = poll_nocancel */
+	AUE_MSGSND,			/* 418 = msgsnd_nocancel */
+	AUE_MSGRCV,			/* 419 = msgrcv_nocancel */
+	AUE_NULL,			/* 420 = sem_wait_nocancel */
+	AUE_NULL,			/* 421 = aio_suspend_nocancel */
+	AUE_NULL,			/* 422 = __sigwait_nocancel */
+	AUE_NULL,			/* 423 = __semwait_signal_nocancel */
+	AUE_MAC_MOUNT,			/* 424 = __mac_mount */
+	AUE_MAC_GET_MOUNT,		/* 425 = __mac_get_mount */
+	AUE_MAC_GETFSSTAT,		/* 426 = __mac_getfsstat */
+
 };
-int	nsys_au_event = sizeof(sys_au_event) / sizeof(sys_au_event[0]);
+
+/*
+ * Verify that sys_au_event has an entry for every syscall.
+ */
+int 	audit_sys_table_size_check[(
+		(sizeof(sys_au_event) / sizeof(sys_au_event[0])) == NUM_SYSENT)?
+			1 : -1] __unused;
 
 /*
  * Hash table functions for the audit event number to event class mask mapping.
@@ -480,7 +559,7 @@ void au_evclassmap_insert(au_event_t event, au_class_t class)
 			return;
 		}
 	}
-	kmem_alloc(kernel_map, (vm_offset_t *)&evc, sizeof(*evc));
+	evc = (struct evclass_elem *)kalloc(sizeof (*evc));
 	if (evc == NULL) {
 		return;
 	}
@@ -489,7 +568,8 @@ void au_evclassmap_insert(au_event_t event, au_class_t class)
 	LIST_INSERT_HEAD(&evcl->head, evc, entry);
 }
 
-void au_evclassmap_init() 
+void
+au_evclassmap_init(void)
 {
 	int i;
 	for (i = 0; i < EVCLASSMAP_HASH_TABLE_SIZE; i++) {
@@ -497,7 +577,7 @@ void au_evclassmap_init()
 	}
 
 	/* Set up the initial event to class mapping for system calls.  */ 
-	for (i = 0; i < nsys_au_event; i++) {
+	for (i = 0; i < NUM_SYSENT; i++) {
 		if (sys_au_event[i] != AUE_NULL) {
 			au_evclassmap_insert(sys_au_event[i], AU_NULL);
 	}
@@ -789,52 +869,43 @@ int auditon_command_event(int cmd)
 }
 
 /* 
- * Create a canonical path from given path by prefixing either the
- * root directory, or the current working directory.
- * If the process working directory is NULL, we could use 'rootvnode'
- * to obtain the root directoty, but this results in a volfs name
- * written to the audit log. So we will leave the filename starting
- * with '/' in the audit log in this case.
+ * Create a canonical path from given path by prefixing the supplied
+ * current working directory, which may be the root directory.
  */
-int canon_path(struct proc *p, char *path, char *cpath)
+int
+canon_path(struct vnode *cwd_vp, char *path, char *cpath)
 {
-	char *bufp;
 	int len;
-	struct vnode *vnp;
-	struct filedesc *fdp;
 	int ret;
+	char *bufp = path;
 
-	fdp = p->p_fd;
-	bufp = path;
+	/*
+	 * convert multiple leading '/' into a single '/' if the cwd_vp is
+	 * NULL (i.e. an absolute path), and strip them entirely if the
+	 * cwd_vp represents a chroot directory (i.e. the caller checked for
+	 * an initial '/' character itself, saw one, and passed fdp->fd_rdir).
+	 * Somewhat complicated, but it places the onus for locking structs
+	 * involved on the caller, and makes proxy operations explicit rather
+	 * than implicit.
+	 */
 	if (*(path) == '/') {
 		while (*(bufp) == '/') 
 			bufp++;			/* skip leading '/'s	     */
-		/* If no process root, or it is the same as the system root,
-		 * audit the path as passed in with a single '/'.
-		 */
-		if ((fdp->fd_rdir == NULL) ||
-		    (fdp->fd_rdir == rootvnode)) {	
-			vnp = NULL;
+		if (cwd_vp == NULL)
 			bufp--;			/* restore one '/'	     */
-		} else {
-			vnp = fdp->fd_rdir;	/* use process root	     */
-		}
-	} else {
-		vnp = fdp->fd_cdir;	/* prepend the current dir  */
-		bufp = path;
 	}
-	if (vnp != NULL) {
+	if (cwd_vp != NULL) {
 		len = MAXPATHLEN;
-		ret = vn_getpath(vnp, cpath, &len);
+		ret = vn_getpath(cwd_vp, cpath, &len);
 		if (ret != 0) {
 			cpath[0] = '\0';
 			return (ret);
 		}
 		if (len < MAXPATHLEN)
 			cpath[len-1] = '/';	
-		strncpy(cpath + len, bufp, MAXPATHLEN - len);
+		strlcpy(cpath + len, bufp, MAXPATHLEN - len);
 	} else {
-		strncpy(cpath, bufp, MAXPATHLEN);
+		strlcpy(cpath, bufp, MAXPATHLEN);
 	}
 	return (0);
 }

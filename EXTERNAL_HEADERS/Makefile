@@ -20,7 +20,12 @@ INSTINC_SUBDIRS_I386 =	\
 	architecture	\
 	i386
 
+INSTINC_SUBDIRS_ARM =	\
+	architecture	\
+	arm
+
 EXPORT_FILES = \
+	AppleSecureBootEpoch.h \
 	ar.h		\
 	stdarg.h	\
 	stdbool.h	\
@@ -36,5 +41,3 @@ EXPORT_MI_DIR = .
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-
-

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <libkern/OSAtomic.h>
@@ -26,12 +32,15 @@ enum {
 	false	= 0,
 	true	= 1
 };
-#define	NULL 0L
+
+#ifndef NULL
+#define NULL ((void *)0)
+#endif
 
 /*
  * atomic operations
  *	these are _the_ atomic operations, currently cast atop CompareAndSwap,
- *	which is implemented in assembler.  if we are worried about the cost of
+ *	which is implemented in assembler.	if we are worried about the cost of
  *	this layering (we shouldn't be), then all this stuff could be
  *	implemented in assembler, as it is in MacOS8/9
  *	(derived from SuperMario/NativeLibs/IO/DriverServices/Synchronization.s,
@@ -47,34 +56,23 @@ enum {
 
 #ifndef __ppc__
 
-SInt32	OSAddAtomic(SInt32 amount, SInt32 * value)
-{
-	SInt32	oldValue;
-	SInt32	newValue;
-	
-	do {
-		oldValue = *value;
-		newValue = oldValue + amount;
-	} while (! OSCompareAndSwap((UInt32) oldValue, (UInt32) newValue, (UInt32 *) value));
-	
-	return oldValue;
-}
 
-SInt32	OSIncrementAtomic(SInt32 * value)
+SInt32	OSIncrementAtomic(volatile SInt32 * value)
 {
 	return OSAddAtomic(1, value);
 }
 
-SInt32	OSDecrementAtomic(SInt32 * value)
+SInt32	OSDecrementAtomic(volatile SInt32 * value)
 {
 	return OSAddAtomic(-1, value);
 }
 
 #ifdef CMPXCHG8B
-void *	OSDequeueAtomic(void ** inList, SInt32 inOffset)
+void *	OSDequeueAtomic(void * volatile * inList, SInt32 inOffset)
 {
-	void *	oldListHead;
-	void *	newListHead;
+	/* The _pointer_ is volatile, not the listhead itself */
+	void * volatile	oldListHead;
+	void * volatile	newListHead;
 	
 	do {
 		oldListHead = *inList;
@@ -82,28 +80,29 @@ void *	OSDequeueAtomic(void ** inList, SInt32 inOffset)
 			break;
 		}
 		
-		newListHead = *(void **) (((char *) oldListHead) + inOffset);
+		newListHead = *(void * volatile *) (((char *) oldListHead) + inOffset);
 	} while (! OSCompareAndSwap((UInt32)oldListHead,
-					(UInt32)newListHead, (UInt32 *)inList));
+					(UInt32)newListHead, (volatile UInt32 *)inList));
 	return oldListHead;
 }
 
-void	OSEnqueueAtomic(void ** inList, void * inNewLink, SInt32 inOffset)
+void	OSEnqueueAtomic(void * volatile * inList, void * inNewLink, SInt32 inOffset)
 {
-	void *	oldListHead;
-	void *	newListHead = inNewLink;
-	void **	newLinkNextPtr = (void **) (((char *) inNewLink) + inOffset);
+	/* The _pointer_ is volatile, not the listhead itself */
+	void * volatile	oldListHead;
+	void * volatile	newListHead = inNewLink;
+	void * volatile * newLinkNextPtr = (void * volatile *) (((char *) inNewLink) + inOffset);
 	
 	do {
 		oldListHead = *inList;
 		*newLinkNextPtr = oldListHead;
 	} while (! OSCompareAndSwap((UInt32)oldListHead, (UInt32)newListHead,
-					(UInt32 *)inList));
+					(volatile UInt32 *)inList));
 }
 #endif /* CMPXCHG8B */
 #endif	/* !__ppc__ */
 
-static UInt32	OSBitwiseAtomic(UInt32 and_mask, UInt32 or_mask, UInt32 xor_mask, UInt32 * value)
+static UInt32	OSBitwiseAtomic(UInt32 and_mask, UInt32 or_mask, UInt32 xor_mask, volatile UInt32 * value)
 {
 	UInt32	oldValue;
 	UInt32	newValue;
@@ -116,41 +115,41 @@ static UInt32	OSBitwiseAtomic(UInt32 and_mask, UInt32 or_mask, UInt32 xor_mask, 
 	return oldValue;
 }
 
-UInt32	OSBitAndAtomic(UInt32 mask, UInt32 * value)
+UInt32	OSBitAndAtomic(UInt32 mask, volatile UInt32 * value)
 {
 	return OSBitwiseAtomic(mask, 0, 0, value);
 }
 
-UInt32	OSBitOrAtomic(UInt32 mask, UInt32 * value)
+UInt32	OSBitOrAtomic(UInt32 mask, volatile UInt32 * value)
 {
 	return OSBitwiseAtomic((UInt32) -1, mask, 0, value);
 }
 
-UInt32	OSBitXorAtomic(UInt32 mask, UInt32 * value)
+UInt32	OSBitXorAtomic(UInt32 mask, volatile UInt32 * value)
 {
 	return OSBitwiseAtomic((UInt32) -1, 0, mask, value);
 }
 
-static Boolean OSCompareAndSwap8(UInt8 oldValue8, UInt8 newValue8, UInt8 * value8)
+static Boolean OSCompareAndSwap8(UInt8 oldValue8, UInt8 newValue8, volatile UInt8 * value8)
 {
-	UInt32		mask        = 0x000000ff;
-	UInt32		alignment   = ((UInt32) value8) & (sizeof(UInt32) - 1);
-    UInt32      shiftValues = (24 << 24) | (16 << 16) | (8 << 8);
-    int			shift       = (UInt32) *(((UInt8 *) &shiftValues) + alignment);
-	UInt32 *	value32     = (UInt32 *) (value8 - alignment);
-    UInt32      oldValue;
-    UInt32      newValue;
+	UInt32				mask		= 0x000000ff;
+	UInt32				alignment	= ((UInt32) value8) & (sizeof(UInt32) - 1);
+	UInt32				shiftValues = (24 << 24) | (16 << 16) | (8 << 8);
+	int					shift		= (UInt32) *(((UInt8 *) &shiftValues) + alignment);
+	volatile UInt32 *	value32		= (volatile UInt32 *) (value8 - alignment);
+	UInt32				oldValue;
+	UInt32				newValue;
 
-    mask <<= shift;
+	mask <<= shift;
 
-    oldValue = *value32;
-    oldValue = (oldValue & ~mask) | (oldValue8 << shift);
-    newValue = (oldValue & ~mask) | (newValue8 << shift);
+	oldValue = *value32;
+	oldValue = (oldValue & ~mask) | (oldValue8 << shift);
+	newValue = (oldValue & ~mask) | (newValue8 << shift);
 
 	return OSCompareAndSwap(oldValue, newValue, value32);
 }
 
-static Boolean	OSTestAndSetClear(UInt32 bit, Boolean wantSet, UInt8 * startAddress)
+static Boolean	OSTestAndSetClear(UInt32 bit, Boolean wantSet, volatile UInt8 * startAddress)
 {
 	UInt8		mask = 1;
 	UInt8		oldValue;
@@ -170,12 +169,12 @@ static Boolean	OSTestAndSetClear(UInt32 bit, Boolean wantSet, UInt8 * startAddre
 	return (oldValue & mask) == wantValue;
 }
 
-Boolean	OSTestAndSet(UInt32 bit, UInt8 * startAddress)
+Boolean OSTestAndSet(UInt32 bit, volatile UInt8 * startAddress)
 {
 	return OSTestAndSetClear(bit, true, startAddress);
 }
 
-Boolean	OSTestAndClear(UInt32 bit, UInt8 * startAddress)
+Boolean OSTestAndClear(UInt32 bit, volatile UInt8 * startAddress)
 {
 	return OSTestAndSetClear(bit, false, startAddress);
 }
@@ -184,17 +183,17 @@ Boolean	OSTestAndClear(UInt32 bit, UInt8 * startAddress)
  * silly unaligned versions
  */
 
-SInt8	OSIncrementAtomic8(SInt8 * value)
+SInt8	OSIncrementAtomic8(volatile SInt8 * value)
 {
 	return OSAddAtomic8(1, value);
 }
 
-SInt8	OSDecrementAtomic8(SInt8 * value)
+SInt8	OSDecrementAtomic8(volatile SInt8 * value)
 {
 	return OSAddAtomic8(-1, value);
 }
 
-SInt8	OSAddAtomic8(SInt32 amount, SInt8 * value)
+SInt8	OSAddAtomic8(SInt32 amount, volatile SInt8 * value)
 {
 	SInt8	oldValue;
 	SInt8	newValue;
@@ -202,12 +201,12 @@ SInt8	OSAddAtomic8(SInt32 amount, SInt8 * value)
 	do {
 		oldValue = *value;
 		newValue = oldValue + amount;
-	} while (! OSCompareAndSwap8((UInt8) oldValue, (UInt8) newValue, (UInt8 *) value));
+	} while (! OSCompareAndSwap8((UInt8) oldValue, (UInt8) newValue, (volatile UInt8 *) value));
 	
 	return oldValue;
 }
 
-static UInt8	OSBitwiseAtomic8(UInt32 and_mask, UInt32 or_mask, UInt32 xor_mask, UInt8 * value)
+static UInt8	OSBitwiseAtomic8(UInt32 and_mask, UInt32 or_mask, UInt32 xor_mask, volatile UInt8 * value)
 {
 	UInt8	oldValue;
 	UInt8	newValue;
@@ -220,51 +219,51 @@ static UInt8	OSBitwiseAtomic8(UInt32 and_mask, UInt32 or_mask, UInt32 xor_mask, 
 	return oldValue;
 }
 
-UInt8	OSBitAndAtomic8(UInt32 mask, UInt8 * value)
+UInt8	OSBitAndAtomic8(UInt32 mask, volatile UInt8 * value)
 {
 	return OSBitwiseAtomic8(mask, 0, 0, value);
 }
 
-UInt8	OSBitOrAtomic8(UInt32 mask, UInt8 * value)
+UInt8	OSBitOrAtomic8(UInt32 mask, volatile UInt8 * value)
 {
 	return OSBitwiseAtomic8((UInt32) -1, mask, 0, value);
 }
 
-UInt8	OSBitXorAtomic8(UInt32 mask, UInt8 * value)
+UInt8	OSBitXorAtomic8(UInt32 mask, volatile UInt8 * value)
 {
 	return OSBitwiseAtomic8((UInt32) -1, 0, mask, value);
 }
 
-static Boolean OSCompareAndSwap16(UInt16 oldValue16, UInt16 newValue16, UInt16 * value16)
+static Boolean OSCompareAndSwap16(UInt16 oldValue16, UInt16 newValue16, volatile UInt16 * value16)
 {
-	UInt32		mask        = 0x0000ffff;
-	UInt32		alignment   = ((UInt32) value16) & (sizeof(UInt32) - 1);
-    UInt32      shiftValues = (16 << 24) | (16 << 16);
-    UInt32		shift       = (UInt32) *(((UInt8 *) &shiftValues) + alignment);
-	UInt32 *	value32     = (UInt32 *) (((UInt32) value16) - alignment);
-    UInt32      oldValue;
-    UInt32      newValue;
+	UInt32				mask		= 0x0000ffff;
+	UInt32				alignment	= ((UInt32) value16) & (sizeof(UInt32) - 1);
+	UInt32				shiftValues = (16 << 24) | (16 << 16);
+	UInt32				shift		= (UInt32) *(((UInt8 *) &shiftValues) + alignment);
+	volatile UInt32 *	value32		= (volatile UInt32 *) (((UInt32) value16) - alignment);
+	UInt32				oldValue;
+	UInt32				newValue;
 
-    mask <<= shift;
+	mask <<= shift;
 
-    oldValue = *value32;
-    oldValue = (oldValue & ~mask) | (oldValue16 << shift);
-    newValue = (oldValue & ~mask) | (newValue16 << shift);
+	oldValue = *value32;
+	oldValue = (oldValue & ~mask) | (oldValue16 << shift);
+	newValue = (oldValue & ~mask) | (newValue16 << shift);
 
 	return OSCompareAndSwap(oldValue, newValue, value32);
 }
 
-SInt16	OSIncrementAtomic16(SInt16 * value)
+SInt16	OSIncrementAtomic16(volatile SInt16 * value)
 {
 	return OSAddAtomic16(1, value);
 }
 
-SInt16	OSDecrementAtomic16(SInt16 * value)
+SInt16	OSDecrementAtomic16(volatile SInt16 * value)
 {
 	return OSAddAtomic16(-1, value);
 }
 
-SInt16	OSAddAtomic16(SInt32 amount, SInt16 * value)
+SInt16	OSAddAtomic16(SInt32 amount, volatile SInt16 * value)
 {
 	SInt16	oldValue;
 	SInt16	newValue;
@@ -272,12 +271,12 @@ SInt16	OSAddAtomic16(SInt32 amount, SInt16 * value)
 	do {
 		oldValue = *value;
 		newValue = oldValue + amount;
-	} while (! OSCompareAndSwap16((UInt16) oldValue, (UInt16) newValue, (UInt16 *) value));
+	} while (! OSCompareAndSwap16((UInt16) oldValue, (UInt16) newValue, (volatile UInt16 *) value));
 	
 	return oldValue;
 }
 
-static UInt16	OSBitwiseAtomic16(UInt32 and_mask, UInt32 or_mask, UInt32 xor_mask, UInt16 * value)
+static UInt16	OSBitwiseAtomic16(UInt32 and_mask, UInt32 or_mask, UInt32 xor_mask, volatile UInt16 * value)
 {
 	UInt16	oldValue;
 	UInt16	newValue;
@@ -290,17 +289,17 @@ static UInt16	OSBitwiseAtomic16(UInt32 and_mask, UInt32 or_mask, UInt32 xor_mask
 	return oldValue;
 }
 
-UInt16	OSBitAndAtomic16(UInt32 mask, UInt16 * value)
+UInt16	OSBitAndAtomic16(UInt32 mask, volatile UInt16 * value)
 {
 	return OSBitwiseAtomic16(mask, 0, 0, value);
 }
 
-UInt16	OSBitOrAtomic16(UInt32 mask, UInt16 * value)
+UInt16	OSBitOrAtomic16(UInt32 mask, volatile UInt16 * value)
 {
 	return OSBitwiseAtomic16((UInt32) -1, mask, 0, value);
 }
 
-UInt16	OSBitXorAtomic16(UInt32 mask, UInt16 * value)
+UInt16	OSBitXorAtomic16(UInt32 mask, volatile UInt16 * value)
 {
 	return OSBitwiseAtomic16((UInt32) -1, 0, mask, value);
 }

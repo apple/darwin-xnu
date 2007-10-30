@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*-
@@ -74,7 +80,7 @@
 
 #include <machine/endian.h>
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 typedef	unsigned char		u_char;
 typedef	unsigned short		u_short;
 typedef	unsigned int		u_int;
@@ -130,6 +136,13 @@ typedef	__darwin_ino_t		ino_t;		/* inode number */
 #define _INO_T
 #endif
 
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+#ifndef	_INO64_T
+typedef	__darwin_ino64_t	ino64_t;	/* 64bit inode number */
+#define _INO64_T
+#endif
+#endif /* !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE) */
+
 #ifndef _KEY_T
 #define _KEY_T
 typedef	__int32_t		key_t;		/* IPC key (for Sys V IPC) */
@@ -173,12 +186,37 @@ typedef __darwin_id_t		id_t;
 #define _ID_T
 #endif
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /* Major, minor numbers, dev_t's. */
+#if defined(__cplusplus)
+/*
+ * These lowercase macros tend to match member functions in some C++ code,
+ * so for C++, we must use inline functions instead.
+ */
+
+static inline __int32_t  major(__uint32_t _x)
+{
+	return (__int32_t)(((__uint32_t)_x >> 24) & 0xff);
+}
+
+static inline __int32_t  minor(__uint32_t _x)
+{
+	return (__int32_t)((_x) & 0xffffff);
+}
+
+static inline dev_t  makedev(__uint32_t _major, __uint32_t _minor)
+{
+	return (dev_t)(((_major) << 24) | (_minor));
+}
+
+#else	/* !__cplusplus */
+
 #define	major(x)	((int32_t)(((u_int32_t)(x) >> 24) & 0xff))
 #define	minor(x)	((int32_t)((x) & 0xffffff))
 #define	makedev(x,y)	((dev_t)(((x) << 24) | (y)))
-#endif
+
+#endif	/* !__cplusplus */
+#endif	/* !_POSIX_C_SOURCE */
 
 #ifndef	_CLOCK_T
 #define	_CLOCK_T
@@ -212,24 +250,19 @@ typedef __darwin_useconds_t	useconds_t;
 typedef __darwin_suseconds_t	suseconds_t;
 #endif
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /*
  * This code is present here in order to maintain historical backward
  * compatability, and is intended to be removed at some point in the
  * future; please include <sys/select.h> instead.
  */
-#define	NBBY		8				/* bits in a byte */
-#define NFDBITS	(sizeof(__int32_t) * NBBY)		/* bits per mask */
-#define	howmany(x, y)	(((x) + ((y) - 1)) / (y))	/* # y's == x bits? */
+#define __need_fd_set
+#include <sys/_structs.h>
+
+#define	NBBY		__DARWIN_NBBY		/* bits in a byte */
+#define NFDBITS		__DARWIN_NFDBITS	/* bits per mask */
+#define	howmany(x, y)	__DARWIN_howmany(x, y)	/* # y's == x bits? */
 typedef __int32_t	fd_mask;
-
-
-/*
- * Note:	We use _FD_SET to protect all select related
- *		types and macros
- */
-#ifndef _FD_SET
-#define	_FD_SET
 
 /*
  * Select uses bit masks of file descriptors in longs.  These macros
@@ -238,36 +271,25 @@ typedef __int32_t	fd_mask;
  * the default size.
  */
 #ifndef	FD_SETSIZE
-#define	FD_SETSIZE	1024
-#endif
-
-#define	__DARWIN_NBBY	8				/* bits in a byte */
-#define __DARWIN_NFDBITS	(sizeof(__int32_t) * __DARWIN_NBBY) /* bits per mask */
-#define	__DARWIN_howmany(x, y) (((x) + ((y) - 1)) / (y))	/* # y's == x bits? */
-
-__BEGIN_DECLS
-typedef	struct fd_set {
-	__int32_t	fds_bits[__DARWIN_howmany(FD_SETSIZE, __DARWIN_NFDBITS)];
-} fd_set;
-__END_DECLS
-
-#define	FD_SET(n, p)	((p)->fds_bits[(n)/__DARWIN_NFDBITS] |= (1<<((n) % __DARWIN_NFDBITS)))
-#define	FD_CLR(n, p)	((p)->fds_bits[(n)/__DARWIN_NFDBITS] &= ~(1<<((n) % __DARWIN_NFDBITS)))
-#define	FD_ISSET(n, p)	((p)->fds_bits[(n)/__DARWIN_NFDBITS] & (1<<((n) % __DARWIN_NFDBITS)))
-#if __GNUC__ > 3 || __GNUC__ == 3 && __GNUC_MINOR__ >= 3
-/*
- * Use the built-in bzero function instead of the library version so that
- * we do not pollute the namespace or introduce prototype warnings.
- */
-#define	FD_ZERO(p)	__builtin_bzero(p, sizeof(*(p)))
-#else
-#define	FD_ZERO(p)	bzero(p, sizeof(*(p)))
-#endif
-#ifndef _POSIX_C_SOURCE
-#define	FD_COPY(f, t)	bcopy(f, t, sizeof(*(f)))
-#endif	/* !_POSIX_C_SOURCE */
-
-#endif	/* !_FD_SET */
+#define	FD_SETSIZE	__DARWIN_FD_SETSIZE
+#endif /* FD_SETSIZE */
+#ifndef FD_SET
+#define	FD_SET(n, p)	__DARWIN_FD_SET(n, p)
+#endif /* FD_SET */
+#ifndef FD_CLR
+#define	FD_CLR(n, p)	__DARWIN_FD_CLR(n, p)
+#endif /* FD_CLR */
+#ifndef FD_ISSET
+#define	FD_ISSET(n, p)	__DARWIN_FD_ISSET(n, p)
+#endif /* FD_ISSET */
+#ifndef FD_ZERO
+#define	FD_ZERO(p)	__DARWIN_FD_ZERO(p)
+#endif /* FD_ZERO */
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+#ifndef FD_COPY
+#define	FD_COPY(f, t)	__DARWIN_FD_COPY(f, t)
+#endif /* FD_COPY */
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 
 #if defined(__STDC__) && defined(KERNEL)
@@ -286,7 +308,7 @@ struct	tty;
 struct	uio;
 #endif
 
-#endif /* !_POSIX_C_SOURCE */
+#endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 #endif /* __ASSEMBLER__ */
 
 #ifndef __POSIX_LIB__

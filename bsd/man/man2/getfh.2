@@ -1,3 +1,25 @@
+.\"
+.\" Copyright (c) 2002-2007 Apple Inc.  All rights reserved.
+.\"
+.\" @APPLE_LICENSE_HEADER_START@
+.\" 
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this
+.\" file.
+.\" 
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\" 
+.\" @APPLE_LICENSE_HEADER_END@
+.\"
 .\"	$NetBSD: getfh.2,v 1.7 1995/10/12 15:40:53 jtc Exp $
 .\"
 .\" Copyright (c) 1989, 1991, 1993
@@ -33,7 +55,7 @@
 .\"
 .\"	@(#)getfh.2	8.1 (Berkeley) 6/9/93
 .\"
-.Dd June 9, 1993
+.Dd January 9, 2007
 .Dt GETFH 2
 .Os
 .Sh NAME
@@ -49,10 +71,13 @@
 returns a file handle for the specified file or directory
 in the file handle pointed to by
 .Fa fhp .
-This system call is restricted to the superuser.
+This system call is restricted to the super-user and is used by an
+NFS server's
+.Xr nfsd 8
+daemon to obtain file handles used in NFS MOUNT service replies.
 .Sh RETURN VALUES
-Upon successful completion, a value of 0 is returned.
-Otherwise, -1 is returned and the global variable
+Upon successful completion, a value of 0 is returned.  Otherwise, -1
+is returned and the global variable
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
@@ -66,17 +91,19 @@ is not a directory.
 .It Bq ENAMETOOLONG
 The length of a component of
 .Fa path
-exceeds 
+exceeds
 .Dv {NAME_MAX}
 characters, or the length of
 .Fa path
-exceeds 
-.Dv {PATH_MAX} 
+exceeds
+.Dv {PATH_MAX}
 characters.
 .It Bq ENOENT
 The file referred to by
 .Fa path
 does not exist.
+.It Bq EPERM
+The caller is not the super-user.
 .It Bq EACCES
 Search permission is denied for a component of the path prefix of
 .Fa path .
@@ -91,8 +118,9 @@ An
 .Tn I/O
 error occurred while reading from or writing to the file system.
 .El
+.Sh SEE ALSO
+.Xr nfsd 8
 .Sh HISTORY
 The
 .Fn getfh
-function
-first appeared in 4.4BSD.
+function first appeared in 4.4BSD.

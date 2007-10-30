@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include "../../hfs_macos_defs.h"
@@ -35,24 +41,24 @@ struct ExtentsRecBuffer {
 typedef struct ExtentsRecBuffer ExtentsRecBuffer;
 
 
-static UInt32 CheckExtents( void *extents, UInt32 blocks, Boolean isHFSPlus );
-static OSErr  DeleteExtents( ExtendedVCB *vcb, UInt32 fileNumber, Boolean isHFSPlus );
-static OSErr  MoveExtents( ExtendedVCB *vcb, UInt32 srcFileID, UInt32 destFileID, Boolean isHFSPlus );
+static u_int32_t CheckExtents( void *extents, u_int32_t blocks, Boolean isHFSPlus );
+static OSErr  DeleteExtents( ExtendedVCB *vcb, u_int32_t fileNumber, Boolean isHFSPlus );
+static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t destFileID, Boolean isHFSPlus );
 static void  CopyCatalogNodeInfo( CatalogRecord *src, CatalogRecord *dest );
 static void  CopyBigCatalogNodeInfo( CatalogRecord *src, CatalogRecord *dest );
-static void  CopyExtentInfo( ExtentKey *key, ExtentRecord *data, ExtentsRecBuffer *buffer, UInt16 bufferCount );
+static void  CopyExtentInfo( ExtentKey *key, ExtentRecord *data, ExtentsRecBuffer *buffer, u_int16_t bufferCount );
 
 
 
-OSErr ExchangeFileIDs( ExtendedVCB *vcb, ConstUTF8Param srcName, ConstUTF8Param destName, HFSCatalogNodeID srcID, HFSCatalogNodeID destID, UInt32 srcHint, UInt32 destHint )
+OSErr ExchangeFileIDs( ExtendedVCB *vcb, ConstUTF8Param srcName, ConstUTF8Param destName, HFSCatalogNodeID srcID, HFSCatalogNodeID destID, u_int32_t srcHint, u_int32_t destHint )
 {
 	CatalogKey	srcKey;		// 518 bytes
 	CatalogKey	destKey;	// 518 bytes
 	CatalogRecord	srcData;	// 520 bytes
 	CatalogRecord	destData;	// 520 bytes
 	CatalogRecord	swapData;	// 520 bytes
-	SInt16		numSrcExtentBlocks;
-	SInt16		numDestExtentBlocks;
+	int16_t		numSrcExtentBlocks;
+	int16_t		numDestExtentBlocks;
 	OSErr		err;
 	Boolean		isHFSPlus = ( vcb->vcbSigWord == kHFSPlusSigWord );
 
@@ -367,7 +373,7 @@ static void  CopyBigCatalogNodeInfo( CatalogRecord *src, CatalogRecord *dest )
 }
 
 
-static OSErr  MoveExtents( ExtendedVCB *vcb, UInt32 srcFileID, UInt32 destFileID, Boolean isHFSPlus )
+static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t destFileID, Boolean isHFSPlus )
 {
 	FCB *				fcb;
 	ExtentsRecBuffer	extentsBuffer[kNumExtentsToCache];
@@ -375,9 +381,9 @@ static OSErr  MoveExtents( ExtendedVCB *vcb, UInt32 srcFileID, UInt32 destFileID
 	ExtentRecord		extentData;
 	BTreeIterator		btIterator;
 	FSBufferDescriptor	btRecord;
-	UInt16				btKeySize;
-	UInt16				btRecordSize;
-	SInt16				i, j;
+	u_int16_t			btKeySize;
+	u_int16_t			btRecordSize;
+	int16_t				i, j;
 	OSErr				err;
 	
 
@@ -525,7 +531,7 @@ static OSErr  MoveExtents( ExtendedVCB *vcb, UInt32 srcFileID, UInt32 destFileID
 }
 
 
-static void  CopyExtentInfo( ExtentKey *key, ExtentRecord *data, ExtentsRecBuffer *buffer, UInt16 bufferCount )
+static void  CopyExtentInfo( ExtentKey *key, ExtentRecord *data, ExtentsRecBuffer *buffer, u_int16_t bufferCount )
 {
 	BlockMoveData( key, &(buffer[bufferCount].extentKey), sizeof( ExtentKey ) );
 	BlockMoveData( data, &(buffer[bufferCount].extentData), sizeof( ExtentRecord ) );
@@ -533,14 +539,14 @@ static void  CopyExtentInfo( ExtentKey *key, ExtentRecord *data, ExtentsRecBuffe
 
 
 //--	Delete all extents in extent file that have the ID given.
-static OSErr  DeleteExtents( ExtendedVCB *vcb, UInt32 fileID, Boolean isHFSPlus )
+static OSErr  DeleteExtents( ExtendedVCB *vcb, u_int32_t fileID, Boolean isHFSPlus )
 {
 	FCB *				fcb;
 	ExtentKey *			extentKeyPtr;
 	ExtentRecord		extentData;
 	BTreeIterator		btIterator;
 	FSBufferDescriptor	btRecord;
-	UInt16				btRecordSize;
+	u_int16_t			btRecordSize;
 	OSErr				err;
 
 	fcb = GetFileControlBlock(vcb->extentsRefNum);
@@ -611,10 +617,10 @@ static OSErr  DeleteExtents( ExtendedVCB *vcb, UInt32 fileID, Boolean isHFSPlus 
 
 
 //	Check if there are extents represented in the extents overflow file.
-static UInt32  CheckExtents( void *extents, UInt32 totalBlocks, Boolean isHFSPlus )
+static u_int32_t  CheckExtents( void *extents, u_int32_t totalBlocks, Boolean isHFSPlus )
 {
-	UInt32		extentAllocationBlocks;
-	UInt16		i;
+	u_int32_t		extentAllocationBlocks;
+	u_int16_t		i;
 
 
 	if ( totalBlocks == 0 )

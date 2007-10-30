@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 /*
@@ -81,9 +87,9 @@ hfs_swap_BTNode (
 )
 {
     BTNodeDescriptor *srcDesc = src->buffer;
-    UInt16 *srcOffs = NULL;
+    u_int16_t *srcOffs = NULL;
 	BTreeControlBlockPtr btcb = (BTreeControlBlockPtr)VTOF(vp)->fcbBTCBPtr;
-    UInt32 i;
+    u_int32_t i;
     int error = 0;
 
 #ifdef ENDIAN_DEBUG
@@ -113,12 +119,12 @@ hfs_swap_BTNode (
     	 */
     	if (btcb->totalNodes != 0) {
 			if (srcDesc->fLink >= btcb->totalNodes) {
-				printf("hfs_swap_BTNode: invalid forward link (0x%08X)\n", srcDesc->fLink);
+				printf("hfs_swap_BTNode: invalid forward link (0x%08x >= 0x%08x)\n", srcDesc->fLink, btcb->totalNodes);
 				error = fsBTInvalidHeaderErr;
 				goto fail;
 			}
 			if (srcDesc->bLink >= btcb->totalNodes) {
-				printf("hfs_swap_BTNode: invalid backward link (0x%08X)\n", srcDesc->bLink);
+				printf("hfs_swap_BTNode: invalid backward link (0x%08x >= 0x%08x)\n", srcDesc->bLink, btcb->totalNodes);
 				error = fsBTInvalidHeaderErr;
 				goto fail;
 			}
@@ -149,7 +155,7 @@ hfs_swap_BTNode (
         /*
          * Swap the node offsets (including the free space one!).
          */
-        srcOffs = (UInt16 *)((char *)src->buffer + (src->blockSize - ((srcDesc->numRecords + 1) * sizeof (UInt16))));
+        srcOffs = (u_int16_t *)((char *)src->buffer + (src->blockSize - ((srcDesc->numRecords + 1) * sizeof (u_int16_t))));
 
         /*
          * Sanity check that the record offsets are within the node itself.
@@ -280,7 +286,7 @@ hfs_swap_BTNode (
         /*
          * Swap the node offsets (including the free space one!).
          */
-        srcOffs = (UInt16 *)((char *)src->buffer + (src->blockSize - ((srcDesc->numRecords + 1) * sizeof (UInt16))));
+        srcOffs = (u_int16_t *)((char *)src->buffer + (src->blockSize - ((srcDesc->numRecords + 1) * sizeof (u_int16_t))));
 
         /*
          * Sanity check that the record offsets are within the node itself.
@@ -332,7 +338,7 @@ fail:
 		 */
 		printf("node=%lld fileID=%u volume=%s device=%s\n", src->blockNum, VTOC(vp)->c_fileid,
 			VTOVCB(vp)->vcbVN, vfs_statfs(vnode_mount(vp))->f_mntfromname);
-		VTOVCB(vp)->vcbFlags |= kHFS_DamagedVolume;
+		hfs_mark_volume_inconsistent(VTOVCB(vp));
 	}
 	
     return (error);
@@ -346,10 +352,16 @@ hfs_swap_HFSPlusBTInternalNode (
 )
 {
     BTNodeDescriptor *srcDesc = src->buffer;
-    UInt16 *srcOffs = (UInt16 *)((char *)src->buffer + (src->blockSize - (srcDesc->numRecords * sizeof (UInt16))));
-	char *nextRecord;	/*  Points to start of record following current one */
-    UInt32 i;
-    UInt32 j;
+    u_int16_t *srcOffs = (u_int16_t *)((char *)src->buffer + (src->blockSize - (srcDesc->numRecords * sizeof (u_int16_t))));
+    char *nextRecord;	/*  Points to start of record following current one */
+    
+    /*
+     * i is an int32 because it needs to be negative to index the offset to free space.
+     * srcDesc->numRecords is a u_int16_t and is unlikely to become 32-bit so this should be ok.
+     */
+
+    int32_t i;
+    u_int32_t j;
 
     if (fileID == kHFSExtentsFileID) {
         HFSPlusExtentKey *srcKey;
@@ -357,7 +369,7 @@ hfs_swap_HFSPlusBTInternalNode (
 		size_t recordSize;	/* Size of the data part of the record, or node number for index nodes */
         
         if (srcDesc->kind == kBTIndexNode)
-        	recordSize = sizeof(UInt32);
+        	recordSize = sizeof(u_int32_t);
         else
         	recordSize = sizeof(HFSPlusExtentDescriptor);
 
@@ -401,7 +413,7 @@ hfs_swap_HFSPlusBTInternalNode (
             
             if (srcDesc->kind == kBTIndexNode) {
             	/* For index nodes, the record data is just a child node number. */
-                *((UInt32 *)srcRec) = SWAP_BE32 (*((UInt32 *)srcRec));
+                *((u_int32_t *)srcRec) = SWAP_BE32 (*((u_int32_t *)srcRec));
             } else {
 				/* Swap the extent data */
 				for (j = 0; j < kHFSPlusExtentDensity; j++) {
@@ -413,7 +425,7 @@ hfs_swap_HFSPlusBTInternalNode (
 
     } else if (fileID == kHFSCatalogFileID) {
         HFSPlusCatalogKey *srcKey;
-        SInt16 *srcPtr;
+        int16_t *srcPtr;
         u_int16_t keyLength;
 
         for (i = 0; i < srcDesc->numRecords; i++) {
@@ -453,8 +465,8 @@ hfs_swap_HFSPlusBTInternalNode (
              * Make sure that we can safely dereference the record's type field or
              * an index node's child node number.
              */
-            srcPtr = (SInt16 *)((char *)srcKey + keyLength + sizeof(srcKey->keyLength));
-            if ((char *)srcPtr + sizeof(UInt32) > nextRecord) {
+            srcPtr = (int16_t *)((char *)srcKey + keyLength + sizeof(srcKey->keyLength));
+            if ((char *)srcPtr + sizeof(u_int32_t) > nextRecord) {
 				printf("hfs_swap_HFSPlusBTInternalNode: catalog key #%d too big\n", srcDesc->numRecords-i-1);
 				return fsBTInvalidNodeErr;
             }
@@ -469,7 +481,7 @@ hfs_swap_HFSPlusBTInternalNode (
             /* Make sure name length is consistent with key length */
             if (keyLength < sizeof(srcKey->parentID) + sizeof(srcKey->nodeName.length) +
                 srcKey->nodeName.length*sizeof(srcKey->nodeName.unicode[0])) {
-				printf("hfs_swap_HFSPlusBTInternalNode: catalog record #%d keyLength=%d expected=%d\n",
+				printf("hfs_swap_HFSPlusBTInternalNode: catalog record #%d keyLength=%d expected=%lu\n",
 					srcDesc->numRecords-i, keyLength, sizeof(srcKey->parentID) + sizeof(srcKey->nodeName.length) +
                     srcKey->nodeName.length*sizeof(srcKey->nodeName.unicode[0]));
 				return fsBTInvalidNodeErr;
@@ -485,7 +497,7 @@ hfs_swap_HFSPlusBTInternalNode (
              * Skip over swapping the various types of catalog record.
              */
             if (srcDesc->kind == kBTIndexNode) {
-                *((UInt32 *)srcPtr) = SWAP_BE32 (*((UInt32 *)srcPtr));
+                *((u_int32_t *)srcPtr) = SWAP_BE32 (*((u_int32_t *)srcPtr));
                 continue;
             }
             
@@ -522,8 +534,8 @@ hfs_swap_HFSPlusBTInternalNode (
     
                 /* Don't swap srcRec->userInfo */
                 /* Don't swap srcRec->finderInfo */
-                /* Don't swap srcRec->reserved */
-    
+                srcRec->folderCount = SWAP_BE32 (srcRec->folderCount);
+   
             } else if (srcPtr[0] == kHFSPlusFileRecord) {
                 HFSPlusCatalogFile *srcRec = (HFSPlusCatalogFile *)srcPtr;
                 if ((char *)srcRec + sizeof(*srcRec) > nextRecord) {
@@ -551,8 +563,12 @@ hfs_swap_HFSPlusBTInternalNode (
                 srcRec->bsdInfo.special.iNodeNum	= SWAP_BE32 (srcRec->bsdInfo.special.iNodeNum);
     
                 srcRec->textEncoding		= SWAP_BE32 (srcRec->textEncoding);
-    
-                /* Don't swap srcRec->reserved1 */
+			
+                /* If kHFSHasLinkChainBit is set, reserved1 is hl_FirstLinkID.  
+		 * In all other context, it is expected to be zero.
+		 */
+                srcRec->reserved1 = SWAP_BE32 (srcRec->reserved1);
+
                 /* Don't swap srcRec->userInfo */
                 /* Don't swap srcRec->finderInfo */
                 /* Don't swap srcRec->reserved2 */
@@ -667,7 +683,7 @@ hfs_swap_HFSPlusBTInternalNode (
              * Skip over swapping the various types of attribute record.
              */
             if (srcDesc->kind == kBTIndexNode) {
-                *((UInt32 *)srcRec) = SWAP_BE32 (*((UInt32 *)srcRec));
+                *((u_int32_t *)srcRec) = SWAP_BE32 (*((u_int32_t *)srcRec));
                 continue;
             }
             
@@ -735,7 +751,7 @@ hfs_swap_HFSPlusBTInternalNode (
     } else if (fileID > kHFSFirstUserCatalogNodeID) {
     	/* The only B-tree with a non-system CNID that we use is the hotfile B-tree */
 		HotFileKey *srcKey;
-		UInt32 *srcRec;
+		u_int32_t *srcRec;
         
 		for (i = 0; i < srcDesc->numRecords; i++) {
         	/* Point to the start of the record we're currently checking. */
@@ -748,8 +764,8 @@ hfs_swap_HFSPlusBTInternalNode (
              */
 			nextRecord = (char *)src->buffer + srcOffs[i-1];
 
-			/* Make sure there is room for the key (HotFileKey) and data (UInt32) */
-			if ((char *)srcKey + sizeof(HotFileKey) + sizeof(UInt32) > nextRecord) {
+			/* Make sure there is room for the key (HotFileKey) and data (u_int32_t) */
+			if ((char *)srcKey + sizeof(HotFileKey) + sizeof(u_int32_t) > nextRecord) {
 				printf("hfs_swap_HFSPlusBTInternalNode: hotfile #%d offset too big (0x%04X)\n", srcDesc->numRecords-i-1, srcOffs[i]);
 				return fsBTInvalidNodeErr;
 			}
@@ -771,7 +787,7 @@ hfs_swap_HFSPlusBTInternalNode (
 			srcKey->temperature = SWAP_BE32 (srcKey->temperature);
 			srcKey->fileID = SWAP_BE32 (srcKey->fileID);
              
-			*((UInt32 *)srcRec) = SWAP_BE32 (*((UInt32 *)srcRec));
+			*((u_int32_t *)srcRec) = SWAP_BE32 (*((u_int32_t *)srcRec));
 		}
     } else {
         panic ("hfs_swap_HFSPlusBTInternalNode: fileID %u is not a system B-tree\n", fileID);
@@ -789,11 +805,15 @@ hfs_swap_HFSBTInternalNode (
 )
 {
     BTNodeDescriptor *srcDesc = src->buffer;
-    UInt16 *srcOffs = (UInt16 *)((char *)src->buffer + (src->blockSize - (srcDesc->numRecords * sizeof (UInt16))));
+    u_int16_t *srcOffs = (u_int16_t *)((char *)src->buffer + (src->blockSize - (srcDesc->numRecords * sizeof (u_int16_t))));
 	char *nextRecord;	/*  Points to start of record following current one */
 
-    UInt32 i;
-    UInt32 j;
+    /*
+     * i is an int32 because it needs to be negative to index the offset to free space.
+     * srcDesc->numRecords is a u_int16_t and is unlikely to become 32-bit so this should be ok.
+     */
+    int32_t i;
+    u_int32_t j;
 
     if (fileID == kHFSExtentsFileID) {
         HFSExtentKey *srcKey;
@@ -801,7 +821,7 @@ hfs_swap_HFSBTInternalNode (
 		size_t recordSize;	/* Size of the data part of the record, or node number for index nodes */
         
         if (srcDesc->kind == kBTIndexNode)
-        	recordSize = sizeof(UInt32);
+        	recordSize = sizeof(u_int32_t);
         else
         	recordSize = sizeof(HFSExtentDescriptor);
 
@@ -843,7 +863,7 @@ hfs_swap_HFSBTInternalNode (
     
             if (srcDesc->kind == kBTIndexNode) {
             	/* For index nodes, the record data is just a child node number. */
-                *((UInt32 *)srcRec) = SWAP_BE32 (*((UInt32 *)srcRec));
+                *((u_int32_t *)srcRec) = SWAP_BE32 (*((u_int32_t *)srcRec));
             } else {
 				/* Swap the extent data */
 				for (j = 0; j < kHFSExtentDensity; j++) {
@@ -855,7 +875,7 @@ hfs_swap_HFSBTInternalNode (
         
     } else if (fileID == kHFSCatalogFileID) {
         HFSCatalogKey *srcKey;
-        SInt16 *srcPtr;
+        int16_t *srcPtr;
         unsigned expectedKeyLength;
 
         for (i = 0; i < srcDesc->numRecords; i++) {
@@ -904,13 +924,13 @@ hfs_swap_HFSBTInternalNode (
             }
 
             /* Point to record data (round up to even byte boundary) */
-            srcPtr = (SInt16 *)((char *)srcKey + ((srcKey->keyLength + 2) & ~1));
+            srcPtr = (int16_t *)((char *)srcKey + ((srcKey->keyLength + 2) & ~1));
             
             /*
              * Make sure that we can safely dereference the record's type field or
              * and index node's child node number.
              */
-            if ((char *)srcPtr + sizeof(UInt32) > nextRecord) {
+            if ((char *)srcPtr + sizeof(u_int32_t) > nextRecord) {
 				printf("hfs_swap_HFSBTInternalNode: catalog key #%d too big\n", srcDesc->numRecords-i-1);
 				return fsBTInvalidNodeErr;
             }
@@ -920,7 +940,7 @@ hfs_swap_HFSBTInternalNode (
              * Skip over swapping the various types of catalog record.
              */
             if (srcDesc->kind == kBTIndexNode) {
-                *((UInt32 *)srcPtr) = SWAP_BE32 (*((UInt32 *)srcPtr));
+                *((u_int32_t *)srcPtr) = SWAP_BE32 (*((u_int32_t *)srcPtr));
                 continue;
             }
     
@@ -977,7 +997,7 @@ hfs_swap_HFSBTInternalNode (
     
                 srcRec->clumpSize			= SWAP_BE16 (srcRec->clumpSize);
                 
-                /* Swap the two sets of extents as an array of six (three each) UInt16 */
+                /* Swap the two sets of extents as an array of six (three each) u_int16_t */
                 for (j = 0; j < kHFSExtentDensity * 2; j++) {
                     srcRec->dataExtents[j].startBlock	= SWAP_BE16 (srcRec->dataExtents[j].startBlock);
                     srcRec->dataExtents[j].blockCount	= SWAP_BE16 (srcRec->dataExtents[j].blockCount);

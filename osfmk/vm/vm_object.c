@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -56,6 +62,7 @@
  *	Virtual memory object module.
  */
 
+#include <debug.h>
 #include <mach_pagemap.h>
 #include <task_swapper.h>
 
@@ -86,6 +93,7 @@
 #include <vm/vm_page.h>
 #include <vm/vm_pageout.h>
 #include <vm/vm_protos.h>
+#include <vm/vm_purgeable_internal.h>
 
 /*
  *	Virtual memory objects maintain the actual data
@@ -198,6 +206,7 @@ static zone_t		vm_object_zone;		/* vm backing store zone */
  */
 static struct vm_object			kernel_object_store;
 vm_object_t						kernel_object;
+
 
 /*
  *	The submap object is used as a placeholder for vm_map_submap
@@ -397,6 +406,12 @@ vm_object_allocate(
 	return object;
 }
 
+
+lck_grp_t	vm_object_lck_grp;
+lck_grp_attr_t	vm_object_lck_grp_attr;
+lck_attr_t	vm_object_lck_attr;
+lck_attr_t	kernel_object_lck_attr;
+
 /*
  *	vm_object_bootstrap:
  *
@@ -413,7 +428,6 @@ vm_object_bootstrap(void)
 				"vm objects");
 
 	queue_init(&vm_object_reaper_queue);
-
 	queue_init(&vm_object_cached_list);
 	mutex_init(&vm_object_cached_lock_data, 0);
 
@@ -426,11 +440,25 @@ vm_object_bootstrap(void)
 	for (i = 0; i < VM_OBJECT_HASH_COUNT; i++)
 		queue_init(&vm_object_hashtable[i]);
 
+	vm_object_init_lck_grp();
+
 	/*
 	 *	Fill in a template object, for quick initialization
 	 */
 
 	/* memq; Lock; init after allocation */
+	vm_object_template.memq.prev = NULL;
+	vm_object_template.memq.next = NULL;
+#if 0
+	/*
+	 * We can't call vm_object_lock_init() here because that will
+	 * allocate some memory and VM is not fully initialized yet.
+	 * The lock will be initialized for each allocate object in
+	 * _vm_object_allocate(), so we don't need to initialize it in
+	 * the vm_object_template.
+	 */
+	vm_object_lock_init(&vm_object_template);
+#endif
 	vm_object_template.size = 0;
 	vm_object_template.memq_hint = VM_PAGE_NULL;
 	vm_object_template.ref_count = 1;
@@ -441,16 +469,10 @@ vm_object_bootstrap(void)
 	vm_object_template.copy = VM_OBJECT_NULL;
 	vm_object_template.shadow = VM_OBJECT_NULL;
 	vm_object_template.shadow_offset = (vm_object_offset_t) 0;
-	vm_object_template.cow_hint = ~(vm_offset_t)0;
-	vm_object_template.true_share = FALSE;
-
 	vm_object_template.pager = MEMORY_OBJECT_NULL;
 	vm_object_template.paging_offset = 0;
 	vm_object_template.pager_control = MEMORY_OBJECT_CONTROL_NULL;
-	/* msr_q; init after allocation */
-
 	vm_object_template.copy_strategy = MEMORY_OBJECT_COPY_SYMMETRIC;
-	vm_object_template.absent_count = 0;
 	vm_object_template.paging_in_progress = 0;
 
 	/* Begin bitfields */
@@ -465,29 +487,53 @@ vm_object_bootstrap(void)
 	vm_object_template.private = FALSE;
 	vm_object_template.pageout = FALSE;
 	vm_object_template.alive = TRUE;
-	vm_object_template.purgable = VM_OBJECT_NONPURGABLE;
+	vm_object_template.purgable = VM_PURGABLE_DENY;
+	vm_object_template.shadowed = FALSE;
 	vm_object_template.silent_overwrite = FALSE;
 	vm_object_template.advisory_pageout = FALSE;
-	vm_object_template.shadowed = FALSE;
+	vm_object_template.true_share = FALSE;
 	vm_object_template.terminating = FALSE;
+	vm_object_template.named = FALSE;
 	vm_object_template.shadow_severed = FALSE;
 	vm_object_template.phys_contiguous = FALSE;
 	vm_object_template.nophyscache = FALSE;
 	/* End bitfields */
 
-	/* cache bitfields */
-	vm_object_template.wimg_bits = VM_WIMG_DEFAULT;
-
-	/* cached_list; init after allocation */
+	vm_object_template.cached_list.prev = NULL;
+	vm_object_template.cached_list.next = NULL;
+	vm_object_template.msr_q.prev = NULL;
+	vm_object_template.msr_q.next = NULL;
+	
 	vm_object_template.last_alloc = (vm_object_offset_t) 0;
-	vm_object_template.cluster_size = 0;
+	vm_object_template.sequential = (vm_object_offset_t) 0;
+	vm_object_template.pages_created = 0;
+	vm_object_template.pages_used = 0;
+
 #if	MACH_PAGEMAP
 	vm_object_template.existence_map = VM_EXTERNAL_NULL;
 #endif	/* MACH_PAGEMAP */
+	vm_object_template.cow_hint = ~(vm_offset_t)0;
 #if	MACH_ASSERT
 	vm_object_template.paging_object = VM_OBJECT_NULL;
 #endif	/* MACH_ASSERT */
 
+	/* cache bitfields */
+	vm_object_template.wimg_bits = VM_WIMG_DEFAULT;
+	vm_object_template.code_signed = FALSE;
+	vm_object_template.not_in_use = 0;
+#ifdef UPL_DEBUG
+	vm_object_template.uplq.prev = NULL;
+	vm_object_template.uplq.next = NULL;
+#endif /* UPL_DEBUG */
+#ifdef VM_PIP_DEBUG
+	bzero(&vm_object_template.pip_holders,
+	      sizeof (vm_object_template.pip_holders));
+#endif /* VM_PIP_DEBUG */
+
+	vm_object_template.objq.next=NULL;
+	vm_object_template.objq.prev=NULL;
+
+	
 	/*
 	 *	Initialize the "kernel object"
 	 */
@@ -547,7 +593,7 @@ vm_object_reaper_init(void)
 		BASEPRI_PREEMPT - 1,
 		&thread);
 	if (kr != KERN_SUCCESS) {
-		panic("failed to launch vm_object_reaper_thread kr=0x%x\n", kr);
+		panic("failed to launch vm_object_reaper_thread kr=0x%x", kr);
 	}
 	thread_deallocate(thread);
 }
@@ -560,13 +606,20 @@ vm_object_init(void)
 	 */
 }
 
-/* remove the typedef below when emergency work-around is taken out */
-typedef struct vnode_pager {
-	memory_object_t pager;
-	memory_object_t pager_handle;	/* pager */
-	memory_object_control_t 	control_handle;	/* memory object's control handle */
-	void	   	*vnode_handle;  /* vnode handle */
-} *vnode_pager_t;
+
+__private_extern__ void
+vm_object_init_lck_grp(void)
+{
+        /*
+	 * initialze the vm_object lock world
+	 */
+        lck_grp_attr_setdefault(&vm_object_lck_grp_attr);
+	lck_grp_init(&vm_object_lck_grp, "vm_object", &vm_object_lck_grp_attr);
+	lck_attr_setdefault(&vm_object_lck_attr);
+	lck_attr_setdefault(&kernel_object_lck_attr);
+	lck_attr_cleardebug(&kernel_object_lck_attr);
+}
+
 
 #define	MIGHT_NOT_CACHE_SHADOWS		1
 #if	MIGHT_NOT_CACHE_SHADOWS
@@ -584,16 +637,83 @@ static int cache_shadows = TRUE;
  *
  *	No object may be locked.
  */
+unsigned long vm_object_deallocate_shared_successes = 0;
+unsigned long vm_object_deallocate_shared_failures = 0;
+unsigned long vm_object_deallocate_shared_swap_failures = 0;
 __private_extern__ void
 vm_object_deallocate(
 	register vm_object_t	object)
 {
-	boolean_t retry_cache_trim = FALSE;
-	vm_object_t shadow = VM_OBJECT_NULL;
+	boolean_t	retry_cache_trim = FALSE;
+	vm_object_t	shadow = VM_OBJECT_NULL;
+	uint32_t	try_failed_count = 0;
 	
 //	if(object)dbgLog(object, object->ref_count, object->can_persist, 3);	/* (TEST/DEBUG) */
 //	else dbgLog(object, 0, 0, 3);	/* (TEST/DEBUG) */
 
+	if (object == VM_OBJECT_NULL)
+	        return;
+
+	if (object == kernel_object) {
+		vm_object_lock(kernel_object);
+		kernel_object->ref_count--;
+		if (kernel_object->ref_count == 0) {
+			panic("vm_object_deallocate: losing kernel_object\n");
+		}
+		vm_object_unlock(kernel_object);
+		return;
+	}
+
+	if (object->ref_count > 2 ||
+	    (!object->named && object->ref_count > 1)) {
+		UInt32		original_ref_count;
+		volatile UInt32	*ref_count_p;
+		Boolean		atomic_swap;
+
+		/*
+		 * The object currently looks like it is not being
+		 * kept alive solely by the reference we're about to release.
+		 * Let's try and release our reference without taking
+		 * all the locks we would need if we had to terminate the
+		 * object (cache lock + exclusive object lock).
+		 * Lock the object "shared" to make sure we don't race with
+		 * anyone holding it "exclusive".
+		 */
+	        vm_object_lock_shared(object);
+		ref_count_p = (volatile UInt32 *) &object->ref_count;
+		original_ref_count = object->ref_count;
+		/*
+		 * Test again as "ref_count" could have changed.
+		 * "named" shouldn't change.
+		 */
+		if (original_ref_count > 2 ||
+		    (!object->named && original_ref_count > 1)) {
+			atomic_swap = OSCompareAndSwap(
+				original_ref_count,
+				original_ref_count - 1,
+				(UInt32 *) &object->ref_count);
+			if (atomic_swap == FALSE) {
+				vm_object_deallocate_shared_swap_failures++;
+			}
+
+		} else {
+			atomic_swap = FALSE;
+		}
+		vm_object_unlock(object);
+
+		if (atomic_swap) {
+			/* ref_count was updated atomically ! */
+			vm_object_deallocate_shared_successes++;
+			return;
+		}
+
+		/*
+		 * Someone else updated the ref_count at the same
+		 * time and we lost the race.  Fall back to the usual
+		 * slow but safe path...
+		 */
+		vm_object_deallocate_shared_failures++;
+	}
 
 	while (object != VM_OBJECT_NULL) {
 
@@ -615,7 +735,9 @@ vm_object_deallocate(
 			if (vm_object_lock_try(object))
 			        break;
 		        vm_object_cache_unlock();
-			mutex_pause();  /* wait a bit */
+			try_failed_count++;
+
+			mutex_pause(try_failed_count);  /* wait a bit */
 		}
 		assert(object->ref_count > 0);
 
@@ -636,6 +758,7 @@ vm_object_deallocate(
 					
 				memory_object_unmap(pager);
 
+				try_failed_count = 0;
 				for (;;) {
 				        vm_object_cache_lock();
 
@@ -649,7 +772,9 @@ vm_object_deallocate(
 					if (vm_object_lock_try(object))
 					        break;
 					vm_object_cache_unlock();
-					mutex_pause();  /* wait a bit */
+					try_failed_count++;
+
+					mutex_pause(try_failed_count);  /* wait a bit */
 				}
 				assert(object->ref_count > 0);
 			}
@@ -668,6 +793,7 @@ vm_object_deallocate(
 		/* terminate again.  */
 
 		if ((object->ref_count > 1) || object->terminating) {
+			vm_object_lock_assert_exclusive(object);
 			object->ref_count--;
 			vm_object_res_deallocate(object);
 			vm_object_cache_unlock();
@@ -733,6 +859,7 @@ vm_object_deallocate(
 			 *	Now it is safe to decrement reference count,
 			 *	and to return if reference count is > 0.
 			 */
+			vm_object_lock_assert_exclusive(object);
 			if (--object->ref_count > 0) {
 				vm_object_res_deallocate(object);
 				vm_object_unlock(object);
@@ -903,6 +1030,7 @@ vm_object_cache_trim(
 
 		assert(object->pager_initialized);
 		assert(object->ref_count == 0);
+		vm_object_lock_assert_exclusive(object);
 		object->ref_count++;
 
 		/*
@@ -926,7 +1054,15 @@ vm_object_cache_trim(
 	}
 }
 
-boolean_t	vm_object_terminate_remove_all = FALSE;
+#define VM_OBJ_TERM_STATS DEBUG
+#if VM_OBJ_TERM_STATS
+uint32_t vm_object_terminate_pages_freed = 0;
+uint32_t vm_object_terminate_pages_removed = 0;
+uint32_t vm_object_terminate_batches = 0;
+uint32_t vm_object_terminate_biggest_batch = 0;
+#endif /* VM_OBJ_TERM_STATS */
+
+#define V_O_T_MAX_BATCH	256
 
 /*
  *	Routine:	vm_object_terminate
@@ -951,14 +1087,72 @@ vm_object_terminate(
 {
 	register vm_page_t	p;
 	vm_object_t		shadow_object;
+	vm_page_t		local_free_q;
+	int			loop_count;
+#if VM_OBJ_TERM_STATS
+	uint32_t		local_free_count;
+	uint32_t		pages_removed;
+#endif /* VM_OBJ_TERM_STATS */
+
+#if VM_OBJ_TERM_STATS
+#define VM_OBJ_TERM_FREELIST_DEBUG(_pages_removed, _local_free_count)	\
+	MACRO_BEGIN							\
+		if (_pages_removed) {					\
+			hw_atomic_add(&vm_object_terminate_batches, 1); \
+			hw_atomic_add(&vm_object_terminate_pages_removed, \
+				      _pages_removed);			\
+			hw_atomic_add(&vm_object_terminate_pages_freed, \
+				      _local_free_count);		\
+			if (_local_free_count >				\
+			    vm_object_terminate_biggest_batch) {	\
+				vm_object_terminate_biggest_batch =	\
+					_local_free_count;		\
+			}						\
+			_local_free_count = 0;				\
+		}							\
+	MACRO_END
+#else /* VM_OBJ_TERM_STATS */
+#define VM_OBJ_TERM_FREELIST_DEBUG(_pages_removed, _local_free_count)
+#endif /* VM_OBJ_TERM_STATS */
+
+#define VM_OBJ_TERM_FREELIST(_pages_removed, _local_free_count, _local_free_q) \
+	MACRO_BEGIN							\
+		VM_OBJ_TERM_FREELIST_DEBUG(_pages_removed, _local_free_count); \
+		if (_local_free_q) {					\
+			vm_page_free_list(_local_free_q);		\
+			_local_free_q = VM_PAGE_NULL;			\
+		}							\
+	MACRO_END
+
+
 
 	XPR(XPR_VM_OBJECT, "vm_object_terminate, object 0x%X ref %d\n",
 		(integer_t)object, object->ref_count, 0, 0, 0);
 
+	local_free_q = VM_PAGE_NULL;
+#if VM_OBJ_TERM_STATS
+	local_free_count = 0;
+	pages_removed = 0;
+#endif /* VM_OBJ_TERM_STATS */
+
 	if (!object->pageout && (!object->temporary || object->can_persist)
 			&& (object->pager != NULL || object->shadow_severed)) {
 	   vm_object_cache_unlock();
+	   loop_count = V_O_T_MAX_BATCH;
+	   vm_page_lock_queues();
 	   while (!queue_empty(&object->memq)) {
+		if (--loop_count == 0) {
+			/*
+			 * Free the pages we've reclaimed so far and
+			 * take a little break to avoid hogging
+			 * the page queues lock too long.
+			 */
+			VM_OBJ_TERM_FREELIST(pages_removed,
+					     local_free_count,
+					     local_free_q);
+			mutex_yield(&vm_page_queue_lock);
+			loop_count = V_O_T_MAX_BATCH;
+		}
 		/*
 		 * Clear pager_trusted bit so that the pages get yanked
 		 * out of the object instead of cleaned in place.  This
@@ -972,17 +1166,24 @@ vm_object_terminate(
 
 		if (p->busy || p->cleaning) {
 			if(p->cleaning || p->absent) {
+				/* free the pages reclaimed so far */
+				VM_OBJ_TERM_FREELIST(pages_removed,
+						     local_free_count,
+						     local_free_q);
+				vm_page_unlock_queues();
 				vm_object_paging_wait(object, THREAD_UNINT);
+				vm_page_lock_queues();
 				continue;
 			} else {
-			   panic("vm_object_terminate.3 0x%x 0x%x", object, p);
+				panic("vm_object_terminate.3 %p %p", object, p);
 			}
 		}
 
-		vm_page_lock_queues();
 		p->busy = TRUE;
 		VM_PAGE_QUEUES_REMOVE(p);
-		vm_page_unlock_queues();
+#if VM_OBJ_TERM_STATS
+		pages_removed++;
+#endif /* VM_OBJ_TERM_STATS */
 
 		if (p->absent || p->private) {
 
@@ -997,23 +1198,50 @@ vm_object_terminate(
 			goto free_page;
 		}
 
-		if (p->fictitious)
-			panic("vm_object_terminate.4 0x%x 0x%x", object, p);
+		if (p->fictitious) {
+			if (p->phys_page == vm_page_guard_addr) {
+				goto free_page;
+			}
+			panic("vm_object_terminate.4 %p %p", object, p);
+		}
 
-		if (!p->dirty)
+		if (!p->dirty && p->pmapped)
 			p->dirty = pmap_is_modified(p->phys_page);
 
 		if ((p->dirty || p->precious) && !p->error && object->alive) {
+			/* free the pages reclaimed so far */
+			VM_OBJ_TERM_FREELIST(pages_removed,
+					     local_free_count,
+					     local_free_q);
+			vm_page_unlock_queues();
 			vm_pageout_cluster(p); /* flush page */
 			vm_object_paging_wait(object, THREAD_UNINT);
 			XPR(XPR_VM_OBJECT,
 			    "vm_object_terminate restart, object 0x%X ref %d\n",
 			    (integer_t)object, object->ref_count, 0, 0, 0);
+			vm_page_lock_queues();
 		} else {
 		    free_page:
-		    	VM_PAGE_FREE(p);
+			/*
+			 * Add this page to our list of reclaimed pages,
+			 * to be freed later.
+			 */
+			vm_page_free_prepare(p);
+			p->pageq.next = (queue_entry_t) local_free_q;
+			local_free_q = p;
+#if VM_OBJ_TERM_STATS
+			local_free_count++;
+#endif /* VM_OBJ_TERM_STATS */
 		}
 	   }
+
+	   /*
+	    * Free the remaining reclaimed pages.
+	    */
+	   VM_OBJ_TERM_FREELIST(pages_removed,
+				local_free_count,
+				local_free_q);
+	   vm_page_unlock_queues();
 	   vm_object_unlock(object);
 	   vm_object_cache_lock();
 	   vm_object_lock(object);
@@ -1023,7 +1251,8 @@ vm_object_terminate(
 	 *	Make sure the object isn't already being terminated
 	 */
 	if(object->terminating) {
-		object->ref_count -= 1;
+		vm_object_lock_assert_exclusive(object);
+		object->ref_count--;
 		assert(object->ref_count > 0);
 		vm_object_cache_unlock();
 		vm_object_unlock(object);
@@ -1035,7 +1264,8 @@ vm_object_terminate(
 	 * cleaning it?
 	 */
 	if(object->ref_count != 1) {
-		object->ref_count -= 1;
+		vm_object_lock_assert_exclusive(object);
+		object->ref_count--;
 		assert(object->ref_count > 0);
 		vm_object_res_deallocate(object);
 		vm_object_cache_unlock();
@@ -1104,6 +1334,14 @@ vm_object_terminate(
 	object = VM_OBJECT_NULL;
 	/* cache lock and object lock were released by vm_object_reap() */
 
+	/*
+	 * KERN_SUCCESS means that this object has been terminated
+	 * and no longer needs its shadow object but still holds a
+	 * reference on it.
+	 * The caller is responsible for dropping that reference.
+	 * We can't call vm_object_deallocate() here because that
+	 * would create a recursion.
+	 */
 	return KERN_SUCCESS;
 }
 
@@ -1122,32 +1360,25 @@ vm_object_reap(
 {
 	memory_object_t		pager;
 	vm_page_t		p;
+	vm_page_t		local_free_q;
+	int			loop_count;
+#if VM_OBJ_TERM_STATS
+	uint32_t		local_free_count;
+#endif /* VM_OBJ_TERM_STATS */
 
 #if DEBUG
 	mutex_assert(&vm_object_cached_lock_data, MA_OWNED);
-	mutex_assert(&object->Lock, MA_OWNED);
 #endif /* DEBUG */
+	vm_object_lock_assert_exclusive(object);
+	assert(object->paging_in_progress == 0);
 
 	vm_object_reap_count++;
 
-	/*
-	 * The pageout daemon might be playing with our pages.
-	 * Now that the object is dead, it won't touch any more
-	 * pages, but some pages might already be on their way out.
-	 * Hence, we wait until the active paging activities have
-	 * ceased before we break the association with the pager
-	 * itself.
-	 */
-	while (object->paging_in_progress != 0) {
-		vm_object_cache_unlock();
-		vm_object_wait(object,
-			       VM_OBJECT_EVENT_PAGING_IN_PROGRESS,
-			       THREAD_UNINT);
-		vm_object_cache_lock();
-		vm_object_lock(object);
-	}
+	local_free_q = VM_PAGE_NULL;
+#if VM_OBJ_TERM_STATS
+	local_free_count = 0;
+#endif /* VM_OBJ_TERM_STATS */
 
-	assert(object->paging_in_progress == 0);
 	pager = object->pager;
 	object->pager = MEMORY_OBJECT_NULL;
 
@@ -1155,6 +1386,7 @@ vm_object_reap(
 		memory_object_control_disable(object->pager_control);
 	vm_object_cache_unlock();
 
+	vm_object_lock_assert_exclusive(object);
 	object->ref_count--;
 #if	TASK_SWAPPER
 	assert(object->res_count == 0);
@@ -1162,6 +1394,19 @@ vm_object_reap(
 
 	assert (object->ref_count == 0);
 
+	/* remove from purgeable queue if it's on */
+	if (object->objq.next || object->objq.prev) {
+	        purgeable_q_t queue = vm_purgeable_object_remove(object);
+		assert(queue);
+
+		/* Must take page lock for this - using it to protect token queue */
+		vm_page_lock_queues();
+		vm_purgeable_token_delete_first(queue);
+        
+		assert(queue->debug_count_objects>=0);
+		vm_page_unlock_queues();
+	}
+    
 	/*
 	 *	Clean or free the pages, as appropriate.
 	 *	It is possible for us to find busy/absent pages,
@@ -1174,12 +1419,39 @@ vm_object_reap(
 
 	} else if ((object->temporary && !object->can_persist) ||
 		   (pager == MEMORY_OBJECT_NULL)) {
+		loop_count = V_O_T_MAX_BATCH;
+		vm_page_lock_queues();
 		while (!queue_empty(&object->memq)) {
+			if (--loop_count == 0) {
+				/*
+				 * Free the pages we reclaimed so far
+				 * and take a little break to avoid
+				 * hogging the page queue lock too long
+				 */
+				VM_OBJ_TERM_FREELIST(local_free_count,
+						     local_free_count,
+						     local_free_q);
+				mutex_yield(&vm_page_queue_lock);
+				loop_count = V_O_T_MAX_BATCH;
+			}
 			p = (vm_page_t) queue_first(&object->memq);
 
-			VM_PAGE_CHECK(p);
-			VM_PAGE_FREE(p);
+			vm_page_free_prepare(p);
+
+			assert(p->pageq.next == NULL && p->pageq.prev == NULL);
+			p->pageq.next = (queue_entry_t) local_free_q;
+			local_free_q = p;
+#if VM_OBJ_TERM_STATS
+			local_free_count++;
+#endif /* VM_OBJ_TERM_STATS */
 		}
+		/*
+		 * Free the remaining reclaimed pages
+		 */
+		VM_OBJ_TERM_FREELIST(local_free_count,
+				     local_free_count,
+				     local_free_q);
+		vm_page_unlock_queues();
 	} else if (!queue_empty(&object->memq)) {
 		panic("vm_object_reap: queue just emptied isn't");
 	}
@@ -1210,6 +1482,7 @@ vm_object_reap(
 
 	object->shadow = VM_OBJECT_NULL;
 
+	vm_object_lock_destroy(object);
 	/*
 	 *	Free the space for the object.
 	 */
@@ -1223,8 +1496,8 @@ vm_object_reap_async(
 {
 #if DEBUG
 	mutex_assert(&vm_object_cached_lock_data, MA_OWNED);
-	mutex_assert(&object->Lock, MA_OWNED);
 #endif /* DEBUG */
+	vm_object_lock_assert_exclusive(object);
 
 	vm_object_reap_count_async++;
 
@@ -1250,6 +1523,23 @@ vm_object_reaper_thread(void)
 		vm_object_lock(object);
 		assert(object->terminating);
 		assert(!object->alive);
+		
+		/*
+		 * The pageout daemon might be playing with our pages.
+		 * Now that the object is dead, it won't touch any more
+		 * pages, but some pages might already be on their way out.
+		 * Hence, we wait until the active paging activities have
+		 * ceased before we break the association with the pager
+		 * itself.
+		 */
+		while (object->paging_in_progress != 0) {
+			vm_object_cache_unlock();
+			vm_object_wait(object,
+				       VM_OBJECT_EVENT_PAGING_IN_PROGRESS,
+				       THREAD_UNINT);
+			vm_object_cache_lock();
+			vm_object_lock(object);
+		}
 
 		shadow_object =
 			object->pageout ? VM_OBJECT_NULL : object->shadow;
@@ -1406,6 +1696,11 @@ vm_object_destroy(
 	return(KERN_SUCCESS);
 }
 
+#define VM_OBJ_DEACT_ALL_STATS DEBUG
+#if VM_OBJ_DEACT_ALL_STATS
+uint32_t vm_object_deactivate_all_pages_batches = 0;
+uint32_t vm_object_deactivate_all_pages_pages = 0;
+#endif /* VM_OBJ_DEACT_ALL_STATS */
 /*
  *	vm_object_deactivate_pages
  *
@@ -1419,13 +1714,45 @@ vm_object_deactivate_all_pages(
 	register vm_object_t	object)
 {
 	register vm_page_t	p;
+	int			loop_count;
+#if VM_OBJ_DEACT_ALL_STATS
+	int			pages_count;
+#endif /* VM_OBJ_DEACT_ALL_STATS */
+#define V_O_D_A_P_MAX_BATCH	256
 
+	loop_count = V_O_D_A_P_MAX_BATCH;
+#if VM_OBJ_DEACT_ALL_STATS
+	pages_count = 0;
+#endif /* VM_OBJ_DEACT_ALL_STATS */
+	vm_page_lock_queues();
 	queue_iterate(&object->memq, p, vm_page_t, listq) {
-		vm_page_lock_queues();
-		if (!p->busy)
+		if (--loop_count == 0) {
+#if VM_OBJ_DEACT_ALL_STATS
+			hw_atomic_add(&vm_object_deactivate_all_pages_batches,
+				      1);
+			hw_atomic_add(&vm_object_deactivate_all_pages_pages,
+				      pages_count);
+			pages_count = 0;
+#endif /* VM_OBJ_DEACT_ALL_STATS */
+			mutex_yield(&vm_page_queue_lock);
+			loop_count = V_O_D_A_P_MAX_BATCH;
+		}
+		if (!p->busy && !p->throttled) {
+#if VM_OBJ_DEACT_ALL_STATS
+			pages_count++;
+#endif /* VM_OBJ_DEACT_ALL_STATS */
 			vm_page_deactivate(p);
-		vm_page_unlock_queues();
+		}
 	}
+#if VM_OBJ_DEACT_ALL_STATS
+	if (pages_count) {
+		hw_atomic_add(&vm_object_deactivate_all_pages_batches, 1);
+		hw_atomic_add(&vm_object_deactivate_all_pages_pages,
+			      pages_count);
+		pages_count = 0;
+	}
+#endif /* VM_OBJ_DEACT_ALL_STATS */
+	vm_page_unlock_queues();
 }
 
 __private_extern__ void
@@ -1471,29 +1798,40 @@ vm_object_deactivate_pages(
 				        	m->precious = FALSE;
 					        m->dirty = FALSE;
 						pmap_clear_modify(m->phys_page);
+#if	MACH_PAGEMAP
 						vm_external_state_clr(object->existence_map, offset);
+#endif	/* MACH_PAGEMAP */
 					}
-					VM_PAGE_QUEUES_REMOVE(m);
 
-					assert(!m->laundry);
-					assert(m->object != kernel_object);
-					assert(m->pageq.next == NULL &&
-					       m->pageq.prev == NULL);
-					if(m->zero_fill) {
-						queue_enter_first(
+					if (!m->throttled) {
+						VM_PAGE_QUEUES_REMOVE(m);
+
+						assert(!m->laundry);
+						assert(m->object != kernel_object);
+						assert(m->pageq.next == NULL &&
+						       m->pageq.prev == NULL);
+					
+						if(m->zero_fill) {
+							queue_enter_first(
 							&vm_page_queue_zf, 
 							m, vm_page_t, pageq);
-					} else {
-						queue_enter_first(
-							&vm_page_queue_inactive, 
-							m, vm_page_t, pageq);
+							vm_zf_queue_count++;
+						} else {
+						        queue_enter_first(
+									  &vm_page_queue_inactive, 
+									  m, vm_page_t, pageq);
+						}
+
+						m->inactive = TRUE;
+						if (!m->fictitious) {
+							vm_page_inactive_count++;
+							token_new_pagecount++;
+						} else {
+							assert(m->phys_page == vm_page_fictitious_addr);
+						}
+
+						pages_moved++;
 					}
-
-					m->inactive = TRUE;
-					if (!m->fictitious)  
-					        vm_page_inactive_count++;
-
-					pages_moved++;
 				}
 			}
 		}
@@ -1560,6 +1898,28 @@ vm_object_pmap_protect(
 
 	vm_object_lock(object);
 
+	if (object->phys_contiguous) {
+		if (pmap != NULL) {
+			vm_object_unlock(object);
+			pmap_protect(pmap, pmap_start, pmap_start + size, prot);
+		} else {
+			vm_object_offset_t phys_start, phys_end, phys_addr;
+
+			phys_start = object->shadow_offset + offset;
+			phys_end = phys_start + size;
+			assert(phys_start <= phys_end);
+			assert(phys_end <= object->shadow_offset + object->size);
+			vm_object_unlock(object);
+
+			for (phys_addr = phys_start;
+			     phys_addr < phys_end;
+			     phys_addr += PAGE_SIZE_64) {
+				pmap_page_protect(phys_addr >> 12, prot);
+			}
+		}
+		return;
+	}
+
 	assert(object->internal);
 
 	while (TRUE) {
@@ -1593,8 +1953,7 @@ vm_object_pmap_protect(
 		    if (!p->fictitious &&
 			(offset <= p->offset) && (p->offset < end)) {
 
-			    pmap_page_protect(p->phys_page,
-					      prot & ~p->page_lock);
+		        pmap_page_protect(p->phys_page, prot);
 		    }
 		  }
 		}
@@ -1623,8 +1982,7 @@ vm_object_pmap_protect(
 				target_off < end; target_off += PAGE_SIZE) {
 				p = vm_page_lookup(object, target_off);
 				if (p != VM_PAGE_NULL) {
-		    			pmap_page_protect(p->phys_page,
-						      prot & ~p->page_lock);
+				        pmap_page_protect(p->phys_page, prot);
 				}
 		    	}
 		}
@@ -1704,8 +2062,7 @@ vm_object_copy_slowly(
 	vm_object_t		new_object;
 	vm_object_offset_t	new_offset;
 
-	vm_object_offset_t	src_lo_offset = src_offset;
-	vm_object_offset_t	src_hi_offset = src_offset + size;
+	struct vm_object_fault_info fault_info;
 
 	XPR(XPR_VM_OBJECT, "v_o_c_slowly obj 0x%x off 0x%x size 0x%x\n",
 	    src_object, src_offset, size, 0, 0);
@@ -1720,9 +2077,7 @@ vm_object_copy_slowly(
 	 *	Prevent destruction of the source object while we copy.
 	 */
 
-	assert(src_object->ref_count > 0);
-	src_object->ref_count++;
-	VM_OBJ_RES_INCR(src_object);
+	vm_object_reference_locked(src_object);
 	vm_object_unlock(src_object);
 
 	/*
@@ -1736,9 +2091,15 @@ vm_object_copy_slowly(
 
 	new_object = vm_object_allocate(size);
 	new_offset = 0;
-	vm_object_lock(new_object);
 
 	assert(size == trunc_page_64(size));	/* Will the loop terminate? */
+
+	fault_info.interruptible = interruptible;
+	fault_info.behavior  = VM_BEHAVIOR_SEQUENTIAL;
+	fault_info.user_tag  = 0;
+	fault_info.lo_offset = src_offset;
+	fault_info.hi_offset = src_offset + size;
+	fault_info.no_cache  = FALSE;
 
 	for ( ;
 	    size != 0 ;
@@ -1748,16 +2109,22 @@ vm_object_copy_slowly(
 		vm_page_t	new_page;
 		vm_fault_return_t result;
 
+		vm_object_lock(new_object);
+
 		while ((new_page = vm_page_alloc(new_object, new_offset))
 				== VM_PAGE_NULL) {
+
+			vm_object_unlock(new_object);
+
 			if (!vm_page_wait(interruptible)) {
-			        vm_object_unlock(new_object);
 				vm_object_deallocate(new_object);
 				vm_object_deallocate(src_object);
 				*_result_object = VM_OBJECT_NULL;
 				return(MACH_SEND_INTERRUPTED);
 			}
+			vm_object_lock(new_object);
 		}
+		vm_object_unlock(new_object);
 
 		do {
 			vm_prot_t	prot = VM_PROT_READ;
@@ -1770,14 +2137,14 @@ vm_object_copy_slowly(
 			vm_object_lock(src_object);
 			vm_object_paging_begin(src_object);
 
+			fault_info.cluster_size = size;
+
 			XPR(XPR_VM_FAULT,"vm_object_copy_slowly -> vm_fault_page",0,0,0,0,0);
 			result = vm_fault_page(src_object, src_offset,
-				VM_PROT_READ, FALSE, interruptible,
-				src_lo_offset, src_hi_offset,
-				VM_BEHAVIOR_SEQUENTIAL,
+				VM_PROT_READ, FALSE,
 				&prot, &_result_page, &top_page,
 			        (int *)0,
-				&error_code, FALSE, FALSE, NULL, 0);
+				&error_code, FALSE, FALSE, &fault_info);
 
 			switch(result) {
 				case VM_FAULT_SUCCESS:
@@ -1804,15 +2171,18 @@ vm_object_copy_slowly(
 					 *	Let go of both pages (make them
 					 *	not busy, perform wakeup, activate).
 					 */
-
-					new_page->busy = FALSE;
+					vm_object_lock(new_object);
 					new_page->dirty = TRUE;
+					PAGE_WAKEUP_DONE(new_page);
+					vm_object_unlock(new_object);
+
 					vm_object_lock(result_page->object);
 					PAGE_WAKEUP_DONE(result_page);
 
-					vm_page_lock_queues();
+					vm_page_lockspin_queues();
 					if (!result_page->active &&
-					    !result_page->inactive)
+					    !result_page->inactive &&
+					    !result_page->throttled)
 						vm_page_activate(result_page);
 					vm_page_activate(new_page);
 					vm_page_unlock_queues();
@@ -1841,7 +2211,6 @@ vm_object_copy_slowly(
 
 				case VM_FAULT_INTERRUPTED:
 					vm_page_free(new_page);
-					vm_object_unlock(new_object);
 					vm_object_deallocate(new_object);
 					vm_object_deallocate(src_object);
 					*_result_object = VM_OBJECT_NULL;
@@ -1859,7 +2228,7 @@ vm_object_copy_slowly(
 					vm_page_lock_queues();
 					vm_page_free(new_page);
 					vm_page_unlock_queues();
-					vm_object_unlock(new_object);
+
 					vm_object_deallocate(new_object);
 					vm_object_deallocate(src_object);
 					*_result_object = VM_OBJECT_NULL;
@@ -1872,8 +2241,6 @@ vm_object_copy_slowly(
 	/*
 	 *	Lose the extra reference, and return our object.
 	 */
-
-        vm_object_unlock(new_object);
 	vm_object_deallocate(src_object);
 	*_result_object = new_object;
 	return(KERN_SUCCESS);
@@ -1929,9 +2296,7 @@ vm_object_copy_quickly(
 		 *	Leave object/offset unchanged.
 		 */
 
-		assert(object->ref_count > 0);
-		object->ref_count++;
-		vm_object_res_reference(object);
+		vm_object_reference_locked(object);
 		object->shadowed = TRUE;
 		vm_object_unlock(object);
 
@@ -1989,6 +2354,7 @@ vm_object_copy_call(
 	kern_return_t	kr;
 	vm_object_t	copy;
 	boolean_t	check_ready = FALSE;
+	uint32_t	try_failed_count = 0;
 
 	/*
 	 *	If a copy is already in progress, wait and retry.
@@ -2048,7 +2414,10 @@ Retry:
 	copy = src_object->copy;
 	if (!vm_object_lock_try(copy)) {
 		vm_object_unlock(src_object);
-		mutex_pause();	/* wait a bit */
+
+		try_failed_count++;
+		mutex_pause(try_failed_count);	/* wait a bit */
+
 		vm_object_lock(src_object);
 		goto Retry;
 	}
@@ -2100,12 +2469,14 @@ __private_extern__ vm_object_t
 vm_object_copy_delayed(
 	vm_object_t		src_object,
 	vm_object_offset_t	src_offset,
-	vm_object_size_t	size)
+	vm_object_size_t	size,
+	boolean_t		src_object_shared)
 {
 	vm_object_t		new_copy = VM_OBJECT_NULL;
 	vm_object_t		old_copy;
 	vm_page_t		p;
 	vm_object_size_t	copy_size = src_offset + size;
+
 
 	int collisions = 0;
 	/*
@@ -2152,9 +2523,15 @@ vm_object_copy_delayed(
 	/*
 	 * Wait for paging in progress.
 	 */
-	if (!src_object->true_share)
+	if (!src_object->true_share && src_object->paging_in_progress) {
+	        if (src_object_shared == TRUE) {
+		        vm_object_unlock(src_object);
+				
+			vm_object_lock(src_object);
+			src_object_shared = FALSE;
+		}
 		vm_object_paging_wait(src_object, THREAD_UNINT);
-
+	}
 	/*
 	 *	See whether we can reuse the result of a previous
 	 *	copy operation.
@@ -2162,22 +2539,34 @@ vm_object_copy_delayed(
 
 	old_copy = src_object->copy;
 	if (old_copy != VM_OBJECT_NULL) {
+	        int lock_granted;
+
 		/*
 		 *	Try to get the locks (out of order)
 		 */
-		if (!vm_object_lock_try(old_copy)) {
+		if (src_object_shared == TRUE)
+		        lock_granted = vm_object_lock_try_shared(old_copy);
+		else
+		        lock_granted = vm_object_lock_try(old_copy);
+
+		if (!lock_granted) {
 			vm_object_unlock(src_object);
-			mutex_pause();
+
+			if (collisions++ == 0)
+				copy_delayed_lock_contention++;
+			mutex_pause(collisions);
 
 			/* Heisenberg Rules */
 			copy_delayed_lock_collisions++;
-			if (collisions++ == 0)
-				copy_delayed_lock_contention++;
 
 			if (collisions > copy_delayed_max_collisions)
 				copy_delayed_max_collisions = collisions;
 
-			vm_object_lock(src_object);
+			if (src_object_shared == TRUE)
+			        vm_object_lock_shared(src_object);
+			else
+			        vm_object_lock(src_object);
+
 			goto Retry;
 		}
 
@@ -2198,6 +2587,14 @@ vm_object_copy_delayed(
 			 */
 
 			if (old_copy->size < copy_size) {
+			        if (src_object_shared == TRUE) {
+				        vm_object_unlock(old_copy);
+					vm_object_unlock(src_object);
+				
+					vm_object_lock(src_object);
+					src_object_shared = FALSE;
+					goto Retry;
+				}
 				/*
 				 * We can't perform a delayed copy if any of the
 				 * pages in the extended range are wired (because
@@ -2206,6 +2603,7 @@ vm_object_copy_delayed(
 				 * go ahead and protect them.
 				 */
 				copy_delayed_protect_iterate++;
+
 				queue_iterate(&src_object->memq, p, vm_page_t, listq) {
 					if (!p->fictitious && 
 					    p->offset >= old_copy->size && 
@@ -2222,15 +2620,16 @@ vm_object_copy_delayed(
 							return VM_OBJECT_NULL;
 						} else {
 							pmap_page_protect(p->phys_page, 
-								(VM_PROT_ALL & ~VM_PROT_WRITE &
-								 ~p->page_lock));
+									  (VM_PROT_ALL & ~VM_PROT_WRITE));
 						}
 					}
 				}
 				old_copy->size = copy_size;
 			}
-				
-			vm_object_reference_locked(old_copy);
+			if (src_object_shared == TRUE)
+			        vm_object_reference_shared(old_copy);
+			else
+			        vm_object_reference_locked(old_copy);
 			vm_object_unlock(old_copy);
 			vm_object_unlock(src_object);
 
@@ -2238,9 +2637,10 @@ vm_object_copy_delayed(
 				vm_object_unlock(new_copy);
 				vm_object_deallocate(new_copy);
 			}
-
 			return(old_copy);
 		}
+		
+		
 
 		/*
 		 * Adjust the size argument so that the newly-created 
@@ -2256,6 +2656,8 @@ vm_object_copy_delayed(
 			new_copy = vm_object_allocate(copy_size);
 			vm_object_lock(src_object);
 			vm_object_lock(new_copy);
+
+			src_object_shared = FALSE;
 			goto Retry;
 		}
 		new_copy->size = copy_size;	
@@ -2275,6 +2677,8 @@ vm_object_copy_delayed(
 		new_copy = vm_object_allocate(copy_size);
 		vm_object_lock(src_object);
 		vm_object_lock(new_copy);
+
+		src_object_shared = FALSE;
 		goto Retry;
 	}
 
@@ -2290,6 +2694,7 @@ vm_object_copy_delayed(
 	 * wired, then go ahead and protect them.
 	 */
 	copy_delayed_protect_iterate++;
+
 	queue_iterate(&src_object->memq, p, vm_page_t, listq) {
 		if (!p->fictitious && p->offset < copy_size) {
 			if (p->wire_count > 0) {
@@ -2301,12 +2706,10 @@ vm_object_copy_delayed(
 				return VM_OBJECT_NULL;
 			} else {
 				pmap_page_protect(p->phys_page, 
-					(VM_PROT_ALL & ~VM_PROT_WRITE &
-					 ~p->page_lock));
+						  (VM_PROT_ALL & ~VM_PROT_WRITE));
 			}
 		}
 	}
-
 	if (old_copy != VM_OBJECT_NULL) {
 		/*
 		 *	Make the old copy-object shadow the new one.
@@ -2314,9 +2717,13 @@ vm_object_copy_delayed(
 		 *	object.
 		 */
 
-		src_object->ref_count--;	/* remove ref. from old_copy */
+		/* remove ref. from old_copy */
+		vm_object_lock_assert_exclusive(src_object);
+		src_object->ref_count--;
 		assert(src_object->ref_count > 0);
+		vm_object_lock_assert_exclusive(old_copy);
 		old_copy->shadow = new_copy;
+		vm_object_lock_assert_exclusive(new_copy);
 		assert(new_copy->ref_count > 0);
 		new_copy->ref_count++;		/* for old_copy->shadow ref. */
 
@@ -2333,12 +2740,13 @@ vm_object_copy_delayed(
 	/*
 	 *	Point the new copy at the existing object.
 	 */
+	vm_object_lock_assert_exclusive(new_copy);
 	new_copy->shadow = src_object;
 	new_copy->shadow_offset = 0;
 	new_copy->shadowed = TRUE;	/* caller must set needs_copy */
-	assert(src_object->ref_count > 0);
-	src_object->ref_count++;
-	VM_OBJ_RES_INCR(src_object);
+
+	vm_object_lock_assert_exclusive(src_object);
+	vm_object_reference_locked(src_object);
 	src_object->copy = new_copy;
 	vm_object_unlock(src_object);
 	vm_object_unlock(new_copy);
@@ -2347,7 +2755,7 @@ vm_object_copy_delayed(
 		"vm_object_copy_delayed: used copy object %X for source %X\n",
 		(integer_t)new_copy, (integer_t)src_object, 0, 0, 0);
 
-	return(new_copy);
+	return new_copy;
 }
 
 /*
@@ -2369,11 +2777,18 @@ vm_object_copy_strategically(
 {
 	boolean_t	result;
 	boolean_t	interruptible = THREAD_ABORTSAFE; /* XXX */
+	boolean_t	object_lock_shared = FALSE;
 	memory_object_copy_strategy_t copy_strategy;
 
 	assert(src_object != VM_OBJECT_NULL);
 
-	vm_object_lock(src_object);
+	copy_strategy = src_object->copy_strategy;
+
+	if (copy_strategy == MEMORY_OBJECT_COPY_DELAY) {
+	        vm_object_lock_shared(src_object);
+		object_lock_shared = TRUE;
+	} else
+	        vm_object_lock(src_object);
 
 	/*
 	 *	The copy strategy is only valid if the memory manager
@@ -2383,6 +2798,12 @@ vm_object_copy_strategically(
 	while (!src_object->internal && !src_object->pager_ready) {
 		wait_result_t wait_result;
 
+		if (object_lock_shared == TRUE) {
+		        vm_object_unlock(src_object);
+			vm_object_lock(src_object);
+			object_lock_shared = FALSE;
+			continue;
+		}
 		wait_result = vm_object_sleep(	src_object,
 						VM_OBJECT_EVENT_PAGER_READY,
 						interruptible);
@@ -2395,8 +2816,6 @@ vm_object_copy_strategically(
 		}
 	}
 
-	copy_strategy = src_object->copy_strategy;
-
 	/*
 	 *	Use the appropriate copy strategy.
 	 */
@@ -2404,7 +2823,7 @@ vm_object_copy_strategically(
 	switch (copy_strategy) {
 	    case MEMORY_OBJECT_COPY_DELAY:
 		*dst_object = vm_object_copy_delayed(src_object,
-						     src_offset, size);
+						     src_offset, size, object_lock_shared);
 		if (*dst_object != VM_OBJECT_NULL) {
 			*dst_offset = src_offset;
 			*dst_needs_copy = TRUE;
@@ -2467,7 +2886,22 @@ vm_object_shadow(
 	register vm_object_t	result;
 
 	source = *object;
+#if 0
+	/*
+	 * XXX FBDP
+	 * This assertion is valid but it gets triggered by Rosetta for example
+	 * due to a combination of vm_remap() that changes a VM object's
+	 * copy_strategy from SYMMETRIC to DELAY and vm_protect(VM_PROT_COPY)
+	 * that then sets "needs_copy" on its map entry.  This creates a
+	 * mapping situation that VM should never see and doesn't know how to
+	 * handle.
+	 * It's not clear if this can create any real problem but we should
+	 * look into fixing this, probably by having vm_protect(VM_PROT_COPY)
+	 * do more than just set "needs_copy" to handle the copy-on-write...
+	 * In the meantime, let's disable the assertion.
+	 */
 	assert(source->copy_strategy == MEMORY_OBJECT_COPY_SYMMETRIC);
+#endif
 
 	/*
 	 *	Determine if we really need a shadow.
@@ -2592,162 +3026,6 @@ vm_object_shadow(
  *	termination routines and vm_object_collapse.]
  */
 
-#if 0
-static void		vm_object_abort_activity(
-				vm_object_t	object);
-
-/*
- *	Routine:	vm_object_abort_activity [internal use only]
- *	Purpose:
- *		Abort paging requests pending on this object.
- *	In/out conditions:
- *		The object is locked on entry and exit.
- */
-static void
-vm_object_abort_activity(
-	vm_object_t	object)
-{
-	register
-	vm_page_t	p;
-	vm_page_t	next;
-
-	XPR(XPR_VM_OBJECT, "vm_object_abort_activity, object 0x%X\n",
-		(integer_t)object, 0, 0, 0, 0);
-
-	/*
-	 *	Abort all activity that would be waiting
-	 *	for a result on this memory object.
-	 *
-	 *	We could also choose to destroy all pages
-	 *	that we have in memory for this object, but
-	 *	we don't.
-	 */
-
-	p = (vm_page_t) queue_first(&object->memq);
-	while (!queue_end(&object->memq, (queue_entry_t) p)) {
-		next = (vm_page_t) queue_next(&p->listq);
-
-		/*
-		 *	If it's being paged in, destroy it.
-		 *	If an unlock has been requested, start it again.
-		 */
-
-		if (p->busy && p->absent) {
-			VM_PAGE_FREE(p);
-		}
-		 else {
-		 	if (p->unlock_request != VM_PROT_NONE)
-			 	p->unlock_request = VM_PROT_NONE;
-			PAGE_WAKEUP(p);
-		}
-		
-		p = next;
-	}
-
-	/*
-	 *	Wake up threads waiting for the memory object to
-	 *	become ready.
-	 */
-
-	object->pager_ready = TRUE;
-	vm_object_wakeup(object, VM_OBJECT_EVENT_PAGER_READY);
-}
-
-/*
- *	Routine:	vm_object_pager_dead
- *
- *	Purpose:
- *		A port is being destroy, and the IPC kobject code
- *		can't tell if it represents a pager port or not.
- *		So this function is called each time it sees a port
- *		die.
- *		THIS IS HORRIBLY INEFFICIENT.  We should only call
- *		this routine if we had requested a notification on
- *		the port.
- */
-
-__private_extern__ void
-vm_object_pager_dead(
-	ipc_port_t	pager)
-{
-	vm_object_t		object;
-	vm_object_hash_entry_t	entry;
-
-	/*
-	 *	Perform essentially the same operations as in vm_object_lookup,
-	 *	except that this time we look up based on the memory_object
-	 *	port, not the control port.
-	 */
-	vm_object_cache_lock();
-	entry = vm_object_hash_lookup(pager, FALSE);
-	if (entry == VM_OBJECT_HASH_ENTRY_NULL ||
-	    		entry->object == VM_OBJECT_NULL) {
-		vm_object_cache_unlock();
-		return;
-	}
-
-	object = entry->object;
-	entry->object = VM_OBJECT_NULL;
-
-	vm_object_lock(object);
-	if (object->ref_count == 0) {
-		XPR(XPR_VM_OBJECT_CACHE,
-		   "vm_object_destroy: removing %x from cache, head (%x, %x)\n",
-			(integer_t)object,
-			(integer_t)vm_object_cached_list.next,
-			(integer_t)vm_object_cached_list.prev, 0,0);
-
-		queue_remove(&vm_object_cached_list, object,
-				vm_object_t, cached_list);
-		vm_object_cached_count--;
-	}
-	object->ref_count++;
-	vm_object_res_reference(object);
-
-	object->can_persist = FALSE;
-
-	assert(object->pager == pager);
-
-	/*
-	 *	Remove the pager association.
-	 *
-	 *	Note that the memory_object itself is dead, so
-	 *	we don't bother with it.
-	 */
-
-	object->pager = MEMORY_OBJECT_NULL;
-
-	vm_object_unlock(object);
-	vm_object_cache_unlock();
-
-	vm_object_pager_wakeup(pager);
-
-	/*
-	 *	Release the pager reference.  Note that there's no
-	 *	point in trying the memory_object_terminate call
-	 *	because the memory_object itself is dead.  Also
-	 *	release the memory_object_control reference, since
-	 *	the pager didn't do that either.
-	 */
-
-	memory_object_deallocate(pager);
-	memory_object_control_deallocate(object->pager_request);
-	
-
-	/*
-	 *	Restart pending page requests
-	 */
-	vm_object_lock(object);
-	vm_object_abort_activity(object);
-	vm_object_unlock(object);
-
-	/*
-	 *	Lose the object reference.
-	 */
-
-	vm_object_deallocate(object);
-}
-#endif
 
 /*
  *	Routine:	vm_object_enter
@@ -2768,6 +3046,7 @@ vm_object_enter(
 	vm_object_t		new_object;
 	boolean_t		must_init;
 	vm_object_hash_entry_t	entry, new_entry;
+	uint32_t        try_failed_count = 0;
 
 	if (pager == MEMORY_OBJECT_NULL)
 		return(vm_object_allocate(size));
@@ -2779,7 +3058,7 @@ vm_object_enter(
 	/*
 	 *	Look for an object associated with this port.
 	 */
-
+Retry:
 	vm_object_cache_lock();
 	do {
 		entry = vm_object_hash_lookup(pager, FALSE);
@@ -2826,7 +3105,15 @@ vm_object_enter(
 	assert(object != VM_OBJECT_NULL);
 
 	if (!must_init) {
-		vm_object_lock(object);
+	        if (!vm_object_lock_try(object)) {
+
+		        vm_object_cache_unlock();
+
+		        try_failed_count++;
+			mutex_pause(try_failed_count);  /* wait a bit */
+
+			goto Retry;
+		}
 		assert(!internal || object->internal);
 		if (named) {
 			assert(!object->named);
@@ -2842,15 +3129,16 @@ vm_object_enter(
 				     vm_object_t, cached_list);
 			vm_object_cached_count--;
 		}
+		vm_object_lock_assert_exclusive(object);
 		object->ref_count++;
 		vm_object_res_reference(object);
 		vm_object_unlock(object);
 
-		VM_STAT(hits++);
+		VM_STAT_INCR(hits);
 	} 
 	assert(object->ref_count > 0);
 
-	VM_STAT(lookups++);
+	VM_STAT_INCR(lookups);
 
 	vm_object_cache_unlock();
 
@@ -3026,13 +3314,10 @@ vm_object_pager_create(
 	 */
 	{
 		memory_object_default_t		dmm;
-		vm_size_t	cluster_size;
 
 		/* acquire a reference for the default memory manager */
-		dmm = memory_manager_default_reference(&cluster_size);
-		assert(cluster_size >= PAGE_SIZE);
+		dmm = memory_manager_default_reference();
 
-		object->cluster_size = cluster_size; /* XXX ??? */
 		assert(object->temporary);
 
 		/* create our new memory object */
@@ -3107,8 +3392,10 @@ static long	object_bypasses  = 0;
 static boolean_t	vm_object_collapse_allowed = TRUE;
 static boolean_t	vm_object_bypass_allowed = TRUE;
 
+#if MACH_PAGEMAP
 static int	vm_external_discarded;
 static int	vm_external_collapsed;
+#endif
 
 unsigned long vm_object_collapse_encrypted = 0;
 
@@ -3164,16 +3451,15 @@ vm_object_do_collapse(
 			/*
 			 * ENCRYPTED SWAP:
 			 * The encryption key includes the "pager" and the
-			 * "paging_offset".  These might not be the same in
-			 * the new object, so we can't just move an encrypted
-			 * page from one object to the other.  We can't just
-			 * decrypt the page here either, because that would drop
+			 * "paging_offset".  These will not change during the 
+			 * object collapse, so we can just move an encrypted
+			 * page from one object to the other in this case.
+			 * We can't decrypt the page here, since we can't drop
 			 * the object lock.
-			 * The caller should check for encrypted pages before
-			 * attempting to collapse.
 			 */
-			ASSERT_PAGE_DECRYPTED(p);
-
+			if (p->encrypted) {
+				vm_object_collapse_encrypted++;
+			}
 			pp = vm_page_lookup(object, new_offset);
 			if (pp == VM_PAGE_NULL) {
 
@@ -3182,7 +3468,7 @@ vm_object_do_collapse(
 				 *	Move the backing object's page up.
 				 */
 
-				vm_page_rename(p, object, new_offset);
+				vm_page_rename(p, object, new_offset, TRUE);
 #if	MACH_PAGEMAP
 			} else if (pp->absent) {
 
@@ -3199,7 +3485,7 @@ vm_object_do_collapse(
 				 */
 
 				VM_PAGE_FREE(pp);
-				vm_page_rename(p, object, new_offset);
+				vm_page_rename(p, object, new_offset, TRUE);
 #endif	/* MACH_PAGEMAP */
 			} else {
 				assert(! pp->absent);
@@ -3215,9 +3501,9 @@ vm_object_do_collapse(
 	}
 	
 #if	!MACH_PAGEMAP
-	assert(!object->pager_created && object->pager == MEMORY_OBJECT_NULL
+	assert((!object->pager_created && (object->pager == MEMORY_OBJECT_NULL))
 		|| (!backing_object->pager_created
-		&&  backing_object->pager == MEMORY_OBJECT_NULL));
+		&&  (backing_object->pager == MEMORY_OBJECT_NULL)));
 #else 
         assert(!object->pager_created && object->pager == MEMORY_OBJECT_NULL);
 #endif	/* !MACH_PAGEMAP */
@@ -3242,7 +3528,6 @@ vm_object_do_collapse(
 		object->pager_control = backing_object->pager_control;
 		object->pager_ready = backing_object->pager_ready;
 		object->pager_initialized = backing_object->pager_initialized;
-		object->cluster_size = backing_object->cluster_size;
 		object->paging_offset =
 		    backing_object->paging_offset + backing_offset;
 		if (object->pager_control != MEMORY_OBJECT_CONTROL_NULL) {
@@ -3315,6 +3600,8 @@ vm_object_do_collapse(
 	XPR(XPR_VM_OBJECT, "vm_object_collapse, collapsed 0x%X\n",
 		(integer_t)backing_object, 0,0,0,0);
 
+	vm_object_lock_destroy(backing_object);
+
 	zfree(vm_object_zone, backing_object);
 	
 	object_collapses++;
@@ -3330,6 +3617,8 @@ vm_object_do_bypass(
 	 *	in the chain.
 	 */
 	
+	vm_object_lock_assert_exclusive(backing_object);
+
 #if	TASK_SWAPPER
 	/*
 	 *	Do object reference in-line to 
@@ -3340,6 +3629,7 @@ vm_object_do_bypass(
 	 */
 	if (backing_object->shadow != VM_OBJECT_NULL) {
 		vm_object_lock(backing_object->shadow);
+		vm_object_lock_assert_exclusive(backing_object->shadow);
 		backing_object->shadow->ref_count++;
 		if (object->res_count != 0)
 			vm_object_res_reference(backing_object->shadow);
@@ -3392,6 +3682,7 @@ vm_object_do_bypass(
 #endif
 	 */
 	if (backing_object->ref_count > 1) {
+		vm_object_lock_assert_exclusive(backing_object);
 		backing_object->ref_count--;
 #if	TASK_SWAPPER
 		if (object->res_count != 0)
@@ -3444,6 +3735,7 @@ static unsigned long vm_object_collapse_calls = 0;
 static unsigned long vm_object_collapse_objects = 0;
 static unsigned long vm_object_collapse_do_collapse = 0;
 static unsigned long vm_object_collapse_do_bypass = 0;
+static unsigned long vm_object_collapse_delays = 0;
 __private_extern__ void
 vm_object_collapse(
 	register vm_object_t			object,
@@ -3453,9 +3745,6 @@ vm_object_collapse(
 	register vm_object_t			backing_object;
 	register unsigned int			rcount;
 	register unsigned int			size;
-	vm_object_offset_t			collapse_min_offset;
-	vm_object_offset_t			collapse_max_offset;
-	vm_page_t				page;
 	vm_object_t				original_object;
 
 	vm_object_collapse_calls++;
@@ -3496,8 +3785,7 @@ vm_object_collapse(
 		 *	No pages in the object are currently
 		 *	being paged out, and
 		 */
-		if (object->paging_in_progress != 0 ||
-		    object->absent_count != 0) {
+		if (object->paging_in_progress != 0) {
 			/* try and collapse the rest of the shadow chain */
 			vm_object_lock(backing_object);
 			if (object != original_object) {
@@ -3595,39 +3883,6 @@ vm_object_collapse(
 			}
 
 			/*
-			 * ENCRYPTED SWAP
-			 * We can't collapse the object if it contains
-			 * any encypted page, because the encryption key
-			 * includes the <object,offset> info.  We can't
-			 * drop the object lock in vm_object_do_collapse()
-			 * so we can't decrypt the page there either.
-			 */
-			if (vm_pages_encrypted) {
-				collapse_min_offset = object->shadow_offset;
-				collapse_max_offset =
-					object->shadow_offset + object->size;
-				queue_iterate(&backing_object->memq,
-					      page, vm_page_t, listq) {
-					if (page->encrypted &&
-					    (page->offset >=
-					     collapse_min_offset) &&
-					    (page->offset <
-					     collapse_max_offset)) {
-						/*
-						 * We found an encrypted page
-						 * in the backing object,
-						 * within the range covered 
-						 * by the parent object: we can
-						 * not collapse them.
-						 */
-						vm_object_collapse_encrypted++;
-						vm_object_cache_unlock();
-						goto try_bypass;
-					}
-				}
-			}
-		       
-			/*
 			 *	Collapse the object with its backing
 			 *	object, and try again with the object's
 			 *	new backing object.
@@ -3638,7 +3893,6 @@ vm_object_collapse(
 			continue;
 		}
 
-	try_bypass:
 		/*
 		 *	Collapsing the backing object was not possible
 		 *	or permitted, so let's try bypassing it.
@@ -3719,10 +3973,15 @@ vm_object_collapse(
 			backing_offset = object->shadow_offset;
 			backing_rcount = backing_object->resident_page_count;
 
+#if	MACH_PAGEMAP
 #define EXISTS_IN_OBJECT(obj, off, rc) \
 	(vm_external_state_get((obj)->existence_map, \
 	 (vm_offset_t)(off)) == VM_EXTERNAL_STATE_EXISTS || \
 	 ((rc) && ++lookups && vm_page_lookup((obj), (off)) != VM_PAGE_NULL && (rc)--))
+#else
+#define EXISTS_IN_OBJECT(obj, off, rc) \
+	(((rc) && ++lookups && vm_page_lookup((obj), (off)) != VM_PAGE_NULL && (rc)--))
+#endif	/* MACH_PAGEMAP */
 
 			/*
 			 * Check the hint location first
@@ -3761,9 +4020,14 @@ vm_object_collapse(
 			 * double-decrement the rcount.  We also may or
 			 * may not have found the 
 			 */
-			if (backing_rcount && size >
-			    ((backing_object->existence_map) ?
-			     backing_rcount : (backing_rcount >> 1))) {
+			if (backing_rcount && 
+#if	MACH_PAGEMAP
+			    size > ((backing_object->existence_map) ?
+			     backing_rcount : (backing_rcount >> 1))
+#else
+			    size > (backing_rcount >> 1)
+#endif	/* MACH_PAGEMAP */
+				) {
 				unsigned int rc = rcount;
 				vm_page_t p;
 
@@ -3772,8 +4036,9 @@ vm_object_collapse(
 				do {
 					/* Until we get more than one lookup lock */
 					if (lookups > 256) {
+						vm_object_collapse_delays++;
 						lookups = 0;
-						delay(1);
+						mutex_pause(0);
 					}
 
 					offset = (p->offset - backing_offset);
@@ -3801,7 +4066,11 @@ vm_object_collapse(
 			 * Walk through the offsets looking for pages in the
 			 * backing object that show through to the object.
 			 */
+#if	MACH_PAGEMAP
 			if (backing_rcount || backing_object->existence_map) {
+#else
+			if (backing_rcount) {
+#endif	/* MACH_PAGEMAP */
 				offset = hint_offset;
 				
 				while((offset =
@@ -3810,8 +4079,9 @@ vm_object_collapse(
 
 					/* Until we get more than one lookup lock */
 					if (lookups > 256) {
+						vm_object_collapse_delays++;
 						lookups = 0;
-						delay(1);
+						mutex_pause(0);
 					}
 
 					if (EXISTS_IN_OBJECT(backing_object, offset +
@@ -3892,7 +4162,7 @@ vm_object_page_remove(
 			p = vm_page_lookup(object, start);
 			if (p != VM_PAGE_NULL) {
 				assert(!p->cleaning && !p->pageout);
-				if (!p->fictitious)
+				if (!p->fictitious && p->pmapped)
 				        pmap_disconnect(p->phys_page);
 				VM_PAGE_FREE(p);
 			}
@@ -3905,7 +4175,7 @@ vm_object_page_remove(
 			next = (vm_page_t) queue_next(&p->listq);
 			if ((start <= p->offset) && (p->offset < end)) {
 				assert(!p->cleaning && !p->pageout);
-				if (!p->fictitious)
+				if (!p->fictitious && p->pmapped)
 				        pmap_disconnect(p->phys_page);
 				VM_PAGE_FREE(p);
 			}
@@ -3981,7 +4251,7 @@ vm_object_coalesce(
 	 *	. paged out
 	 *	. shadows another object
 	 *	. has a copy elsewhere
-	 *	. is purgable
+	 *	. is purgeable
 	 *	. paging references (pages might be in page-list)
 	 */
 
@@ -3990,7 +4260,7 @@ vm_object_coalesce(
 	    (prev_object->shadow != VM_OBJECT_NULL) ||
 	    (prev_object->copy != VM_OBJECT_NULL) ||
 	    (prev_object->true_share != FALSE) ||
-	    (prev_object->purgable != VM_OBJECT_NONPURGABLE) ||
+	    (prev_object->purgable != VM_PURGABLE_DENY) ||
 	    (prev_object->paging_in_progress != 0)) {
 		vm_object_unlock(prev_object);
 		return(FALSE);
@@ -4188,11 +4458,8 @@ vm_follow_object(
  *	vm_object_print:	[ debug ]
  */
 void
-vm_object_print(
-	db_addr_t	db_addr,
-	__unused boolean_t	have_addr,
-	__unused int		arg_count,
-	__unused char		*modif)
+vm_object_print(db_expr_t db_addr, __unused boolean_t have_addr,
+		__unused db_expr_t arg_count, __unused char *modif)
 {
 	vm_object_t	object;
 	register vm_page_t p;
@@ -4209,7 +4476,6 @@ vm_object_print(
 	db_indent += 2;
 
 	iprintf("size=0x%x", object->size);
-	printf(", cluster=0x%x", object->cluster_size);
 	printf(", memq_hint=%p", object->memq_hint);
 	printf(", ref_count=%d\n", object->ref_count);
 	iprintf("");
@@ -4260,7 +4526,6 @@ vm_object_print(
 		printf("?");
 	}
 	printf("]");
-	printf(", absent_count=%d\n", object->absent_count);
 
 	iprintf("all_wanted=0x%x<", object->all_wanted);
 	s = "";
@@ -4274,10 +4539,6 @@ vm_object_print(
 	}
 	if (vm_object_wanted(object, VM_OBJECT_EVENT_PAGING_IN_PROGRESS)) {
 		printf("%spaging", s);
-		s = ",";
-	}
-	if (vm_object_wanted(object, VM_OBJECT_EVENT_ABSENT_COUNT)) {
-		printf("%sabsent", s);
 		s = ",";
 	}
 	if (vm_object_wanted(object, VM_OBJECT_EVENT_LOCK_IN_PROGRESS)) {
@@ -4308,11 +4569,11 @@ vm_object_print(
 		(object->pageout ? "" : "!"),
 		(object->internal ? "internal" : "external"),
 		(object->temporary ? "temporary" : "permanent"));
-	iprintf("%salive, %spurgable, %spurgable_volatile, %spurgable_empty, %sshadowed, %scached, %sprivate\n",
+	iprintf("%salive, %spurgeable, %spurgeable_volatile, %spurgeable_empty, %sshadowed, %scached, %sprivate\n",
 		(object->alive ? "" : "!"),
-		((object->purgable != VM_OBJECT_NONPURGABLE) ? "" : "!"),
-		((object->purgable == VM_OBJECT_PURGABLE_VOLATILE) ? "" : "!"),
-		((object->purgable == VM_OBJECT_PURGABLE_EMPTY) ? "" : "!"),
+		((object->purgable != VM_PURGABLE_DENY) ? "" : "!"),
+		((object->purgable == VM_PURGABLE_VOLATILE) ? "" : "!"),
+		((object->purgable == VM_PURGABLE_EMPTY) ? "" : "!"),
 		(object->shadowed ? "" : "!"),
 		(vm_object_cached(object) ? "" : "!"),
 		(object->private ? "" : "!"));
@@ -4370,10 +4631,9 @@ vm_object_find(
         task_t task;
 	vm_map_t map;
 	vm_map_entry_t entry;
-	processor_set_t pset = &default_pset;
 	boolean_t found = FALSE;
 
-	queue_iterate(&pset->tasks, task, task_t, pset_tasks) {
+	queue_iterate(&tasks, task, task_t, tasks) {
 		map = task->map;
 		for (entry = vm_map_first_entry(map);
 			 entry && entry != vm_map_to_entry(map);
@@ -4443,22 +4703,28 @@ vm_object_populate_with_private(
 			m = vm_page_lookup(object, base_offset);
 			if(m != VM_PAGE_NULL) {
 				if(m->fictitious) {
-					vm_page_lock_queues();
-					m->fictitious = FALSE;
-					m->private = TRUE;
-					m->phys_page = base_page;
-					if(!m->busy) {
-						m->busy = TRUE;
+					if (m->phys_page !=
+					    vm_page_guard_addr) {
+						vm_page_lockspin_queues();
+						m->fictitious = FALSE;
+						m->private = TRUE;
+						m->phys_page = base_page;
+						if(!m->busy) {
+							m->busy = TRUE;
+						}
+						if(!m->absent) {
+							m->absent = TRUE;
+						}
+						m->list_req_pending = TRUE;
+						vm_page_unlock_queues();
 					}
-					if(!m->absent) {
-						m->absent = TRUE;
-						object->absent_count++;
-					}
-					m->list_req_pending = TRUE;
-					vm_page_unlock_queues();
 				} else if (m->phys_page != base_page) {
-					/* pmap call to clear old mapping */
-				        pmap_disconnect(m->phys_page);
+				        if (m->pmapped) {
+					        /*
+						 * pmap call to clear old mapping
+						 */
+					        pmap_disconnect(m->phys_page);
+					}
 					m->phys_page = base_page;
 				}
 
@@ -4477,14 +4743,13 @@ vm_object_populate_with_private(
 				while ((m = vm_page_grab_fictitious()) 
 							 == VM_PAGE_NULL)
                 			vm_page_more_fictitious();	
-				vm_page_lock_queues();
+				vm_page_lockspin_queues();
 				m->fictitious = FALSE;
 				m->private = TRUE;
 				m->phys_page = base_page;
 				m->list_req_pending = TRUE;
 				m->absent = TRUE;
 				m->unusual = TRUE;
-				object->absent_count++;
 				vm_page_unlock_queues();
 	    			vm_page_insert(m, object, base_offset);
 			}
@@ -4558,6 +4823,7 @@ memory_object_free_from_cache(
 
 			assert(object->pager_initialized);
 			assert(object->ref_count == 0);
+			vm_object_lock_assert_exclusive(object);
 			object->ref_count++;
 
 			/*
@@ -4693,6 +4959,7 @@ restart:
 	vm_object_cache_unlock();
 
 	object->named = TRUE;
+	vm_object_lock_assert_exclusive(object);
 	object->ref_count++;
 	vm_object_res_reference(object);
 	while (!object->pager_ready) {
@@ -4804,6 +5071,7 @@ vm_object_release_name(
 			}
 			return KERN_SUCCESS;
 		} else {
+			vm_object_lock_assert_exclusive(object);
 			object->ref_count--;
 			assert(object->ref_count > 0);
 			if(original_object)
@@ -4865,16 +5133,16 @@ vm_object_lock_request(
 }
 
 /*
- * Empty a purgable object by grabbing the physical pages assigned to it and
+ * Empty a purgeable object by grabbing the physical pages assigned to it and
  * putting them on the free queue without writing them to backing store, etc.
  * When the pages are next touched they will be demand zero-fill pages.  We
  * skip pages which are busy, being paged in/out, wired, etc.  We do _not_
  * skip referenced/dirty pages, pages on the active queue, etc.  We're more
- * than happy to grab these since this is a purgable object.  We mark the
+ * than happy to grab these since this is a purgeable object.  We mark the
  * object as "empty" after reaping its pages.
  *
  * On entry the object and page queues are locked, the object must be a
- * purgable object with no delayed copies pending.
+ * purgeable object with no delayed copies pending.
  */
 unsigned int
 vm_object_purge(vm_object_t object)
@@ -4890,10 +5158,11 @@ vm_object_purge(vm_object_t object)
 #define PURGE_LOOP_QUOTA	100
 
 	num_purged_pages = 0;
-	if (object->purgable == VM_OBJECT_NONPURGABLE)
+	if (object->purgable == VM_PURGABLE_DENY)
 		return num_purged_pages;
 
-	object->purgable = VM_OBJECT_PURGABLE_EMPTY;
+	assert(object->purgable != VM_PURGABLE_NONVOLATILE);
+	object->purgable = VM_PURGABLE_EMPTY;
 
 	assert(object->copy == VM_OBJECT_NULL);
 	assert(object->copy_strategy == MEMORY_OBJECT_COPY_NONE);
@@ -4926,9 +5195,7 @@ vm_object_purge(vm_object_t object)
 				local_freeq = VM_PAGE_NULL;
 				local_freed = 0;
 			}
-			vm_page_unlock_queues();
-			mutex_pause();
-			vm_page_lock_queues();
+			mutex_yield(&vm_page_queue_lock);
 
 			/* resume with the current page and a new quota */
 			purge_loop_quota = PURGE_LOOP_QUOTA;
@@ -4945,24 +5212,15 @@ vm_object_purge(vm_object_t object)
 			continue;
 		}
 
-		if (p->tabled) {
-			/* clean up the object/offset table */
-			vm_page_remove(p);
-		}
-		if (p->absent) {
-			/* update the object's count of absent pages */
-			vm_object_absent_release(object);
-		}
+		assert(!p->laundry);
+		assert(p->object != kernel_object);
 
 		/* we can discard this page */
 
 		/* advertize that this page is in a transition state */
 		p->busy = TRUE;
 
-		if (p->no_isync == TRUE) {
-			/* the page hasn't been mapped yet */
-			/* (optimization to delay the i-cache sync) */
-		} else {
+		if (p->pmapped == TRUE) {
 			/* unmap the page */
 			int refmod_state;
 
@@ -4978,12 +5236,9 @@ vm_object_purge(vm_object_t object)
 			vm_page_purged_count++;
 		}
 
-		/* remove page from active or inactive queue... */
-		VM_PAGE_QUEUES_REMOVE(p);
+		vm_page_free_prepare(p);
 
 		/* ... and put it on our queue of pages to free */
-		assert(!p->laundry);
-		assert(p->object != kernel_object);
 		assert(p->pageq.next == NULL &&
 		       p->pageq.prev == NULL);
 		p->pageq.next = (queue_entry_t) local_freeq;
@@ -5007,72 +5262,72 @@ vm_object_purge(vm_object_t object)
 }
 
 /*
- * vm_object_purgable_control() allows the caller to control and investigate the
- * state of a purgable object.  A purgable object is created via a call to
- * vm_allocate() with VM_FLAGS_PURGABLE specified.  A purgable object will
- * never be coalesced with any other object -- even other purgable objects --
- * and will thus always remain a distinct object.  A purgable object has
+ * vm_object_purgeable_control() allows the caller to control and investigate the
+ * state of a purgeable object.  A purgeable object is created via a call to
+ * vm_allocate() with VM_FLAGS_PURGABLE specified.  A purgeable object will
+ * never be coalesced with any other object -- even other purgeable objects --
+ * and will thus always remain a distinct object.  A purgeable object has
  * special semantics when its reference count is exactly 1.  If its reference
- * count is greater than 1, then a purgable object will behave like a normal
+ * count is greater than 1, then a purgeable object will behave like a normal
  * object and attempts to use this interface will result in an error return
  * of KERN_INVALID_ARGUMENT.
  *
- * A purgable object may be put into a "volatile" state which will make the
+ * A purgeable object may be put into a "volatile" state which will make the
  * object's pages elligable for being reclaimed without paging to backing
  * store if the system runs low on memory.  If the pages in a volatile
- * purgable object are reclaimed, the purgable object is said to have been
- * "emptied."  When a purgable object is emptied the system will reclaim as
+ * purgeable object are reclaimed, the purgeable object is said to have been
+ * "emptied."  When a purgeable object is emptied the system will reclaim as
  * many pages from the object as it can in a convenient manner (pages already
  * en route to backing store or busy for other reasons are left as is).  When
- * a purgable object is made volatile, its pages will generally be reclaimed
+ * a purgeable object is made volatile, its pages will generally be reclaimed
  * before other pages in the application's working set.  This semantic is
  * generally used by applications which can recreate the data in the object
  * faster than it can be paged in.  One such example might be media assets
  * which can be reread from a much faster RAID volume.
  *
- * A purgable object may be designated as "non-volatile" which means it will
+ * A purgeable object may be designated as "non-volatile" which means it will
  * behave like all other objects in the system with pages being written to and
  * read from backing store as needed to satisfy system memory needs.  If the
  * object was emptied before the object was made non-volatile, that fact will
- * be returned as the old state of the purgable object (see
+ * be returned as the old state of the purgeable object (see
  * VM_PURGABLE_SET_STATE below).  In this case, any pages of the object which
  * were reclaimed as part of emptying the object will be refaulted in as
  * zero-fill on demand.  It is up to the application to note that an object
  * was emptied and recreate the objects contents if necessary.  When a
- * purgable object is made non-volatile, its pages will generally not be paged
- * out to backing store in the immediate future.  A purgable object may also
+ * purgeable object is made non-volatile, its pages will generally not be paged
+ * out to backing store in the immediate future.  A purgeable object may also
  * be manually emptied.
  *
  * Finally, the current state (non-volatile, volatile, volatile & empty) of a
- * volatile purgable object may be queried at any time.  This information may
+ * volatile purgeable object may be queried at any time.  This information may
  * be used as a control input to let the application know when the system is
  * experiencing memory pressure and is reclaiming memory.
  *
- * The specified address may be any address within the purgable object.  If
+ * The specified address may be any address within the purgeable object.  If
  * the specified address does not represent any object in the target task's
  * virtual address space, then KERN_INVALID_ADDRESS will be returned.  If the
- * object containing the specified address is not a purgable object, then
+ * object containing the specified address is not a purgeable object, then
  * KERN_INVALID_ARGUMENT will be returned.  Otherwise, KERN_SUCCESS will be
  * returned.
  *
  * The control parameter may be any one of VM_PURGABLE_SET_STATE or
  * VM_PURGABLE_GET_STATE.  For VM_PURGABLE_SET_STATE, the in/out parameter
- * state is used to set the new state of the purgable object and return its
- * old state.  For VM_PURGABLE_GET_STATE, the current state of the purgable
+ * state is used to set the new state of the purgeable object and return its
+ * old state.  For VM_PURGABLE_GET_STATE, the current state of the purgeable
  * object is returned in the parameter state.
  *
  * The in/out parameter state may be one of VM_PURGABLE_NONVOLATILE,
  * VM_PURGABLE_VOLATILE or VM_PURGABLE_EMPTY.  These, respectively, represent
  * the non-volatile, volatile and volatile/empty states described above.
- * Setting the state of a purgable object to VM_PURGABLE_EMPTY will
+ * Setting the state of a purgeable object to VM_PURGABLE_EMPTY will
  * immediately reclaim as many pages in the object as can be conveniently
  * collected (some may have already been written to backing store or be
  * otherwise busy).
  *
- * The process of making a purgable object non-volatile and determining its
- * previous state is atomic.  Thus, if a purgable object is made
+ * The process of making a purgeable object non-volatile and determining its
+ * previous state is atomic.  Thus, if a purgeable object is made
  * VM_PURGABLE_NONVOLATILE and the old state is returned as
- * VM_PURGABLE_VOLATILE, then the purgable object's previous contents are
+ * VM_PURGABLE_VOLATILE, then the purgeable object's previous contents are
  * completely intact and will remain so until the object is made volatile
  * again.  If the old state is returned as VM_PURGABLE_EMPTY then the object
  * was reclaimed while it was in a volatile state and its previous contents
@@ -5088,42 +5343,23 @@ vm_object_purgable_control(
 	int		*state)
 {
 	int		old_state;
-	vm_page_t	p;
+	int		new_state;
 
 	if (object == VM_OBJECT_NULL) {
 		/*
-		 * Object must already be present or it can't be purgable.
+		 * Object must already be present or it can't be purgeable.
 		 */
 		return KERN_INVALID_ARGUMENT;
 	}
 
 	/*
-	 * Get current state of the purgable object.
+	 * Get current state of the purgeable object.
 	 */
-	switch (object->purgable) {
-	    case VM_OBJECT_NONPURGABLE:
+	old_state = object->purgable;
+	if (old_state == VM_PURGABLE_DENY)
 		return KERN_INVALID_ARGUMENT;
     
-	    case VM_OBJECT_PURGABLE_NONVOLATILE:
-		old_state = VM_PURGABLE_NONVOLATILE;
-		break;
-
-	    case VM_OBJECT_PURGABLE_VOLATILE:
-		old_state = VM_PURGABLE_VOLATILE;
-		break;
-
-	    case VM_OBJECT_PURGABLE_EMPTY:
-		old_state = VM_PURGABLE_EMPTY;
-		break;
-
-	    default:
-		old_state = VM_PURGABLE_NONVOLATILE;
-		panic("Bad state (%d) for purgable object!\n",
-		      object->purgable);
-		/*NOTREACHED*/
-	}
-
-	/* purgable cant have delayed copies - now or in the future */
+	/* purgeable cant have delayed copies - now or in the future */
 	assert(object->copy == VM_OBJECT_NULL); 
 	assert(object->copy_strategy == MEMORY_OBJECT_COPY_NONE);
 
@@ -5135,86 +5371,116 @@ vm_object_purgable_control(
 		return KERN_SUCCESS;
 	}
 
-	switch (*state) {
+	new_state = *state & VM_PURGABLE_STATE_MASK;
+	switch (new_state) {
+	case VM_PURGABLE_DENY:
 	case VM_PURGABLE_NONVOLATILE:
-		vm_page_lock_queues();
-		if (object->purgable != VM_OBJECT_PURGABLE_NONVOLATILE) {
+		object->purgable = new_state;
+
+		if (old_state != VM_PURGABLE_NONVOLATILE) {
+			vm_page_lock_queues();
 			assert(vm_page_purgeable_count >=
 			       object->resident_page_count);
 			vm_page_purgeable_count -= object->resident_page_count;
+
+			if (old_state==VM_PURGABLE_VOLATILE) {
+			        assert(object->objq.next != NULL && object->objq.prev != NULL); /* object should be on a queue */
+				purgeable_q_t queue = vm_purgeable_object_remove(object);
+				assert(queue);
+
+				vm_purgeable_token_delete_first(queue);
+				assert(queue->debug_count_objects>=0);
+			};
+			vm_page_unlock_queues();
 		}
-
-		object->purgable = VM_OBJECT_PURGABLE_NONVOLATILE;
-
-		/*
-		 * If the object wasn't emptied, then mark all pages of the
-		 * object as referenced in order to give them a complete turn
-		 * of the virtual memory "clock" before becoming candidates
-		 * for paging out (if the system is suffering from memory
-		 * pressure).  We don't really need to set the pmap reference
-		 * bits (which would be expensive) since the software copies
-		 * are believed if they're set to true ...
-		 */
-		if (old_state != VM_PURGABLE_EMPTY) {
-			for (p = (vm_page_t)queue_first(&object->memq);
-			     !queue_end(&object->memq, (queue_entry_t)p);
-			     p = (vm_page_t)queue_next(&p->listq))
-				p->reference = TRUE;
-		}
-
-		vm_page_unlock_queues();
-
 		break;
 
 	case VM_PURGABLE_VOLATILE:
-		vm_page_lock_queues();
 
-		if (object->purgable != VM_OBJECT_PURGABLE_VOLATILE &&
-		    object->purgable != VM_OBJECT_PURGABLE_EMPTY) {
+		if ((old_state != VM_PURGABLE_NONVOLATILE) && (old_state != VM_PURGABLE_VOLATILE))
+			break;
+		purgeable_q_t queue;
+        
+		/* find the correct queue */
+		if ((*state&VM_PURGABLE_ORDERING_MASK) == VM_PURGABLE_ORDERING_OBSOLETE)
+		        queue = &purgeable_queues[PURGEABLE_Q_TYPE_FIFO];
+		else {
+		        if ((*state&VM_PURGABLE_BEHAVIOR_MASK) == VM_PURGABLE_BEHAVIOR_FIFO)
+			        queue = &purgeable_queues[PURGEABLE_Q_TYPE_FIFO];
+			else
+			        queue = &purgeable_queues[PURGEABLE_Q_TYPE_LIFO];
+		}
+        
+		if (old_state == VM_PURGABLE_NONVOLATILE) {
+		        /* try to add token... this can fail */
+		        vm_page_lock_queues();
+
+			kern_return_t result = vm_purgeable_token_add(queue);
+			if (result != KERN_SUCCESS) {
+			        vm_page_unlock_queues();
+				return result;
+			}
 			vm_page_purgeable_count += object->resident_page_count;
+
+			vm_page_unlock_queues();
+
+			object->purgable = new_state;
+
+			/* object should not be on a queue */
+			assert(object->objq.next == NULL && object->objq.prev == NULL);
 		}
+		else if (old_state == VM_PURGABLE_VOLATILE) {
+		        /*
+			 * if reassigning priorities / purgeable groups, we don't change the
+			 * token queue. So moving priorities will not make pages stay around longer.
+			 * Reasoning is that the algorithm gives most priority to the most important
+			 * object. If a new token is added, the most important object' priority is boosted.
+			 * This biases the system already for purgeable queues that move a lot.
+			 * It doesn't seem more biasing is neccessary in this case, where no new object is added.
+			 */
+		        assert(object->objq.next != NULL && object->objq.prev != NULL); /* object should be on a queue */
+            
+			purgeable_q_t old_queue=vm_purgeable_object_remove(object);
+			assert(old_queue);
+            
+			if (old_queue != queue) {
+				kern_return_t result;
 
-		object->purgable = VM_OBJECT_PURGABLE_VOLATILE;
+			        /* Changing queue. Have to move token. */
+			        vm_page_lock_queues();
+				vm_purgeable_token_delete_first(old_queue);
+				result = vm_purgeable_token_add(queue);
+				vm_page_unlock_queues();
 
-		/*
-		 * We want the newly volatile purgable object to be a
-		 * candidate for the pageout scan before other pages in the
-		 * application if the system is suffering from memory
-		 * pressure.  To do this, we move a page of the object from
-		 * the active queue onto the inactive queue in order to
-		 * promote the object for early reclaim.  We only need to move
-		 * a single page since the pageout scan will reap the entire
-		 * purgable object if it finds a single page in a volatile
-		 * state.  Obviously we don't do this if there are no pages
-		 * associated with the object or we find a page of the object
-		 * already on the inactive queue.
-		 */
-		for (p = (vm_page_t)queue_first(&object->memq);
-		     !queue_end(&object->memq, (queue_entry_t)p);
-		     p = (vm_page_t)queue_next(&p->listq)) {
-			if (p->inactive) {
-				/* already a page on the inactive queue */
-				break;
+				assert(result==KERN_SUCCESS);   /* this should never fail since we just freed a token */
 			}
-			if (p->active && !p->busy) {
-				/* found one we can move */
-				vm_page_deactivate(p);
-				break;
-			}
-		}
-		vm_page_unlock_queues();
+		};
+		vm_purgeable_object_add(object, queue, (*state&VM_VOLATILE_GROUP_MASK)>>VM_VOLATILE_GROUP_SHIFT );
 
+		assert(queue->debug_count_objects>=0);
+        
 		break;
 
 
 	case VM_PURGABLE_EMPTY:
-		vm_page_lock_queues();
-		if (object->purgable != VM_OBJECT_PURGABLE_VOLATILE &&
-		    object->purgable != VM_OBJECT_PURGABLE_EMPTY) {
-			vm_page_purgeable_count += object->resident_page_count;
+		if (old_state != new_state) 
+		{
+			assert(old_state==VM_PURGABLE_NONVOLATILE || old_state==VM_PURGABLE_VOLATILE);
+			if(old_state==VM_PURGABLE_VOLATILE) {
+				assert(object->objq.next != NULL && object->objq.prev != NULL); /* object should be on a queue */
+				purgeable_q_t old_queue=vm_purgeable_object_remove(object);
+				assert(old_queue);
+				vm_page_lock_queues();
+				vm_purgeable_token_delete_first(old_queue);
+			}
+
+			if (old_state==VM_PURGABLE_NONVOLATILE) {
+				vm_page_purgeable_count += object->resident_page_count;
+				vm_page_lock_queues();
+			}
+			(void) vm_object_purge(object);
+			vm_page_unlock_queues();
 		}
-		(void) vm_object_purge(object);
-		vm_page_unlock_queues();
 		break;
 
 	}
@@ -5389,8 +5655,9 @@ vm_object_transpose(
 
 	vm_object_lock(object1);
 	object1_locked = TRUE;
-	if (object1->copy || object1->shadow || object1->shadowed ||
-	    object1->purgable != VM_OBJECT_NONPURGABLE) {
+	if (!object1->alive || object1->terminating ||
+	    object1->copy || object1->shadow || object1->shadowed ||
+	    object1->purgable != VM_PURGABLE_DENY) {
 		/*
 		 * We don't deal with copy or shadow objects (yet).
 		 */
@@ -5415,8 +5682,9 @@ vm_object_transpose(
 	 */
 	vm_object_lock(object2);
 	object2_locked = TRUE;
-	if (object2->copy || object2->shadow || object2->shadowed ||
-	    object2->purgable != VM_OBJECT_NONPURGABLE) {
+	if (! object2->alive || object2->terminating ||
+	    object2->copy || object2->shadow || object2->shadowed ||
+	    object2->purgable != VM_PURGABLE_DENY) {
 		retval = KERN_INVALID_VALUE;
 		goto done;
 	}
@@ -5466,6 +5734,7 @@ vm_object_transpose(
 
 	/*
 	 * Transpose the lists of resident pages.
+	 * This also updates the resident_page_count and the memq_hint.
 	 */
 	if (object1->phys_contiguous || queue_empty(&object1->memq)) {
 		/*
@@ -5475,7 +5744,7 @@ vm_object_transpose(
 		 */
 		while (!queue_empty(&object2->memq)) {
 			page = (vm_page_t) queue_first(&object2->memq);
-			vm_page_rename(page, object1, page->offset);
+			vm_page_rename(page, object1, page->offset, FALSE);
 		}
 		assert(queue_empty(&object2->memq));
 	} else if (object2->phys_contiguous || queue_empty(&object2->memq)) {
@@ -5486,7 +5755,7 @@ vm_object_transpose(
 		 */
 		while (!queue_empty(&object1->memq)) {
 			page = (vm_page_t) queue_first(&object1->memq);
-			vm_page_rename(page, object2, page->offset);
+			vm_page_rename(page, object2, page->offset, FALSE);
 		}
 		assert(queue_empty(&object1->memq));
 	} else {
@@ -5504,7 +5773,7 @@ vm_object_transpose(
 		/* transfer object2's pages to object1 */
 		while (!queue_empty(&object2->memq)) {
 			page = (vm_page_t) queue_first(&object2->memq);
-			vm_page_rename(page, object1, page->offset);
+			vm_page_rename(page, object1, page->offset, FALSE);
 		}
 		assert(queue_empty(&object2->memq));
 		/* transfer tmp_object's pages to object1 */
@@ -5517,9 +5786,6 @@ vm_object_transpose(
 		assert(queue_empty(&tmp_object->memq));
 	}
 
-	/* no need to transpose the size: they should be identical */
-	assert(object1->size == object2->size);
-
 #define __TRANSPOSE_FIELD(field)				\
 MACRO_BEGIN							\
 	tmp_object->field = object1->field;			\
@@ -5527,16 +5793,23 @@ MACRO_BEGIN							\
 	object2->field = tmp_object->field;			\
 MACRO_END
 
+	/* "size" should be identical */
+	assert(object1->size == object2->size);
+	/* "Lock" refers to the object not its contents */
+	/* "ref_count" refers to the object not its contents */
+#if TASK_SWAPPER
+	/* "res_count" refers to the object not its contents */
+#endif
+	/* "resident_page_count" was updated above when transposing pages */
+	/* there should be no "copy" */
 	assert(!object1->copy);
 	assert(!object2->copy);
-
+	/* there should be no "shadow" */
 	assert(!object1->shadow);
 	assert(!object2->shadow);
-
 	__TRANSPOSE_FIELD(shadow_offset); /* used by phys_contiguous objects */
 	__TRANSPOSE_FIELD(pager);
 	__TRANSPOSE_FIELD(paging_offset);
-
 	__TRANSPOSE_FIELD(pager_control);
 	/* update the memory_objects' pointers back to the VM objects */
 	if (object1->pager_control != MEMORY_OBJECT_CONTROL_NULL) {
@@ -5547,29 +5820,62 @@ MACRO_END
 		memory_object_control_collapse(object2->pager_control,
 					       object2);
 	}
-		
-	__TRANSPOSE_FIELD(absent_count);
-
+	__TRANSPOSE_FIELD(copy_strategy);
+	/* "paging_in_progress" refers to the object not its contents */
 	assert(object1->paging_in_progress);
 	assert(object2->paging_in_progress);
-
+	/* "all_wanted" refers to the object not its contents */
 	__TRANSPOSE_FIELD(pager_created);
 	__TRANSPOSE_FIELD(pager_initialized);
 	__TRANSPOSE_FIELD(pager_ready);
 	__TRANSPOSE_FIELD(pager_trusted);
+	__TRANSPOSE_FIELD(can_persist);
 	__TRANSPOSE_FIELD(internal);
 	__TRANSPOSE_FIELD(temporary);
 	__TRANSPOSE_FIELD(private);
 	__TRANSPOSE_FIELD(pageout);
+	/* "alive" should be set */
+	assert(object1->alive);
+	assert(object2->alive);
+	/* "purgeable" should be non-purgeable */
+	assert(object1->purgable == VM_PURGABLE_DENY);
+	assert(object2->purgable == VM_PURGABLE_DENY);
+	/* "shadowed" refers to the the object not its contents */
+	__TRANSPOSE_FIELD(silent_overwrite);
+	__TRANSPOSE_FIELD(advisory_pageout);
 	__TRANSPOSE_FIELD(true_share);
+	/* "terminating" should not be set */
+	assert(!object1->terminating);
+	assert(!object2->terminating);
+	__TRANSPOSE_FIELD(named);
+	/* "shadow_severed" refers to the object not its contents */
 	__TRANSPOSE_FIELD(phys_contiguous);
 	__TRANSPOSE_FIELD(nophyscache);
+	/* "cached_list" should be NULL */
+	assert(object1->cached_list.prev == NULL);
+	assert(object1->cached_list.next == NULL);
+	assert(object2->cached_list.prev == NULL);
+	assert(object2->cached_list.next == NULL);
+	/* "msr_q" is linked to the object not its contents */
+	assert(queue_empty(&object1->msr_q));
+	assert(queue_empty(&object2->msr_q));
 	__TRANSPOSE_FIELD(last_alloc);
 	__TRANSPOSE_FIELD(sequential);
-	__TRANSPOSE_FIELD(cluster_size);
+	__TRANSPOSE_FIELD(pages_created);
+	__TRANSPOSE_FIELD(pages_used);
+#if MACH_PAGEMAP
 	__TRANSPOSE_FIELD(existence_map);
+#endif
 	__TRANSPOSE_FIELD(cow_hint);
+#if MACH_ASSERT
+	__TRANSPOSE_FIELD(paging_object);
+#endif
 	__TRANSPOSE_FIELD(wimg_bits);
+	__TRANSPOSE_FIELD(code_signed);
+	__TRANSPOSE_FIELD(not_in_use);
+#ifdef UPL_DEBUG
+	/* "uplq" refers to the object not its contents (see upl_transpose()) */
+#endif
 
 #undef __TRANSPOSE_FIELD
 
@@ -5616,8 +5922,262 @@ done:
 }
 
 
-/* Allow manipulation of individual page state.  This is actually part of */
-/* the UPL regimen but takes place on the VM object rather than on a UPL */
+/*
+ *      vm_object_build_cluster
+ *
+ *      Determine how big a cluster we should issue an I/O for...
+ *
+ *	Inputs:   *start == offset of page needed
+ *		  *length == maximum cluster pager can handle
+ *	Outputs:  *start == beginning offset of cluster
+ *		  *length == length of cluster to try
+ *
+ *	The original *start will be encompassed by the cluster
+ *
+ */
+extern int speculative_reads_disabled;
+
+uint32_t pre_heat_scaling[MAX_UPL_TRANSFER];
+uint32_t pre_heat_cluster[MAX_UPL_TRANSFER];
+
+#define PRE_HEAT_MULTIPLIER 4
+
+__private_extern__ void
+vm_object_cluster_size(vm_object_t object, vm_object_offset_t *start,
+		       vm_size_t *length, vm_object_fault_info_t fault_info)
+{
+	vm_size_t		pre_heat_size;
+	vm_size_t		tail_size;
+	vm_size_t		head_size;
+	vm_size_t		max_length;
+	vm_size_t		cluster_size;
+	vm_object_offset_t	object_size;
+	vm_object_offset_t	orig_start;
+	vm_object_offset_t	target_start;
+	vm_object_offset_t	offset;
+	vm_behavior_t		behavior;
+	boolean_t		look_behind = TRUE;
+	boolean_t		look_ahead  = TRUE;
+	int			sequential_run;
+	int			sequential_behavior = VM_BEHAVIOR_SEQUENTIAL;
+
+	assert( !(*length & PAGE_MASK));
+	assert( !(*start & PAGE_MASK_64));
+
+	if ( (max_length = *length) > (MAX_UPL_TRANSFER * PAGE_SIZE) ) 
+	        max_length = (MAX_UPL_TRANSFER * PAGE_SIZE);
+	/*
+	 * we'll always return a cluster size of at least
+	 * 1 page, since the original fault must always
+	 * be processed
+	 */
+	*length = PAGE_SIZE;
+
+	if (speculative_reads_disabled || fault_info == NULL || max_length == 0) {
+	        /*
+		 * no cluster... just fault the page in
+		 */
+	        return;
+	}
+	orig_start = *start;
+	target_start = orig_start;
+	cluster_size = round_page_32(fault_info->cluster_size);
+	behavior = fault_info->behavior;
+
+	vm_object_lock(object);
+
+	if (object->internal)
+	        object_size = object->size;
+	else if (object->pager != MEMORY_OBJECT_NULL)
+	        vnode_pager_get_object_size(object->pager, &object_size);
+	else
+		goto out;	/* pager is gone for this object, nothing more to do */
+
+	object_size = round_page_64(object_size);
+
+	if (orig_start >= object_size) {
+	        /*
+		 * fault occurred beyond the EOF...
+		 * we need to punt w/o changing the
+		 * starting offset
+		 */
+	        goto out;
+	}
+	if (object->pages_used > object->pages_created) {
+	        /*
+		 * must have wrapped our 32 bit counters
+		 * so reset
+		 */
+ 	        object->pages_used = object->pages_created = 0;
+	}
+	if ((sequential_run = object->sequential)) {
+		  if (sequential_run < 0) {
+		          sequential_behavior = VM_BEHAVIOR_RSEQNTL;
+			  sequential_run = 0 - sequential_run;
+		  } else {
+		          sequential_behavior = VM_BEHAVIOR_SEQUENTIAL;
+		  }
+	}
+	switch(behavior) {
+
+	default:
+	        behavior = VM_BEHAVIOR_DEFAULT;
+
+	case VM_BEHAVIOR_DEFAULT:
+	        if (object->internal && fault_info->user_tag == VM_MEMORY_STACK)
+		        goto out;
+
+	        if (sequential_run >= (3 * PAGE_SIZE)) {
+		        pre_heat_size = sequential_run + PAGE_SIZE;
+
+			if ((behavior = sequential_behavior) == VM_BEHAVIOR_SEQUENTIAL)
+			        look_behind = FALSE;
+			else
+			        look_ahead = FALSE;
+		} else {
+		        uint32_t	pages_unused;
+
+			if (object->pages_created < 32 * PRE_HEAT_MULTIPLIER) {
+			        /*
+				 * prime the pump
+				 */
+			        pre_heat_size = PAGE_SIZE * 8 * PRE_HEAT_MULTIPLIER;
+			        break;
+			}
+			pages_unused = object->pages_created - object->pages_used;
+
+			if (pages_unused < (object->pages_created / 8)) {
+			        pre_heat_size = PAGE_SIZE * 32 * PRE_HEAT_MULTIPLIER;
+			} else if (pages_unused < (object->pages_created / 4)) {
+			        pre_heat_size = PAGE_SIZE * 16 * PRE_HEAT_MULTIPLIER;
+			} else if (pages_unused < (object->pages_created / 2)) {
+			        pre_heat_size = PAGE_SIZE * 8 * PRE_HEAT_MULTIPLIER;
+			} else {
+			        pre_heat_size = PAGE_SIZE * 4 * PRE_HEAT_MULTIPLIER;
+			}
+		}
+		break;
+
+	case VM_BEHAVIOR_RANDOM:
+	        if ((pre_heat_size = cluster_size) <= PAGE_SIZE)
+		        goto out;
+	        break;
+
+	case VM_BEHAVIOR_SEQUENTIAL:
+	        if ((pre_heat_size = cluster_size) == 0)
+		        pre_heat_size = sequential_run + PAGE_SIZE;
+		look_behind = FALSE;
+
+	        break;
+
+	case VM_BEHAVIOR_RSEQNTL:
+	        if ((pre_heat_size = cluster_size) == 0)
+		        pre_heat_size = sequential_run + PAGE_SIZE;
+		look_ahead = FALSE;
+
+	        break;
+
+	}
+	if (pre_heat_size > max_length)
+	        pre_heat_size = max_length;
+
+	if (behavior == VM_BEHAVIOR_DEFAULT && vm_page_free_count < vm_page_free_target)
+	        pre_heat_size /= 2;
+
+	if (look_ahead == TRUE) {
+	        if (look_behind == TRUE)
+		        target_start &= ~(pre_heat_size - 1);
+
+	        if ((target_start + pre_heat_size) > object_size)
+		        pre_heat_size = (vm_size_t)(trunc_page_64(object_size - target_start));
+
+	        tail_size = pre_heat_size - (orig_start - target_start) - PAGE_SIZE;
+	} else {
+	        if (pre_heat_size > target_start)
+	                pre_heat_size = target_start;
+		tail_size = 0;
+	}
+	pre_heat_scaling[pre_heat_size / PAGE_SIZE]++;
+
+	if (pre_heat_size <= PAGE_SIZE)
+	        goto out;
+
+	if (look_behind == TRUE) {
+	        /*
+		 * take a look at the pages before the original
+		 * faulting offset 
+		 */
+	        head_size = pre_heat_size - tail_size - PAGE_SIZE;
+
+	        for (offset = orig_start - PAGE_SIZE_64; head_size; offset -= PAGE_SIZE_64, head_size -= PAGE_SIZE) {
+		        /*
+			 * don't poke below the lowest offset 
+			 */
+		        if (offset < fault_info->lo_offset)
+			        break;
+		        /*
+			 * for external objects and internal objects w/o an existence map
+			 * vm_externl_state_get will return VM_EXTERNAL_STATE_UNKNOWN
+			 */
+#if MACH_PAGEMAP
+		        if (vm_external_state_get(object->existence_map, offset) == VM_EXTERNAL_STATE_ABSENT) {
+			        /*
+				 * we know for a fact that the pager can't provide the page
+				 * so don't include it or any pages beyond it in this cluster
+				 */
+			        break;
+			}
+#endif
+			if (vm_page_lookup(object, offset) != VM_PAGE_NULL) {
+			        /*
+				 * don't bridge resident pages
+				 */
+			        break;
+			}
+			*start = offset;
+			*length += PAGE_SIZE;
+		}
+	}
+	if (look_ahead == TRUE) {
+	        for (offset = orig_start + PAGE_SIZE_64; tail_size; offset += PAGE_SIZE_64, tail_size -= PAGE_SIZE) {
+		        /*
+			 * don't poke above the highest offset 
+			 */
+		        if (offset >= fault_info->hi_offset)
+			        break;
+		        /*
+			 * for external objects and internal objects w/o an existence map
+			 * vm_externl_state_get will return VM_EXTERNAL_STATE_UNKNOWN
+			 */
+#if MACH_PAGEMAP
+		        if (vm_external_state_get(object->existence_map, offset) == VM_EXTERNAL_STATE_ABSENT) {
+			        /*
+				 * we know for a fact that the pager can't provide the page
+				 * so don't include it or any pages beyond it in this cluster
+				 */
+			        break;
+			}
+#endif
+			if (vm_page_lookup(object, offset) != VM_PAGE_NULL) {
+			        /*
+				 * don't bridge resident pages
+				 */
+			        break;
+			}
+			*length += PAGE_SIZE;
+		}
+	}
+out:
+	pre_heat_cluster[*length / PAGE_SIZE]++;
+
+	vm_object_unlock(object);
+}
+
+
+/*
+ * Allow manipulation of individual page state.  This is actually part of
+ * the UPL regimen but takes place on the VM object rather than on a UPL
+ */
 
 kern_return_t
 vm_object_page_op(
@@ -5666,13 +6226,13 @@ vm_object_page_op(
 		}
 
 		if (ops & UPL_POP_DUMP) {
-		        vm_page_lock_queues();
-
-			if (dst_page->no_isync == FALSE)
+			if (dst_page->pmapped == TRUE)
 			        pmap_disconnect(dst_page->phys_page);
-			vm_page_free(dst_page);
 
+		        vm_page_lock_queues();
+			vm_page_free(dst_page);
 			vm_page_unlock_queues();
+
 			break;
 		}
 
@@ -5807,7 +6367,7 @@ vm_object_range_op(
 	        return KERN_INVALID_OBJECT;
 	}
 	
-	offset = offset_beg;
+	offset = offset_beg & ~PAGE_MASK_64;
 
 	while (offset < offset_end) {
 		dst_page = vm_page_lookup(object, offset);
@@ -5818,8 +6378,7 @@ vm_object_range_op(
 					 * someone else is playing with the 
 					 * page, we will have to wait
 					 */
-				        PAGE_SLEEP(object,
-						dst_page, THREAD_UNINT);
+				        PAGE_SLEEP(object, dst_page, THREAD_UNINT);
 					/*
 					 * need to relook the page up since it's
 					 * state may have changed while we slept
@@ -5828,13 +6387,13 @@ vm_object_range_op(
 					 */
 					continue;
 				}
-				vm_page_lock_queues();
-
-				if (dst_page->no_isync == FALSE)
+				if (dst_page->pmapped == TRUE)
 				        pmap_disconnect(dst_page->phys_page);
-				vm_page_free(dst_page);
 
+				vm_page_lock_queues();
+				vm_page_free(dst_page);
 				vm_page_unlock_queues();
+
 			} else if (ops & UPL_ROP_ABSENT)
 			        break;
 		} else if (ops & UPL_ROP_PRESENT)
@@ -5844,8 +6403,53 @@ vm_object_range_op(
 	}
 	vm_object_unlock(object);
 
-	if (range)
+	if (range) {
+	        if (offset > offset_end)
+		        offset = offset_end;
 	        *range = offset - offset_beg;
-
+	}
 	return KERN_SUCCESS;
+}
+
+
+uint32_t scan_object_collision = 0;
+
+void
+vm_object_lock(vm_object_t object)
+{
+        if (object == vm_pageout_scan_wants_object) {
+	        scan_object_collision++;
+	        mutex_pause(2);
+	}
+        lck_rw_lock_exclusive(&object->Lock);
+}
+
+boolean_t
+vm_object_lock_try(vm_object_t object)
+{
+        if (object == vm_pageout_scan_wants_object) {
+	        scan_object_collision++;
+	        mutex_pause(2);
+	}
+	return (lck_rw_try_lock_exclusive(&object->Lock));
+}
+
+void
+vm_object_lock_shared(vm_object_t object)
+{
+        if (object == vm_pageout_scan_wants_object) {
+	        scan_object_collision++;
+	        mutex_pause(2);
+	}
+	lck_rw_lock_shared(&object->Lock);
+}
+
+boolean_t
+vm_object_lock_try_shared(vm_object_t object)
+{
+        if (object == vm_pageout_scan_wants_object) {
+	        scan_object_collision++;
+	        mutex_pause(2);
+	}
+	return (lck_rw_try_lock_shared(&object->Lock));
 }

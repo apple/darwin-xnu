@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 // NOTE:  This file is only c++ so I can get static initialisers going
@@ -33,6 +39,8 @@
 #include <libkern/libkern.h>	// From bsd's libkern directory
 #include <mach/vm_param.h>
 
+#include <sys/kdebug.h>
+extern int etext;
 __BEGIN_DECLS
 // From osmfk/kern/thread.h but considered to be private
 extern vm_offset_t min_valid_stack_address(void);
@@ -42,9 +50,41 @@ extern vm_offset_t max_valid_stack_address(void);
 extern void kmod_dump_log(vm_offset_t *addr, unsigned int cnt);
 
 extern addr64_t kvtophys(vm_offset_t va);
+#if __arm__
+extern int copyinframe(vm_address_t fp, uint32_t *frame);
+#endif
+
 __END_DECLS
 
 static mutex_t *sOSReportLock = mutex_alloc(0);
+
+/* Use kernel_debug() to log a backtrace */ 
+void
+trace_backtrace(unsigned int debugid, unsigned int debugid2, int size, int data) {
+	void *bt[16];
+	const unsigned cnt = sizeof(bt) / sizeof(bt[0]);
+  	unsigned i;
+	int found = 0;
+
+	OSBacktrace(bt, cnt);	
+  
+	/* find first non-kernel frame */
+  	for (i = 3; i < cnt && bt[i]; i++) {
+ 		if (bt[i] > (void*)&etext) {
+			found = 1;
+  			break;
+		}
+	}
+	/* 
+	 * if there are non-kernel frames, only log these
+	 * otherwise, log everything but the first two
+	 */
+	if (!found) i=2;
+
+#define safe_bt(a) (int)(a<cnt ? bt[a] : 0)
+	kernel_debug(debugid, data, size, safe_bt(i), safe_bt(i+1), 0);
+	kernel_debug(debugid2, safe_bt(i+2), safe_bt(i+3), safe_bt(i+4), safe_bt(i+5), 0);
+}
 
 /* Report a message with a 4 entry backtrace - very slow */
 void
@@ -182,6 +222,30 @@ pad:
 
     for ( ; frame_index < maxAddrs; frame_index++)
 	    bt[frame_index] = (void *) 0;
+#elif __arm__
+    uint32_t i= 0;
+    uint32_t frameb[2];
+    uint32_t fp= 0;
+    
+    // get the current frame pointer for this thread
+    __asm__ volatile("mov %0,r7" : "=r" (fp)); 
+    
+    // now crawl up the stack recording the link value of each frame
+    do {
+      // check bounds
+      if ((fp == 0) || ((fp & 3) != 0) || (fp > VM_MAX_KERNEL_ADDRESS) || (fp < VM_MIN_KERNEL_ADDRESS)) {
+	break;
+      }
+      // safely read frame
+      if (copyinframe(fp, frameb) != 0) {
+	break;
+      }
+      
+      // No need to use copyin as this is always a kernel address, see check above
+      bt[i] = (void*)frameb[1];        // link register
+      fp = frameb[0]; 
+    } while (++i < maxAddrs);
+    frame= i;
 #else
 #error arch
 #endif

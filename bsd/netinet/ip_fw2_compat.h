@@ -3,6 +3,7 @@
 #ifndef _IP_FW_COMPAT_H_
 #define _IP_FW_COMPAT_H_
 
+#if !__LP64__
 
 /* prototypes */
 void	ipfw_convert_from_latest(struct ip_fw *curr_rule, void *old_rule, u_int32_t api_version);
@@ -371,4 +372,5 @@ struct ip_old_fw {
  */
 #define IP_OLD_FW_TCPF_ESTAB	0x40
 
-
+#endif /* !__LP64__ */
+#endif /* _IP_FW_COMPAT_H_ */

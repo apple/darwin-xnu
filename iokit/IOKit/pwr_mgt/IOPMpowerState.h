@@ -1,40 +1,68 @@
 /*
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <IOKit/pwr_mgt/IOPM.h>
 
+/*! @header IOPMpowerState.h
+    @abstract Defines the struct IOPMPowerState that power managed drivers should use to describe their power states.
+*/
+
+/*! @struct IOPMPowerState
+    @abstract Describes a device's power state.
+    @discussion To take part in system power management, drivers should define an array of 2 or more power states and pass it to kernel power management through IOService::registerPowerDriver.
+    @field version Defines version number of this struct. Just use the value "1" when defining an IOPMPowerState.
+    @field	capabilityFlags Describes the capability of the device in this state.
+    @field	outputPowerCharacter Describes the power provided in this state.
+    @field	inputPowerRequirement Describes the input power required in this state.
+    @field	staticPower Describes average consumption in milliwatts. Unused; drivers may specify 0.
+    @field	unbudgetedPower Describes additional consumption from separate power supply (milliWatts). Unused; drivers may specify 0.
+    @field	powerToAttain Describes dditional power to attain this state from next lower state (in milliWatts). Unused; drivers may specify 0.
+    @field	timeToAttain Describes time required to enter this state from next lower state (in microseconds). Unused; drivers may specify 0.
+    @field	settleUpTime Describes settle time required after entering this state from next lower state (microseconds). Unused; drivers may specify 0.
+    @field timeToLower Describes time required to enter next lower state from this one (microseconds). Unused; drivers may specify 0.
+    @field	settleDownTime Settle time required after entering next lower state from this state (microseconds). Unused; drivers may specify 0.
+    @field	powerDomainBudget Describes power in milliWatts a domain in this state can deliver to its children. Unused; drivers may specify 0.
+}
+*/
+
 struct IOPMPowerState
 {
- unsigned long	version;		// version number of this struct
-IOPMPowerFlags	capabilityFlags;	// bits that describe (to interested drivers) the capability of the device in this state 
-IOPMPowerFlags	outputPowerCharacter;	// description (to power domain children) of the power provided in this state 
-IOPMPowerFlags	inputPowerRequirement;	// description (to power domain parent) of input power required in this state
-unsigned long	staticPower;	// average consumption in milliwatts
-unsigned long	unbudgetedPower;	// additional consumption from separate power supply (mw)
-unsigned long	powerToAttain;	// additional power to attain this state from next lower state (in mw)
-unsigned long	timeToAttain;	// time required to enter this state from next lower state (in microseconds)
-unsigned long	settleUpTime;	// settle time required after entering this state from next lower state (microseconds)
-unsigned long	timeToLower;	// time required to enter next lower state from this one (in microseconds)
-unsigned long	settleDownTime;	// settle time required after entering next lower state from this state (microseconds)
-unsigned long	powerDomainBudget;	// power in mw a domain in this state can deliver to its children
+    unsigned long	version;
+    IOPMPowerFlags	capabilityFlags;
+    IOPMPowerFlags	outputPowerCharacter;
+    IOPMPowerFlags	inputPowerRequirement;
+    unsigned long	staticPower;
+    unsigned long	unbudgetedPower;
+    unsigned long	powerToAttain;
+    unsigned long	timeToAttain;
+    unsigned long	settleUpTime;
+    unsigned long	timeToLower;
+    unsigned long	settleDownTime;
+    unsigned long	powerDomainBudget;
 };
 
 typedef struct IOPMPowerState IOPMPowerState;

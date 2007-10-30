@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
  * 
- * @APPLE_LICENSE_HEADER_START@ 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and 
- * are subject to the Apple Public Source License Version 1.1 (the 
- * "License").  You may not use this file except in compliance with the 
- * License.  Please obtain a copy of the License at 
- * http://www.apple.com/publicsource and read it before using this file. 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are 
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the 
- * License for the specific language governing rights and limitations 
- * under the License. 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
  * 
- * @APPLE_LICENSE_HEADER_END@ 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  * 
  * 
  * System call switch table.
@@ -49,11 +55,8 @@
 #define	SYS_chmod          15
 #define	SYS_chown          16
 #define	SYS_obreak         17
-#if COMPAT_GETFSSTAT
 #define	SYS_ogetfsstat     18
-#else
 #define	SYS_getfsstat      18
-#endif
 			/* 19  old lseek */
 #define	SYS_getpid         20
 			/* 21  old mount */
@@ -80,7 +83,7 @@
 #define	SYS_pipe           42
 #define	SYS_getegid        43
 #define	SYS_profil         44
-#define	SYS_ktrace         45
+			/* 45  old ktrace */
 #define	SYS_sigaction      46
 #define	SYS_getgid         47
 #define	SYS_sigprocmask    48
@@ -161,8 +164,8 @@
 #define	SYS_fchown         123
 #define	SYS_fchmod         124
 			/* 125  old recvfrom */
-			/* 126  old setreuid */
-			/* 127  old setregid */
+#define	SYS_setreuid       126
+#define	SYS_setregid       127
 #define	SYS_rename         128
 			/* 129  old truncate */
 			/* 130  old ftruncate */
@@ -177,7 +180,7 @@
 #define	SYS_futimes        139
 #define	SYS_adjtime        140
 			/* 141  old getpeername */
-			/* 142  old gethostid */
+#define	SYS_gethostuuid    142
 			/* 143  old sethostid */
 			/* 144  old getrlimit */
 			/* 145  old setrlimit */
@@ -190,21 +193,13 @@
 #define	SYS_setprivexec    152
 #define	SYS_pread          153
 #define	SYS_pwrite         154
-#if NFSSERVER
 #define	SYS_nfssvc         155
-#else
-			/* 155  */
-#endif
 			/* 156  old getdirentries */
 #define	SYS_statfs         157
 #define	SYS_fstatfs        158
 #define	SYS_unmount        159
 			/* 160  old async_daemon */
-#if NFSCLIENT
 #define	SYS_getfh          161
-#else
-			/* 161  */
-#endif
 			/* 162  old getdomainname */
 			/* 163  old setdomainname */
 			/* 164  */
@@ -212,7 +207,7 @@
 			/* 166  old exportfs */
 #define	SYS_mount          167
 			/* 168  old ustat */
-			/* 169  */
+#define	SYS_csops          169
 #define	SYS_table          170
 			/* 171  old wait3 */
 			/* 172  old rpause */
@@ -236,11 +231,7 @@
 #define	SYS_lstat          190
 #define	SYS_pathconf       191
 #define	SYS_fpathconf      192
-#if COMPAT_GETFSSTAT
-#define	SYS_getfsstat      193
-#else
 			/* 193  */
-#endif
 #define	SYS_getrlimit      194
 #define	SYS_setrlimit      195
 #define	SYS_getdirentries  196
@@ -271,11 +262,7 @@
 #define	SYS_setattrlist    221
 #define	SYS_getdirentriesattr 222
 #define	SYS_exchangedata   223
-#ifdef __APPLE_API_OBSOLETE
-#define	SYS_checkuseraccess 224
-#else
-			/* 224  HFS checkuseraccess check access to a file */
-#endif /* __APPLE_API_OBSOLETE */
+			/* 224  was checkuseraccess */
 #define	SYS_searchfs       225
 #define	SYS_delete         226
 #define	SYS_copyfile       227
@@ -295,16 +282,11 @@
 #define	SYS_flistxattr     241
 #define	SYS_fsctl          242
 #define	SYS_initgroups     243
-			/* 244  */
+#define	SYS_posix_spawn    244
 			/* 245  */
 			/* 246  */
-#if NFSCLIENT
 #define	SYS_nfsclnt        247
 #define	SYS_fhopen         248
-#else
-			/* 247  */
-			/* 248  */
-#endif
 			/* 249  */
 #define	SYS_minherit       250
 #define	SYS_semsys         251
@@ -313,7 +295,7 @@
 #define	SYS_semctl         254
 #define	SYS_semget         255
 #define	SYS_semop          256
-			/* 257 */
+			/* 257  */
 #define	SYS_msgctl         258
 #define	SYS_msgget         259
 #define	SYS_msgsnd         260
@@ -350,25 +332,25 @@
 #define	SYS_mkfifo_extended 291
 #define	SYS_mkdir_extended 292
 #define	SYS_identitysvc    293
-			/* 294  */
-			/* 295  */
-#define	SYS_load_shared_file 296
-#define	SYS_reset_shared_file 297
-#define	SYS_new_system_shared_regions 298
-#define	SYS_shared_region_map_file_np 299
-#define	SYS_shared_region_make_private_np 300
-			/* 301  */
-			/* 302  */
-			/* 303  */
-			/* 304  */
-			/* 305  */
-			/* 306  */
-			/* 307  */
-			/* 308  */
-			/* 309  */
+#define	SYS_shared_region_check_np 294
+#define	SYS_shared_region_map_np 295
+			/* 296  old load_shared_file */
+			/* 297  old reset_shared_file */
+			/* 298  old new_system_shared_regions */
+			/* 299  old shared_region_map_file_np */
+			/* 300  old shared_region_make_private_np */
+#define	SYS___pthread_mutex_destroy 301
+#define	SYS___pthread_mutex_init 302
+#define	SYS___pthread_mutex_lock 303
+#define	SYS___pthread_mutex_trylock 304
+#define	SYS___pthread_mutex_unlock 305
+#define	SYS___pthread_cond_init 306
+#define	SYS___pthread_cond_destroy 307
+#define	SYS___pthread_cond_broadcast 308
+#define	SYS___pthread_cond_signal 309
 #define	SYS_getsid         310
 #define	SYS_settid_with_pid 311
-			/* 312  */
+#define	SYS___pthread_cond_timedwait 312
 #define	SYS_aio_fsync      313
 #define	SYS_aio_return     314
 #define	SYS_aio_suspend    315
@@ -377,35 +359,35 @@
 #define	SYS_aio_read       318
 #define	SYS_aio_write      319
 #define	SYS_lio_listio     320
-			/* 321  */
-			/* 322  */
+#define	SYS___pthread_cond_wait 321
+#define	SYS_iopolicysys    322
 			/* 323  */
 #define	SYS_mlockall       324
 #define	SYS_munlockall     325
 			/* 326  */
 #define	SYS_issetugid      327
 #define	SYS___pthread_kill 328
-#define	SYS_pthread_sigmask 329
-#define	SYS_sigwait        330
+#define	SYS___pthread_sigmask 329
+#define	SYS___sigwait      330
 #define	SYS___disable_threadsignal 331
 #define	SYS___pthread_markcancel 332
 #define	SYS___pthread_canceled 333
 #define	SYS___semwait_signal 334
-#define	SYS_utrace         335
+			/* 335  old utrace */
 #define	SYS_proc_info      336
-			/* 337  */
-			/* 338  */
-			/* 339  */
-			/* 340  */
-			/* 341  */
-			/* 342  */
-			/* 343  */
-			/* 344  */
-			/* 345  */
-			/* 346  */
-			/* 347  */
-			/* 348  */
-			/* 349  */
+#define	SYS_sendfile       337
+#define	SYS_stat64         338
+#define	SYS_fstat64        339
+#define	SYS_lstat64        340
+#define	SYS_stat64_extended 341
+#define	SYS_lstat64_extended 342
+#define	SYS_fstat64_extended 343
+#define	SYS_getdirentries64 344
+#define	SYS_statfs64       345
+#define	SYS_fstatfs64      346
+#define	SYS_getfsstat64    347
+#define	SYS___pthread_chdir 348
+#define	SYS___pthread_fchdir 349
 #define	SYS_audit          350
 #define	SYS_auditon        351
 			/* 352  */
@@ -416,17 +398,74 @@
 #define	SYS_getaudit_addr  357
 #define	SYS_setaudit_addr  358
 #define	SYS_auditctl       359
-			/* 360  */
-			/* 361  */
+#define	SYS_bsdthread_create 360
+#define	SYS_bsdthread_terminate 361
 #define	SYS_kqueue         362
 #define	SYS_kevent         363
 #define	SYS_lchown         364
 #define	SYS_stack_snapshot 365
-			/* 366  */
-			/* 367  */
-			/* 368  */
+#define	SYS_bsdthread_register 366
+#define	SYS_workq_open     367
+#define	SYS_workq_ops      368
 			/* 369  */
-#define	SYS_MAXSYSCALL	370
+			/* 370  */
+			/* 371  */
+			/* 372  */
+			/* 373  */
+			/* 374  */
+			/* 375  */
+			/* 376  */
+			/* 377  */
+			/* 378  */
+			/* 379  */
+#define	SYS___mac_execve   380
+#define	SYS___mac_syscall  381
+#define	SYS___mac_get_file 382
+#define	SYS___mac_set_file 383
+#define	SYS___mac_get_link 384
+#define	SYS___mac_set_link 385
+#define	SYS___mac_get_proc 386
+#define	SYS___mac_set_proc 387
+#define	SYS___mac_get_fd   388
+#define	SYS___mac_set_fd   389
+#define	SYS___mac_get_pid  390
+#define	SYS___mac_get_lcid 391
+#define	SYS___mac_get_lctx 392
+#define	SYS___mac_set_lctx 393
+#define	SYS_setlcid        394
+#define	SYS_getlcid        395
+#define	SYS_read_nocancel  396
+#define	SYS_write_nocancel 397
+#define	SYS_open_nocancel  398
+#define	SYS_close_nocancel 399
+#define	SYS_wait4_nocancel 400
+#define	SYS_recvmsg_nocancel 401
+#define	SYS_sendmsg_nocancel 402
+#define	SYS_recvfrom_nocancel 403
+#define	SYS_accept_nocancel 404
+#define	SYS_msync_nocancel 405
+#define	SYS_fcntl_nocancel 406
+#define	SYS_select_nocancel 407
+#define	SYS_fsync_nocancel 408
+#define	SYS_connect_nocancel 409
+#define	SYS_sigsuspend_nocancel 410
+#define	SYS_readv_nocancel 411
+#define	SYS_writev_nocancel 412
+#define	SYS_sendto_nocancel 413
+#define	SYS_pread_nocancel 414
+#define	SYS_pwrite_nocancel 415
+#define	SYS_waitid_nocancel 416
+#define	SYS_poll_nocancel  417
+#define	SYS_msgsnd_nocancel 418
+#define	SYS_msgrcv_nocancel 419
+#define	SYS_sem_wait_nocancel 420
+#define	SYS_aio_suspend_nocancel 421
+#define	SYS___sigwait_nocancel 422
+#define	SYS___semwait_signal_nocancel 423
+#define	SYS___mac_mount    424
+#define	SYS___mac_get_mount 425
+#define	SYS___mac_getfsstat 426
+#define	SYS_MAXSYSCALL	427
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* !_SYS_SYSCALL_H_ */

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002, 2004-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <sys/param.h>
 #include <sys/utfconv.h>
@@ -40,7 +46,7 @@
 
 OSErr
 LocateCatalogNode(const ExtendedVCB *volume, HFSCatalogNodeID folderID, const CatalogName *name,
-					UInt32 hint, CatalogKey *keyPtr, CatalogRecord *dataPtr, UInt32 *newHint)
+					u_int32_t hint, CatalogKey *keyPtr, CatalogRecord *dataPtr, u_int32_t *newHint)
 {
 	OSErr				result;
 	CatalogName 		*nodeName = NULL;	/* To ward off uninitialized use warnings from compiler */
@@ -84,16 +90,18 @@ LocateCatalogNode(const ExtendedVCB *volume, HFSCatalogNodeID folderID, const Ca
 //
 
 OSErr
-LocateCatalogNodeByKey(const ExtendedVCB *volume, UInt32 hint, CatalogKey *keyPtr,
-						CatalogRecord *dataPtr, UInt32 *newHint)
+LocateCatalogNodeByKey(const ExtendedVCB *volume, u_int32_t hint, CatalogKey *keyPtr,
+						CatalogRecord *dataPtr, u_int32_t *newHint)
 {
 	OSErr				result;
 	CatalogName 		*nodeName = NULL;
 	HFSCatalogNodeID	threadParentID;
-	UInt16 tempSize;
+	u_int16_t tempSize;
 	FSBufferDescriptor	 btRecord;
-	BTreeIterator		 searchIterator = {0};
+	BTreeIterator		 searchIterator; 
 	FCB			*fcb;
+
+	bzero(&searchIterator, sizeof(searchIterator));
 
 	fcb = GetFileControlBlock(volume->catalogRefNum);
 
@@ -155,11 +163,11 @@ LocateCatalogNodeByKey(const ExtendedVCB *volume, UInt32 hint, CatalogKey *keyPt
 
 OSErr
 LocateCatalogRecord(const ExtendedVCB *volume, HFSCatalogNodeID folderID, const CatalogName *name,
-					UInt32 hint, CatalogKey *keyPtr, CatalogRecord *dataPtr, UInt32 *newHint)
+					u_int32_t hint, CatalogKey *keyPtr, CatalogRecord *dataPtr, u_int32_t *newHint)
 {
 	OSErr			result;
 	CatalogKey		tempKey;	// 518 bytes
-	UInt16			tempSize;
+	u_int16_t		tempSize;
 
 	BuildCatalogKey(folderID, name, (volume->vcbSigWord == kHFSPlusSigWord), &tempKey);
 
@@ -211,15 +219,15 @@ BuildCatalogKey(HFSCatalogNodeID parentID, const CatalogName *cName, Boolean isH
 }
 
 OSErr
-BuildCatalogKeyUTF8(ExtendedVCB *volume, HFSCatalogNodeID parentID, const char *name, UInt32 nameLength,
-		    CatalogKey *key, UInt32 *textEncoding)
+BuildCatalogKeyUTF8(ExtendedVCB *volume, HFSCatalogNodeID parentID, const unsigned char *name, u_int32_t nameLength,
+		    CatalogKey *key, u_int32_t *textEncoding)
 {
 	OSErr err = 0;
 
     if ( name == NULL)
         nameLength = 0;
     else if (nameLength == kUndefinedStrLen)
-        nameLength = strlen(name);
+        nameLength = strlen((const char *)name);
 
 	if ( volume->vcbSigWord == kHFSPlusSigWord ) {
 		size_t unicodeBytes = 0;
@@ -292,7 +300,7 @@ FlushCatalog(ExtendedVCB *volume)
 		if ( 0 /*fcb->fcbFlags & fcbModifiedMask*/ )
 		{
 			HFS_MOUNT_LOCK(volume, TRUE);
-			volume->vcbFlags |= 0xFF00;		// Mark the VCB dirty
+			MarkVCBDirty(volume);	// Mark the VCB dirty
 			volume->vcbLsMod = GetTimeUTC();	// update last modified date
 			HFS_MOUNT_UNLOCK(volume, TRUE);
 
@@ -329,7 +337,7 @@ UpdateCatalogName(ConstStr31Param srcName, Str31 destName)
 void
 CopyCatalogName(const CatalogName *srcName, CatalogName *dstName, Boolean isHFSPLus)
 {
-	UInt32	length;
+	u_int32_t	length;
 	
 	if ( srcName == NULL )
 	{
@@ -341,7 +349,7 @@ CopyCatalogName(const CatalogName *srcName, CatalogName *dstName, Boolean isHFSP
 	if (isHFSPLus)
 		length = sizeof(UniChar) * (srcName->ustr.length + 1);
 	else
-		length = sizeof(UInt8) + srcName->pstr[0];
+		length = sizeof(u_int8_t) + srcName->pstr[0];
 
 	if ( length > 1 )
 		BlockMoveData(srcName, dstName, length);

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 1998-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * HISTORY
@@ -42,6 +48,11 @@
 #include <IOKit/IOKitDebug.h> 
 
 #include "IOKitKernelInternal.h"
+
+#ifdef IOALLOCDEBUG
+#include <libkern/OSDebug.h>
+#include <sys/sysctl.h>
+#endif
 
 extern "C"
 {
@@ -165,8 +176,9 @@ void * IOMalloc(vm_size_t size)
 
     address = (void *)kalloc(size);
 #if IOALLOCDEBUG
-    if (address)
-	debug_iomalloc_size += size;
+    if (address) {
+		debug_iomalloc_size += size;
+	}
 #endif
     return address;
 }
@@ -174,9 +186,9 @@ void * IOMalloc(vm_size_t size)
 void IOFree(void * address, vm_size_t size)
 {
     if (address) {
-	kfree(address, size);
+		kfree(address, size);
 #if IOALLOCDEBUG
-	debug_iomalloc_size -= size;
+		debug_iomalloc_size -= size;
 #endif
     }
 }
@@ -236,8 +248,9 @@ void * IOMallocAligned(vm_size_t size, vm_size_t alignment)
     assert(0 == (address & alignMask));
 
 #if IOALLOCDEBUG
-    if( address)
-	debug_iomalloc_size += size;
+    if( address) {
+		debug_iomalloc_size += size;
+	}
 #endif
 
     return (void *) address;
@@ -331,7 +344,7 @@ IOKernelAllocateContiguous(mach_vm_size_t size, mach_vm_size_t alignment)
 	if (adjustedSize > page_size)
 	{
 	    kr = kmem_alloc_contig(kernel_map, &virt, size,
-				    alignMask, 0);
+				   alignMask, 0, 0);
 	}
 	else
 	{
@@ -366,8 +379,9 @@ IOKernelAllocateContiguous(mach_vm_size_t size, mach_vm_size_t alignment)
     }
 
 #if IOALLOCDEBUG
-    if (address)
-	debug_iomalloc_size += size;
+    if (address) {
+		debug_iomalloc_size += size;
+	}
 #endif
 
     return (address);
@@ -650,9 +664,7 @@ IOReturn IOFlushProcessorCache( task_t task, IOVirtualAddress address,
     if( task != kernel_task)
 	return( kIOReturnUnsupported );
 
-#if __ppc__
     flush_dcache64( (addr64_t) address, (unsigned) length, false );
-#endif
 
     return( kIOReturnSuccess );
 }
@@ -670,6 +682,9 @@ SInt32 OSKernelStackRemaining( void )
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+/*
+ * Spin for indicated number of milliseconds.
+ */
 void IOSleep(unsigned milliseconds)
 {
     delay_for_interval(milliseconds, kMillisecondScale);
@@ -681,6 +696,14 @@ void IOSleep(unsigned milliseconds)
 void IODelay(unsigned microseconds)
 {
     delay_for_interval(microseconds, kMicrosecondScale);
+}
+
+/*
+ * Spin for indicated number of nanoseconds.
+ */
+void IOPause(unsigned nanoseconds)
+{
+    delay_for_interval(nanoseconds, kNanosecondScale);
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -698,7 +721,7 @@ void IOLog(const char *format, ...)
 
 void IOPanic(const char *reason)
 {
-	panic(reason);
+	panic("%s", reason);
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -714,7 +737,7 @@ const char *IOFindNameForValue(int value, const IONamedValue *regValueArray)
 		if(regValueArray->value == value)
 			return(regValueArray->name);
 	}
-	sprintf(noValue, "0x%x (UNDEFINED)", value);
+	snprintf(noValue, sizeof(noValue), "0x%x (UNDEFINED)", value);
 	return((const char *)noValue);
 }
 
@@ -729,6 +752,16 @@ IOReturn IOFindValueForName(const char *string,
 		}
 	}
 	return kIOReturnBadArgument;
+}
+
+OSString * IOCopyLogNameForPID(int pid)
+{
+    char   buf[128];
+    size_t len;
+    snprintf(buf, sizeof(buf), "pid %d, ", pid);
+    len = strlen(buf);
+    proc_name(pid, buf + len, sizeof(buf) - len);
+    return (OSString::withCString(buf));
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -757,3 +790,6 @@ unsigned int IOAlignmentToSize(IOAlignment align)
 }
 
 } /* extern "C" */
+
+
+

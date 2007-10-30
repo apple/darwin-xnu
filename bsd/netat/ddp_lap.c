@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *	Copyright (c) 1988, 1989, 1993-1998 Apple Computer, Inc. 
@@ -66,6 +72,7 @@
 
 #include <netat/sysglue.h>
 #include <netat/appletalk.h>
+#include <netat/at_pcb.h>
 #include <netat/at_var.h>
 #include <netat/ddp.h>
 #include <netat/lap.h>
@@ -73,13 +80,14 @@
 #include <netat/zip.h>
 #include <netat/nbp.h>
 #include <netat/at_snmp.h>
-#include <netat/at_pcb.h>
 #include <netat/at_aarp.h>
 #include <netat/asp.h>
 #include <netat/atp.h>
 #include <netat/debug.h>
 #include <netat/adsp.h>
 #include <netat/adsp_internal.h>
+#include <netat/at_pat.h>
+#include <netat/rtmp.h>
 
 #include <sys/kern_event.h>
 
@@ -128,19 +136,21 @@ extern at_ddp_stats_t at_ddp_stats;
 extern lck_mtx_t * atalk_mutex;
 
 /* protos */
-extern snmpAarpEnt_t * getAarp(int *);
-extern void nbp_shutdown(), routershutdown(), ddp_brt_shutdown();
-extern void ddp_brt_init(), rtmp_init(), rtmp_input();
-extern rtmp_router_start(at_kern_err_t *);
-static void getIfNames(at_ifnames_t *);
-static void add_route();
-static int set_zones();
-void elap_offline();
-static int elap_online1(), re_aarp();
-int at_reg_mcast(), at_unreg_mcast();
-void  AARPwakeup(), ZIPwakeup();
-static void elap_hangup();
-static getSnmpCfg();
+int rtmp_router_start(at_kern_err_t *);
+static void add_route(RT_entry 	*);
+void elap_offline(at_ifaddr_t *);
+static int elap_online1(at_ifaddr_t *);
+static void elap_online2(at_ifaddr_t *);
+ int elap_online3(at_ifaddr_t *);
+static int re_aarp(at_ifaddr_t *);
+static int getSnmpCfg(snmpCfg_t *);
+
+int routerStart(at_kern_err_t *);
+
+static int validate_msg_size(gbuf_t *, gref_t *, at_ifaddr_t **);
+at_ifaddr_t *find_ifID(char *);
+int lap_online( at_ifaddr_t *, at_if_cfg_t *cfgp);
+
 
 at_ifaddr_t *find_ifID(if_name)
 	char	*if_name;
@@ -166,7 +176,6 @@ static int validate_msg_size(m, gref, elapp)
 */
 {
 	register ioc_t *iocbp;
-	register at_if_cfg_t *cfgp;
 	int i = 0, size = 1;
 	
 	*elapp = NULL;		
@@ -249,8 +258,9 @@ int lap_online(elapp, cfgp)
 			elapp->flags |= ELAP_CFG_SEED;
 	}
 
-	if (!DEFAULT_ZONE(&cfgp->zonename) &&
-	    (elapp->flags & ELAP_CFG_HOME) || MULTIHOME_MODE) {
+	/* (VL) !? */
+	if ((!DEFAULT_ZONE(&cfgp->zonename) &&
+	    (elapp->flags & ELAP_CFG_HOME)) || MULTIHOME_MODE) {
 		elapp->startup_zone = cfgp->zonename;
 	}
 
@@ -306,10 +316,12 @@ int elap_wput(gref, m)
 	register ioc_t		*iocbp;
 	register at_if_cfg_t	*cfgp;
 	at_elap_stats_t		*statsp;
-	int 		i;
-	int			(*func)();
-	gbuf_t		*tmpm;
-	at_ifaddr_t *patp;
+	int i,j;
+	int size, totalsize = 0, tabsize;
+	gbuf_t	*mn;		/* new gbuf */
+	gbuf_t	*mo;		/* old gbuf */
+	gbuf_t	*mt = NULL;		/* temp */
+	snmpNbpTable_t		*nbp;
 
 
 	switch (gbuf_type(m)) {
@@ -458,7 +470,6 @@ int elap_wput(gref, m)
 				kprintf("LAP_IOC_SNMP_GET_CFG\n");
 #endif
 			{
-				int i,size;
 				snmpCfg_t 	snmp;
 
 				i =  *(int *)gbuf_rptr(gbuf_cont(m));
@@ -542,12 +553,6 @@ int elap_wput(gref, m)
 				kprintf("LAP_IOC_SNMP_GET_ZIP\n");
 #endif
 			{ /* matching brace NOT in this case */
-				register int i,j;
-				register int size, total, tabsize;
-				gbuf_t	*mn;		/* new gbuf */
-				gbuf_t	*mo;		/* old gbuf */
-				gbuf_t	*mt;		/* temp */
-				snmpNbpTable_t		*nbp;
 
 				i =  *(int *)gbuf_rptr(gbuf_cont(m));
 				gbuf_freem(gbuf_cont(m));
@@ -578,11 +583,11 @@ int elap_wput(gref, m)
 					}
 					if (!mo)	{ 		/* if first new one */
 						mt = mn;
-						total = size;
+						totalsize = size;
 					}
 					else {
 						gbuf_cont(mo) = mn;
-						total += size;
+						totalsize += size;
 					}
 					mo = mn;
 					getZipTable((ZT_entry*)gbuf_rptr(mn),i,j); 
@@ -598,9 +603,9 @@ int elap_wput(gref, m)
 				if (!tabsize) {
 					dPrintf(D_M_ELAP,D_L_WARNING,
 						("elap_wput:snmp: empty zip table\n"));
-					total = 0;
+					totalsize = 0;
 				}
-				*(int*)gbuf_rptr(gbuf_cont(m)) = total; 	/* return table size */
+				*(int*)gbuf_rptr(gbuf_cont(m)) = totalsize; 	/* return table size */
 				gbuf_wset(gbuf_cont(m),sizeof(int));
 				iocbp->ioc_count = sizeof(int);
 				ioc_ack(0, m, gref);
@@ -643,11 +648,11 @@ int elap_wput(gref, m)
 					}
 					if (!mo)	{ 		/* if first new one */
 						mt = mn;
-						total = size;
+						totalsize = size;
 					}
 					else {
 						gbuf_cont(mo) = mn;
-						total += size;
+						totalsize += size;
 					}
 					mo = mn;
 					getRtmpTable((RT_entry*)gbuf_rptr(mn),i,j); 
@@ -661,8 +666,8 @@ int elap_wput(gref, m)
 					break;
 				}
 				if (!tabsize)
-					total = 0;
-				*(int*)gbuf_rptr(gbuf_cont(m)) = total;	/* return table size */
+					totalsize = 0;
+				*(int*)gbuf_rptr(gbuf_cont(m)) = totalsize;	/* return table size */
 				gbuf_wset(gbuf_cont(m),sizeof(int));
 				iocbp->ioc_count = sizeof(int);
 				ioc_ack(0, m, gref);
@@ -709,7 +714,7 @@ int elap_wput(gref, m)
 					}
 					if (!mo)	{ 		/* if first new one */
 						mt = mn;
-						total = size;
+						totalsize = size;
 						nbp = (snmpNbpTable_t*)gbuf_rptr(mn);
 						nbp->nbpt_entries = tabsize;
 						nbp->nbpt_zone = ifID_home->ifZoneName;
@@ -717,7 +722,7 @@ int elap_wput(gref, m)
 					}
 					else {
 						gbuf_cont(mo) = mn;
-						total += size;
+						totalsize += size;
 						getNbpTable((snmpNbpEntry_t *)gbuf_rptr(mn),i,j); 
 					}
 					mo = mn;
@@ -731,8 +736,8 @@ int elap_wput(gref, m)
 					break;
 				}
 				if (!tabsize)
-					total = 0;
-				*(int*)gbuf_rptr(gbuf_cont(m)) = total;	/* return table size */
+					totalsize = 0;
+				*(int*)gbuf_rptr(gbuf_cont(m)) = totalsize;	/* return table size */
 				gbuf_wset(gbuf_cont(m),sizeof(int));
 				iocbp->ioc_count = sizeof(int);
 				ioc_ack(0, m, gref);
@@ -768,6 +773,7 @@ int elap_wput(gref, m)
 
 /* Called directly by ddp/zip.
  */
+int
 elap_dataput(m, elapp, addr_flag, addr)
      register	gbuf_t	*m;
      register at_ifaddr_t *elapp;
@@ -776,10 +782,8 @@ elap_dataput(m, elapp, addr_flag, addr)
 {
 	register int		size;
 	int			error = 0;
-	extern	int		zip_type_packet();
 	struct	etalk_addr	dest_addr;
 	struct	atalk_addr	dest_at_addr;
-	extern	gbuf_t		*growmsg();
 	int			loop = TRUE;
 				/* flag to aarp to loopback (default) */
 
@@ -856,7 +860,7 @@ elap_dataput(m, elapp, addr_flag, addr)
 	    error = aarp_send_data(m, elapp, &dest_at_addr, loop);
 	    break;
 	case ET_ADDR :
-	    error = pat_output(elapp, m, &dest_addr, 0);
+	    error = pat_output(elapp, m, (unsigned char *)&dest_addr, 0);
 	    break;
         }
 	return (error);
@@ -955,9 +959,11 @@ static void elap_online2(elapp)
 			/* LD 081694: set the RTR_SEED_PORT flag for seed ports */
 			elapp->ifFlags |= RTR_SEED_PORT;
 		}
+#if DEBUG
 		else 
 			dPrintf(D_M_ELAP,D_L_STARTUP_INFO,
 				("elap_online: it's a router, but non seed\n"));
+#endif
 	}
 
 	if (elapp->flags & ELAP_CFG_ZONELESS) {
@@ -1022,9 +1028,6 @@ void elap_offline(elapp)
      register at_ifaddr_t *elapp;
 
 {
-	void	zip_sched_getnetinfo(); /* forward reference */
-	int	errno;
-
 	dPrintf(D_M_ELAP, D_L_SHUTDN_INFO, ("elap_offline:%s\n", elapp->ifName));
 	if (elapp->ifState != LAP_OFFLINE) {
 
@@ -1091,7 +1094,6 @@ int ddp_shutdown(count_only)
 	struct atp_state *atp, *atp_next;
 	CCB *sp, *sp_next;
 	gref_t *gref;
-	vm_offset_t temp_rcb_data, temp_state_data;
 	int i, active_skts = 0;	/* count of active pids for non-socketized
 				   AppleTalk protocols */
 
@@ -1416,6 +1418,8 @@ static unsigned char reverse_data[] = {
 		addr[k] = reverse_data[addr[k]];
 }
 
+static int elap_trackMcast(at_ifaddr_t *, int, caddr_t);
+
 static int elap_trackMcast(patp, func, addr)
 	at_ifaddr_t    *patp;
 	int func;
@@ -1495,7 +1499,7 @@ static int elap_trackMcast(patp, func, addr)
 }
 
 
-static getSnmpCfg(snmp)
+static int getSnmpCfg(snmp)
 	snmpCfg_t *snmp;
 {
 	int i;
@@ -1598,7 +1602,7 @@ int at_reg_mcast(ifID, data)
 			 *(unsigned*)data, (*(unsigned *)(data+2))&0x0000ffff, 
 			 (unsigned)ifID));
 
-		if (if_addmulti(nddp, &sdl, 0))
+		if (if_addmulti(nddp, (struct sockaddr *)&sdl, 0))
 			return -1;
 	}
 	return 0;
@@ -1637,7 +1641,7 @@ int at_unreg_mcast(ifID, data)
 			 (unsigned)ifID));
 		bzero(data, sizeof(struct etalk_addr));
 
-		if (if_delmulti(nddp, &sdl))
+		if (if_delmulti(nddp, (struct sockaddr *)&sdl))
 			return -1;
 	}
 	return 0;

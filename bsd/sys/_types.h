@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #ifndef _SYS__TYPES_H_
@@ -25,14 +31,6 @@
 
 #include <sys/cdefs.h>
 #include <machine/_types.h>
-
-/* Forward references */
-#ifndef _POSIX_C_SOURCE
-struct mcontext;
-struct mcontext64;
-#else /* _POSIX_C_SOURCE */
-struct __darwin_mcontext;
-#endif /* _POSIX_C_SOURCE */
 
 /* pthread opaque structures */
 #if defined(__LP64__)
@@ -100,15 +98,14 @@ typedef unsigned int	__darwin_fsblkcnt_t;	/* Used by statvfs and fstatvfs */
 typedef unsigned int	__darwin_fsfilcnt_t;	/* Used by statvfs and fstatvfs */
 typedef __uint32_t	__darwin_gid_t;		/* [???] process and group IDs */
 typedef __uint32_t	__darwin_id_t;		/* [XSI] pid_t, uid_t, or gid_t*/
+typedef __uint64_t	__darwin_ino64_t;	/* [???] Used for 64 bit inodes */
+#if __DARWIN_64_BIT_INO_T
+typedef __darwin_ino64_t __darwin_ino_t;	/* [???] Used for inodes */
+#else /* !__DARWIN_64_BIT_INO_T */
 typedef __uint32_t	__darwin_ino_t;		/* [???] Used for inodes */
+#endif /* __DARWIN_64_BIT_INO_T */
 typedef __darwin_natural_t __darwin_mach_port_name_t; /* Used by mach */
 typedef __darwin_mach_port_name_t __darwin_mach_port_t; /* Used by mach */
-#ifndef _POSIX_C_SOURCE
-typedef struct mcontext *__darwin_mcontext_t;	/* [???] machine context */
-typedef struct mcontext64 *__darwin_mcontext64_t; /* [???] machine context */
-#else /* _POSIX_C_SOURCE */
-typedef struct __darwin_mcontext *__darwin_mcontext_t; /* [???] machine context */
-#endif /* _POSIX_C_SOURCE */
 typedef __uint16_t	__darwin_mode_t;	/* [???] Some file attributes */
 typedef __int64_t	__darwin_off_t;		/* [???] Used for file sizes */
 typedef __int32_t	__darwin_pid_t;		/* [???] process and group IDs */
@@ -136,59 +133,6 @@ typedef __int32_t	__darwin_suseconds_t;	/* [???] microseconds */
 typedef __uint32_t	__darwin_uid_t;		/* [???] user IDs */
 typedef __uint32_t	__darwin_useconds_t;	/* [???] microseconds */
 typedef	unsigned char	__darwin_uuid_t[16];
-
-/* Structure used in sigaltstack call. */
-#ifndef _POSIX_C_SOURCE
-struct	sigaltstack
-#else /* _POSIX_C_SOURCE */
-struct	__darwin_sigaltstack
-#endif /* _POSIX_C_SOURCE */
-{
-	void	*ss_sp;			/* signal stack base */
-	__darwin_size_t ss_size;	/* signal stack length */
-	int	ss_flags;		/* SA_DISABLE and/or SA_ONSTACK */
-};
-#ifndef _POSIX_C_SOURCE
-typedef struct sigaltstack __darwin_stack_t;	/* [???] signal stack */
-#else /* _POSIX_C_SOURCE */
-typedef struct __darwin_sigaltstack __darwin_stack_t; /* [???] signal stack */
-#endif /* _POSIX_C_SOURCE */
-
-/* user context */
-#ifndef _POSIX_C_SOURCE
-struct ucontext
-#else /* _POSIX_C_SOURCE */
-struct __darwin_ucontext
-#endif /* _POSIX_C_SOURCE */
-{
-	int		uc_onstack;
-	__darwin_sigset_t	uc_sigmask;	/* signal mask used by this context */
-	__darwin_stack_t 	uc_stack;	/* stack used by this context */
-#ifndef _POSIX_C_SOURCE
-	struct ucontext	*uc_link;		/* pointer to resuming context */
-#else /* _POSIX_C_SOURCE */
-	struct __darwin_ucontext *uc_link;	/* pointer to resuming context */
-#endif /* _POSIX_C_SOURCE */
-	__darwin_size_t	uc_mcsize;		/* size of the machine context passed in */
-	__darwin_mcontext_t	uc_mcontext;	/* pointer to machine specific context */
-};
-#ifndef _POSIX_C_SOURCE
-typedef struct ucontext __darwin_ucontext_t;	/* [???] user context */
-#else /* _POSIX_C_SOURCE */
-typedef struct __darwin_ucontext __darwin_ucontext_t; /* [???] user context */
-#endif /* _POSIX_C_SOURCE */
-
-#ifndef _POSIX_C_SOURCE
-struct ucontext64 {
-	int		uc_onstack;
-	__darwin_sigset_t	uc_sigmask;	/* signal mask used by this context */
-	__darwin_stack_t 	uc_stack;	/* stack used by this context */
-	struct ucontext64 *uc_link;		/* pointer to resuming context */
-	__darwin_size_t	uc_mcsize;		/* size of the machine context passed in */
-	__darwin_mcontext64_t uc_mcontext64;	/* pointer to machine specific context */
-};
-typedef struct ucontext64 __darwin_ucontext64_t; /* [???] user context */
-#endif /* _POSIX_C_SOURCE */
 
 #ifdef KERNEL
 #ifndef offsetof

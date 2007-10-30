@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_FREE_COPYRIGHT@
@@ -77,8 +83,9 @@ db_addr_t	db_low_trace_prev = 0;
  *		If entaddr is omitted, it starts with the most current
  *		If entaddr = 0, it starts with the most current and does the whole table
  */
-void db_low_trace(db_expr_t addr, int have_addr, db_expr_t count, char * modif) {
-
+void
+db_low_trace(db_expr_t addr, boolean_t have_addr, db_expr_t count, char *modif)
+{
 	int		c, i;
 	unsigned int tempx, cnt;
 	unsigned int xTraceCurr, xTraceStart, xTraceEnd, cxltr;
@@ -147,7 +154,6 @@ void db_low_trace(db_expr_t addr, int have_addr, db_expr_t count, char * modif) 
 	
 	}
 	db_next = (db_expr_t)(xxltr);
-	return;
 }
 
 
@@ -157,8 +163,10 @@ void db_low_trace(db_expr_t addr, int have_addr, db_expr_t count, char * modif) 
  *		
  *		dl [entaddr]
  */
-void db_display_long(db_expr_t addr, int have_addr, db_expr_t count, char * modif) {
-
+void
+db_display_long(db_expr_t addr, __unused boolean_t have_addr,
+		db_expr_t count, char * modif)
+{
 	int				i;
 
 	for(i=0; i<8; i++) {									/* Print 256 bytes */
@@ -198,7 +206,10 @@ unsigned char xtran[256] = {
  *		
  *		dc [entaddr]
  */
-void db_display_char(db_expr_t addr, int have_addr, db_expr_t count, char * modif) {
+void
+db_display_char(db_expr_t addr, boolean_t have_addr, db_expr_t count,
+		char * modif)
+{
 
 	int				i, j, k;
 	unsigned char xlt[256], *xaddr;
@@ -234,8 +245,10 @@ void db_display_char(db_expr_t addr, int have_addr, db_expr_t count, char * modi
  *		
  *		dr [entaddr]
  */
-void db_display_real(db_expr_t addr, int have_addr, db_expr_t count, char * modif) {
-
+void
+db_display_real(db_expr_t addr, boolean_t have_addr, db_expr_t count,
+		char *modif)
+{
 	int				i;
 	unsigned int xbuf[8];
 
@@ -257,8 +270,10 @@ unsigned int	dvspace = 0;
  *		
  *		dm vaddr [space] (defaults to last entered) 
  */
-void db_display_mappings(db_expr_t addr, int have_addr, db_expr_t count, char * modif) {
-
+void
+db_display_mappings(db_expr_t addr, boolean_t have_addr, db_expr_t count,
+		    char *modif)
+{
 	db_expr_t	xspace;
 	pmap_t			pmap;
 	addr64_t		lnextva;
@@ -296,9 +311,7 @@ void db_display_mappings(db_expr_t addr, int have_addr, db_expr_t count, char * 
 
 	db_dumpmapping(mp);										/* Dump it all out */
 
-	return;													/* Tell them we did it */
-
-
+	/* Tell them we did it */
 }
 
 /*
@@ -307,8 +320,10 @@ void db_display_mappings(db_expr_t addr, int have_addr, db_expr_t count, char * 
  *		
  *		dh vaddr [space] (defaults to last entered) 
  */
-void db_display_hash(db_expr_t addr, int have_addr, db_expr_t count, char * modif) {
-
+void
+db_display_hash(db_expr_t addr, boolean_t have_addr, db_expr_t count,
+		char *modif)
+{
 	db_expr_t		xspace;
 	unsigned int	seg, vsid, ptegindex, htsize;
 	pmap_t			pmap;
@@ -345,9 +360,7 @@ void db_display_hash(db_expr_t addr, int have_addr, db_expr_t count, char * modi
 	ptegindex = llva & (htsize - 1);						/* Get the index to the pteg and pca */
 	db_dumppca(ptegindex);									/* dump the info */
 	
-	return;													/* Tell them we did it */
-
-
+	/* Tell them we did it */
 }
 
 /*
@@ -355,8 +368,10 @@ void db_display_hash(db_expr_t addr, int have_addr, db_expr_t count, char * modi
  *
   *		dp
  */
-void db_display_pmap(db_expr_t addr, int have_addr, db_expr_t count, char * modif) {
-
+void
+db_display_pmap(db_expr_t addr, boolean_t have_addr, db_expr_t count,
+		char *modif)
+{
 	pmap_t			pmap;
 	int i;
 	unsigned int v0, v1, st0, st1;
@@ -397,7 +412,6 @@ void db_display_pmap(db_expr_t addr, int have_addr, db_expr_t count, char * modi
 		pmap = (pmap_t)pmap->pmap_link.next;				/* Skip to the next */
 		if(pmap == kernel_pmap) break;						/* We've wrapped, we're done */
 	}
-	return;
 }
 
 
@@ -407,8 +421,10 @@ void db_display_pmap(db_expr_t addr, int have_addr, db_expr_t count, char * modi
  *		
  *		cp pmap
  */
-void db_check_pmaps(db_expr_t addr, int have_addr, db_expr_t count, char * modif) {
-
+void
+db_check_pmaps(db_expr_t addr, boolean_t have_addr, db_expr_t count,
+	       char *modif)
+{
 	int				i;
 	unsigned int ret;
 	uint64_t dumpa[32];
@@ -431,9 +447,6 @@ void db_check_pmaps(db_expr_t addr, int have_addr, db_expr_t count, char * modif
 		pmap = (pmap_t)pmap->pmap_link.next;				/* Skip to the next */
 		if(pmap == kernel_pmap) break;						/* We've wrapped, we're done */
 	}
-	
-	return;
-
 }
 
 
@@ -445,11 +458,11 @@ void db_check_pmaps(db_expr_t addr, int have_addr, db_expr_t count, char * modif
 
 void db_piokjunk(void);
 
-void db_display_iokit(db_expr_t addr, int have_addr, db_expr_t count, char * modif) {
-
+void
+db_display_iokit(__unused db_expr_t addr, __unused boolean_t have_addr,
+		 __unused db_expr_t count, __unused char *modif)
+{
 	db_piokjunk();
-
-	return;
 }
 
 /*
@@ -476,8 +489,6 @@ void db_dumpmapping(struct mapping *mp) { 					/* Dump out a mapping */
 	for(i = 1; i < (mp->mpFlags & mpLists); i++) {			/* Dump out secondary physical skip lists */
 		db_printf("             mpList%02d: %016llX\n", i, mp->mpList[i - 1]);     
 	}
-	            
-	return;
 }
 
 /*
@@ -544,8 +555,6 @@ void db_dumppca(unsigned int ptegindex) {
 			db_printf("va = %016llX\n", llva);
 		}
 	}
-
-	return;
 }
 
 
@@ -556,7 +565,10 @@ void db_dumppca(unsigned int ptegindex) {
  *		dv [entaddr] [space]
  *		address must be on 32-byte boundary.  It will be rounded down if not
  */
-void db_display_virtual(db_expr_t addr, int have_addr, db_expr_t count, char * modif) {
+void
+db_display_virtual(db_expr_t addr, boolean_t have_addr, db_expr_t count,
+		   char *modif)
+{
 
 	int			i, size, lines, rlines;
 	unsigned int 	xbuf[8];
@@ -646,26 +658,27 @@ void db_display_virtual(db_expr_t addr, int have_addr, db_expr_t count, char * m
 
 #define chainmax 32
 
-void db_display_save(db_expr_t addr, int have_addr, db_expr_t count, char * modif) {
-
+void
+db_display_save(db_expr_t addr, boolean_t have_addr, db_expr_t count,
+		char *modif)
+{
 	int				i, j, totsaves, tottasks, taskact, chainsize, vmid, didvmhead;
-	processor_set_t	pset = &default_pset;
 	task_t			task;
 	thread_act_t	act;
-	savearea		*save;
+	struct savearea		*save;
 	vmmCntrlTable	*CTable;
 	
 	tottasks = 0;
 	totsaves = 0;
 	
-	for(task = (task_t)pset->tasks.next; task != (task_t)&pset->tasks.next; task = (task_t)task->pset_tasks.next) {	/* Go through the tasks */
+	for(task = (task_t)tasks.next; task != (task_t)&tasks.next; task = (task_t)task->tasks.next) {	/* Go through the tasks */
 		taskact = 0;								/* Reset activation count */
 		db_printf("\nTask %4d @%08X:\n", tottasks, task);	/* Show where we're at */
 		for(act = (thread_act_t)task->threads.next; act != (thread_act_t)&task->threads; act = (thread_act_t)act->task_threads.next) {	/* Go through activations */
 			db_printf("   Act %4d @%08X - p: %08X  current context: %08X\n",
 					  taskact, act, act->machine.pcb, act->machine.curctx);					
 					
-			save = (savearea *)act->machine.pcb; 		/* Set the start of the normal chain */
+			save = (struct savearea *)act->machine.pcb; 		/* Set the start of the normal chain */
 			chainsize = 0;
 			
 			db_printf("      General context - fp: %08X  fl: %08X  fc: %d  vp: %08X  vl: %08X  vp: %d\n",
@@ -675,31 +688,31 @@ void db_display_save(db_expr_t addr, int have_addr, db_expr_t count, char * modi
 			while(save) {							/* Do them all */
 				totsaves++;							/* Count savearea */
 				db_printf("         Norm %08X: %016llX %016llX - tot = %d\n", save, save->save_srr0, save->save_srr1, totsaves);
-				save = (savearea *)save->save_hdr.save_prev;	/* Next one */
+				save = (struct savearea *)save->save_hdr.save_prev;	/* Next one */
 				if(chainsize++ > chainmax) {		/* See if we might be in a loop */
 					db_printf("         Chain terminated by count (%d) before %08X\n", chainmax, save);
 					break;
 				}
 			}
 			
-			save = (savearea *)act->machine.facctx.FPUsave; 	/* Set the start of the floating point chain */
+			save = (struct savearea *)act->machine.facctx.FPUsave; 	/* Set the start of the floating point chain */
 			chainsize = 0;
 			while(save) {							/* Do them all */
 				totsaves++;							/* Count savearea */
 				db_printf("         FPU  %08X: %08X - tot = %d\n", save, save->save_hdr.save_level, totsaves);
-				save = (savearea *)save->save_hdr.save_prev;	/* Next one */
+				save = (struct savearea *)save->save_hdr.save_prev;	/* Next one */
 				if(chainsize++ > chainmax) {		/* See if we might be in a loop */
 					db_printf("         Chain terminated by count (%d) before %08X\n", chainmax, save);
 					break;
 				}
 			}
 			
-			save = (savearea *)act->machine.facctx.VMXsave; 	/* Set the start of the floating point chain */
+			save = (struct savearea *)act->machine.facctx.VMXsave; 	/* Set the start of the floating point chain */
 			chainsize = 0;
 			while(save) {							/* Do them all */
 				totsaves++;							/* Count savearea */
 				db_printf("         Vec  %08X: %08X - tot = %d\n", save, save->save_hdr.save_level, totsaves);
-				save = (savearea *)save->save_hdr.save_prev;	/* Next one */
+				save = (struct savearea *)save->save_hdr.save_prev;	/* Next one */
 				if(chainsize++ > chainmax) {		/* See if we might be in a loop */
 					db_printf("         Chain terminated by count (%d) before %08X\n", chainmax, save);
 					break;
@@ -719,24 +732,24 @@ void db_display_save(db_expr_t addr, int have_addr, db_expr_t count, char * modi
 						CTable->vmmc[vmid].vmmFacCtx.VMXsave, CTable->vmmc[vmid].vmmFacCtx.VMXlevel, CTable->vmmc[vmid].vmmFacCtx.VMXcpu
 					);
 					
-					save = (savearea *)CTable->vmmc[vmid].vmmFacCtx.FPUsave; 	/* Set the start of the floating point chain */
+					save = (struct savearea *)CTable->vmmc[vmid].vmmFacCtx.FPUsave; 	/* Set the start of the floating point chain */
 					chainsize = 0;
 					while(save) {						/* Do them all */
 						totsaves++;						/* Count savearea */
 						db_printf("         FPU  %08X: %08X - tot = %d\n", save, save->save_hdr.save_level, totsaves);
-						save = (savearea *)save->save_hdr.save_prev;	/* Next one */
+						save = (struct savearea *)save->save_hdr.save_prev;	/* Next one */
 						if(chainsize++ > chainmax) {	/* See if we might be in a loop */
 							db_printf("         Chain terminated by count (%d) before %08X\n", chainmax, save);
 							break;
 						}
 					}
 					
-					save = (savearea *)CTable->vmmc[vmid].vmmFacCtx.VMXsave; 	/* Set the start of the floating point chain */
+					save = (struct savearea *)CTable->vmmc[vmid].vmmFacCtx.VMXsave; 	/* Set the start of the floating point chain */
 					chainsize = 0;
 					while(save) {						/* Do them all */
 						totsaves++;						/* Count savearea */
 						db_printf("         Vec  %08X: %08X - tot = %d\n", save, save->save_hdr.save_level, totsaves);
-						save = (savearea *)save->save_hdr.save_prev;	/* Next one */
+						save = (struct savearea *)save->save_hdr.save_prev;	/* Next one */
 						if(chainsize++ > chainmax) {	/* See if we might be in a loop */
 							db_printf("         Chain terminated by count (%d) before %08X\n", chainmax, save);
 							break;
@@ -750,7 +763,6 @@ void db_display_save(db_expr_t addr, int have_addr, db_expr_t count, char * modi
 	}
 	
 	db_printf("Total saveareas accounted for: %d\n", totsaves);
-	return;
 }
 
 /*
@@ -764,8 +776,10 @@ extern unsigned int dbfloats[33][2];
 extern unsigned int dbvecs[33][4];
 extern unsigned int dbspecrs[336];
 
-void db_display_xregs(db_expr_t addr, int have_addr, db_expr_t count, char * modif) {
-
+void
+db_display_xregs(db_expr_t addr, boolean_t have_addr, db_expr_t count,
+		 char *modif)
+{
 	int				i, j, pents;
 
 	stSpecrs(dbspecrs);										/* Save special registers */
@@ -834,9 +848,7 @@ void db_display_xregs(db_expr_t addr, int have_addr, db_expr_t count, char * mod
 	}
 	db_printf("VCR: %08X %08X %08X %08X\n", dbvecs[32][0], dbvecs[32][1], dbvecs[32][2], dbvecs[32][3]);	/* Print VSCR */
 
-	return;													/* Tell them we did it */
-
-
+	/* Tell them we did it */
 }
 
 /*
@@ -844,8 +856,10 @@ void db_display_xregs(db_expr_t addr, int have_addr, db_expr_t count, char * mod
  *
   *		cm
  */
-void db_check_mappings(db_expr_t addr, int have_addr, db_expr_t count, char * modif) {
-
+void
+db_check_mappings(db_expr_t addr, boolean_t have_addr, db_expr_t count,
+		  char *modif)
+{
 	addr64_t  pteg, pca, llva, lnextva;	
 	unsigned int xpteg[32], xpca[8], space, hash, pva, seg, api, va, free, free2, xauto, PTEGcnt, wimgkk, wimgxx, slotoff;
 	int i, j, fnderr, slot, slot2, k, s4bit;
@@ -1027,8 +1041,6 @@ dcmout:
 
 
 	}
-
-	return;
 }
 
 /*
@@ -1036,8 +1048,10 @@ dcmout:
  *
   *		dp
  */
-void db_display_kmod(db_expr_t addr, int have_addr, db_expr_t count, char * modif) {
-
+void
+db_display_kmod(db_expr_t addr, boolean_t have_addr, db_expr_t count,
+		char *modif)
+{
 	kmod_info_t	*kmd;
 	unsigned int strt, end;
 	
@@ -1052,8 +1066,6 @@ void db_display_kmod(db_expr_t addr, int have_addr, db_expr_t count, char * modi
 			kmd->name, kmd->version);
 		kmd = kmd->next;				/* Step to it */
 	}
-
-	return;
 }
 
 /*
@@ -1063,8 +1075,9 @@ void db_display_kmod(db_expr_t addr, int have_addr, db_expr_t count, char * modi
  */
 unsigned char xxgpo[36] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
 
-void db_gsnoop(db_expr_t addr, int have_addr, db_expr_t count, char * modif) {
-
+void
+db_gsnoop(db_expr_t addr, boolean_t have_addr, db_expr_t count, char *modif)
+{
 	int i, j;
 	unsigned char *gp, gpn[36];
 #define ngpr 34
@@ -1085,8 +1098,6 @@ void db_gsnoop(db_expr_t addr, int have_addr, db_expr_t count, char * modif) {
 	db_printf("\n");
 	
 	for(i = 0; i < ngpr; i++) xxgpo[i] = gpn[i];	/* Save 'em */
-
-	return;
 }
 
 

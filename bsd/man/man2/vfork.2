@@ -42,7 +42,9 @@
 .Sh SYNOPSIS
 .Fd #include <unistd.h>
 .Ft pid_t
-.Fn vfork void
+.Fo vfork
+.Fa void
+.Fc
 .Sh DESCRIPTION
 .Fn Vfork
 can be used to create new processes without fully copying the address
@@ -91,13 +93,30 @@ it is wrong to call
 .Xr exit
 since buffered data would then be flushed twice.)
 .Sh SEE ALSO
-.Xr fork 2 ,
 .Xr execve 2 ,
+.Xr fork 2 ,
 .Xr sigaction 2 ,
 .Xr wait 2 
-.Sh DIAGNOSTICS
-Same as for
-.Xr fork .
+.Sh ERRORS
+The
+.Fn vfork
+system call will fail for any of the reasons described
+in the
+.Xr fork
+man page.
+In addition, it will fail if:
+.Bl -tag -width Er
+.\" ===========
+.It Bq Er EINVAL
+A system call other than
+.Xr _exit()
+or
+.Xr execve()
+(or libc functions that make no system calls other than those)
+is called following calling a
+.Fn vfork
+call.
+.El
 .Sh BUGS
 This system call will be eliminated when proper system sharing
 mechanisms are implemented. 

@@ -1,50 +1,49 @@
 /*
- * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
- *
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- *
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- *
- * @APPLE_LICENSE_HEADER_END@
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+
+
 #include <mach/mach_types.h>
 #include <mach/mach_host.h>
 
 #include <kern/host.h>
 #include <kern/processor.h>
 #include <kern/cpu_data.h>
-
+#include <kern/machine.h>
 #include <machine/machine_routines.h>
 
 #include <chud/chud_xnu.h>
 
 #pragma mark **** cpu count ****
 
-__private_extern__ int
-chudxnu_avail_cpu_count(void)
+__private_extern__ int 
+chudxnu_logical_cpu_count(void)
 {
-    host_basic_info_data_t hinfo;
-    kern_return_t kr;
-    mach_msg_type_number_t count = HOST_BASIC_INFO_COUNT;
-
-    kr = host_info(host_self(), HOST_BASIC_INFO, (integer_t *)&hinfo, &count);
-    if(kr == KERN_SUCCESS) {
-        return hinfo.avail_cpus;
-    } else {
-        return 0;
-    }
+	return machine_info.logical_cpu_max;
 }
 
 __private_extern__ int
@@ -58,27 +57,14 @@ chudxnu_phys_cpu_count(void)
     if(kr == KERN_SUCCESS) {
         return hinfo.max_cpus;
     } else {
-        return 0;
+        return 1;  // fall back to 1, 0 doesn't make sense at all
     }
 }
 
-__private_extern__
-int chudxnu_cpu_number(void)
+__private_extern__ int
+chudxnu_cpu_number(void)
 {
     return cpu_number();
-}
-
-#pragma mark **** branch trace buffer ****
-
-extern int pc_trace_buf[1024];
-
-__private_extern__ uint32_t *
-chudxnu_get_branch_trace_buffer(uint32_t *entries)
-{
-    if(entries) {
-        *entries = sizeof(pc_trace_buf)/sizeof(int);
-    }
-    return pc_trace_buf;
 }
 
 #pragma mark **** interrupts enable/disable ****
@@ -126,3 +112,13 @@ chudxnu_get_preemption_level(void)
 {
 	return get_preemption_level();
 }
+
+#pragma mark *** deprecated ***
+
+//DEPRECATED
+__private_extern__ int
+chudxnu_avail_cpu_count(void)
+{
+	return machine_info.logical_cpu;
+}
+

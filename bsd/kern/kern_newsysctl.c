@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
  * Copyright (c) 1982, 1986, 1989, 1993
@@ -80,7 +86,7 @@ struct sysctl_oid_list sysctl__sysctl_children;
 
 extern struct sysctl_oid *newsysctl_list[];
 extern struct sysctl_oid *machdep_sysctl_list[];
-
+lck_rw_t * sysctl_geometry_lock = NULL;
 
 static void
 sysctl_sysctl_debug_dump_node(struct sysctl_oid_list *l, int i);
@@ -90,11 +96,7 @@ sysctl_sysctl_debug_dump_node(struct sysctl_oid_list *l, int i);
 /*
  * Locking and stats
  */
-static struct sysctl_lock {
-	int	sl_lock;
-	int	sl_want;
-	int	sl_locked;
-} memlock;
+static struct sysctl_lock memlock;
 
 /*
  * XXX this does not belong here
@@ -143,15 +145,27 @@ void sysctl_register_oid(struct sysctl_oid *oidp)
 
 	fnl = spl_kernel_funnel();
 
+	if(sysctl_geometry_lock == NULL)
+	{
+		/* Initialise the geometry lock for reading/modifying the sysctl tree
+		 * This is done here because IOKit registers some sysctls before bsd_init()
+		 * calls sysctl_register_fixed().
+		 */
+
+		lck_grp_t* lck_grp  = lck_grp_alloc_init("sysctl", NULL);
+		sysctl_geometry_lock = lck_rw_alloc_init(lck_grp, NULL);
+	}
+	/* Get the write lock to modify the geometry */
+	lck_rw_lock_exclusive(sysctl_geometry_lock);
+
 	/*
 	 * If this oid has a number OID_AUTO, give it a number which
 	 * is greater than any current oid.  Make sure it is at least
-	 * 100 to leave space for pre-assigned oid numbers.
+	 * OID_AUTO_START to leave space for pre-assigned oid numbers.
 	 */
-/*	sysctl_sysctl_debug_dump_node(parent, 3); */
 	if (oidp->oid_number == OID_AUTO) {
-		/* First, find the highest oid in the parent list >99 */
-		n = 99;
+		/* First, find the highest oid in the parent list >OID_AUTO_START-1 */
+		n = OID_AUTO_START;
 		SLIST_FOREACH(p, parent, oid_link) {
 			if (p->oid_number > n)
 				n = p->oid_number;
@@ -173,6 +187,9 @@ void sysctl_register_oid(struct sysctl_oid *oidp)
 	else
 		SLIST_INSERT_HEAD(parent, oidp, oid_link);
 
+	/* Release the write lock */
+	lck_rw_unlock_exclusive(sysctl_geometry_lock);
+
 	splx_kernel_funnel(fnl);
 }
 
@@ -181,57 +198,191 @@ void sysctl_unregister_oid(struct sysctl_oid *oidp)
 	funnel_t *fnl;
 
 	fnl = spl_kernel_funnel();
+
+	/* Get the write lock to modify the geometry */
+	lck_rw_lock_exclusive(sysctl_geometry_lock);
+
 	SLIST_REMOVE(oidp->oid_parent, oidp, sysctl_oid, oid_link);
+
+	/* Release the write lock */
+	lck_rw_unlock_exclusive(sysctl_geometry_lock);
+
 	splx_kernel_funnel(fnl);
 }
 
 /*
  * Bulk-register all the oids in a linker_set.
  */
-void sysctl_register_set(struct linker_set *lsp)
+void sysctl_register_set(const char *set)
 {
-	int count = lsp->ls_length;
-	int i;
-	for (i = 0; i < count; i++)
-		sysctl_register_oid((struct sysctl_oid *) lsp->ls_items[i]);
+	struct sysctl_oid **oidpp, *oidp;
+
+	LINKER_SET_FOREACH(oidpp, set) {
+		oidp = *oidpp;
+		if (!(oidp->oid_kind & CTLFLAG_NOAUTO)) {
+		    sysctl_register_oid(oidp);
+		}
+	}
 }
 
-void sysctl_unregister_set(struct linker_set *lsp)
+void sysctl_unregister_set(const char *set)
 {
-	int count = lsp->ls_length;
-	int i;
-	for (i = 0; i < count; i++)
-		sysctl_unregister_oid((struct sysctl_oid *) lsp->ls_items[i]);
+	struct sysctl_oid **oidpp, *oidp;
+
+	LINKER_SET_FOREACH(oidpp, set) {
+		oidp = *oidpp;
+		if (!(oidp->oid_kind & CTLFLAG_NOAUTO)) {
+		    sysctl_unregister_oid(oidp);
+		}
+	}
 }
 
-
-/*
- * Register OID's from fixed list
- */
-
-void sysctl_register_fixed()
-{
-    int i;
-
-    for (i=0; newsysctl_list[i]; i++) {
-	sysctl_register_oid(newsysctl_list[i]);
-    }
-    for (i=0; machdep_sysctl_list[i]; i++) {
-	sysctl_register_oid(machdep_sysctl_list[i]);
-    }
-}
 
 /*
  * Register the kernel's oids on startup.
  */
-struct linker_set sysctl_set;
 
-void sysctl_register_all(void *arg)
+void
+sysctl_register_all()
 {
-	sysctl_register_set(&sysctl_set);
+	sysctl_register_set("__sysctl_set");
 }
 
-SYSINIT(sysctl, SI_SUB_KMEM, SI_ORDER_ANY, sysctl_register_all, 0);
+void
+sysctl_register_fixed(void)
+{
+	sysctl_register_all();
+}
+
+/*
+ * New handler interface
+ *   If the sysctl caller (user mode or kernel mode) is interested in the
+ *   value (req->oldptr != NULL), we copy the data (bigValue etc.) out,
+ *   if the caller wants to set the value (req->newptr), we copy
+ *   the data in (*pValue etc.).
+ */
+
+int
+sysctl_io_number(struct sysctl_req *req, long long bigValue, size_t valueSize, void *pValue, int *changed) {
+	int		smallValue;
+	int		error;
+
+	if (changed) *changed = 0;
+
+	/*
+	 * Handle the various combinations of caller buffer size and
+	 * data value size.  We are generous in the case where the
+	 * caller has specified a 32-bit buffer but the value is 64-bit
+	 * sized.
+	 */
+
+	/* 32 bit value expected or 32 bit buffer offered */
+	if ((valueSize == sizeof(int)) ||
+	    ((req->oldlen == sizeof(int)) && (valueSize == sizeof(long long)))) {
+		smallValue = (int)bigValue;
+		if ((long long)smallValue != bigValue)
+			return(ERANGE);
+		error = SYSCTL_OUT(req, &smallValue, sizeof(smallValue));
+	} else {
+		/* any other case is either size-equal or a bug */
+		error = SYSCTL_OUT(req, &bigValue, valueSize);
+	}
+	/* error or nothing to set */
+	if (error || !req->newptr)
+		return(error);
+
+	/* set request for constant */
+	if (pValue == NULL)
+		return(EPERM);
+
+	/* set request needs to convert? */
+	if ((req->newlen == sizeof(int)) && (valueSize == sizeof(long long))) {
+		/* new value is 32 bits, upconvert to 64 bits */
+		error = SYSCTL_IN(req, &smallValue, sizeof(smallValue));
+		if (!error)
+			*(long long *)pValue = (long long)smallValue;
+	} else if ((req->newlen == sizeof(long long)) && (valueSize == sizeof(int))) {
+		/* new value is 64 bits, downconvert to 32 bits and range check */
+		error = SYSCTL_IN(req, &bigValue, sizeof(bigValue));
+		if (!error) {
+			smallValue = (int)bigValue;
+			if ((long long)smallValue != bigValue)
+				return(ERANGE);
+			*(int *)pValue = smallValue;
+		}
+	} else {
+		/* sizes match, just copy in */
+		error = SYSCTL_IN(req, pValue, valueSize);
+	}
+	if (!error && changed)
+		*changed = 1;
+	return(error);
+}
+
+int
+sysctl_io_string(struct sysctl_req *req, char *pValue, size_t valueSize, int trunc, int *changed)
+{
+	int error;
+
+	if (changed) *changed = 0;
+
+	if (trunc && req->oldptr && req->oldlen && (req->oldlen<strlen(pValue) + 1)) {
+		/* If trunc != 0, if you give it a too small (but larger than
+		 * 0 bytes) buffer, instead of returning ENOMEM, it truncates the
+		 * returned string to the buffer size.  This preserves the semantics
+		 * of some library routines implemented via sysctl, which truncate
+		 * their returned data, rather than simply returning an error. The
+		 * returned string is always NUL terminated. */
+		error = SYSCTL_OUT(req, pValue, req->oldlen-1);
+		if (!error) {
+			char c = 0;
+			error = SYSCTL_OUT(req, &c, 1);
+		}
+	} else {
+		/* Copy string out */
+		error = SYSCTL_OUT(req, pValue, strlen(pValue) + 1);
+	}
+
+	/* error or no new value */
+	if (error || !req->newptr)
+		return(error);
+
+	/* attempt to set read-only value */
+	if (valueSize == 0)
+		return(EPERM);
+
+	/* make sure there's room for the new string */
+	if (req->newlen >= valueSize)
+		return(EINVAL);
+
+	/* copy the string in and force NUL termination */
+	error = SYSCTL_IN(req, pValue, req->newlen);
+	pValue[req->newlen] = '\0';
+
+	if (!error && changed)
+		*changed = 1;
+	return(error);
+}
+
+int sysctl_io_opaque(struct sysctl_req *req,void *pValue, size_t valueSize, int *changed)
+{
+	int error;
+
+	if (changed) *changed = 0;
+
+	/* Copy blob out */
+	error = SYSCTL_OUT(req, pValue, valueSize);
+
+	/* error or nothing to set */
+	if (error || !req->newptr)
+		return(error);
+
+	error = SYSCTL_IN(req, pValue, valueSize);
+
+	if (!error && changed)
+		*changed = 1;
+	return(error);
+}
 
 /*
  * "Staff-functions"
@@ -290,7 +441,8 @@ sysctl_sysctl_debug_dump_node(struct sysctl_oid_list *l, int i)
 }
 
 static int
-sysctl_sysctl_debug SYSCTL_HANDLER_ARGS
+sysctl_sysctl_debug(__unused struct sysctl_oid *oidp, __unused void *arg1,
+	__unused int arg2, __unused struct sysctl_req *req)
 {
 	sysctl_sysctl_debug_dump_node(&sysctl__children, 0);
 	return ENOENT;
@@ -300,7 +452,8 @@ SYSCTL_PROC(_sysctl, 0, debug, CTLTYPE_STRING|CTLFLAG_RD,
 	0, 0, sysctl_sysctl_debug, "-", "");
 
 static int
-sysctl_sysctl_name SYSCTL_HANDLER_ARGS
+sysctl_sysctl_name(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
+        struct sysctl_req *req)
 {
 	int *name = (int *) arg1;
 	u_int namelen = arg2;
@@ -372,6 +525,11 @@ sysctl_sysctl_next_ls (struct sysctl_oid_list *lsp, int *name, u_int namelen,
 				/* We really should call the handler here...*/
 				return 0;
 			lsp = (struct sysctl_oid_list *)oidp->oid_arg1;
+
+			if (!SLIST_FIRST(lsp))
+				/* This node had no children - skip it! */
+				continue;
+
 			if (!sysctl_sysctl_next_ls (lsp, 0, 0, next+1, 
 				len, level+1, oidpp))
 				return 0;
@@ -410,7 +568,8 @@ sysctl_sysctl_next_ls (struct sysctl_oid_list *lsp, int *name, u_int namelen,
 }
 
 static int
-sysctl_sysctl_next SYSCTL_HANDLER_ARGS
+sysctl_sysctl_next(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
+        struct sysctl_req *req)
 {
 	int *name = (int *) arg1;
 	u_int namelen = arg2;
@@ -486,10 +645,12 @@ name2oid (char *name, int *oid, int *len, struct sysctl_oid **oidpp)
 }
 
 static int
-sysctl_sysctl_name2oid SYSCTL_HANDLER_ARGS
+sysctl_sysctl_name2oid(__unused struct sysctl_oid *oidp, __unused void *arg1,
+	__unused int arg2, struct sysctl_req *req)
 {
 	char *p;
-	int error, oid[CTL_MAXNAME], len;
+	int error, oid[CTL_MAXNAME];
+	int len = 0;		/* set by name2oid() */
 	struct sysctl_oid *op = 0;
 
 	if (!req->newlen) 
@@ -524,11 +685,12 @@ SYSCTL_PROC(_sysctl, 3, name2oid, CTLFLAG_RW|CTLFLAG_ANYBODY|CTLFLAG_KERN, 0, 0,
 	sysctl_sysctl_name2oid, "I", "");
 
 static int
-sysctl_sysctl_oidfmt SYSCTL_HANDLER_ARGS
+sysctl_sysctl_oidfmt(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
+        struct sysctl_req *req)
 {
 	int *name = (int *) arg1, error;
 	u_int namelen = arg2;
-	int indx;
+	u_int indx;
 	struct sysctl_oid *oid;
 	struct sysctl_oid_list *lsp = &sysctl__children;
 
@@ -581,26 +743,10 @@ SYSCTL_NODE(_sysctl, 4, oidfmt, CTLFLAG_RD, sysctl_sysctl_oidfmt, "");
  */
 
 int
-sysctl_handle_int SYSCTL_HANDLER_ARGS
+sysctl_handle_int(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
+        struct sysctl_req *req)
 {
-	int error = 0;
-
-	if (arg1)
-		error = SYSCTL_OUT(req, arg1, sizeof(int));
-	else
-		error = SYSCTL_OUT(req, &arg2, sizeof(int));
-
-	if (error || !req->newptr)
-		return (error);
-
-	if (!arg1)
-		error = EPERM;
-	else
-		error = SYSCTL_IN(req, arg1, sizeof(int));
-
-	if (error == 0)
-		AUDIT_ARG(value, *(int *)arg1);
-	return (error);
+	return sysctl_io_number(req, arg1? *(int*)arg1: arg2, sizeof(int), arg1, NULL);
 }
 
 /*
@@ -608,19 +754,12 @@ sysctl_handle_int SYSCTL_HANDLER_ARGS
  */
 
 int
-sysctl_handle_long SYSCTL_HANDLER_ARGS
+sysctl_handle_long(__unused struct sysctl_oid *oidp, void *arg1,
+	__unused int arg2, struct sysctl_req *req)
 {
-	int error = 0;
-
 	if (!arg1)
 		return (EINVAL);
-	error = SYSCTL_OUT(req, arg1, sizeof(long));
-
-	if (error || !req->newptr)
-		return (error);
-
-	error = SYSCTL_IN(req, arg1, sizeof(long));
-	return (error);
+	return sysctl_io_number(req, *(long*)arg1, sizeof(long), arg1, NULL);
 }
 
 /*
@@ -628,19 +767,12 @@ sysctl_handle_long SYSCTL_HANDLER_ARGS
  */
 
 int
-sysctl_handle_quad SYSCTL_HANDLER_ARGS
+sysctl_handle_quad(__unused struct sysctl_oid *oidp, void *arg1,
+	__unused int arg2, struct sysctl_req *req)
 {
-	int error = 0;
-
 	if (!arg1)
 		return (EINVAL);
-	error = SYSCTL_OUT(req, arg1, sizeof(long long));
-
-	if (error || !req->newptr)
-		return (error);
-
-	error = SYSCTL_IN(req, arg1, sizeof(long long));
-	return (error);
+	return sysctl_io_number(req, *(long long*)arg1, sizeof(long long), arg1, NULL);
 }
 
 /*
@@ -651,7 +783,8 @@ sysctl_handle_quad SYSCTL_HANDLER_ARGS
  * using ints.
  */
 int
-sysctl_handle_int2quad SYSCTL_HANDLER_ARGS
+sysctl_handle_int2quad(__unused struct sysctl_oid *oidp, void *arg1,
+	__unused int arg2, struct sysctl_req *req)
 {
 	int error = 0;
 	long long val;
@@ -689,24 +822,10 @@ sysctl_handle_int2quad SYSCTL_HANDLER_ARGS
  */
 
 int
-sysctl_handle_string SYSCTL_HANDLER_ARGS
+sysctl_handle_string( __unused struct sysctl_oid *oidp, void *arg1, int arg2,
+        struct sysctl_req *req)
 {
-	int error=0;
-
-	error = SYSCTL_OUT(req, arg1, strlen((char *)arg1)+1);
-
-	if (error || !req->newptr)
-		return (error);
-
-	if ((req->newlen - req->newidx) >= arg2) {
-		error = EINVAL;
-	} else {
-		arg2 = (req->newlen - req->newidx);
-		error = SYSCTL_IN(req, arg1, arg2);
-		((char *)arg1)[arg2] = '\0';
-	}
-
-	return (error);
+	return sysctl_io_string(req, arg1, arg2, 0, NULL);
 }
 
 /*
@@ -715,18 +834,10 @@ sysctl_handle_string SYSCTL_HANDLER_ARGS
  */
 
 int
-sysctl_handle_opaque SYSCTL_HANDLER_ARGS
+sysctl_handle_opaque(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
+        struct sysctl_req *req)
 {
-	int error;
-
-	error = SYSCTL_OUT(req, arg1, arg2);
-
-	if (error || !req->newptr)
-		return (error);
-
-	error = SYSCTL_IN(req, arg1, arg2);
-
-	return (error);
+	return sysctl_io_opaque(req, arg1, arg2, NULL);
 }
 
 /*
@@ -742,7 +853,7 @@ sysctl_old_kernel(struct sysctl_req *req, const void *p, size_t l)
 		if (i > req->oldlen - req->oldidx)
 			i = req->oldlen - req->oldidx;
 		if (i > 0)
-			bcopy((void*)p, CAST_DOWN(char *, (req->oldptr + req->oldidx)), i);
+			bcopy((const void*)p, CAST_DOWN(char *, (req->oldptr + req->oldidx)), i);
 	}
 	req->oldidx += l;
 	if (req->oldptr && i != l)
@@ -767,7 +878,6 @@ kernel_sysctl(struct proc *p, int *name, u_int namelen, void *old, size_t *oldle
 {
 	int error = 0;
 	struct sysctl_req req;
-	funnel_t *fnl;
 
 	/*
 	 * Construct request.
@@ -786,37 +896,12 @@ kernel_sysctl(struct proc *p, int *name, u_int namelen, void *old, size_t *oldle
 	req.newfunc = sysctl_new_kernel;
 	req.lock = 1;
 
-	/*
-	 * Locking.  Tree traversal always begins with the kernel funnel held.
-	 */
-	fnl = spl_kernel_funnel();
-
-	/* XXX this should probably be done in a general way */
-	while (memlock.sl_lock) {
-		memlock.sl_want = 1;
-		(void) tsleep((caddr_t)&memlock, PRIBIO+1, "sysctl", 0);
-		memlock.sl_locked++;
-	}
-	memlock.sl_lock = 1;
-
 	/* make the request */
 	error = sysctl_root(0, name, namelen, &req);
 
 	/* unlock memory if required */
 	if (req.lock == 2)
 		vsunlock(req.oldptr, (user_size_t)req.oldlen, B_WRITE);
-
-	memlock.sl_lock = 0;
-
-	if (memlock.sl_want) {
-		memlock.sl_want = 0;
-		wakeup((caddr_t)&memlock);
-	}
-
-	/*
-	 * Undo locking.
-	 */
-	splx_kernel_funnel(fnl);
 
 	if (error && error != ENOMEM)
 		return (error);
@@ -843,7 +928,7 @@ sysctl_old_user(struct sysctl_req *req, const void *p, size_t l)
 		if (i > req->oldlen - req->oldidx)
 			i = req->oldlen - req->oldidx;
 		if (i > 0)
-			error = copyout((void*)p, (req->oldptr + req->oldidx), i);
+			error = copyout((const void*)p, (req->oldptr + req->oldidx), i);
 	}
 	req->oldidx += l;
 	if (error)
@@ -873,14 +958,21 @@ sysctl_new_user(struct sysctl_req *req, void *p, size_t l)
  */
 
 int
-sysctl_root SYSCTL_HANDLER_ARGS
+sysctl_root(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
+        struct sysctl_req *req)
 {
 	int *name = (int *) arg1;
 	u_int namelen = arg2;
-	int indx, i;
+	u_int indx;
+	int i;
 	struct sysctl_oid *oid;
 	struct sysctl_oid_list *lsp = &sysctl__children;
 	int error;
+	funnel_t *fnl = NULL;
+	boolean_t funnel_held = FALSE;
+
+	/* Get the read lock on the geometry */
+	lck_rw_lock_shared(sysctl_geometry_lock);
 
 	oid = SLIST_FIRST(lsp);
 
@@ -888,30 +980,43 @@ sysctl_root SYSCTL_HANDLER_ARGS
 	while (oid && indx < CTL_MAXNAME) {
 		if (oid->oid_number == name[indx]) {
 			indx++;
+			if (!(oid->oid_kind & CTLFLAG_LOCKED))
+			{
+				funnel_held = TRUE;
+			}
 			if (oid->oid_kind & CTLFLAG_NOLOCK)
 				req->lock = 0;
 			if ((oid->oid_kind & CTLTYPE) == CTLTYPE_NODE) {
 				if (oid->oid_handler)
 					goto found;
 				if (indx == namelen)
-					return ENOENT;
+				{
+					error = ENOENT;
+					goto err;
+				}
+
 				lsp = (struct sysctl_oid_list *)oid->oid_arg1;
 				oid = SLIST_FIRST(lsp);
 			} else {
 				if (indx != namelen)
-					return EISDIR;
+				{
+					error = EISDIR;
+					goto err;
+				}
 				goto found;
 			}
 		} else {
 			oid = SLIST_NEXT(oid, oid_link);
 		}
 	}
-	return ENOENT;
+	error = ENOENT;
+	goto err;
 found:
 	/* If writing isn't allowed */
 	if (req->newptr && (!(oid->oid_kind & CTLFLAG_WR) ||
 			    ((oid->oid_kind & CTLFLAG_SECURE) && securelevel > 0))) {
-		return (EPERM);
+		error = (EPERM);
+		goto err;
 	}
 
 	/*
@@ -919,18 +1024,27 @@ found:
 	 * XXX This mechanism for testing is bad.
 	 */
 	if ((req->oldfunc == sysctl_old_kernel) && !(oid->oid_kind & CTLFLAG_KERN))
-		return(EPERM);
+	{
+		error = (EPERM);
+		goto err;
+	}
 
 	/* Most likely only root can write */
 	if (!(oid->oid_kind & CTLFLAG_ANYBODY) &&
 	    req->newptr && req->p &&
-	    (error = suser(req->p->p_ucred, &req->p->p_acflag)))
-		return (error);
+	    (error = proc_suser(req->p)))
+		goto err;
 
 	if (!oid->oid_handler) {
-	    return EINVAL;
+	    error = EINVAL;
+		goto err;
 	}
 
+	if (funnel_held)
+	{
+		fnl = spl_kernel_funnel();
+		MEMLOCK_LOCK();
+	}
 
 	if ((oid->oid_kind & CTLTYPE) == CTLTYPE_NODE) {
 		i = (oid->oid_handler) (oid,
@@ -941,8 +1055,17 @@ found:
 					oid->oid_arg1, oid->oid_arg2,
 					req);
 	}
+	error = i;
 
-	return (i);
+	if (funnel_held)
+	{
+		MEMLOCK_UNLOCK();
+		splx_kernel_funnel(fnl);
+	}
+
+err:
+	lck_rw_done(sysctl_geometry_lock);
+	return (error);
 }
 
 #ifndef _SYS_SYSPROTO_H_

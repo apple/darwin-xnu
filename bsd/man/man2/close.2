@@ -42,7 +42,9 @@
 .Sh SYNOPSIS
 .Fd #include <unistd.h>
 .Ft int
-.Fn close "int d"
+.Fo close
+.Fa "int fildes"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn close
@@ -98,24 +100,32 @@ Otherwise, a value of -1 is returned and the global integer variable
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
-.Fn Close
-will fail if:
+The
+.Fn close
+system call will fail if:
 .Bl -tag -width Er
+.\" ==========
 .It Bq Er EBADF
-.Fa D
-is not an active descriptor.
+.Fa fildes
+is not a valid, active file descriptor.
+.\" ==========
 .It Bq Er EINTR
-An interrupt was received.
+Its execution was interrupted by a signal.
+.\" ==========
+.It Bq Er EIO
+A previously-uncommitted
+.Xr write 2
+encountered an input/output error.
 .El
 .Sh SEE ALSO
 .Xr accept 2 ,
+.Xr execve 2 ,
+.Xr fcntl 2 ,
 .Xr flock 2 ,
 .Xr open 2 ,
 .Xr pipe 2 ,
 .Xr socket 2 ,
-.Xr socketpair 2 ,
-.Xr execve 2 ,
-.Xr fcntl 2
+.Xr socketpair 2
 .Sh STANDARDS
 .Fn Close
 conforms to 

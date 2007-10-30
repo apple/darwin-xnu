@@ -1,26 +1,33 @@
 /*
- * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #define __KPI__
+#include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -37,8 +44,8 @@
 #include <sys/uio_internal.h>
 #include <kern/lock.h>
 
-extern void	*memcpy(void *, const void *, size_t);
 extern int soclose_locked(struct socket *so);
+extern void soclose_wait_locked(struct socket *so);
 
 errno_t sock_send_internal(
 	socket_t			sock,
@@ -47,6 +54,7 @@ errno_t sock_send_internal(
 	int					flags,
 	size_t				*sentlen);
 
+typedef	void	(*so_upcall)(struct socket *, caddr_t , int );
 
 
 errno_t
@@ -95,7 +103,7 @@ sock_accept(
 			sock->so_error = ECONNABORTED;
 			break;
 		}
-		error = msleep((caddr_t)&sock->so_timeo, mutex_held, PSOCK | PCATCH, "sock_accept", 0);
+		error = msleep((caddr_t)&sock->so_timeo, mutex_held, PSOCK | PCATCH, "sock_accept", NULL);
 		if (error) {
 			socket_unlock(sock, 1);
 			return (error);
@@ -111,7 +119,26 @@ sock_accept(
 	new_so = TAILQ_FIRST(&sock->so_comp);
 	TAILQ_REMOVE(&sock->so_comp, new_so, so_list);
 	sock->so_qlen--;
-	socket_unlock(sock, 1);	/* release the head */
+
+	/*
+	 * Pass the pre-accepted socket to any interested socket filter(s).
+	 * Upon failure, the socket would have been closed by the callee.
+	 */
+	if (new_so->so_filt != NULL) {
+		/*
+		 * Temporarily drop the listening socket's lock before we
+		 * hand off control over to the socket filter(s), but keep
+		 * a reference so that it won't go away.  We'll grab it
+		 * again once we're done with the filter(s).
+		 */
+		socket_unlock(sock, 0);
+		if ((error = soacceptfilter(new_so)) != 0) {
+			/* Drop reference on listening socket */
+			sodereference(sock);
+			return (error);
+		}
+		socket_lock(sock, 0);
+	}
 
 	if (dosocklock)	{
 		lck_mtx_assert(new_so->so_proto->pr_getlock(new_so, 0),
@@ -121,12 +148,17 @@ sock_accept(
 	
 	new_so->so_state &= ~SS_COMP;
 	new_so->so_head = NULL;
-	soacceptlock(new_so, &sa, 0);
+	(void) soacceptlock(new_so, &sa, 0);
 	
+	socket_unlock(sock, 1);	/* release the head */
+
 	if (callback) {
-		new_so->so_upcall = callback;
+		new_so->so_upcall = (so_upcall) callback;
 		new_so->so_upcallarg = cookie;
 		new_so->so_rcv.sb_flags |= SB_UPCALL;
+#if CONFIG_SOWUPCALL
+		new_so->so_snd.sb_flags |= SB_UPCALL;
+#endif
 	}
 	
 	if (sa && from)
@@ -135,6 +167,20 @@ sock_accept(
 		memcpy(from, sa, fromlen);
 	}
 	if (sa) FREE(sa, M_SONAME);
+
+	/*
+	 * If the socket has been marked as inactive by soacceptfilter(),
+	 * disallow further operations on it.  We explicitly call shutdown
+	 * on both data directions to ensure that SS_CANT{RCV,SEND}MORE
+	 * states are set for the socket.  This would also flush out data
+	 * hanging off the receive list of this socket.
+	 */
+	if (new_so->so_flags & SOF_DEFUNCT) {
+		(void) soshutdownlock(new_so, SHUT_RD);
+		(void) soshutdownlock(new_so, SHUT_WR);
+		(void) sodisconnectlocked(new_so);
+	}
+
 	*new_sock = new_so;
 	if (dosocklock)	
 		socket_unlock(new_so, 1);
@@ -185,7 +231,7 @@ sock_connect(
 
 		while ((sock->so_state & SS_ISCONNECTING) && sock->so_error == 0) {
 			error = msleep((caddr_t)&sock->so_timeo, mutex_held, PSOCK | PCATCH,
-				"sock_connect", 0);
+				"sock_connect", NULL);
 			if (error)
 				break;
 		}
@@ -287,51 +333,77 @@ sock_nointerrupt(
 }
 
 errno_t
-sock_getpeername(
-	socket_t		sock,
-	struct sockaddr	*peername,
-	int				peernamelen)
+sock_getpeername(socket_t sock, struct sockaddr	*peername, int peernamelen)
 {
-	int				error = 0;
+	int error;
 	struct sockaddr	*sa = NULL;
-	
-	if (sock == NULL || peername == NULL || peernamelen < 0) return EINVAL;
+
+	if (sock == NULL || peername == NULL || peernamelen < 0)
+		return (EINVAL);
+
 	socket_lock(sock, 1);
-	if ((sock->so_state & (SS_ISCONNECTED|SS_ISCONFIRMING)) == 0) {
+	if (!(sock->so_state & (SS_ISCONNECTED|SS_ISCONFIRMING))) {
 		socket_unlock(sock, 1);
-		return ENOTCONN;
+		return (ENOTCONN);
 	}
-	error = sock->so_proto->pr_usrreqs->pru_peeraddr(sock, &sa);
-	if (!error)
-	{
-		if (peernamelen > sa->sa_len) peernamelen = sa->sa_len;
-		memcpy(peername, sa, peernamelen);
-	}
-	if (sa) FREE(sa, M_SONAME);
+	error = sock_getaddr(sock, &sa, 1);
 	socket_unlock(sock, 1);
-	return error;
+	if (error == 0) {
+		if (peernamelen > sa->sa_len)
+			peernamelen = sa->sa_len;
+		memcpy(peername, sa, peernamelen);
+		FREE(sa, M_SONAME);
+	}
+	return (error);
 }
 
 errno_t
-sock_getsockname(
-	socket_t		sock,
-	struct sockaddr	*sockname,
-	int				socknamelen)
+sock_getsockname(socket_t sock, struct sockaddr	*sockname, int socknamelen)
 {
-	int				error = 0;
+	int error;
 	struct sockaddr	*sa = NULL;
-	
-	if (sock == NULL || sockname == NULL || socknamelen < 0) return EINVAL;
+
+	if (sock == NULL || sockname == NULL || socknamelen < 0)
+		return (EINVAL);
+
 	socket_lock(sock, 1);
-	error = sock->so_proto->pr_usrreqs->pru_sockaddr(sock, &sa);
-	if (!error)
-	{
-		if (socknamelen > sa->sa_len) socknamelen = sa->sa_len;
-		memcpy(sockname, sa, socknamelen);
-	}
-	if (sa) FREE(sa, M_SONAME);
+	error = sock_getaddr(sock, &sa, 0);
 	socket_unlock(sock, 1);
-	return error;
+	if (error == 0) {
+		if (socknamelen > sa->sa_len)
+			socknamelen = sa->sa_len;
+		memcpy(sockname, sa, socknamelen);
+		FREE(sa, M_SONAME);
+	}
+	return (error);
+}
+
+errno_t
+sock_getaddr(socket_t sock, struct sockaddr **psa, int peer)
+{
+	int error;
+
+	if (sock == NULL || psa == NULL)
+		return (EINVAL);
+
+	*psa = NULL;
+	error = peer ? sock->so_proto->pr_usrreqs->pru_peeraddr(sock, psa) :
+	    sock->so_proto->pr_usrreqs->pru_sockaddr(sock, psa);
+
+	if (error == 0 && *psa == NULL) {
+		error = ENOMEM;
+	} else if (error != 0 && *psa != NULL) {
+		FREE(*psa, M_SONAME);
+		*psa = NULL;
+	}
+	return (error);
+}
+
+void
+sock_freeaddr(struct sockaddr *sa)
+{
+	if (sa != NULL)
+		FREE(sa, M_SONAME);
 }
 
 errno_t
@@ -662,7 +734,6 @@ sock_shutdown(
 	return soshutdown(sock, how);
 }
 
-typedef	void	(*so_upcall)(struct socket *sock, void* arg, int waitf);
 
 errno_t
 sock_socket(
@@ -680,6 +751,9 @@ sock_socket(
 	if (error == 0 && callback)
 	{
 		(*new_so)->so_rcv.sb_flags |= SB_UPCALL;
+#if CONFIG_SOWUPCALL
+		(*new_so)->so_snd.sb_flags |= SB_UPCALL;
+#endif
 		(*new_so)->so_upcall = (so_upcall)callback;
 		(*new_so)->so_upcallarg = context;
 	}
@@ -708,19 +782,26 @@ sock_retain(
 
 /* Do we want this to be APPLE_PRIVATE API? */
 void
-sock_release(
-	socket_t	sock)
+sock_release(socket_t sock)
 {
-	if (sock == NULL) return;
+	if (sock == NULL)
+		return;
 	socket_lock(sock, 1);
+
+	if (sock->so_flags & SOF_UPCALLINUSE)
+		soclose_wait_locked(sock);
+
 	sock->so_retaincnt--;
 	if (sock->so_retaincnt < 0)
-		panic("sock_release: negative retain count for sock=%x cnt=%x\n",
-			sock, sock->so_retaincnt);
-	if ((sock->so_retaincnt == 0) && (sock->so_usecount == 2))
-		soclose_locked(sock); /* close socket only if the FD is not holding it */
-	else
-		sock->so_usecount--;	/* remove extra reference holding the socket */
+		panic("sock_release: negative retain count for sock=%p "
+		    "cnt=%x\n", sock, sock->so_retaincnt);
+	if ((sock->so_retaincnt == 0) && (sock->so_usecount == 2)) {
+		/* close socket only if the FD is not holding it */
+		soclose_locked(sock);
+	} else {
+		/* remove extra reference holding the socket */
+		sock->so_usecount--;
+	}
 	socket_unlock(sock, 1);
 }
 
@@ -781,4 +862,18 @@ sock_gettype(
 		*outProtocol = sock->so_proto->pr_protocol;
 	socket_unlock(sock, 1);
 	return 0;
+}
+
+/*
+ * Return the listening socket of a pre-accepted socket.  It returns the
+ * listener (so_head) value of a given socket.  This is intended to be
+ * called by a socket filter during a filter attach (sf_attach) callback.
+ * The value returned by this routine is safe to be used only in the
+ * context of that callback, because we hold the listener's lock across
+ * the sflt_initsock() call.
+ */
+socket_t
+sock_getlistener(socket_t sock)
+{
+	return (sock->so_head);
 }

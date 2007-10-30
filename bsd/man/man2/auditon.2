@@ -1,0 +1,195 @@
+.\"
+.\" Copyright (c) 2007 Apple Inc. All rights reserved.
+.\"
+.\" @APPLE_LICENSE_HEADER_START@
+.\" 
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this
+.\" file.
+.\" 
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\" 
+.\" @APPLE_LICENSE_HEADER_END@
+.\"
+.Dd July 30, 2007
+.Dt AUDITON 2
+.Os Darwin
+.Sh NAME
+.Nm auditon
+.Nd configure the current audit parameters on the system
+.Sh SYNOPSIS
+.Fd #include <bsm/audit.h>
+.Ft int
+.Fn auditon "int cmd" "void * data" "int length"
+.Sh DESCRIPTION
+The
+.Fn auditon
+function manipulates various audit parameters. The 
+.Fa data 
+argument points to the appropriate structure from the header file.
+.Fa Length
+is the size of the 
+.Fa data 
+parameter in bytes. It will typically be the sizeof the the structure.
+.Sh PARAMETERS
+.Bl -tag -width Er
+.It A_GETPOLICY
+Get the current audit policy. 
+.Fa Data
+should point to a long. The policy is the bitwise OR'ing of the 
+appropriate flags from 
+.Fa bsm/audit.h .
+If AUDIT_AHLT is set, the system will kernel panic if it cannot write to the
+global audit trail.  If AUDIT_CNT is not set and the system becomes low on
+space, audited events will block until the low space condition is remedied.
+Unaudited events are unaffected. The other policy flags are not implemented.
+.It A_SETPOLICY
+Set the current audit policy.
+.Fa Data 
+should point to a long specifying the desired audit policy, as described in
+A_GETPOLICY.
+.It A_GETKMASK
+Get the current value of the audit preselection mask for non-attributable events.
+.Fa Data
+should point to an
+.Fa au_mask_t .
+The field
+.Fa am_success
+specifies which classes of successful audit events are to be logged to the
+audit trail. The field
+.Fa am_failure
+specifies which classes of failed audit events are to be logged. The value of
+both fields is the bitwise OR'ing of the event classes specified in
+.Fa bsm/audit.h .
+The various audit classes are described more fully in
+.Xr audit_class 5 .
+.It A_SETKMASK
+Set the current value of the audit preselection mask for non-attributable events.
+.Fa Data
+should point to an
+.Fa au_mask_t .
+The masks are defined as described in A_GETKMASK.
+.It A_GETQCTRL
+Get the current settings for the audit queue (specifying in kernel buffer size, 
+percentage of free filesystem blocks, and limits to the number of audit records
+allowed).
+.Fa Data
+should point to an
+.Fa au_qctrl_t .
+.It A_SETQCTRL
+Set the current settings for the audit queue.
+.Fa Data
+should point to an
+.Fa au_qctrl_t .
+.\" The following are not yet implemented, but as mentioned in the header file.
+.\" .It A_GETCWD
+.\" .It A_GETCAR
+.\" .It A_GETSTAT
+.\" .It A_SETSTAT
+.\" .It A_SETUMASK
+.\" .It A_SETSMASK
+.It A_GETCOND
+Gets the current condition of the auditing subsystem. If the value is
+AUC_AUDITING, then the audit implementation is currently running. If the 
+value is AUC_NOAUDIT then the audit implementation is currently turned off.
+.Fa Data
+should point to a long.
+.It A_SETCOND
+Sets the condition of the auditing subsystem. If AUC_NOAUDIT is set, then
+auditing is temporarily suspended. If AUC_AUDITING is set, auditing is resumed.
+If AUC_DISABLED is set, the auditing system will shutdown, draining all audit
+records and closing out the audit trail file. 
+To re-enable auditing, a call to
+.Fa auditctl
+is required in addition to setting the condition to AUC_AUDITING. 
+.Fa Data
+should point to a long.
+.It A_GETCLASS
+Returns the audit class for the specified audit event. 
+.Fa Data
+should point to a 
+.Fa au_evclassmap_t .
+.It A_SETCLASS
+Sets the audit class for the specified audit event. 
+.Fa Data
+should point to a 
+.Fa au_evclassmap_t .
+.It A_GETPINFO
+Returns the audit information stored in the credential for the current process.
+.Fa Data
+should point to a 
+.Fa auditpinfo_t .
+.It A_SETPMASK
+Sets the audit settings for a process. The audit user ID, preselection masks 
+for both success and failure, and terminal IDs must be set.
+.Fa Data
+should point to a 
+.Fa auditpinfo_t 
+struct.
+.It A_SETFSIZE
+Set the limit on audit trail file size. File size is in bytes. The file size 
+specified is treated as an advisory limit. The system will make a best effort
+attempt to rotate log files before they exceed the requested maximum size, but
+makes no guarantees on log file size
+.Fa Data
+should point to a 
+.Fa au_fstat_t 
+struct. The
+.Fa af_filesz
+field is used to specify the new file size, which must be greater than
+MIN_AUDIT_FILE_SIZE. A value of 0 indicates no limit on the audit trail's size. The 
+.Fa af_currsz
+field is ignored. A errno value of EINVAL indicates a maximum file size that is
+too small.
+.It A_GETFSIZE
+Return the maximum allowable size of the audit trail, and the current size of 
+the audit trail.
+.Fa Data
+should point to a
+.Fa au_fstat_t
+struct. 
+.It A_GETPINFO_ADDR
+Not implemented, returns ENOSYS.
+.It A_GETKAUDIT
+Not implemented, returns ENOSYS.
+.It A_SETKAUDIT
+Not implemented, returns ENOSYS.
+.El
+.Sh RETURN VALUES
+Upon successful completion a value of 0 is returned.
+Otherwise, a value of -1 is returned and
+.Va errno
+is set to indicate the error.
+.Sh ERRORS
+.Bl -tag -width Er
+Errors are specific to the operation requested. In addition, rhe
+.Fn auditon
+system call will fail if:
+.\" ===========
+.It Bq Er EINVAL
+.Fa Length
+is less than or equal to zero, or if it is greater than any of the expected structures.
+.El
+.Sh SEE ALSO
+.Xr audit 2 ,
+.Xr auditctl 2 ,
+.Xr getauid 2 ,
+.Xr setauid 2 ,
+.Xr getaudit 2 ,
+.Xr setaudit 2 ,
+.Xr getaudit_addr 2 ,
+.Xr setaudit_addr 2 ,
+.Xr audit_class 5
+.Sh HISTORY
+The
+.Fn auditon
+function call first appeared in Mac OS X 10.3 (Panther).

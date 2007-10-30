@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -76,8 +82,9 @@
 zone_t kalloc_zone(vm_size_t);
 #endif
 
+#define KALLOC_MAP_SIZE_MIN  (16 * 1024 * 1024)
+#define KALLOC_MAP_SIZE_MAX  (128 * 1024 * 1024)
 vm_map_t kalloc_map;
-vm_size_t kalloc_map_size = 16 * 1024 * 1024;
 vm_size_t kalloc_max;
 vm_size_t kalloc_max_prerounded;
 vm_size_t kalloc_kernmap_size;	/* size of kallocs that can come from kernel map */
@@ -173,8 +180,18 @@ kalloc_init(
 {
 	kern_return_t retval;
 	vm_offset_t min;
-	vm_size_t size;
+	vm_size_t size, kalloc_map_size;
 	register int i;
+
+	/* 
+	 * Scale the kalloc_map_size to physical memory size: stay below 
+	 * 1/8th the total zone map size, or 128 MB.
+	 */
+	kalloc_map_size = sane_size >> 5;
+	if (kalloc_map_size > KALLOC_MAP_SIZE_MAX)
+		kalloc_map_size = KALLOC_MAP_SIZE_MAX;
+	if (kalloc_map_size < KALLOC_MAP_SIZE_MIN)
+		kalloc_map_size = KALLOC_MAP_SIZE_MIN;
 
 	retval = kmem_suballoc(kernel_map, &min, kalloc_map_size,
 			       FALSE, VM_FLAGS_ANYWHERE, &kalloc_map);
@@ -202,7 +219,7 @@ kalloc_init(
 	 */
 	for (i = 0, size = 1; size < kalloc_max; i++, size <<= 1) {
 		if (size < KALLOC_MINSIZE) {
-			k_zone[i] = 0;
+			k_zone[i] = NULL;
 			continue;
 		}
 		if (size == KALLOC_MINSIZE) {
@@ -234,11 +251,11 @@ kalloc_canblock(
 
 		/* kmem_alloc could block so we return if noblock */
 		if (!canblock) {
-		  return(0);
+		  return(NULL);
 		}
 
-		if (size >=  kalloc_kernmap_size) {
-			alloc_map = kernel_map;
+		if (size >= kalloc_kernmap_size) {
+		        alloc_map = kernel_map;
 
 			if (size > kalloc_largest_allocated)
 			        kalloc_largest_allocated = size;
@@ -246,7 +263,7 @@ kalloc_canblock(
 			alloc_map = kalloc_map;
 
 		if (kmem_alloc(alloc_map, (vm_offset_t *)&addr, size) != KERN_SUCCESS) 
-			addr = 0;
+			addr = NULL;
 
 		if (addr) {
 		        kalloc_large_inuse++;
@@ -327,10 +344,8 @@ krealloc(
 
 			if (KERN_SUCCESS != kmem_realloc(alloc_map, 
 			    (vm_offset_t)*addrp, old_size,
-			    (vm_offset_t *)&naddr, new_size)) {
+			    (vm_offset_t *)&naddr, new_size))
 				panic("krealloc: kmem_realloc");
-				naddr = 0;
-			}
 
 			simple_lock(lock);
 			*addrp = (void *) naddr;
@@ -456,7 +471,7 @@ kfree(
 			if (size > kalloc_largest_allocated)
 			        /*
 				 * work around double FREEs of small MALLOCs
-				 * this used to end up being a nop
+				 * this use to end up being a nop
 				 * since the pointer being freed from an
 				 * alloc backed by the zalloc world could
 				 * never show up in the kalloc_map... however,
@@ -578,7 +593,7 @@ OSMalloc_Tagref(
 	if (!((tag->OSMT_state & OSMT_VALID_MASK) == OSMT_VALID)) 
 		panic("OSMalloc_Tagref(): bad state 0x%08X\n",tag->OSMT_state);
 
-	(void)hw_atomic_add((uint32_t *)(&tag->OSMT_refcnt), 1);
+	(void)hw_atomic_add(&tag->OSMT_refcnt, 1);
 }
 
 void
@@ -588,7 +603,7 @@ OSMalloc_Tagrele(
 	if (!((tag->OSMT_state & OSMT_VALID_MASK) == OSMT_VALID))
 		panic("OSMalloc_Tagref(): bad state 0x%08X\n",tag->OSMT_state);
 
-	if (hw_atomic_sub((uint32_t *)(&tag->OSMT_refcnt), 1) == 0) {
+	if (hw_atomic_sub(&tag->OSMT_refcnt, 1) == 0) {
 		if (hw_compare_and_store(OSMT_VALID|OSMT_RELEASED, OSMT_VALID|OSMT_RELEASED, &tag->OSMT_state)) {
 			simple_lock(&OSMalloc_tag_lock);
 			(void)remque((queue_entry_t)tag);
@@ -606,7 +621,7 @@ OSMalloc_Tagfree(
 	if (!hw_compare_and_store(OSMT_VALID, OSMT_VALID|OSMT_RELEASED, &tag->OSMT_state))
 		panic("OSMalloc_Tagfree(): bad state 0x%08X\n", tag->OSMT_state);
 
-	if (hw_atomic_sub((uint32_t *)(&tag->OSMT_refcnt), 1) == 0) {
+	if (hw_atomic_sub(&tag->OSMT_refcnt, 1) == 0) {
 		simple_lock(&OSMalloc_tag_lock);
 		(void)remque((queue_entry_t)tag);
 		simple_unlock(&OSMalloc_tag_lock);
@@ -627,9 +642,12 @@ OSMalloc(
 	    && (size & ~PAGE_MASK)) {
 
 		if ((kr = kmem_alloc_pageable(kernel_map, (vm_offset_t *)&addr, size)) != KERN_SUCCESS)
-			panic("OSMalloc(): kmem_alloc_pageable() failed 0x%08X\n", kr);
+			addr = NULL;
 	} else 
 		addr = kalloc((vm_size_t)size);
+
+	if (!addr)
+		OSMalloc_Tagrele(tag);
 
 	return(addr);
 }

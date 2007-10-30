@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -159,10 +165,11 @@ host_ipc_hash_info(
 	hash_info_bucket_array_t		*infop,
 	mach_msg_type_number_t 		*countp)
 {
+	vm_map_copy_t copy;
 	vm_offset_t addr;
-	vm_size_t size = 0;
+	vm_size_t size;
 	hash_info_bucket_t *info;
-	unsigned int potential, actual;
+	natural_t count;
 	kern_return_t kr;
 
 	if (host == HOST_NULL)
@@ -170,53 +177,24 @@ host_ipc_hash_info(
 
 	/* start with in-line data */
 
-	info = *infop;
-	potential = *countp;
+	count = ipc_hash_size();
+	size = round_page(count * sizeof(hash_info_bucket_t));
+	kr = kmem_alloc_pageable(ipc_kernel_map, &addr, size);
+	if (kr != KERN_SUCCESS)
+		return KERN_RESOURCE_SHORTAGE;
 
-	for (;;) {
-		actual = ipc_hash_info(info, potential);
-		if (actual <= potential)
-			break;
+	info = (hash_info_bucket_t *) addr;
+	count = ipc_hash_info(info, count);
 
-		/* allocate more memory */
+	if (size > count * sizeof(hash_info_bucket_t))
+		bzero((char *)&info[count], size - count * sizeof(hash_info_bucket_t));
 
-		if (info != *infop)
-			kmem_free(ipc_kernel_map, addr, size);
+	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr, 
+			   (vm_map_size_t)size, TRUE, &copy);
+	assert(kr == KERN_SUCCESS);
 
-		size = round_page(actual * sizeof *info);
-		kr = kmem_alloc_pageable(ipc_kernel_map, &addr, size);
-		if (kr != KERN_SUCCESS)
-			return KERN_RESOURCE_SHORTAGE;
-
-		info = (hash_info_bucket_t *) addr;
-		potential = size/sizeof *info;
-	}
-
-	if (info == *infop) {
-		/* data fit in-line; nothing to deallocate */
-
-		*countp = actual;
-	} else if (actual == 0) {
-		kmem_free(ipc_kernel_map, addr, size);
-
-		*countp = 0;
-	} else {
-		vm_map_copy_t copy;
-		vm_size_t used;
-
-		used = round_page(actual * sizeof *info);
-
-		if (used != size)
-			kmem_free(ipc_kernel_map, addr + used, size - used);
-
-		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr, 
-				   (vm_map_size_t)used, TRUE, &copy);
-		assert(kr == KERN_SUCCESS);
-
-		*infop = (hash_info_bucket_t *) copy;
-		*countp = actual;
-	}
-
+	*infop = (hash_info_bucket_t *) copy;
+	*countp = count;
 	return KERN_SUCCESS;
 }
 #endif /* MACH_IPC_DEBUG */
@@ -249,26 +227,26 @@ mach_port_space_info(
 #else
 kern_return_t
 mach_port_space_info(
-	ipc_space_t				space,
-	ipc_info_space_t			*infop,
+	ipc_space_t			space,
+	ipc_info_space_t		*infop,
 	ipc_info_name_array_t		*tablep,
 	mach_msg_type_number_t 		*tableCntp,
-	ipc_info_tree_name_array_t		*treep,
+	ipc_info_tree_name_array_t	*treep,
 	mach_msg_type_number_t 		*treeCntp)
 {
 	ipc_info_name_t *table_info;
-	unsigned int table_potential, table_actual;
 	vm_offset_t table_addr;
-	vm_size_t table_size;
+	vm_size_t table_size, table_size_needed;
 	ipc_info_tree_name_t *tree_info;
-	unsigned int tree_potential, tree_actual;
 	vm_offset_t tree_addr;
-	vm_size_t tree_size;
+	vm_size_t tree_size, tree_size_needed;
 	ipc_tree_entry_t tentry;
 	ipc_entry_t table;
 	ipc_entry_num_t tsize;
 	mach_port_index_t index;
 	kern_return_t kr;
+	vm_map_copy_t copy;
+
 
 	if (space == IS_NULL)
 		return KERN_INVALID_TASK;
@@ -276,78 +254,58 @@ mach_port_space_info(
 	/* start with in-line memory */
 
 	table_size = 0;
-	table_info = *tablep;
-	table_potential = *tableCntp;
 	tree_size = 0;
-	tree_info = *treep;
-	tree_potential = *treeCntp;
 
 	for (;;) {
 		is_read_lock(space);
 		if (!space->is_active) {
 			is_read_unlock(space);
-			if (table_info != *tablep)
+			if (table_size != 0)
 				kmem_free(ipc_kernel_map,
 					  table_addr, table_size);
-			if (tree_info != *treep)
+			if (tree_size != 0)
 				kmem_free(ipc_kernel_map,
 					  tree_addr, tree_size);
 			return KERN_INVALID_TASK;
 		}
 
-		table_actual = space->is_table_size;
-		tree_actual = space->is_tree_total;
+		table_size_needed = round_page(space->is_table_size
+					       * sizeof(ipc_info_name_t));
+		tree_size_needed = round_page(space->is_tree_total
+					      * sizeof(ipc_info_tree_name_t));
 
-		if ((table_actual <= table_potential) &&
-		    (tree_actual <= tree_potential))
+		if ((table_size_needed == table_size) &&
+		    (tree_size_needed == tree_size))
 			break;
 
 		is_read_unlock(space);
 
-		if (table_actual > table_potential) {
-			if (table_info != *tablep)
-				kmem_free(ipc_kernel_map,
-					  table_addr, table_size);
-
-			table_size = round_page(table_actual *
-						sizeof *table_info);
-			kr = kmem_alloc(ipc_kernel_map,
-					&table_addr, table_size);
+		if (table_size != table_size_needed) {
+			if (table_size != 0)
+				kmem_free(ipc_kernel_map, table_addr, table_size);
+			kr = kmem_alloc(ipc_kernel_map,	&table_addr, table_size_needed);
 			if (kr != KERN_SUCCESS) {
-				if (tree_info != *treep)
-					kmem_free(ipc_kernel_map,
-						  tree_addr, tree_size);
-
+				if (tree_size != 0)
+					kmem_free(ipc_kernel_map, tree_addr, tree_size);
 				return KERN_RESOURCE_SHORTAGE;
 			}
-
-			table_info = (ipc_info_name_t *) table_addr;
-			table_potential = table_size/sizeof *table_info;
+			table_size = table_size_needed;
 		}
-
-		if (tree_actual > tree_potential) {
-			if (tree_info != *treep)
-				kmem_free(ipc_kernel_map,
-					  tree_addr, tree_size);
-
-			tree_size = round_page(tree_actual *
-					       sizeof *tree_info);
-			kr = kmem_alloc(ipc_kernel_map,
-					&tree_addr, tree_size);
+		if (tree_size != tree_size_needed) {
+			if (tree_size != 0)
+				kmem_free(ipc_kernel_map, tree_addr, tree_size);
+			kr = kmem_alloc(ipc_kernel_map, &tree_addr, tree_size_needed);
 			if (kr != KERN_SUCCESS) {
-				if (table_info != *tablep)
-					kmem_free(ipc_kernel_map,
-						  table_addr, table_size);
-
+				if (table_size != 0)
+					kmem_free(ipc_kernel_map, table_addr, table_size);
 				return KERN_RESOURCE_SHORTAGE;
 			}
-
-			tree_info = (ipc_info_tree_name_t *) tree_addr;
-			tree_potential = tree_size/sizeof *tree_info;
+			tree_size = tree_size_needed;
 		}
 	}
 	/* space is read-locked and active; we have enough wired memory */
 
+	/* get the overall space info */
 	infop->iis_genno_mask = MACH_PORT_NGEN(MACH_PORT_DEAD);
 	infop->iis_table_size = space->is_table_size;
 	infop->iis_table_next = space->is_table_next->its_size;
@@ -355,9 +313,10 @@ mach_port_space_info(
 	infop->iis_tree_small = space->is_tree_small;
 	infop->iis_tree_hash = space->is_tree_hash;
 
+	/* walk the table for this space */
 	table = space->is_table;
 	tsize = space->is_table_size;
-
+	table_info = (ipc_info_name_array_t)table_addr;
 	for (index = 0; index < tsize; index++) {
 		ipc_info_name_t *iin = &table_info[index];
 		ipc_entry_t entry = &table[index];
@@ -367,12 +326,16 @@ mach_port_space_info(
 		iin->iin_name = MACH_PORT_MAKE(index, IE_BITS_GEN(bits));
 		iin->iin_collision = (bits & IE_BITS_COLLISION) ? TRUE : FALSE;
 		iin->iin_type = IE_BITS_TYPE(bits);
+		if (entry->ie_request)
+			iin->iin_type |= MACH_PORT_TYPE_DNREQUEST;
 		iin->iin_urefs = IE_BITS_UREFS(bits);
 		iin->iin_object = (vm_offset_t) entry->ie_object;
 		iin->iin_next = entry->ie_next;
 		iin->iin_hash = entry->ie_index;
 	}
 
+	/* walk the splay tree for this space */
+	tree_info = (ipc_info_tree_name_array_t)tree_addr;
 	for (tentry = ipc_splay_traverse_start(&space->is_tree), index = 0;
 	     tentry != ITE_NULL;
 	     tentry = ipc_splay_traverse_next(&space->is_tree, FALSE)) {
@@ -386,6 +349,8 @@ mach_port_space_info(
 		iin->iin_name = tentry->ite_name;
 		iin->iin_collision = (bits & IE_BITS_COLLISION) ? TRUE : FALSE;
 		iin->iin_type = IE_BITS_TYPE(bits);
+		if (entry->ie_request)
+			iin->iin_type |= MACH_PORT_TYPE_DNREQUEST;
 		iin->iin_urefs = IE_BITS_UREFS(bits);
 		iin->iin_object = (vm_offset_t) entry->ie_object;
 		iin->iin_next = entry->ie_next;
@@ -405,82 +370,43 @@ mach_port_space_info(
 	ipc_splay_traverse_finish(&space->is_tree);
 	is_read_unlock(space);
 
-	if (table_info == *tablep) {
-		/* data fit in-line; nothing to deallocate */
-
-		*tableCntp = table_actual;
-	} else if (table_actual == 0) {
-		kmem_free(ipc_kernel_map, table_addr, table_size);
-
-		*tableCntp = 0;
-	} else {
-		vm_size_t size_used, rsize_used;
-		vm_map_copy_t copy;
-
-		/* kmem_alloc doesn't zero memory */
-
-		size_used = table_actual * sizeof *table_info;
-		rsize_used = round_page(size_used);
-
-		if (rsize_used != table_size)
-			kmem_free(ipc_kernel_map,
-				  table_addr + rsize_used,
-				  table_size - rsize_used);
-
-		if (size_used != rsize_used)
-			bzero((char *) (table_addr + size_used),
-			      rsize_used - size_used);
+	/* prepare the table out-of-line data for return */
+	if (table_size > 0) {
+		if (table_size > infop->iis_table_size * sizeof(ipc_info_name_t))
+			bzero((char *)&table_info[infop->iis_table_size],
+			      table_size - infop->iis_table_size * sizeof(ipc_info_name_t));
 
 		kr = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(table_addr),
-				   vm_map_round_page(table_addr + rsize_used), FALSE);
+				   vm_map_round_page(table_addr + table_size), FALSE);
 		assert(kr == KERN_SUCCESS);
-
 		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)table_addr, 
-				   (vm_map_size_t)rsize_used, TRUE, &copy);
+				   (vm_map_size_t)table_size, TRUE, &copy);
 		assert(kr == KERN_SUCCESS);
-
-		*tablep = (ipc_info_name_t *) copy;
-		*tableCntp = table_actual;
+		*tablep = (ipc_info_name_t *)copy;
+		*tableCntp = infop->iis_table_size;
+	} else {
+		*tablep = (ipc_info_name_t *)0;
+		*tableCntp = 0;
 	}
 
-	if (tree_info == *treep) {
-		/* data fit in-line; nothing to deallocate */
-
-		*treeCntp = tree_actual;
-	} else if (tree_actual == 0) {
-		kmem_free(ipc_kernel_map, tree_addr, tree_size);
-
-		*treeCntp = 0;
-	} else {
-		vm_size_t size_used, rsize_used;
-		vm_map_copy_t copy;
-
-		/* kmem_alloc doesn't zero memory */
-
-		size_used = tree_actual * sizeof *tree_info;
-		rsize_used = round_page(size_used);
-
-		if (rsize_used != tree_size)
-			kmem_free(ipc_kernel_map,
-				  tree_addr + rsize_used,
-				  tree_size - rsize_used);
-
-		if (size_used != rsize_used)
-			bzero((char *) (tree_addr + size_used),
-			      rsize_used - size_used);
+	/* prepare the tree out-of-line data for return */
+	if (tree_size > 0) {
+		if (tree_size > infop->iis_tree_size * sizeof(ipc_info_tree_name_t))
+			bzero((char *)&tree_info[infop->iis_tree_size],
+			      tree_size - infop->iis_tree_size * sizeof(ipc_info_tree_name_t));
 
 		kr = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(tree_addr),
-				   vm_map_round_page(tree_addr + rsize_used), FALSE);
+				   vm_map_round_page(tree_addr + tree_size), FALSE);
 		assert(kr == KERN_SUCCESS);
-
-		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)tree_addr,
-				   (vm_map_size_t)rsize_used, TRUE, &copy);
+		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)tree_addr, 
+				   (vm_map_size_t)tree_size, TRUE, &copy);
 		assert(kr == KERN_SUCCESS);
-
-		*treep = (ipc_info_tree_name_t *) copy;
-		*treeCntp = tree_actual;
+		*treep = (ipc_info_tree_name_t *)copy;
+		*treeCntp = infop->iis_tree_size;
+	} else {
+		*treep = (ipc_info_tree_name_t *)0;
+		*treeCntp = 0;
 	}
-
 	return KERN_SUCCESS;
 }
 #endif /* MACH_IPC_DEBUG */
@@ -592,6 +518,9 @@ mach_port_kernel_object(
 	ipc_entry_t entry;
 	ipc_port_t port;
 	kern_return_t kr;
+
+	if (space == IS_NULL)
+		return KERN_INVALID_TASK;
 
 	kr = ipc_right_lookup_read(space, name, &entry);
 	if (kr != KERN_SUCCESS)

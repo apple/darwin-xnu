@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -102,15 +108,6 @@ struct	sigacts {
 #define	KERN_SIG_HOLD	(void (*)(int))3
 #define	KERN_SIG_WAIT	(void (*)(int))4
 
-#define pgsigio(pgid, sig, notused) \
-	{ \
-	struct proc *p; \
-	if (pgid < 0) \
-		gsignal(-(pgid), sig);\
-	else if (pgid > 0 && (p = pfind(pgid)) != 0) \
-		psignal(p, sig); \
-}
-
 /*
  * get signal action for process and signal; currently only for current process
  */
@@ -122,7 +119,7 @@ struct	sigacts {
 #define SHOULDissignal(p,uthreadp) \
 	 (((uthreadp)->uu_siglist)	\
 	  & ~((((uthreadp)->uu_sigmask) \
-	       | (((p)->p_flag & P_TRACED) ? 0 : (p)->p_sigignore)) \
+	       | (((p)->p_lflag & P_LTRACED) ? 0 : (p)->p_sigignore)) \
 	      & ~sigcantmask))
 
 /*
@@ -194,8 +191,6 @@ int sigprop[NSIG + 1] = {
 /*
  * Machine-independent functions:
  */
-int	signal_lock(struct proc *);
-int	signal_unlock(struct proc *);
 int	coredump(struct proc *p);
 void	execsigs(struct proc *p, thread_t thread);
 void	gsignal(int pgid, int sig);
@@ -204,11 +199,11 @@ int	CURSIG(struct proc *p);
 int clear_procsiglist(struct proc *p, int bit);
 int clear_procsigmask(struct proc *p, int bit);
 int set_procsigmask(struct proc *p, int bit);
-void	tty_pgsignal(struct pgrp *pgrp, int sig);
 void	postsig(int sig);
-void	siginit(struct proc *p);
+void	siginit(struct proc *p) __attribute__((section("__TEXT, initcode")));
 void	trapsignal(struct proc *p, int sig, unsigned code);
 void	pt_setrunnable(struct proc *p);
+int	hassigprop(int sig, int prop);
 
 /*
  * Machine-dependent functions:
@@ -217,20 +212,22 @@ void	sendsig(struct proc *, /*sig_t*/ user_addr_t  action, int sig,
 	int returnmask, u_long code);
 
 void	psignal(struct proc *p, int sig);
+void	psignal_locked(struct proc *, int);
 void	pgsignal(struct pgrp *pgrp, int sig, int checkctty);
-void	threadsignal(thread_t sig_actthread, int signum, u_long code);
+void	tty_pgsignal(struct tty * tp, int sig, int checkctty);
+void	threadsignal(thread_t sig_actthread, int signum, 
+		mach_exception_code_t code);
 int	thread_issignal(proc_t p, thread_t th, sigset_t mask);
-void	psignal_vfork(struct proc *p, task_t new_task, thread_t thr_act,
+void	psignal_vfork(struct proc *p, task_t new_task, thread_t thread,
 		int signum);
 void	psignal_vtalarm(struct proc *);
 void	psignal_xcpu(struct proc *);
 void	psignal_sigprof(struct proc *);
-void	psignal_lock(struct proc *, int, int);
 void	signal_setast(thread_t sig_actthread);
+void	pgsigio(pid_t pgid, int signalnum);
 
-/* XXX not really very "inline"... */
-__inline__ void sig_lock_to_exit(struct proc *p);
-__inline__ int sig_try_locked(struct proc *p);
+void sig_lock_to_exit(struct proc *p);
+int sig_try_locked(struct proc *p);
 
 #endif	/* BSD_KERNEL_PRIVATE */
 

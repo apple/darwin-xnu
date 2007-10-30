@@ -1,24 +1,31 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+
 /*
  * Copyright (c) 1982, 1986, 1993
  *      The Regents of the University of California.  All rights reserved.
@@ -95,13 +102,13 @@ static const char
 
 volatile int kdp_flag = 0;
 
-static kdp_send_t kdp_en_send_pkt = 0;
-static kdp_receive_t kdp_en_recv_pkt = 0;
+static kdp_send_t kdp_en_send_pkt;
+static kdp_receive_t kdp_en_recv_pkt;
 
 
 static u_long kdp_current_ip_address = 0;
 static struct ether_addr kdp_current_mac_address = {{0, 0, 0, 0, 0, 0}};
-static void *kdp_current_ifp = 0;
+static void *kdp_current_ifp;
 
 static void kdp_handler( void *);
 
@@ -114,7 +121,6 @@ static volatile boolean_t panicd_specified = FALSE;
 static boolean_t router_specified = FALSE;
 static unsigned int panicd_port = CORE_REMOTE_PORT;
 
-/* As in bsd/net/ether_if_module.c */
 static struct ether_addr etherbroadcastaddr = {{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}};
 
 static struct ether_addr router_mac = {{0, 0, 0 , 0, 0, 0}};
@@ -137,12 +143,11 @@ static char panicd_ip_str[20];
 static char router_ip_str[20];
 
 static unsigned int panic_block = 0;
-static volatile unsigned int kdp_trigger_core_dump = 0;
-static volatile unsigned int flag_kdp_trigger_reboot = 0;
+volatile unsigned int kdp_trigger_core_dump = 0;
+__private_extern__ volatile unsigned int flag_kdp_trigger_reboot = 0;
 
 extern unsigned int not_in_kdp;
 
-extern unsigned long panic_caller;
 extern unsigned int disableConsoleOutput;
 
 extern int 		kdp_vm_read( caddr_t, caddr_t, unsigned int);
@@ -160,6 +165,8 @@ static void 		kdp_arp_reply(struct ether_arp *);
 static void 		kdp_process_arp_reply(struct ether_arp *);
 static boolean_t 	kdp_arp_resolve(uint32_t, struct ether_addr *);
 
+static volatile unsigned	kdp_reentry_deadline;
+
 static boolean_t	gKDPDebug = FALSE;
 #define KDP_DEBUG(...) if (gKDPDebug) printf(__VA_ARGS__);
 
@@ -172,6 +179,8 @@ static uint32_t stack_snapshot_bufsize;
 static int stack_snapshot_pid;
 static uint32_t stack_snapshot_options;
 
+static unsigned int old_debugger;
+
 void
 kdp_snapshot_preflight(int pid, void * tracebuf, uint32_t tracebuf_size,
     uint32_t options);
@@ -180,7 +189,7 @@ void
 kdp_snapshot_postflight(void);
 
 extern int
-kdp_stackshot(int pid, uint32_t tracebuf, uint32_t tracebuf_size,
+kdp_stackshot(int pid, void *tracebuf, uint32_t tracebuf_size,
     unsigned trace_options, uint32_t *pbytesTraced);
 
 int
@@ -189,43 +198,63 @@ kdp_stack_snapshot_geterror(void);
 int
 kdp_stack_snapshot_bytes_traced(void);
 
+static thread_call_t
+kdp_timer_call;
+
+static void
+kdp_ml_enter_debugger_wrapper(__unused void *param0, __unused void *param1) {
+	kdp_ml_enter_debugger();
+}
+
+static void
+kdp_timer_callout_init(void) {
+	kdp_timer_call = thread_call_allocate(kdp_ml_enter_debugger_wrapper, NULL);
+}
+
+
 void
 kdp_register_send_receive(
 	kdp_send_t	send, 
 	kdp_receive_t	receive)
 {
-	unsigned int	debug=0;
+	unsigned int	debug = 0;
 
 	kdp_en_send_pkt = send;
 	kdp_en_recv_pkt = receive;
 
 	debug_log_init();
 
+	kdp_timer_callout_init();
+
 	PE_parse_boot_arg("debug", &debug);
+
+
+	if (!debug)
+		return;
 
 	if (debug & DB_KDP_BP_DIS)
 		kdp_flag |= KDP_BP_DIS;   
 	if (debug & DB_KDP_GETC_ENA)
 		kdp_flag |= KDP_GETC_ENA;   
 	if (debug & DB_ARP)
-	  kdp_flag |= KDP_ARP;
+		kdp_flag |= KDP_ARP;
 
 	if (debug & DB_KERN_DUMP_ON_PANIC)
-	  kdp_flag |= KDP_PANIC_DUMP_ENABLED;
+		kdp_flag |= KDP_PANIC_DUMP_ENABLED;
 	if (debug & DB_KERN_DUMP_ON_NMI)
-	  kdp_flag |= PANIC_CORE_ON_NMI;
-	
+		kdp_flag |= PANIC_CORE_ON_NMI;
+
 	if (debug & DB_DBG_POST_CORE)
-	  kdp_flag |= DBG_POST_CORE;
-	
+		kdp_flag |= DBG_POST_CORE;
+
 	if (debug & DB_PANICLOG_DUMP)
-	  kdp_flag |= PANIC_LOG_DUMP;
-	
+		kdp_flag |= PANIC_LOG_DUMP;
+
 	if (PE_parse_boot_arg ("_panicd_ip", panicd_ip_str))
-	  panicd_specified = TRUE;
+		panicd_specified = TRUE;
 
 	if (PE_parse_boot_arg ("_router_ip", router_ip_str))
-	  router_specified = TRUE;
+		router_specified = TRUE;
 
 	if (!PE_parse_boot_arg ("panicd_port", &panicd_port))
 		panicd_port = CORE_REMOTE_PORT;
@@ -233,7 +262,7 @@ kdp_register_send_receive(
 	kdp_flag |= KDP_READY;
 	if (current_debugger == NO_CUR_DB)
 		current_debugger = KDP_CUR_DB;
-	if (halt_in_debugger) {
+	if ((kdp_current_ip_address != 0) && halt_in_debugger) {
 		kdp_call(); 
 		halt_in_debugger=0;
 	}
@@ -260,12 +289,22 @@ kdp_snapshot_preflight(int pid, void * tracebuf, uint32_t tracebuf_size, uint32_
 	stack_snapshot_bufsize = tracebuf_size;
 	stack_snapshot_options = options;
 	kdp_snapshot++;
+	/* Mark this debugger as active, since the polled mode driver that 
+	 * ordinarily does this may not be enabled (yet), or since KDB may be
+	 * the primary debugger.
+	 */
+	old_debugger = current_debugger;
+	if (old_debugger != KDP_CUR_DB) {
+		current_debugger = KDP_CUR_DB;
+	}
 }
 
 void
 kdp_snapshot_postflight(void)
 {
 	kdp_snapshot--;
+	if ((kdp_en_send_pkt == NULL) || (old_debugger == KDB_CUR_DB))
+		current_debugger = old_debugger;
 }
 
 int
@@ -278,6 +317,14 @@ int
 kdp_stack_snapshot_bytes_traced(void)
 {
 	return stack_snapshot_bytes_traced;
+}
+
+static void
+kdp_schedule_debugger_reentry(unsigned interval) {
+	uint64_t deadline;;
+
+	clock_interval_to_deadline(interval, 1000 * 1000, &deadline);
+	thread_call_enter_delayed(kdp_timer_call, deadline);
 }
 
 static void
@@ -332,7 +379,7 @@ kdp_reply(
 #else
 	ui = (struct udpiphdr *)&pkt.data[pkt.off];
 #endif
-	ui->ui_next = ui->ui_prev = 0;
+	ui->ui_next = ui->ui_prev = NULL;
 	ui->ui_x1 = 0;
 	ui->ui_pr = IPPROTO_UDP;
 	ui->ui_len = htons((u_short)pkt.len + sizeof (struct udphdr));
@@ -400,7 +447,7 @@ kdp_send(
 #else
     ui = (struct udpiphdr *)&pkt.data[pkt.off];
 #endif
-    ui->ui_next = ui->ui_prev = 0;
+    ui->ui_next = ui->ui_prev = NULL;
     ui->ui_x1 = 0;
     ui->ui_pr = IPPROTO_UDP;
     ui->ui_len = htons((u_short)pkt.len + sizeof (struct udphdr));
@@ -449,7 +496,7 @@ kdp_set_interface(void *ifp)
 }
 
 void *
-kdp_get_interface()
+kdp_get_interface(void)
 {
 	return kdp_current_ifp;
 }
@@ -461,6 +508,10 @@ kdp_set_ip_and_mac_addresses(
 {
 	kdp_current_ip_address = ipaddr->s_addr;
 	kdp_current_mac_address = *macaddr;
+	if ((current_debugger == KDP_CUR_DB) && halt_in_debugger) {
+		kdp_call();
+		halt_in_debugger=0;
+	}
 }
 
 void
@@ -857,6 +908,7 @@ kdp_connection_wait(void)
             
 	printf("\nWaiting for remote debugger connection.\n");
 
+
 	if (reattach_wait == 0) {
 		if((kdp_flag & KDP_GETC_ENA) && (0 != kdp_getc()))
 		{
@@ -992,6 +1044,14 @@ kdp_raise_exception(
 {
     int			index;
 
+    /* Was a system trace requested ? */
+    if (kdp_snapshot && (!panic_active()) && (panic_caller == 0)) {
+	    stack_snapshot_ret = kdp_stackshot(stack_snapshot_pid,
+	    stack_snapshot_buf, stack_snapshot_bufsize,
+	    stack_snapshot_options, &stack_snapshot_bytes_traced);
+	    return;
+    }
+
     disable_preemption();
 
     if (saved_state == 0) 
@@ -1017,14 +1077,6 @@ kdp_raise_exception(
     if (pkt.input)
 	kdp_panic("kdp_raise_exception");
 
-    /* Was a system trace requested ? */
-    if (kdp_snapshot && (panicstr == ((char *) 0)) && (panic_caller == 0) && !kdp.is_conn) {
-	    /* XXX This should be reworked to take a pointer to the buffer */
-	    stack_snapshot_ret = kdp_stackshot(stack_snapshot_pid,
-	    (uint32_t) stack_snapshot_buf, stack_snapshot_bufsize,
-	    stack_snapshot_options, &stack_snapshot_bytes_traced);
-	    goto exit_raise_exception;
-    }
 	    
     if (((kdp_flag & KDP_PANIC_DUMP_ENABLED) || (kdp_flag & PANIC_LOG_DUMP))
 	&& (panicstr != (char *) 0)) {
@@ -1035,7 +1087,7 @@ kdp_raise_exception(
       if ((kdp_flag & PANIC_CORE_ON_NMI) && (panicstr == (char *) 0) &&
 	  !kdp.is_conn) {
 
-	disableDebugOuput = disableConsoleOutput = FALSE;
+	disable_debug_output = disableConsoleOutput = FALSE;
 	kdp_panic_dump();
 
 	if (!(kdp_flag & DBG_POST_CORE))
@@ -1072,6 +1124,7 @@ kdp_raise_exception(
 	kdp_flag &= ~PANIC_LOG_DUMP;
 	kdp_flag |= KDP_PANIC_DUMP_ENABLED;
 	kdp_panic_dump();
+	kdp_trigger_core_dump = 0;
       }
 
 /* Trigger a reboot if the user has set this flag through the
@@ -1084,7 +1137,13 @@ kdp_raise_exception(
 	    /* If we're still around, reset the flag */
 	    flag_kdp_trigger_reboot = 0;
     }
-	    
+
+    if (kdp_reentry_deadline) {
+	    kdp_schedule_debugger_reentry(kdp_reentry_deadline);
+	    printf("Debugger re-entry scheduled in %d milliseconds\n", kdp_reentry_deadline);
+	    kdp_reentry_deadline = 0;
+    }
+
     kdp_sync_cache();
 
     if (reattach_wait == 1)
@@ -1122,7 +1181,7 @@ create_panic_header(unsigned int request, const char *corename,
 #else
 	ui = (struct udpiphdr *)&pkt.data[pkt.off];
 #endif
-	ui->ui_next = ui->ui_prev = 0;
+	ui->ui_next = ui->ui_prev = NULL;
 	ui->ui_x1 = 0;
 	ui->ui_pr = IPPROTO_UDP;
 	ui->ui_len = htons((u_short)pkt.len + sizeof (struct udphdr));
@@ -1159,14 +1218,12 @@ create_panic_header(unsigned int request, const char *corename,
   
 	if (request == KDP_WRQ)
 	{
-		register char *cp;
+		char *cp;
 
 		cp = coreh->th_u.tu_rpl;
-		strcpy (cp, corename);
-		cp += strlen(corename);
+		cp += strlcpy (cp, corename, KDP_MAXPACKET);
 		*cp++ = '\0';
-		strcpy (cp, mode);
-		cp+= modelen;
+		cp += strlcpy (cp, mode, KDP_MAXPACKET - strlen(corename));
 		*cp++ = '\0';
 	}
 	else
@@ -1336,7 +1393,7 @@ strnstr(char *s, const char *find, size_t slen)
     } while (strncmp(s, find, len) != 0);
     s--;
   }
-  return ((char *)s);
+  return (s);
 }
 
 extern char version[];
@@ -1353,13 +1410,12 @@ extern char version[];
 static int 
 kdp_get_xnu_version(char *versionbuf)
 {
-
 	char *versionpos;
 	char vstr[20];
 	int retval = -1;
 	char *vptr;
 
-	strcpy(vstr, "custom");
+	strlcpy(vstr, "custom", 10);
 	if (version) {
 		if (kdp_vm_read(version, versionbuf, 95)) {
 			versionbuf[94] = '\0';
@@ -1378,7 +1434,7 @@ kdp_get_xnu_version(char *versionbuf)
 			}
 		}
 	}
-	strcpy(versionbuf, vstr);
+	strlcpy(versionbuf, vstr, KDP_MAXPACKET);
 	return retval;
 }
 
@@ -1387,7 +1443,7 @@ extern int snprintf(char *str, size_t size, const char *format, ...);
 
 /* Primary dispatch routine for the system dump */
 void 
-kdp_panic_dump()
+kdp_panic_dump(void)
 {
 	char corename[50];
 	char coreprefix[10];

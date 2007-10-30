@@ -1,24 +1,31 @@
 /*
- * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
- *
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- *
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- *
- * @APPLE_LICENSE_HEADER_END@
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+
 #include <mach/mach_types.h>
 #include <mach/mach_host.h>
 
@@ -58,7 +65,7 @@ extern kern_return_t processor_exit(processor_t     processor); // osfmk/kern/pr
 __private_extern__
 kern_return_t chudxnu_enable_cpu(int cpu, boolean_t enable)
 {
-    chudxnu_unbind_thread(current_thread());
+    chudxnu_unbind_thread(current_thread(), 0);
 
     if(cpu<0 || cpu>=chudxnu_phys_cpu_count()) { // check sanity of cpu argument
         return KERN_FAILURE;
@@ -128,7 +135,7 @@ kern_return_t chudxnu_set_shadowed_spr(int cpu, int spr, uint32_t val)
 		cpu = chudxnu_cpu_number();
 		didBind = FALSE;
     } else {
-    chudxnu_bind_thread(current_thread(), cpu);
+    chudxnu_bind_thread(current_thread(), cpu, 0);
 		didBind = TRUE;
     }
 
@@ -246,7 +253,7 @@ kern_return_t chudxnu_set_shadowed_spr(int cpu, int spr, uint32_t val)
     }
 
     if(didBind) {
-    chudxnu_unbind_thread(current_thread());
+    chudxnu_unbind_thread(current_thread(), 0);
     }
     
     return retval;
@@ -268,7 +275,7 @@ kern_return_t chudxnu_set_shadowed_spr64(int cpu, int spr, uint64_t val)
 		cpu = chudxnu_cpu_number();
 		didBind = FALSE;
     } else {
-    chudxnu_bind_thread(current_thread(), cpu);
+    chudxnu_bind_thread(current_thread(), cpu, 0);
 		didBind = TRUE;
     }
 
@@ -327,7 +334,7 @@ kern_return_t chudxnu_set_shadowed_spr64(int cpu, int spr, uint64_t val)
     }
 
     if(didBind) {
-    chudxnu_unbind_thread(current_thread());
+    chudxnu_unbind_thread(current_thread(), 0);
     }
 
     return retval;
@@ -361,8 +368,8 @@ kern_return_t chudxnu_read_spr(int cpu, int spr, uint32_t *val_p)
     uint32_t val = 0xFFFFFFFF;
 
     /* bind to requested CPU */
-    if(cpu>=0) { // cpu<0 means don't bind
-		if(chudxnu_bind_thread(current_thread(), cpu)!=KERN_SUCCESS) {
+    if(cpu>=0 && !(ml_at_interrupt_context() && cpu_number() == cpu)) { // cpu<0 means don't bind
+		if(chudxnu_bind_thread(current_thread(), cpu, 0)!=KERN_SUCCESS) {
 			return KERN_INVALID_ARGUMENT;
 		}
     }
@@ -577,7 +584,7 @@ kern_return_t chudxnu_read_spr(int cpu, int spr, uint32_t *val_p)
     chudxnu_set_interrupts_enabled(oldlevel); /* enable interrupts */
 
     if(cpu>=0) { // cpu<0 means don't bind
-		chudxnu_unbind_thread(current_thread());
+		chudxnu_unbind_thread(current_thread(), 0);
     }
 
     *val_p = val;
@@ -592,8 +599,8 @@ kern_return_t chudxnu_read_spr64(int cpu, int spr, uint64_t *val_p)
     boolean_t oldlevel;
 
     /* bind to requested CPU */
-    if(cpu>=0) { // cpu<0 means don't bind
-		if(chudxnu_bind_thread(current_thread(), cpu)!=KERN_SUCCESS) {
+    if(cpu>=0 && !(ml_at_interrupt_context() && cpu_number() == cpu)) { // cpu<0 means don't bind
+		if(chudxnu_bind_thread(current_thread(), cpu, 0)!=KERN_SUCCESS) {
 			return KERN_INVALID_ARGUMENT;
 		}
     }
@@ -667,7 +674,7 @@ kern_return_t chudxnu_read_spr64(int cpu, int spr, uint64_t *val_p)
     chudxnu_set_interrupts_enabled(oldlevel); /* enable interrupts */
 
     if(cpu>=0) { // cpu<0 means don't bind
-		chudxnu_unbind_thread(current_thread());
+		chudxnu_unbind_thread(current_thread(), 0);
     }
 
     return retval;
@@ -680,8 +687,8 @@ kern_return_t chudxnu_write_spr(int cpu, int spr, uint32_t val)
     boolean_t oldlevel;
 
     /* bind to requested CPU */
-    if(cpu>=0) { // cpu<0 means don't bind
-		if(chudxnu_bind_thread(current_thread(), cpu)!=KERN_SUCCESS) {
+    if(cpu>=0 && !(ml_at_interrupt_context() && cpu_number() == cpu)) { // cpu<0 means don't bind
+		if(chudxnu_bind_thread(current_thread(), cpu, 0)!=KERN_SUCCESS) {
 			return KERN_INVALID_ARGUMENT;
 		}
     }
@@ -948,7 +955,7 @@ kern_return_t chudxnu_write_spr(int cpu, int spr, uint32_t val)
     chudxnu_set_interrupts_enabled(oldlevel); /* re-enable interrupts */
 	
     if(cpu>=0) { // cpu<0 means don't bind
-		chudxnu_unbind_thread(current_thread());
+		chudxnu_unbind_thread(current_thread(), 0);
     }
   
     return retval;
@@ -962,8 +969,8 @@ kern_return_t chudxnu_write_spr64(int cpu, int spr, uint64_t val)
     uint64_t *val_p = &val;
 
     /* bind to requested CPU */
-    if(cpu>=0) { // cpu<0 means don't bind
-		if(chudxnu_bind_thread(current_thread(), cpu)!=KERN_SUCCESS) {
+    if(cpu>=0 && !(ml_at_interrupt_context() && cpu_number() == cpu)) { // cpu<0 means don't bind
+		if(chudxnu_bind_thread(current_thread(), cpu, 0)!=KERN_SUCCESS) {
 			return KERN_INVALID_ARGUMENT;
 		}
     }
@@ -1064,29 +1071,10 @@ kern_return_t chudxnu_write_spr64(int cpu, int spr, uint64_t val)
     chudxnu_set_interrupts_enabled(oldlevel); /* re-enable interrupts */
 
     if(cpu>=0) { // cpu<0 means don't bind
-		chudxnu_unbind_thread(current_thread());
+		chudxnu_unbind_thread(current_thread(), 0);
     }
  
     return retval;
-}
-
-#pragma mark **** cache flush ****
-
-__private_extern__
-void chudxnu_flush_caches(void)
-{
-    cacheInit();
-}
-
-__private_extern__
-void chudxnu_enable_caches(boolean_t enable)
-{
-    if(!enable) {
-        cacheInit();
-        cacheDisable();
-    } else {
-        cacheInit();
-    }
 }
 
 #pragma mark **** perfmon facility ****
@@ -1106,7 +1094,7 @@ kern_return_t chudxnu_perfmon_release_facility(task_t task)
 #pragma mark **** rupt counters ****
 
 __private_extern__
-kern_return_t chudxnu_get_cpu_rupt_counters(int cpu, rupt_counters_t *rupts)
+kern_return_t chudxnu_get_cpu_interrupt_counters(int cpu, rupt_counters_t *rupts)
 {
     if(cpu<0 || cpu>=chudxnu_phys_cpu_count()) { // check sanity of cpu argument
         return KERN_FAILURE;
@@ -1148,7 +1136,7 @@ kern_return_t chudxnu_get_cpu_rupt_counters(int cpu, rupt_counters_t *rupts)
 }
 
 __private_extern__
-kern_return_t chudxnu_clear_cpu_rupt_counters(int cpu)
+kern_return_t chudxnu_clear_cpu_interrupt_counters(int cpu)
 {
     if(cpu<0 || cpu>=chudxnu_phys_cpu_count()) { // check sanity of cpu argument
         return KERN_FAILURE;
@@ -1182,4 +1170,37 @@ kern_return_t chudxnu_scom_write(uint32_t reg, uint64_t data)
 {
 	ml_scom_write(reg, data);
 	return KERN_SUCCESS;
+}
+
+#pragma mark *** deprecated ***
+
+//DEPRECATED
+__private_extern__ kern_return_t
+chudxnu_get_cpu_rupt_counters(int cpu, rupt_counters_t *rupts) {
+	return chudxnu_get_cpu_interrupt_counters(cpu, rupts);
+}
+
+//DEPRECATED
+__private_extern__ kern_return_t
+chudxnu_clear_cpu_rupt_counters(int cpu) {
+	return chudxnu_clear_cpu_interrupt_counters(cpu);
+}
+
+//DEPRECATED
+__private_extern__
+void chudxnu_flush_caches(void)
+{
+	cacheInit();
+}
+
+//DEPRECATED
+__private_extern__
+void chudxnu_enable_caches(boolean_t enable)
+{
+	if(!enable) {
+		cacheInit();
+		cacheDisable();
+	} else {
+		cacheInit();
+	}
 }

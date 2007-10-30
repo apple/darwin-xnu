@@ -40,23 +40,23 @@
 .Nm umask
 .Nd set file creation mode mask
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
 .Fd #include <sys/stat.h>
 .Ft mode_t
-.Fn umask "mode_t numask"
+.Fo umask
+.Fa "mode_t cmask"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn umask
 routine sets the process's file mode creation mask to
-.Fa numask
-and returns the previous value of the mask.  The 9 low-order
-access permission
-bits of
-.Fa numask
+.Fa cmask
+and returns the previous value of the mask.
+The 9 low-order access permission bits of
+.Fa cmask
 are used by system calls, including
 .Xr open 2 ,
 .Xr mkdir 2 ,
-.Xr mkfifo 2
+.Xr mkfifo 2 ,
 and
 .Xr mknod 2
 to turn off corresponding bits
@@ -75,12 +75,20 @@ The previous value of the file mode mask is returned by the call.
 The
 .Fn umask
 function is always successful.
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/stat.h>
+.Pp
+The include file
+.In sys/types.h
+is necessary.
 .Sh SEE ALSO
 .Xr chmod 2 ,
 .Xr mkdir 2 ,
 .Xr mkfifo 2 ,
 .Xr mknod 2 ,
-.Xr open 2
+.Xr open 2 ,
+.Xr compat 5
 .Sh STANDARDS
 The
 .Fn umask

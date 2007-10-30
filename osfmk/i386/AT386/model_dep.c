@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -85,6 +91,8 @@
 #include <i386/machine_routines.h>
 #include <i386/pmCPU.h>
 #include <i386/postcode.h>
+#include <i386/trap.h>
+#include <i386/mp.h>		/* mp_rendezvous_break_lock */
 #include <architecture/i386/pio.h> /* inb() */
 #include <pexpert/i386/boot.h>
 #if	MACH_KDB
@@ -117,18 +125,13 @@ static void machine_conf(void);
 extern int		default_preemption_rate;
 extern int		max_unsafe_quanta;
 extern int		max_poll_quanta;
-extern int		idlehalt;
 extern unsigned int	panic_is_inited;
 
 int db_run_mode;
 
-static int packAsc (uint8_t *inbuf, unsigned int length);
-
 volatile int pbtcpu = -1;
 hw_lock_data_t pbtlock;		/* backtrace print lock */
 uint32_t pbtcnt = 0;
-
-extern const char version[];
 
 typedef struct _cframe_t {
     struct _cframe_t	*prev;
@@ -136,12 +139,11 @@ typedef struct _cframe_t {
     unsigned		args[0];
 } cframe_t;
 
-void panic_i386_backtrace(void *_frame, int nframes);
-
-static unsigned panic_io_port = 0;
+static unsigned panic_io_port;
+static unsigned	commit_paniclog_to_nvram;
 
 void
-machine_startup()
+machine_startup(void)
 {
 	int	boot_arg;
 
@@ -152,11 +154,21 @@ machine_startup()
 
 	if (PE_parse_boot_arg("debug", &boot_arg)) {
 		if (boot_arg & DB_HALT) halt_in_debugger=1;
-		if (boot_arg & DB_PRT) disableDebugOuput=FALSE; 
+		if (boot_arg & DB_PRT) disable_debug_output=FALSE; 
 		if (boot_arg & DB_SLOG) systemLogDiags=TRUE; 
 		if (boot_arg & DB_NMI) panicDebugging=TRUE; 
 		if (boot_arg & DB_LOG_PI_SCRN) logPanicDataToScreen=TRUE; 
 	}
+
+	if (!PE_parse_boot_arg("nvram_paniclog", &commit_paniclog_to_nvram))
+		commit_paniclog_to_nvram = 1;
+
+	/*
+	 * Entering the debugger will put the CPUs into a "safe"
+	 * power mode.
+	 */
+	if (PE_parse_boot_arg("pmsafe_debug", &boot_arg))
+	    pmsafe_debug = boot_arg;
 
 #if NOTYET
 	hw_lock_init(&debugger_lock);	/* initialize debugger lock */
@@ -209,25 +221,6 @@ machine_startup()
 		/*I/O ports range from 0 through 0xFFFF */
 		panic_io_port = boot_arg & 0xffff;
 	}
-
-/*
- *	fn is used to force napping.
- *		fn=0 means no napping allowed
- *		fn=1 means forces napping on, normal C2 and C4 transitions
- *		fn=2 means forces napping on, but C4 is disabled
- *		fn=3 means forces napping on, but use halt
- *		fn=4 means forces napping on and will always use C4
- *
- *		Note that this will take effect only when the system normally starts napping.
- *
- */ 
-
-	if (!PE_parse_boot_arg("fn", &forcenap)) forcenap = 0;	/* If force nap not set, make 0 */
-	else {
-		if(forcenap < 5) forcenap = forcenap + 1;		/* See comments above for decode, this is set to fn + 1 */
-		else forcenap = 0;								/* Clear for error case */
-	}
-	machine_nap_policy();								/* Make sure the nap policy reflects the user's choice */
 
 	machine_conf();
 
@@ -362,7 +355,7 @@ efi_set_tables_64(EFI_SYSTEM_TABLE_64 * system_table)
     uint32_t hdr_cksum;
     uint32_t cksum;
 
-    kprintf("Processing 64-bit EFI tables at 0x%x\n", (unsigned int)system_table);
+    kprintf("Processing 64-bit EFI tables at %p\n", system_table);
     do {
         if (system_table->Hdr.Signature != EFI_SYSTEM_TABLE_SIGNATURE) {
 	    kprintf("Bad EFI system table signature\n");
@@ -383,8 +376,8 @@ efi_set_tables_64(EFI_SYSTEM_TABLE_64 * system_table)
 	gPEEFISystemTable     = system_table;
 
         kprintf("RuntimeServices table at 0x%qx\n", system_table->RuntimeServices);
-        runtime = (EFI_RUNTIME_SERVICES_64 *) (uint32_t)system_table->RuntimeServices; // XXX
-        kprintf("Checking runtime services table 0x%x\n", runtime);
+        runtime = (EFI_RUNTIME_SERVICES_64 *) (uintptr_t)system_table->RuntimeServices; // XXX
+        kprintf("Checking runtime services table %p\n", runtime);
 	if (runtime->Hdr.Signature != EFI_RUNTIME_SERVICES_SIGNATURE) {
 	    kprintf("Bad EFI runtime table signature\n");
 	    break;
@@ -414,7 +407,7 @@ efi_set_tables_32(EFI_SYSTEM_TABLE * system_table)
     uint32_t hdr_cksum;
     uint32_t cksum;
 
-    kprintf("Processing 32-bit EFI tables at 0x%x\n", (unsigned int)system_table);
+    kprintf("Processing 32-bit EFI tables at %p\n", system_table);
     do {
         if (system_table->Hdr.Signature != EFI_SYSTEM_TABLE_SIGNATURE) {
 	    kprintf("Bad EFI system table signature\n");
@@ -434,6 +427,7 @@ efi_set_tables_32(EFI_SYSTEM_TABLE * system_table)
 
 	gPEEFISystemTable     = system_table;
 
+	kprintf("RuntimeServices table at %p\n", system_table->RuntimeServices);
         runtime = (EFI_RUNTIME_SERVICES *) system_table->RuntimeServices;
 	if (runtime->Hdr.Signature != EFI_RUNTIME_SERVICES_SIGNATURE) {
 	    kprintf("Bad EFI runtime table signature\n");
@@ -468,7 +462,7 @@ efi_init(void)
 
     do
     {
-        vm_offset_t vm_size, vm_addr;
+	vm_offset_t vm_size, vm_addr;
 	vm_map_offset_t phys_addr;
 	EfiMemoryRange *mptr;
 	unsigned int msize, mcount;
@@ -516,7 +510,7 @@ hibernate_newruntime_map(void * map, vm_size_t map_size, uint32_t system_table_o
 	return;
     do
     {
-	vm_offset_t vm_size, vm_addr;
+        vm_offset_t vm_size, vm_addr;
 	vm_map_offset_t phys_addr;
 	EfiMemoryRange *mptr;
 	unsigned int msize, mcount;
@@ -527,10 +521,10 @@ hibernate_newruntime_map(void * map, vm_size_t map_size, uint32_t system_table_o
 
 	system_table_offset += ptoa_32(args->efiRuntimeServicesPageStart);
 
-	kprintf("Old system table %p, new %p\n",
-	    args->efiSystemTable,    (void *) system_table_offset);
+	kprintf("Old system table 0x%x, new 0x%x\n",
+	    (uint32_t)args->efiSystemTable,    system_table_offset);
 
-	args->efiSystemTable    = (uint32_t) system_table_offset;
+	args->efiSystemTable    = system_table_offset;
 
 	kprintf("Old map:\n");
 	msize = args->MemoryMapDescriptorSize;
@@ -543,7 +537,7 @@ hibernate_newruntime_map(void * map, vm_size_t map_size, uint32_t system_table_o
 		vm_addr =   (vm_offset_t) mptr->VirtualStart;
 		phys_addr = (vm_map_offset_t) mptr->PhysicalStart;
 
-		kprintf("mapping[%d] %qx @ %x, %x\n", mptr->Type, phys_addr, vm_addr, mptr->NumberOfPages);
+		kprintf("mapping[%u] %qx @ %x, %llu\n", mptr->Type, phys_addr, vm_addr, mptr->NumberOfPages);
 	    }
 	}
 
@@ -561,7 +555,7 @@ hibernate_newruntime_map(void * map, vm_size_t map_size, uint32_t system_table_o
 		vm_addr =   (vm_offset_t) mptr->VirtualStart;
 		phys_addr = (vm_map_offset_t) mptr->PhysicalStart;
 
-		kprintf("mapping[%d] %qx @ %x, %x\n", mptr->Type, phys_addr, vm_addr, mptr->NumberOfPages);
+		kprintf("mapping[%u] %qx @ %x, %llu\n", mptr->Type, phys_addr, vm_addr, mptr->NumberOfPages);
 
 		pmap_map(vm_addr, phys_addr, phys_addr + round_page(vm_size),
 			 (mptr->Type == kEfiRuntimeServicesCode) ? VM_PROT_READ | VM_PROT_EXECUTE : VM_PROT_READ|VM_PROT_WRITE,
@@ -662,6 +656,7 @@ halt_all_cpus(boolean_t reboot)
 	while(1);
 }
 
+ 
 /* Issue an I/O port read if one has been requested - this is an event logic
  * analyzers can use as a trigger point.
  */
@@ -678,7 +673,7 @@ panic_io_port_read(void) {
 static void
 machine_halt_cpu(__unused void *arg) {
 	panic_io_port_read();
-	__asm__ volatile("hlt");
+	pmCPUHalt(PM_HALT_DEBUG);
 }
 
 void
@@ -723,39 +718,45 @@ Debugger(
 		 */
 
 		if( debug_buf_size > 0) {
-		    /* Do not compress the panic log 
-		     * or save to NVRAM unless kernel debugging 
-		     * is disabled. The NVRAM shim doesn't
-		     * sync to the store until haltRestart is called.
-		     */
-		    if (!panicDebugging) {
+		  /* Optionally sync the panic log, if any, to NVRAM
+		   * This is the default.
+		   */
+		    if (commit_paniclog_to_nvram) {
 			unsigned int bufpos;
-			
+
                         debug_putc(0);
 
 			/* Now call the compressor */
 			/* XXX Consider using the WKdm compressor in the
 			 * future, rather than just packing - would need to
 			 * be co-ordinated with crashreporter, which decodes
-			 * this post-restart.
+			 * this post-restart. The compressor should be
+			 * capable of in-place compression.
 			 */
-			bufpos = packAsc ((uint8_t *)debug_buf,
-			    (unsigned int) (debug_buf_ptr - debug_buf) );
+			bufpos = packA(debug_buf,
+			    (unsigned int) (debug_buf_ptr - debug_buf), debug_buf_size);
 			/* If compression was successful,
 			 * use the compressed length
 			 */
-			if (bufpos) {
-			    debug_buf_ptr = debug_buf + bufpos;
-                        }
+			pi_size = bufpos ? bufpos : (unsigned) (debug_buf_ptr - debug_buf);
+
 			/* Save panic log to non-volatile store
 			 * Panic info handler must truncate data that is 
 			 * too long for this platform.
 			 * This call must save data synchronously,
 			 * since we can subsequently halt the system.
 			 */
-                        pi_size = debug_buf_ptr - debug_buf;
+			kprintf("Attempting to commit panic log to NVRAM\n");
                         pi_size = PESavePanicInfo((unsigned char *)debug_buf,
 			    pi_size );
+
+			/* Uncompress in-place, to permit examination of
+			 * the panic log by debuggers.
+			 */
+
+			if (bufpos) {
+			  unpackA(debug_buf, bufpos);
+			}
                     }
                 }
 		draw_panic_dialog();
@@ -765,12 +766,16 @@ Debugger(
 			 * that a panic occurred while in that codepath.
 			 */
 			mp_rendezvous_break_lock();
+#if CONFIG_EMBEDDED
+			PEHaltRestart(kPEPanicRestartCPU);
+#else
 			/* Force all CPUs to disable interrupts and HLT.
 			 * We've panicked, and shouldn't depend on the
 			 * PEHaltRestart() mechanism, which relies on several
 			 * bits of infrastructure.
 			 */
 			mp_rendezvous_no_intrs(machine_halt_cpu, NULL);
+#endif
 			/* NOT REACHED */
 		}
         }
@@ -810,32 +815,6 @@ struct pasc {
 
 typedef struct pasc pasc_t;
 
-static int packAsc (unsigned char *inbuf, unsigned int length)
-{
-  unsigned int i, j = 0;
-  unsigned int extra;
-  pasc_t pack;
-
-  for (i = 0; i < length; i+=8)
-    {
-      pack.a = inbuf[i];
-      pack.b = inbuf[i+1];
-      pack.c = inbuf[i+2];
-      pack.d = inbuf[i+3];
-      pack.e = inbuf[i+4];
-      pack.f = inbuf[i+5];
-      pack.g = inbuf[i+6];
-      pack.h = inbuf[i+7];
-      bcopy ((char *) &pack, inbuf + j, 7);
-      j += 7;
-    }
-  extra = (i - length);
-  if (extra > 0) {
-    inbuf[j - extra] &= (0xFF << (8-extra));
-  }
-  return j-((extra == 7) ? 6 : extra);
-}
-
 /* Routines for address - symbol translation. Not called unless the "keepsyms"
  * boot-arg is supplied.
  */
@@ -861,11 +840,14 @@ panic_print_macho_symbol_name(struct mach_header *mh, vm_address_t search)
         if (cmd->cmd == LC_SEGMENT) {
             struct segment_command *orig_sg = (struct segment_command *) cmd;
             
-            if (strcmp(SEG_TEXT, orig_sg->segname) == 0)
+            if (strncmp(SEG_TEXT, orig_sg->segname,
+				    sizeof(orig_sg->segname)) == 0)
                 orig_ts = orig_sg;
-            else if (strcmp(SEG_LINKEDIT, orig_sg->segname) == 0)
+            else if (strncmp(SEG_LINKEDIT, orig_sg->segname,
+				    sizeof(orig_sg->segname)) == 0)
                 orig_le = orig_sg;
-            else if (strcmp("", orig_sg->segname) == 0)
+            else if (strncmp("", orig_sg->segname,
+				    sizeof(orig_sg->segname)) == 0)
                 orig_ts = orig_sg; /* kexts have a single unnamed segment */
         }
         else if (cmd->cmd == LC_SYMTAB)
@@ -906,9 +888,9 @@ panic_print_macho_symbol_name(struct mach_header *mh, vm_address_t search)
     
     if (bestsym != NULL) {
         if (diff != 0) {
-            kdb_printf("%s + 0x%08x ", bestsym, diff);
+            kdb_printf("%s + 0x%08x \n", bestsym, diff);
         } else {
-            kdb_printf("%s ", bestsym);
+            kdb_printf("%s \n", bestsym);
         }
         return 1;
     }
@@ -930,7 +912,7 @@ panic_print_kmod_symbol_name(vm_address_t search)
     }
     if (current_kmod != NULL) {
         /* if kexts had symbol table loaded, we'd call search_symbol_name again; alas, they don't */
-        kdb_printf("%s + %d ", current_kmod->name, search - current_kmod->address);
+        kdb_printf("%s + %d \n", current_kmod->name, search - current_kmod->address);
     }
 }
 
@@ -969,14 +951,14 @@ panic_i386_backtrace(void *_frame, int nframes)
 		/* Spin on print backtrace lock, which serializes output
 		 * Continue anyway if a timeout occurs.
 		 */
-		hw_lock_to(&pbtlock, LockTimeOut*100);
+		hw_lock_to(&pbtlock, LockTimeOutTSC);
 		pbtcpu = cpu_number();
 	}
 
 	PE_parse_boot_arg("keepsyms", &keepsyms);
 
 	kdb_printf("Backtrace, "
-	    "Format - Frame : Return Address (4 potential args on stack) ");
+	    "Format - Frame : Return Address (4 potential args on stack) \n");
 
 	for (frame_index = 0; frame_index < nframes; frame_index++) {
 		vm_offset_t curframep = (vm_offset_t) frame;
@@ -995,13 +977,12 @@ panic_i386_backtrace(void *_frame, int nframes)
 			goto invalid;
 		}
 
-		kdb_printf("\n0x%x : 0x%x ",
-		    frame, frame->caller);
+		kdb_printf("%p : 0x%x ", frame, frame->caller);
 		if (frame_index < DUMPFRAMES)
 			raddrs[frame_index] = frame->caller;
 
 		if (kvtophys((vm_offset_t)&(frame->args[3])))
-			kdb_printf("(0x%x 0x%x 0x%x 0x%x) ",
+			kdb_printf("(0x%x 0x%x 0x%x 0x%x) \n",
 			    frame->args[0], frame->args[1],
 			    frame->args[2], frame->args[3]);
 
@@ -1027,7 +1008,7 @@ panic_i386_backtrace(void *_frame, int nframes)
 	goto out;
 
 invalid:
-	kdb_printf("Backtrace terminated-invalid frame pointer 0x%x\n",frame);
+	kdb_printf("Backtrace terminated-invalid frame pointer %p\n",frame);
 out:
 
 	/* Identify kernel modules in the backtrace and display their
@@ -1037,8 +1018,7 @@ out:
 	if (frame_index)
 		kmod_dump((vm_offset_t *)&raddrs[0], frame_index);
 
-	kdb_printf("\nKernel version:\n%s\n\n",version);
-
+	panic_display_system_configuration();
 	/* Release print backtrace lock, to permit other callers in the
 	 * event of panics on multiple processors.
 	 */

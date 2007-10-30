@@ -324,13 +324,14 @@ the fields of the IP header, including the following:
 ip->ip_v = IPVERSION;
 ip->ip_hl = hlen >> 2;
 ip->ip_id = 0;  /* 0 means kernel set appropriate value */
-ip->ip_off = htons(offset);
-ip->ip_len = htons(len);
+ip->ip_off = offset;
+ip->ip_len = len;
 .Ed
 .sp .5
-Additionally note that starting with
-.Tn OpenBSD 2.1
-the ip_off and ip_len fields are in network byte order.
+.Pp
+Note that 
+the ip_off and ip_len fields are in host byte order.
+.Pp
 If the header source address is set to 
 .Dv INADDR_ANY,
 the kernel will choose an appropriate address.
@@ -372,11 +373,11 @@ or longer than the option buffer provided.
 .El
 .Sh SEE ALSO
 .Xr getsockopt 2 ,
-.Xr send 2 ,
 .Xr recv 2 ,
-.Xr intro 4 ,
+.Xr send 2 ,
 .Xr icmp 4 ,
-.Xr inet 4
+.Xr inet 4 ,
+.Xr intro 4
 .Sh HISTORY
 The
 .Nm

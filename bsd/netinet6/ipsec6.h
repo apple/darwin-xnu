@@ -76,7 +76,7 @@ extern const char *ipsec6_logpacketstr(struct ip6_hdr *, u_int32_t);
 extern int ipsec6_output_trans(struct ipsec_output_state *, u_char *,
 	struct mbuf *, struct secpolicy *, int, int *);
 extern int ipsec6_output_tunnel(struct ipsec_output_state *,
-	struct secpolicy *, int);
+				struct secpolicy *, int, int*);
 extern int ipsec6_tunnel_validate(struct mbuf *, int, u_int,
 	struct secasvar *);
 #endif KERNEL_PRIVATE

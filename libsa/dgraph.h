@@ -1,3 +1,36 @@
+/*
+ * Copyright (c) 2007 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 #ifndef __DGRAPH_H__
 #define __DGRAPH_H__
 
@@ -68,6 +101,12 @@ typedef struct dgraph_entry_t {
     unsigned long kernel_hdr_pad;
     int need_cleanup;  // true if load failed with kernel memory allocated
     kmod_t kmod_id;    // the id assigned by the kernel to a loaded kmod
+
+#if CONFIG_MACF_KEXT
+    // module-specific data from the plist
+    kmod_args_t user_data;
+    mach_msg_type_number_t user_data_length;
+#endif
 
 } dgraph_entry_t;
 
@@ -146,6 +185,10 @@ dgraph_entry_t * dgraph_add_dependent(
     void * object,
     size_t object_length,
     bool   object_is_kmem,
+#if CONFIG_MACF_KEXT
+    kmod_args_t user_data,
+    mach_msg_type_number_t user_data_length,
+#endif
 #endif /* KERNEL */
     const char * expected_kmod_name,
     const char * expected_kmod_vers,
@@ -160,11 +203,21 @@ dgraph_entry_t * dgraph_add_dependency(
     void * object,
     size_t object_length,
     bool   object_is_kmem,
+#if CONFIG_MACF_KEXT
+    kmod_args_t user_data,
+    mach_msg_type_number_t user_data_length,
+#endif 
 #endif /* KERNEL */
     const char * expected_kmod_name,
     const char * expected_kmod_vers,
     vm_address_t load_address,
     char is_kernel_component);
+
+dgraph_entry_t ** fill_backward_load_order(
+    dgraph_entry_t ** backward_load_order,
+    unsigned int * list_length,
+    dgraph_entry_t * first_entry,
+    unsigned int * last_index /* out param */);
 
 #ifdef __cplusplus
 }

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -59,6 +65,12 @@
  *
  *	@(#)vfs_init.c	8.5 (Berkeley) 5/11/95
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 
 #include <sys/param.h>
@@ -72,6 +84,14 @@
 #include <sys/errno.h>
 #include <sys/malloc.h>
 
+#include <vfs/vfs_journal.h>	/* journal_init() */
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#include <sys/kauth.h>
+#endif
+#if QUOTA
+#include <sys/quota.h>
+#endif
 
 /*
  * Sigh, such primitive tools are these...
@@ -82,7 +102,8 @@
 #define DODEBUG(A)
 #endif
 
-extern uid_t console_user;
+__private_extern__ void vntblinit(void) __attribute__((section("__TEXT, initcode")));
+
 extern struct vnodeopv_desc *vfs_opv_descs[];
 				/* a list of lists of vnodeops defns */
 extern struct vnodeop_desc *vfs_op_descs[];
@@ -95,14 +116,14 @@ extern struct vnodeop_desc *vfs_op_descs[];
  */
 int vfs_opv_numops;
 
-typedef (*PFI)();   /* the standard Pointer to a Function returning an Int */
+typedef int (*PFIvp)(void *); 
 
 /*
  * A miscellaneous routine.
  * A generic "default" routine that just returns an error.
  */
 int
-vn_default_error()
+vn_default_error(void)
 {
 
 	return (ENOTSUP);
@@ -125,7 +146,7 @@ vn_default_error()
  * that is a(whole)nother story.) This is a feature.
  */
 void
-vfs_opv_init()
+vfs_opv_init(void)
 {
 	int i, j, k;
 	int (***opv_desc_vector_p)(void *);
@@ -142,9 +163,9 @@ vfs_opv_init()
 		 * Also handle backwards compatibility.
 		 */
 		if (*opv_desc_vector_p == NULL) {
-			MALLOC(*opv_desc_vector_p, PFI*,
-			       vfs_opv_numops*sizeof(PFI), M_TEMP, M_WAITOK);
-			bzero (*opv_desc_vector_p, vfs_opv_numops*sizeof(PFI));
+			MALLOC(*opv_desc_vector_p, PFIvp*,
+			       vfs_opv_numops*sizeof(PFIvp), M_TEMP, M_WAITOK);
+			bzero (*opv_desc_vector_p, vfs_opv_numops*sizeof(PFIvp));
 			DODEBUG(printf("vector at %x allocated\n",
 			    opv_desc_vector_p));
 		}
@@ -208,7 +229,7 @@ vfs_opv_init()
  * Initialize known vnode operations vectors.
  */
 void
-vfs_op_init()
+vfs_op_init(void)
 {
 	int i;
 
@@ -245,11 +266,8 @@ lck_attr_t * vnode_lck_attr;
 lck_grp_t * vnode_list_lck_grp;
 lck_grp_attr_t * vnode_list_lck_grp_attr;
 lck_attr_t * vnode_list_lck_attr;
-lck_mtx_t * vnode_list_mtx_lock;
+lck_spin_t * vnode_list_spin_lock;
 lck_mtx_t * spechash_mtx_lock;
-/* Routine to lock and unlock the  vnode lists */
-void vnode_list_lock(void);
-void vnode_list_unlock(void);
 
 /* vars for vfsconf lock */
 lck_grp_t * fsconf_lck_grp;
@@ -268,14 +286,12 @@ lck_grp_attr_t * mnt_list_lck_grp_attr;
 lck_attr_t * mnt_list_lck_attr;
 lck_mtx_t * mnt_list_mtx_lock;
 
-extern void journal_init();
-
 struct mount * dead_mountp;
 /*
  * Initialize the vnode structures and initialize each file system type.
  */
 void
-vfsinit()
+vfsinit(void)
 {
 	struct vfstable *vfsp;
 	int i, maxtypenum;
@@ -290,7 +306,7 @@ vfsinit()
 	vnode_list_lck_attr = lck_attr_alloc_init();
 
 	/* Allocate vnode list lock */
-	vnode_list_mtx_lock = lck_mtx_alloc_init(vnode_list_lck_grp, vnode_list_lck_attr);
+	vnode_list_spin_lock = lck_spin_alloc_init(vnode_list_lck_grp, vnode_list_lck_attr);
 
 	/* Allocate spec hash list lock */
 	spechash_mtx_lock = lck_mtx_alloc_init(vnode_list_lck_grp, vnode_list_lck_attr);
@@ -334,11 +350,6 @@ vfsinit()
 	mnt_lck_attr = lck_attr_alloc_init();
 
 	/*
-	 * Initialize the "console user" for access purposes:
-	 */
-	console_user = (uid_t)0;
-	
-	/*
 	 * Initialize the vnode table
 	 */
 	vntblinit();
@@ -350,10 +361,14 @@ vfsinit()
 	 * Initialize the vnode name cache
 	 */
 	nchinit();
+
+#if JOURNALING
 	/*
 	 * Initialize the journaling locks
 	 */
 	journal_init();
+#endif 
+
 	/*
 	 * Build vnode operation vectors.
 	 */
@@ -370,7 +385,8 @@ vfsinit()
 		if (i) vfsconf[i-1].vfc_next = vfsp;
 		if (maxtypenum <= vfsp->vfc_typenum)
 			maxtypenum = vfsp->vfc_typenum + 1;
-		(*vfsp->vfc_vfsops->vfs_init)(vfsp);
+		/* a vfsconf is a prefix subset of a vfstable... */
+		(*vfsp->vfc_vfsops->vfs_init)((struct vfsconf *)vfsp);
 		
 		lck_mtx_init(&vfsp->vfc_lock, fsconf_lck_grp, fsconf_lck_attr);
 		
@@ -383,6 +399,13 @@ vfsinit()
 	 * Initialize the vnop authorization scope.
 	 */
 	vnode_authorize_init();
+
+	/*
+	 * Initialiize the quota system.
+	 */
+#if QUOTA
+	dqinit();
+#endif
 	
 	/* 
 	 * create a mount point for dead vnodes
@@ -396,6 +419,10 @@ vfsinit()
 	mp->mnt_maxsegreadsize = mp->mnt_maxreadcnt;
 	mp->mnt_maxsegwritesize = mp->mnt_maxwritecnt;
 	mp->mnt_devblocksize = DEV_BSIZE;
+	mp->mnt_alignmentmask = PAGE_MASK;
+	mp->mnt_ioflags = 0;
+	mp->mnt_realrootvp = NULLVP;
+	mp->mnt_authcache_ttl = CACHED_LOOKUP_RIGHT_TTL;
     
 	TAILQ_INIT(&mp->mnt_vnodelist);
 	TAILQ_INIT(&mp->mnt_workerqueue);
@@ -403,29 +430,34 @@ vfsinit()
 	mp->mnt_flag = MNT_LOCAL;
 	mp->mnt_lflag = MNT_LDEAD;
 	mount_lock_init(mp);
+
+#if CONFIG_MACF
+	mac_mount_label_init(mp);
+	mac_mount_label_associate(vfs_context_kernel(), mp);
+#endif
 	dead_mountp = mp;
 }
 
 void
-vnode_list_lock()
+vnode_list_lock(void)
 {
-	lck_mtx_lock(vnode_list_mtx_lock);
+	lck_spin_lock(vnode_list_spin_lock);
 }
 
 void
-vnode_list_unlock()
+vnode_list_unlock(void)
 {
-	lck_mtx_unlock(vnode_list_mtx_lock);
+	lck_spin_unlock(vnode_list_spin_lock);
 }
 
 void
-mount_list_lock()
+mount_list_lock(void)
 {
 	lck_mtx_lock(mnt_list_mtx_lock);
 }
 
 void
-mount_list_unlock()
+mount_list_unlock(void)
 {
 	lck_mtx_unlock(mnt_list_mtx_lock);
 }

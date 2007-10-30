@@ -40,23 +40,46 @@
 .Sh NAME
 .Nm copy ,
 .Nm copyin ,
+.Nm copyinstr ,
 .Nm copyout ,
-.Nm copystr ,
-.Nm copyinstr
+.Nm copystr
 .Nd kernel copy functions
 .Sh SYNOPSIS
 .In sys/types.h
 .In sys/systm.h
 .Ft int
-.Fn copyin "const void *uaddr" "void *kaddr" "size_t len"
+.Fo copyin
+.Fa "const void *uaddr"
+.Fa "void *kaddr"
+.Fa "size_t len"
+.Fc
 .Ft int
-.Fn copyout "const void *kaddr" "void *uaddr" "size_t len"
+.Fo copyinstr
+.Fa "const void *uaddr"
+.Fa "void *kaddr"
+.Fa "size_t len"
+.Fa "size_t *done"
+.Fc
 .Ft int
-.Fn copystr "const void *kfaddr" "void *kdaddr" "size_t len" "size_t *done"
-.Ft int
-.Fn copyinstr "const void *uaddr" "void *kaddr" "size_t len" "size_t *done"
+.Fo copyout
+.Fa "const void *kaddr"
+.Fa "void *uaddr"
+.Fa "size_t len"
+.Fc
 .\" .Ft int
-.\" .Fn copyoutstr "const void *kaddr" "void *uaddr" "size_t len" "size_t *done"
+.\" .Fn copyoutstr
+.\" .Fa "const void *kaddr"
+.\" .Fa "void *uaddr"
+.\" .Fa "size_t len"
+.\" .Fa "size_t *done"
+.\" .Fc
+.Ft int
+.Fo copystr
+.Fa "const void *kfaddr"
+.Fa "void *kdaddr"
+.Fa "size_t len"
+.Fa "size_t *done"
+.Fc
 .Sh DESCRIPTION
 The
 .Nm
@@ -69,6 +92,7 @@ The
 .Nm
 routines provide the following functionality:
 .Bl -tag -width "copyoutstr()"
+.\" ========
 .It Fn copyin
 Copies
 .Pa len
@@ -76,23 +100,7 @@ bytes of data from the user-space address
 .Pa uaddr
 to the kernel-space address
 .Pa kaddr .
-.It Fn copyout
-Copies
-.Pa len
-bytes of data from the kernel-space address
-.Pa kaddr
-to the user-space address
-.Pa uaddr .
-.It Fn copystr
-Copies a NUL-terminated string, at most
-.Pa len
-bytes long, from kernel-space address
-.Pa kfaddr
-to kernel-space address
-.Pa kdaddr .
-The number of bytes actually copied, including the terminating
-NUL, is returned in
-.Pa *done .
+.\" ========
 .It Fn copyinstr
 Copies a NUL-terminated string, at most
 .Pa len
@@ -103,6 +111,15 @@ to kernel-space address
 The number of bytes actually copied, including the terminating
 NUL, is returned in
 .Pa *done .
+.\" ========
+.It Fn copyout
+Copies
+.Pa len
+bytes of data from the kernel-space address
+.Pa kaddr
+to the user-space address
+.Pa uaddr .
+.\" ========
 .\" .It Fn copyoutstr
 .\" Copies a NUL-terminated string, at most
 .\" bytes long, from kernel-space address
@@ -112,6 +129,17 @@ NUL, is returned in
 .\" The number of bytes actually copied, including the terminating
 .\" NUL, is returned in
 .\" .Pa *done .
+.\" ========
+.It Fn copystr
+Copies a NUL-terminated string, at most
+.Pa len
+bytes long, from kernel-space address
+.Pa kfaddr
+to kernel-space address
+.Pa kdaddr .
+The number of bytes actually copied, including the terminating
+NUL, is returned in
+.Pa *done .
 .El
 .Sh RETURN VALUES
 The

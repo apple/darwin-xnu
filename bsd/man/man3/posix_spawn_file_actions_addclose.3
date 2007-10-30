@@ -1,0 +1,154 @@
+.\"
+.\" Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+.\"
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+.\" 
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. The rights granted to you under the License
+.\" may not be used to create, or enable the creation or redistribution of,
+.\" unlawful or unlicensed copies of an Apple operating system, or to
+.\" circumvent, violate, or enable the circumvention or violation of, any
+.\" terms of an Apple operating system software license agreement.
+.\" 
+.\" Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this file.
+.\" 
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\" 
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+.\"
+.\"     @(#)posix_spawn_file_actions_addclose.3
+.
+.Dd August 22, 2007
+.Dt POSIX_SPAWN_FILE_ACTIONS_ADDCLOSE 3
+.Os "Mac OS X"
+.Sh NAME
+.Nm posix_spawn_file_actions_addclose
+.Nm posix_spawn_file_actions_addopen
+.Nd add open or close actions to a
+.Em posix_spawn_file_actions_t
+.Sh SYNOPSIS
+.Fd #include <spawn.h>
+.Ft int
+.Fo posix_spawn_file_actions_addclose
+.Fa "posix_spawn_file_actions_t *file_actions"
+.Fa "int filedes"
+.Fc
+.Ft int
+.Fo posix_spawn_file_actions_addopen
+.Fa "posix_spawn_file_actions_t *restrict file_actions"
+.Fa "int filedes"
+.Fa "const char *restrict path"
+.Fa "int oflag"
+.Fa "mode_t mode"
+.Fc
+.Ft int
+.Fo posix_spawn_file_actions_adddup2
+.Fa "posix_spawn_file_actions_t *file_actions"
+.Fa "int filedes"
+.Fa "int newfiledes"
+.Fc
+.Sh DESCRIPTION
+The
+.Fn posix_spawn_file_actions_addclose
+function adds a close operation to the list of operations associated with
+the object referenced by
+.Em file_actions ,
+for subsequent use in a call to
+.Xr posix_spawn 2
+or 
+.Xr posix_spawnp 2 .
+The descriptor referred to by
+.Em filedes
+is closed as if
+.Fn close
+had been called on it prior to the new child process
+starting execution.
+.Pp
+The
+.Fn posix_spawn_file_actions_addopen
+function adds an open operation to the list of operations associated with
+the object referenced by
+.Em file_actions ,
+for subsequent use in a call to
+.Xr posix_spawn 2
+or 
+.Xr posix_spawnp 2 .
+The descriptor referred to by
+.Em filedes
+is opened using the
+.Em path ,
+.Em oflag ,
+and
+.Em mode
+arguments as if
+.Fn open
+had been called on it prior to the new child process
+starting execution.  The string
+.Em path
+is copied by the
+.Fn posix_spawn_file_actions_addopen
+function during this process, so storage need not be persistent in the
+caller.
+.Pp
+The
+.Fn posix_spawn_file_actions_adddup2
+function adds a dup2 operation to the list of operations associated with
+the object referenced by
+.Em file_actions ,
+for subsequent use in a call to
+.Xr posix_spawn 2
+or 
+.Xr posix_spawnp 2 .
+The descriptor referred to by
+.Em newfiledes
+is created as if
+.Fn dup2
+had been called on
+.Em filedes
+prior to the new child process starting execution.
+.Sh RETURN VALUES
+On success, these functions return 0; on failure they return an error
+number from
+.In errno.h .
+.Sh ERRORS
+These functions may fail if:
+.Bl -tag -width Er
+.\" ==========
+.It Bq Er EBADF
+The value specified by
+.Fa filedes
+is negative or would cause the process to exceed the maximum number of
+open files it is allowed..
+.\" ==========
+.It Bq Er EINVAL
+The value of
+.Fa file_actions
+is invalid.
+.\" ==========
+.It Bq Er ENOMEM
+Insufficient memory was available eo add to the
+.Fa file_actions .
+.El
+.Sh SEE ALSO
+.Xr posix_spawn 2 ,
+.Xr posix_spawnp 2 ,
+.Xr posix_spawn_file_actions_init 3 ,
+.Xr posix_spawn_file_actions_destroy 3 ,
+.Sh STANDARDS
+.St -susv3 [SPN]
+.Sh HISTORY
+The
+.Fn posix_spawn_file_actions_init
+and
+.Fn posix_spawn_file_actions_destroy
+function calls appeared in
+.St -susv3 [SPN] .

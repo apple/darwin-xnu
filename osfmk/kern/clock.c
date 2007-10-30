@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -41,6 +47,12 @@
 #include <mach/mach_traps.h>
 #include <mach/mach_time.h>
 
+uint32_t	hz_tick_interval = 1;
+
+#if CONFIG_DTRACE
+static void clock_track_calend_nowait(void);
+#endif
+
 decl_simple_lock_data(static,clock_lock)
 
 /*
@@ -53,9 +65,35 @@ decl_simple_lock_data(static,clock_lock)
  *	where CONV converts absolute time units into seconds and a fraction.
  */
 static struct clock_calend {
-	uint64_t			epoch;
-	uint64_t			offset;
-}					clock_calend;
+
+	uint64_t	epoch;
+	uint64_t	offset;
+	int64_t		adjtotal;	/* Nanosecond remaining total adjustment */
+	uint64_t	adjdeadline;	/* Absolute time value for next adjustment period */
+	uint32_t	adjinterval;	/* Absolute time interval of adjustment period */
+	int32_t		adjdelta;	/* Nanosecond time delta for this adjustment period */
+	uint64_t	adjstart;	/* Absolute time value for start of this adjustment period */
+	uint32_t	adjoffset;	/* Absolute time offset for this adjustment period as absolute value */
+	uint32_t	adjactive;
+	timer_call_data_t	adjcall;
+} clock_calend;
+
+#if CONFIG_DTRACE
+/*
+ *	Unlocked calendar flipflop; this is used to track a clock_calend such
+ *	that we can safely access a snapshot of a valid  clock_calend structure
+ *	without needing to take any locks to do it.
+ *
+ *	The trick is to use a generation count and set the low bit when it is
+ *	being updated/read; by doing this, we guarantee, through use of the
+ *	hw_atomic functions, that the generation is incremented when the bit
+ *	is cleared atomically (by using a 1 bit add).
+ */
+static struct unlocked_clock_calend {
+	struct clock_calend	calend;		/* copy of calendar */
+	uint32_t		gen;		/* generation count */
+} flipflop[ 2];
+#endif
 
 /*
  *	Calendar adjustment variables and values.
@@ -63,18 +101,6 @@ static struct clock_calend {
 #define calend_adjperiod	(NSEC_PER_SEC / 100)	/* adjustment period, ns */
 #define calend_adjskew		(40 * NSEC_PER_USEC)	/* "standard" skew, ns / period */
 #define	calend_adjbig		(NSEC_PER_SEC)			/* use 10x skew above adjbig ns */
-
-static uint64_t			calend_adjstart;		/* Absolute time value for start of this adjustment period */
-static uint32_t			calend_adjoffset;		/* Absolute time offset for this adjustment period as absolute value */
-
-static int32_t			calend_adjdelta;		/* Nanosecond time delta for this adjustment period */
-static int64_t			calend_adjtotal;		/* Nanosecond remaining total adjustment */
-
-static uint64_t			calend_adjdeadline;		/* Absolute time value for next adjustment period */
-static uint32_t			calend_adjinterval;		/* Absolute time interval of adjustment period */
-
-static timer_call_data_t	calend_adjcall;
-static uint32_t				calend_adjactive;
 
 static uint32_t		calend_set_adjustment(
 						int32_t			*secs,
@@ -117,7 +143,7 @@ clock_config(void)
 {
 	simple_lock_init(&clock_lock, 0);
 
-	timer_call_setup(&calend_adjcall, (timer_call_func_t)calend_adjust_call, NULL);
+	timer_call_setup(&clock_calend.adjcall, (timer_call_func_t)calend_adjust_call, NULL);
 	thread_call_setup(&calend_wakecall, (thread_call_func_t)IOKitResetTime, NULL);
 
 	clock_oldconfig();
@@ -153,7 +179,10 @@ clock_timebase_init(void)
 	uint64_t	abstime;
 
 	nanoseconds_to_absolutetime(calend_adjperiod, &abstime);
-	calend_adjinterval = abstime;
+	clock_calend.adjinterval = abstime;
+
+	nanoseconds_to_absolutetime(NSEC_PER_SEC / 100, &abstime);
+	hz_tick_interval = abstime;
 
 	sched_timebase_init();
 }
@@ -200,16 +229,16 @@ clock_get_calendar_microtime(
 
 	now = mach_absolute_time();
 
-	if (calend_adjdelta < 0) {
+	if (clock_calend.adjdelta < 0) {
 		uint32_t	t32;
 
-		if (now > calend_adjstart) {
-			t32 = now - calend_adjstart;
+		if (now > clock_calend.adjstart) {
+			t32 = now - clock_calend.adjstart;
 
-			if (t32 > calend_adjoffset)
-				now -= calend_adjoffset;
+			if (t32 > clock_calend.adjoffset)
+				now -= clock_calend.adjoffset;
 			else
-				now = calend_adjstart;
+				now = clock_calend.adjstart;
 		}
 	}
 
@@ -246,16 +275,16 @@ clock_get_calendar_nanotime(
 
 	now = mach_absolute_time();
 
-	if (calend_adjdelta < 0) {
+	if (clock_calend.adjdelta < 0) {
 		uint32_t	t32;
 
-		if (now > calend_adjstart) {
-			t32 = now - calend_adjstart;
+		if (now > clock_calend.adjstart) {
+			t32 = now - clock_calend.adjstart;
 
-			if (t32 > calend_adjoffset)
-				now -= calend_adjoffset;
+			if (t32 > clock_calend.adjoffset)
+				now -= clock_calend.adjoffset;
 			else
-				now = calend_adjstart;
+				now = clock_calend.adjstart;
 		}
 	}
 
@@ -294,19 +323,19 @@ clock_gettimeofday(
 
 	now = mach_absolute_time();
 
-	if (calend_adjdelta >= 0) {
+	if (clock_calend.adjdelta >= 0) {
 		clock_gettimeofday_set_commpage(now, clock_calend.epoch, clock_calend.offset, secs, microsecs);
 	}
 	else {
 		uint32_t	t32;
 
-		if (now > calend_adjstart) {
-			t32 = now - calend_adjstart;
+		if (now > clock_calend.adjstart) {
+			t32 = now - clock_calend.adjstart;
 
-			if (t32 > calend_adjoffset)
-				now -= calend_adjoffset;
+			if (t32 > clock_calend.adjoffset)
+				now -= clock_calend.adjoffset;
 			else
-				now = calend_adjstart;
+				now = clock_calend.adjstart;
 		}
 
 		now += clock_calend.offset;
@@ -347,7 +376,7 @@ clock_set_calendar_microtime(
 	s = splclock();
 	simple_lock(&clock_lock);
 
-    commpage_set_timestamp(0,0,0);
+	commpage_disable_timestamp();
 
 	/*
 	 *	Calculate the new calendar epoch based on
@@ -370,7 +399,7 @@ clock_set_calendar_microtime(
 	/*
 	 *	Cancel any adjustment in progress.
 	 */
-	calend_adjdelta = calend_adjtotal = 0;
+	clock_calend.adjdelta = clock_calend.adjtotal = 0;
 
 	simple_unlock(&clock_lock);
 
@@ -385,6 +414,10 @@ clock_set_calendar_microtime(
 	 *	Send host notifications.
 	 */
 	host_notify_calendar_change();
+	
+#if CONFIG_DTRACE
+	clock_track_calend_nowait();
+#endif
 }
 
 /*
@@ -406,7 +439,7 @@ clock_initialize_calendar(void)
 	s = splclock();
 	simple_lock(&clock_lock);
 
-    commpage_set_timestamp(0,0,0);
+	commpage_disable_timestamp();
 
 	if ((int32_t)secs >= (int32_t)clock_boottime) {
 		/*
@@ -431,7 +464,7 @@ clock_initialize_calendar(void)
 		/*
 		 *	 Cancel any adjustment in progress.
 		 */
-		calend_adjdelta = calend_adjtotal = 0;
+		clock_calend.adjdelta = clock_calend.adjtotal = 0;
 	}
 
 	simple_unlock(&clock_lock);
@@ -441,6 +474,10 @@ clock_initialize_calendar(void)
 	 *	Send host notifications.
 	 */
 	host_notify_calendar_change();
+	
+#if CONFIG_DTRACE
+	clock_track_calend_nowait();
+#endif
 }
 
 /*
@@ -478,13 +515,13 @@ clock_adjtime(
 
 	interval = calend_set_adjustment(secs, microsecs);
 	if (interval != 0) {
-		calend_adjdeadline = mach_absolute_time() + interval;
-		if (!timer_call_enter(&calend_adjcall, calend_adjdeadline))
-			calend_adjactive++;
+		clock_calend.adjdeadline = mach_absolute_time() + interval;
+		if (!timer_call_enter(&clock_calend.adjcall, clock_calend.adjdeadline))
+			clock_calend.adjactive++;
 	}
 	else
-	if (timer_call_cancel(&calend_adjcall))
-		calend_adjactive--;
+	if (timer_call_cancel(&clock_calend.adjcall))
+		clock_calend.adjactive--;
 
 	simple_unlock(&clock_lock);
 	splx(s);
@@ -501,11 +538,11 @@ calend_set_adjustment(
 
 	total = (int64_t)*secs * NSEC_PER_SEC + *microsecs * NSEC_PER_USEC;
 
-    commpage_set_timestamp(0,0,0);
+	commpage_disable_timestamp();
 
 	now = mach_absolute_time();
 
-	ototal = calend_adjtotal;
+	ototal = clock_calend.adjtotal;
 
 	if (total != 0) {
 		int32_t		delta = calend_adjskew;
@@ -517,7 +554,7 @@ calend_set_adjustment(
 				delta = total;
 
 			nanoseconds_to_absolutetime((uint64_t)delta, &t64);
-			calend_adjoffset = t64;
+			clock_calend.adjoffset = t64;
 		}
 		else {
 			if (total < -calend_adjbig)
@@ -526,19 +563,19 @@ calend_set_adjustment(
 			if (delta < total)
 				delta = total;
 
-			calend_adjstart = now;
+			clock_calend.adjstart = now;
 
 			nanoseconds_to_absolutetime((uint64_t)-delta, &t64);
-			calend_adjoffset = t64;
+			clock_calend.adjoffset = t64;
 		}
 
-		calend_adjtotal = total;
-		calend_adjdelta = delta;
+		clock_calend.adjtotal = total;
+		clock_calend.adjdelta = delta;
 
-		interval = calend_adjinterval;
+		interval = clock_calend.adjinterval;
 	}
 	else
-		calend_adjdelta = calend_adjtotal = 0;
+		clock_calend.adjdelta = clock_calend.adjtotal = 0;
 
 	if (ototal != 0) {
 		*secs = ototal / NSEC_PER_SEC;
@@ -547,6 +584,10 @@ calend_set_adjustment(
 	else
 		*secs = *microsecs = 0;
 
+#if CONFIG_DTRACE
+	clock_track_calend_nowait();
+#endif
+	
 	return (interval);
 }
 
@@ -559,14 +600,14 @@ calend_adjust_call(void)
 	s = splclock();
 	simple_lock(&clock_lock);
 
-	if (--calend_adjactive == 0) {
+	if (--clock_calend.adjactive == 0) {
 		interval = calend_adjust();
 		if (interval != 0) {
 			clock_deadline_for_periodic_event(interval, mach_absolute_time(),
-																&calend_adjdeadline);
+																&clock_calend.adjdeadline);
 
-			if (!timer_call_enter(&calend_adjcall, calend_adjdeadline))
-				calend_adjactive++;
+			if (!timer_call_enter(&clock_calend.adjcall, clock_calend.adjdeadline))
+				clock_calend.adjactive++;
 		}
 	}
 
@@ -581,41 +622,45 @@ calend_adjust(void)
 	int32_t			delta;
 	uint32_t		interval = 0;
 
-    commpage_set_timestamp(0,0,0);
+	commpage_disable_timestamp();
 
 	now = mach_absolute_time();
 
-	delta = calend_adjdelta;
+	delta = clock_calend.adjdelta;
 
 	if (delta > 0) {
-		clock_calend.offset += calend_adjoffset;
+		clock_calend.offset += clock_calend.adjoffset;
 
-		calend_adjtotal -= delta;
-		if (delta > calend_adjtotal) {
-			calend_adjdelta = delta = calend_adjtotal;
+		clock_calend.adjtotal -= delta;
+		if (delta > clock_calend.adjtotal) {
+			clock_calend.adjdelta = delta = clock_calend.adjtotal;
 
 			nanoseconds_to_absolutetime((uint64_t)delta, &t64);
-			calend_adjoffset = t64;
+			clock_calend.adjoffset = t64;
 		}
 	}
 	else
 	if (delta < 0) {
-		clock_calend.offset -= calend_adjoffset;
+		clock_calend.offset -= clock_calend.adjoffset;
 
-		calend_adjtotal -= delta;
-		if (delta < calend_adjtotal) {
-			calend_adjdelta = delta = calend_adjtotal;
+		clock_calend.adjtotal -= delta;
+		if (delta < clock_calend.adjtotal) {
+			clock_calend.adjdelta = delta = clock_calend.adjtotal;
 
 			nanoseconds_to_absolutetime((uint64_t)-delta, &t64);
-			calend_adjoffset = t64;
+			clock_calend.adjoffset = t64;
 		}
 
-		if (calend_adjdelta != 0)
-			calend_adjstart = now;
+		if (clock_calend.adjdelta != 0)
+			clock_calend.adjstart = now;
 	}
+	
+	if (clock_calend.adjdelta != 0)
+		interval = clock_calend.adjinterval;
 
-	if (calend_adjdelta != 0)
-		interval = calend_adjinterval;
+#if CONFIG_DTRACE
+	clock_track_calend_nowait();
+#endif
 
 	return (interval);
 }
@@ -747,3 +792,101 @@ clock_deadline_for_periodic_event(
 			*deadline = abstime + interval;
 	}
 }
+
+#if CONFIG_DTRACE
+
+/*
+ * clock_get_calendar_nanotime_nowait
+ *
+ * Description:	Non-blocking version of clock_get_calendar_nanotime()
+ *
+ * Notes:	This function operates by separately tracking calendar time
+ *		updates using a two element structure to copy the calendar
+ *		state, which may be asynchronously modified.  It utilizes
+ *		barrier instructions in the tracking process and in the local
+ *		stable snapshot process in order to ensure that a consistent
+ *		snapshot is used to perform the calculation.
+ */
+void
+clock_get_calendar_nanotime_nowait(
+	uint32_t			*secs,
+	uint32_t			*nanosecs)
+{
+	int i = 0;
+	uint64_t		now;
+	struct unlocked_clock_calend stable;
+
+	for (;;) {
+		stable = flipflop[i];		/* take snapshot */
+
+		/*
+		 * Use a barrier instructions to ensure atomicity.  We AND
+		 * off the "in progress" bit to get the current generation
+		 * count.
+		 */
+		(void)hw_atomic_and(&stable.gen, ~(uint32_t)1);
+
+		/*
+		 * If an update _is_ in progress, the generation count will be
+		 * off by one, if it _was_ in progress, it will be off by two,
+		 * and if we caught it at a good time, it will be equal (and
+		 * our snapshot is threfore stable).
+		 */
+		if (flipflop[i].gen == stable.gen)
+			break;
+
+		/* Switch to the oher element of the flipflop, and try again. */
+		i ^= 1;
+	}
+
+	now = mach_absolute_time();
+
+	if (stable.calend.adjdelta < 0) {
+		uint32_t	t32;
+
+		if (now > stable.calend.adjstart) {
+			t32 = now - stable.calend.adjstart;
+
+			if (t32 > stable.calend.adjoffset)
+				now -= stable.calend.adjoffset;
+			else
+				now = stable.calend.adjstart;
+		}
+	}
+
+	now += stable.calend.offset;
+
+	absolutetime_to_microtime(now, secs, nanosecs);
+	*nanosecs *= NSEC_PER_USEC;
+
+	*secs += stable.calend.epoch;
+}
+
+static void 
+clock_track_calend_nowait(void)
+{
+	int i;
+
+	for (i = 0; i < 2; i++) {
+		struct clock_calend tmp = clock_calend;
+
+		/*
+		 * Set the low bit if the generation count; since we use a
+		 * barrier instruction to do this, we are guaranteed that this
+		 * will flag an update in progress to an async caller trying
+		 * to examine the contents.
+		 */
+		(void)hw_atomic_or(&flipflop[i].gen, 1);
+
+		flipflop[i].calend = tmp;
+
+		/*
+		 * Increment the generation count to clear the low bit to
+		 * signal completion.  If a caller compares the generation
+		 * count after taking a copy while in progress, the count
+		 * will be off by two.
+		 */
+		(void)hw_atomic_add(&flipflop[i].gen, 1);
+	}
+}
+#endif /* CONFIG_DTRACE */

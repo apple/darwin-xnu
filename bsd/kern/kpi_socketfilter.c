@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <sys/kpi_socketfilter.h>
@@ -29,6 +35,8 @@
 #include <sys/protosw.h>
 #include <kern/locks.h>
 #include <net/kext_net.h>
+
+#include <string.h>
 
 static struct socket_filter_list	sock_filter_head;
 static lck_mtx_t					*sock_filter_lock = 0;
@@ -273,7 +281,6 @@ sflt_detach_private(
 	struct socket_filter_entry *entry,
 	int	unregistering)
 {
-	struct socket *so = entry->sfe_socket;
 	struct socket_filter_entry **next_ptr;
 	int				detached = 0;
 	int				found = 0;
@@ -407,53 +414,74 @@ sflt_detach(
 errno_t
 sflt_register(
 	const struct sflt_filter	*filter,
-	int							domain,
-	int							type,
-	int							protocol)
+	int				domain,
+	int				type,
+	int				protocol)
 {
 	struct socket_filter *sock_filt = NULL;
 	struct socket_filter *match = NULL;
 	int error = 0;
 	struct protosw *pr = pffindproto(domain, protocol, type);
-	
-	if (pr == NULL) return ENOENT;
-	
-	if (filter->sf_attach == NULL || filter->sf_detach == NULL) return EINVAL;
-	if (filter->sf_handle == 0) return EINVAL;
-	if (filter->sf_name == NULL) return EINVAL;
+	unsigned int len;
+
+	if (pr == NULL)
+		return ENOENT;
+
+	if (filter->sf_attach == NULL || filter->sf_detach == NULL ||
+	    filter->sf_handle == 0 || filter->sf_name == NULL)
+		return EINVAL;
 
 	/* Allocate the socket filter */
-	MALLOC(sock_filt, struct socket_filter*, sizeof(*sock_filt), M_IFADDR, M_WAITOK);
+	MALLOC(sock_filt, struct socket_filter *, sizeof (*sock_filt),
+	    M_IFADDR, M_WAITOK);
 	if (sock_filt == NULL) {
 		return ENOBUFS;
 	}
-	
-	bzero(sock_filt, sizeof(*sock_filt));
-	sock_filt->sf_filter = *filter;
-	
+
+	bzero(sock_filt, sizeof (*sock_filt));
+
+	/* Legacy sflt_filter length; current structure minus extended */
+	len = sizeof (*filter) - sizeof (struct sflt_filter_ext);
+	/*
+	 * Include extended fields if filter defines SFLT_EXTENDED.
+	 * We've zeroed out our internal sflt_filter placeholder,
+	 * so any unused portion would have been taken care of.
+	 */
+	if (filter->sf_flags & SFLT_EXTENDED) {
+		unsigned int ext_len = filter->sf_len;
+
+		if (ext_len > sizeof (struct sflt_filter_ext))
+			ext_len = sizeof (struct sflt_filter_ext);
+
+		len += ext_len;
+	}
+	bcopy(filter, &sock_filt->sf_filter, len);
+
 	lck_mtx_lock(sock_filter_lock);
 	/* Look for an existing entry */
 	TAILQ_FOREACH(match, &sock_filter_head, sf_global_next) {
-		if (match->sf_filter.sf_handle == sock_filt->sf_filter.sf_handle) {
+		if (match->sf_filter.sf_handle ==
+		    sock_filt->sf_filter.sf_handle) {
 			break;
 		}
 	}
-	
+
 	/* Add the entry only if there was no existing entry */
 	if (match == NULL) {
 		TAILQ_INSERT_TAIL(&sock_filter_head, sock_filt, sf_global_next);
 		if ((sock_filt->sf_filter.sf_flags & SFLT_GLOBAL) != 0) {
-			TAILQ_INSERT_TAIL(&pr->pr_filter_head, sock_filt, sf_protosw_next);
+			TAILQ_INSERT_TAIL(&pr->pr_filter_head, sock_filt,
+			    sf_protosw_next);
 			sock_filt->sf_proto = pr;
 		}
 	}
 	lck_mtx_unlock(sock_filter_lock);
-	
+
 	if (match != NULL) {
 		FREE(sock_filt, M_IFADDR);
 		return EEXIST;
 	}
-	
+
 	return error;
 }
 
@@ -566,7 +594,7 @@ sock_inject_data_out(
 {
 	int	sosendflags = 0;
 	if (flags & sock_data_filt_flag_oob) sosendflags = MSG_OOB;
-	return sosend(so, (const struct sockaddr*)to, NULL,
+	return sosend(so, (struct sockaddr*)to, NULL,
 				  data, control, sosendflags);
 }
 

@@ -37,25 +37,41 @@
 .Dt MADVISE 2
 .Os
 .Sh NAME
-.Nm madvise
+.Nm madvise ,
+.Nm posix_madvise
 .Nd give advice about use of memory
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
 .Fd #include <sys/mman.h>
 .Ft int
-.Fn madvise "caddr_t addr" "size_t len" "int behav"
+.Fo madvise
+.Fa "void *addr"
+.Fa "size_t len"
+.Fa "int advice"
+.Fc
 .Ft int
-.Fn posix_madvise "caddr_t addr" "size_t len" "int behav"
+.Fo posix_madvise
+.Fa "void *addr"
+.Fa "size_t len"
+.Fa "int advice"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn madvise
-system call allows a process that has knowledge of its memory behavior to describe it to the system. The advice passed in may be used by the system to alter its virtual memory paging strategy. This advice may improve application and system performance. The behavior specified in
-.Fa behav
+system call allows a process that has knowledge of its memory behavior
+to describe it to the system.
+The advice passed in may be used by the system
+to alter its virtual memory paging strategy.
+This advice may improve application and system performance.
+The behavior specified in
+.Fa advice
 can only be one of the following values:
 .Pp
 .Bl -tag -width MADV_SEQUENTIAL
 .It Dv  MADV_NORMAL
-Indicates that the application has no advice to give on its behavior in the specifed address range. This is the system default behavior. This is used with 
+Indicates that the application has no advice to give on its behavior
+in the specified address range.
+This is the system default behavior.
+This is used with 
 .Fn madvise
 system call.
 .It Dv POSIX_MADV_NORMAL
@@ -63,7 +79,9 @@ Same as MADV_NORMAL but used with
 .Fn posix_madvise
 system call.
 .It Dv MADV_SEQUENTIAL
-Indicates that the application expects to access this address range in a sequential manner. This is used with
+Indicates that the application expects to access this address range
+in a sequential manner.
+This is used with
 .Fn madvise
 system call.
 .It Dv POSIX_MADV_SEQUENTIAL
@@ -71,7 +89,9 @@ Same as MADV_SEQUENTIAL but used with
 .Fn posix_madvise
 system call.
 .It Dv MADV_RANDOM
-Indicates that the application expects to access this address range in a random manner. This is used with
+Indicates that the application expects to access this address range
+in a random manner.
+This is used with
 .Fn madvise
 system call.
 .It Dv POSIX_MADV_RANDOM
@@ -79,7 +99,8 @@ Same as MADV_RANDOM but used with
 .Fn posix_madvise
 system call.
 .It Dv MADV_WILLNEED
-Indicates that the application expects to access this address range soon. This is used with
+Indicates that the application expects to access this address range soon.
+This is used with
 .Fn madvise
 system call.
 .It Dv POSIX_MADV_WILLNEED
@@ -87,7 +108,9 @@ Same as MADV_WILLNEED but used with
 .Fn posix_madvise
 system call.
 .It Dv MADV_DONTNEED
-Indicates that the application is not expecting to access this address range soon. This is used with
+Indicates that the application is not expecting
+to access this address range soon.
+This is used with
 .Fn madvise
 system call.
 .It Dv POSIX_MADV_DONTNEED
@@ -95,7 +118,10 @@ Same as MADV_DONTNEED but used with
 .Fn posix_madvise
 system call.
 .It Dv MADV_FREE
-Indicates that the application will not need the information contained in this address range so the pages may be reused right away. The address range will remain valid. This is used with
+Indicates that the application will not need the information contained
+in this address range, so the pages may be reused right away.
+The address range will remain valid.
+This is used with
 .Fn madvise
 system call.
 .El
@@ -105,7 +131,7 @@ The
 behaves same as 
 .Fn madvise
 except that it uses values with POSIX_ prefix for the 
-.Fa behav
+.Fa advice
 system call argument.
 .Sh RETURN VALUES
 Upon successful completion,
@@ -117,29 +143,60 @@ is set to indicate the error.
 .Fn madvise
 fails if one or more of the following are true:
 .Bl -tag -width Er
+.\" ==========
 .It Bq Er EINVAL
 The value of 
-.Fa behav 
+.Fa advice 
 is incorrect.
+.\" ==========
+.It Bq Er EINVAL
+The address range includes unallocated regions.
+.\" ==========
 .It Bq Er ENOMEM
 The virtual address range specified by the 
 .Fa addr
 and
 .Fa len
 are outside the range allowed for the address space.
-.It Bq Er EINVAL
-The address range includes unallocated regions.
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/mman.h>
+.Pp
+.Ft int
+.br
+.Fo madvise
+.Fa "caddr_t addr"
+.Fa "size_t len"
+.Fa "int advice"
+.Fc ;
+.Pp
+.Ft int
+.br
+.Fo posix_madvise
+.Fa "caddr_t addr"
+.Fa "size_t len"
+.Fa "int advice"
+.Fc ;
+.Pp
+The include file
+.In sys/types.h
+is necessary.
+The type of
+.Fa addr
+has changed.
 .Sh SEE ALSO
 .Xr mincore 2 ,
 .Xr minherit 2 ,
 .Xr mprotect 2 , 
 .Xr msync 2 ,
-.Xr munmap 2
+.Xr munmap 2 ,
+.Xr compat 5
 .Sh HISTORY
 The
 .Nm madvise
 function first appeared in 4.4BSD.
 The
 .Nm posix_madvise
-function is part of IEEE 1003.1-2001 and was first implemented in Mac OS X 10.2.
+function is part of IEEE 1003.1-2001
+and was first implemented in Mac OS X 10.2.

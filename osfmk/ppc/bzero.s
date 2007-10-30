@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2002 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <ppc/asm.h>
@@ -30,7 +36,28 @@
         .globl	_bzero
         .globl	_bzero_nc
         .globl	_bzero_phys
+        .globl	_bzero_phys_nc
 
+
+// *****************************
+// * B Z E R O _ P H Y S _ N C *
+// *****************************
+//
+// void bzero_phys_nc(addr64_t phys_addr, uint32_t length);
+//
+// Takes a phys addr in (r3,r4), and length in r5.  NO CACHING
+
+        .align	5
+LEXT(bzero_phys_nc)
+        mflr	r12				// save return address
+        rlwinm	r3,r3,0,1,0		// coallesce long-long in (r3,r4) into reg64_t in r3
+        rlwimi	r3,r4,0,0,31
+        mr		r4,r5			// put length where bzero() expects it
+        bl		EXT(ml_set_physical_get_ffs)	// turn DR off, SF on, features in cr6, old MSR in r11
+        bl		EXT(bzero_nc)		// use normal bzero() routine
+        mtlr	r12				// restore return
+        b		EXT(ml_restore)		// restore MSR, turning DR on and SF off
+        
 
 // ***********************
 // * B Z E R O _ P H Y S *

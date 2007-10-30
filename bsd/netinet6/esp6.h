@@ -40,7 +40,7 @@
 
 #ifdef KERNEL_PRIVATE
 extern int esp6_output(struct mbuf *, u_char *, struct mbuf *,
-	struct ipsecrequest *);
+	struct secasvar *);
 extern int esp6_input(struct mbuf **, int *);
 
 extern void esp6_ctlinput(int, struct sockaddr *, void *);

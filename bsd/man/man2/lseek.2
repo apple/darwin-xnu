@@ -42,7 +42,11 @@
 .Sh SYNOPSIS
 .Fd #include <unistd.h>
 .Ft off_t
-.Fn lseek "int fildes" "off_t offset" "int whence"
+.Fo lseek
+.Fa "int fildes"
+.Fa "off_t offset"
+.Fa "int whence"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn lseek
@@ -50,9 +54,9 @@ function repositions the offset of the file descriptor
 .Fa fildes
 to the
 argument
-.Fa offset
+.Fa offset ,
 according to the directive
-.Fa whence.
+.Fa whence .
 The argument
 .Fa fildes
 must be an open
@@ -112,15 +116,29 @@ the error.
 .Fn Lseek
 will fail and the file pointer will remain unchanged if:
 .Bl -tag -width Er
+.\" ==========
 .It Bq Er EBADF
 .Em Fildes
 is not an open file descriptor.
-.It Bq Er ESPIPE
-.Em Fildes
-is associated with a pipe, socket, or FIFO.
+.\" ==========
 .It Bq Er EINVAL
 .Fa Whence
 is not a proper value.
+.\" ==========
+.It Bq Er EINVAL
+The seek location (calculated from
+.Fa offset
+and
+.Fa whence )
+is negative.
+.\" ==========
+.It Bq Er EOVERFLOW
+The seek location is too large to be stored
+in an object of type off_t.
+.\" ==========
+.It Bq Er ESPIPE
+.Em Fildes
+is associated with a pipe, socket, or FIFO.
 .El
 .Sh SEE ALSO
 .Xr dup 2 ,

@@ -40,10 +40,11 @@
 .Nm setsid
 .Nd create session and set process group ID
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
 .Fd #include <unistd.h>
 .Ft pid_t
-.Fn setsid "void"
+.Fo setsid
+.Fa void
+.Fc
 .Sh DESCRIPTION
 The
 .Nm setsid
@@ -70,10 +71,18 @@ The calling process is already a process group leader, or the process
 group ID of a process other than the calling process matches the process
 ID of the calling process.
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <unistd.h>
+.Pp
+The include file
+.In sys/types.h
+is necessary.
 .Sh SEE ALSO
 .Xr setpgid 3 ,
 .Xr tcgetpgrp 3 ,
-.Xr tcsetpgrp 3
+.Xr tcsetpgrp 3 ,
+.Xr compat 5
 .Sh STANDARDS
 The
 .Nm setsid

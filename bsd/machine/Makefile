@@ -9,15 +9,17 @@ include $(MakeInc_def)
 
 
 DATAFILES = \
-	byte_order.h  endian.h \
+	byte_order.h  endian.h fasttrap_isa.h \
 	param.h  profile.h \
 	setjmp.h signal.h  types.h\
-	ucontext.h vmparam.h _types.h _limits.h
+	vmparam.h _structs.h _types.h _limits.h _param.h
+
 KERNELFILES = \
+	disklabel.h \
 	byte_order.h  endian.h \
 	param.h   profile.h \
 	signal.h spl.h types.h \
-	 vmparam.h _types.h _limits.h
+	vmparam.h _structs.h _types.h _limits.h _param.h
 
 
 INSTALL_MI_LIST = ${DATAFILES}

@@ -35,7 +35,11 @@
 .Sh SYNOPSIS
 .In aio.h
 .Ft int
-.Fn aio_suspend "const struct aiocb * const iocbs[]" "int niocb" "const struct timespec * timeout"
+.Fo aio_suspend
+.Fa "const struct aiocb *const list[]"
+.Fa "int nent"
+.Fa "const struct timespec *timeout"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn aio_suspend
@@ -46,10 +50,10 @@ delivered, or the
 has passed.
 .Pp
 The
-.Fa iocbs
+.Fa list
 argument
 is an array of
-.Fa niocb
+.Fa nent
 pointers to asynchronous I/O requests.  Array members containing
 NULL will be silently ignored.
 .Pp
@@ -63,10 +67,10 @@ poll, the
 .Fa timeout
 should point to a zero-value timespec structure.
 .Sh RETURN VALUES
-If one or more of the specified asynchronous I/O requests have
-completed,
+If one or more of the specified asynchronous I/O requests have completed,
 .Fn aio_suspend
-returns 0.  Otherwise it returns -1 and sets
+returns 0.
+Otherwise, it returns -1 and sets
 .Va errno
 to indicate the error, as enumerated below.
 .Sh ERRORS
@@ -75,19 +79,21 @@ The
 system call will fail if:
 .Bl -tag -width Er
 .It Bq Er EAGAIN
-the
+The
 .Fa timeout
-expired before any I/O requests completed.
+expired before any of the listed I/O requests completed.
+.\" ==========
+.It Bq Er EINTR
+The suspend was interrupted by a signal.
+.\" ==========
 .It Bq Er EINVAL
 The
-.Fa iocbs
+.Fa list
 argument
 contains more than
 .Dv AIO_LISTIO_MAX
 asynchronous I/O requests, or at least one of the requests is not
 valid.
-.It Bq Er EINTR
-the suspend was interrupted by a signal.
 .El
 .Sh SEE ALSO
 .Xr aio_cancel 2 ,

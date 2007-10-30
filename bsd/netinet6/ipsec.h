@@ -42,6 +42,17 @@
 #ifdef KERNEL_PRIVATE
 #include <netkey/keydb.h>
 
+/* lock for IPSec stats */
+lck_grp_t         *sadb_stat_mutex_grp;
+lck_grp_attr_t    *sadb_stat_mutex_grp_attr;
+lck_attr_t        *sadb_stat_mutex_attr;
+lck_mtx_t         *sadb_stat_mutex;
+
+
+#define IPSEC_STAT_INCREMENT(x)	\
+	{lck_mtx_lock(sadb_stat_mutex); (x)++; lck_mtx_unlock(sadb_stat_mutex);}
+
+
 /*
  * Security Policy Index
  * Ensure that both address families in the "src" and "dst" are same.
@@ -101,7 +112,6 @@ struct ipsecrequest {
 				/* if __ss_len == 0 then no address specified.*/
 	u_int level;		/* IPsec level defined below. */
 
-	struct secasvar *sav;	/* place holder of SA for use */
 	struct secpolicy *sp;	/* back pointer to SP */
 };
 
@@ -157,6 +167,7 @@ struct secspacq {
 #define IPSEC_POLICY_IPSEC	2	/* do IPsec */
 #define IPSEC_POLICY_ENTRUST	3	/* consulting SPD if present. */
 #define IPSEC_POLICY_BYPASS	4	/* only for privileged socket. */
+#define IPSEC_POLICY_GENERATE   5       /* same as discard - IKE daemon can override with generated policy */
 
 /* Security protocol level */
 #define	IPSEC_LEVEL_DEFAULT	0	/* reference to system default */
@@ -318,6 +329,7 @@ extern int ipsec_updatereplay(u_int32_t, struct secasvar *);
 
 extern size_t ipsec4_hdrsiz(struct mbuf *, u_int, struct inpcb *);
 extern size_t ipsec_hdrsiz_tcp(struct tcpcb *);
+extern size_t ipsec_hdrsiz(struct secpolicy *);
 
 struct ip;
 extern const char *ipsec4_logpacketstr(struct ip *, u_int32_t);
@@ -326,7 +338,7 @@ extern const char *ipsec_logsastr(struct secasvar *);
 extern void ipsec_dumpmbuf(struct mbuf *);
 
 extern int ipsec4_output(struct ipsec_output_state *, struct secpolicy *, int);
-extern int ipsec4_tunnel_validate(struct mbuf *, int, u_int, struct secasvar *);
+extern int ipsec4_tunnel_validate(struct mbuf *, int, u_int, struct secasvar *, sa_family_t *);
 extern struct mbuf *ipsec_copypkt(struct mbuf *);
 extern void ipsec_delaux(struct mbuf *);
 extern int ipsec_setsocket(struct mbuf *, struct socket *);

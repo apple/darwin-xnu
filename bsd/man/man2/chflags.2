@@ -60,15 +60,19 @@ The flags specified are formed by
 .Em or Ns 'ing
 the following values
 .Pp
-.Bl -tag -width "SF_IMMUTABLE" -compact -offset indent
+.Bl -tag -width "SF_IMMUTABLEX" -compact -offset indent
 .It UF_NODUMP
 Do not dump the file.
 .It UF_IMMUTABLE
 The file may not be changed.
 .It UF_APPEND
 The file may only be appended to.
-.\".It ARCHIVED
-.\"File is archived.
+.It UF_OPAQUE
+The directory is opaque when viewed through a union stack.
+.It UF_HIDDEN
+The file or directory is not intended to be displayed to the user.
+.It SF_ARCHIVED
+The file has been archived.
 .It SF_IMMUTABLE
 The file may not be changed.
 .It SF_APPEND
@@ -76,12 +80,15 @@ The file may only be appended to.
 .El
 .Pp
 The
-.Dq UF_IMMUTABLE
+.Dq UF_IMMUTABLE ,
+.Dq UF_APPEND ,
+.Dq UF_OPAQUE ,
 and
-.Dq UF_APPEND
+.Dq UF_HIDDEN
 flags may be set or unset by either the owner of a file or the super-user.
 .Pp
 The
+.Dq SF_ARCHIVED ,
 .Dq SF_IMMUTABLE
 and
 .Dq SF_APPEND
@@ -148,6 +155,8 @@ error occurred while reading from or writing to the file system.
 .El
 .Sh SEE ALSO
 .Xr chflags 1 ,
+.Xr fflagstostr 3 ,
+.Xr strtofflags 3 ,
 .Xr init 8
 .Sh HISTORY
 The

@@ -64,7 +64,12 @@
  *
  *	@(#)ip_output.c	8.3 (Berkeley) 1/21/94
  */
-
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 #include <sys/param.h>
 #include <sys/malloc.h>
@@ -80,6 +85,7 @@
 
 #include <net/if.h>
 #include <net/route.h>
+#include <net/dlil.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -98,9 +104,12 @@
 #endif
 #include <netkey/key.h>
 extern int ipsec_bypass;
-extern lck_mtx_t *sadb_mutex;
-extern lck_mtx_t *nd6_mutex;
 #endif /* IPSEC */
+extern lck_mtx_t *nd6_mutex;
+
+#if CONFIG_MACF_NET
+#include <security/mac.h>
+#endif /* MAC_NET */
 
 #include <netinet6/ip6_fw.h>
 
@@ -222,7 +231,6 @@ ip6_output(
 	if (ipsec_bypass != 0)
 		goto skip_ipsec;
 	
-	lck_mtx_lock(sadb_mutex);
 	/* get a security policy for this packet */
 	if (so == NULL)
 		sp = ipsec6_getpolicybyaddr(m, IPSEC_DIR_OUTBOUND, 0, &error);
@@ -230,8 +238,7 @@ ip6_output(
 		sp = ipsec6_getpolicybysock(m, IPSEC_DIR_OUTBOUND, so, &error);
 
 	if (sp == NULL) {
-		ipsec6stat.out_inval++;
-		lck_mtx_unlock(sadb_mutex);
+		IPSEC_STAT_INCREMENT(ipsec6stat.out_inval);
 		goto freehdrs;
 	}
 
@@ -240,11 +247,11 @@ ip6_output(
 	/* check policy */
 	switch (sp->policy) {
 	case IPSEC_POLICY_DISCARD:
+	case IPSEC_POLICY_GENERATE:
 		/*
 		 * This packet is just discarded.
 		 */
-		ipsec6stat.out_polvio++;
-		lck_mtx_unlock(sadb_mutex);
+		IPSEC_STAT_INCREMENT(ipsec6stat.out_polvio);
 		goto freehdrs;
 
 	case IPSEC_POLICY_BYPASS:
@@ -257,7 +264,6 @@ ip6_output(
 		if (sp->req == NULL) {
 			/* acquire a policy */
 			error = key_spdacquire(sp);
-			lck_mtx_unlock(sadb_mutex);
 			goto freehdrs;
 		}
 		needipsec = 1;
@@ -267,7 +273,6 @@ ip6_output(
 	default:
 		printf("ip6_output: Invalid policy found. %d\n", sp->policy);
 	}
-	lck_mtx_unlock(sadb_mutex);
 	skip_ipsec:
 #endif /* IPSEC */
 
@@ -458,10 +463,8 @@ ip6_output(
 		bzero(&state, sizeof(state));
 		state.m = m;
 		lck_mtx_unlock(ip6_mutex);
-		lck_mtx_lock(sadb_mutex);
 		error = ipsec6_output_trans(&state, nexthdrp, mprev, sp, flags,
 			&needipsectun);
-		lck_mtx_unlock(sadb_mutex);
 		lck_mtx_lock(ip6_mutex);
 		m = state.m;
 		if (error) {
@@ -572,6 +575,7 @@ skip_ipsec2:;
 #if IPSEC
 	if (needipsec && needipsectun) {
 		struct ipsec_output_state state;
+		int tunneledv4 = 0;
 
 		/*
 		 * All the extension headers will become inaccessible
@@ -589,10 +593,10 @@ skip_ipsec2:;
 		state.ro = (struct route *)ro;
 		state.dst = (struct sockaddr *)dst;
 		lck_mtx_unlock(ip6_mutex);
-		lck_mtx_lock(sadb_mutex);
-		error = ipsec6_output_tunnel(&state, sp, flags);
-		lck_mtx_unlock(sadb_mutex);
+		error = ipsec6_output_tunnel(&state, sp, flags, &tunneledv4);
 		lck_mtx_lock(ip6_mutex);
+		if (tunneledv4)	/* tunneled in IPv4 - packet is gone */
+			goto done;
 		m = state.m;
 		ro = (struct route_in6 *)state.ro;
 		dst = (struct sockaddr_in6 *)state.dst;
@@ -615,7 +619,6 @@ skip_ipsec2:;
 				error = 0;
 				break;
 			}
-			lck_mtx_unlock(sadb_mutex);
 			goto bad;
 		}
 
@@ -719,7 +722,7 @@ skip_ipsec2:;
 				in6_ifstat_inc(ifp, ifs6_out_discard);
 				goto bad;
 			} else {
-				ifp = &loif[0];
+				ifp = lo_ifp;
 			}
 		}
 
@@ -736,8 +739,8 @@ skip_ipsec2:;
 		if (ifp == NULL) {
 			lck_mtx_lock(rt_mtx);
 			if (ro->ro_rt == 0) {
-				ro->ro_rt = rtalloc1_locked((struct sockaddr *)
-						&ro->ro_dst, 0, 0UL);
+				ro->ro_rt = rtalloc1_locked(
+				    (struct sockaddr *)&ro->ro_dst, 0, 0UL);
 			}
 			if (ro->ro_rt == 0) {
 				ip6stat.ip6s_noroute++;
@@ -790,7 +793,7 @@ skip_ipsec2:;
 			 * if necessary.
 			 */
 			if (ip6_mrouter && (flags & IPV6_FORWARDING) == 0) {
-				if (ip6_mforward(ip6, ifp, m) != NULL) {
+				if (ip6_mforward(ip6, ifp, m) != 0) {
 					m_freem(m);
 					goto done;
 				}
@@ -840,7 +843,7 @@ skip_ipsec2:;
 		}
 	}
 	if (ro_pmtu->ro_rt != NULL) {
-		u_int32_t ifmtu = nd_ifinfo[ifp->if_index].linkmtu;
+		u_int32_t ifmtu = IN6_LINKMTU(ifp);
 
 		mtu = ro_pmtu->ro_rt->rt_rmx.rmx_mtu;
 		if (mtu > ifmtu || mtu == 0) {
@@ -860,7 +863,7 @@ skip_ipsec2:;
 				 ro_pmtu->ro_rt->rt_rmx.rmx_mtu = mtu; /* XXX */
 		}
 	} else {
-		mtu = nd_ifinfo[ifp->if_index].linkmtu;
+		mtu = IN6_LINKMTU(ifp);
 	}
 
 	/*
@@ -1017,7 +1020,7 @@ skip_ipsec2:;
 		goto bad;
 	} else {
 		struct mbuf **mnext, *m_frgpart;
-		struct ip6_frag *ip6f;
+		struct ip6_frag *ip6f = NULL;
 		u_int32_t id = htonl(ip6_id++);
 		u_char nextproto;
 
@@ -1064,7 +1067,7 @@ skip_ipsec2:;
 		 */
 		m0 = m;
 		for (off = hlen; off < tlen; off += len) {
-			MGETHDR(m, M_DONTWAIT, MT_HEADER);
+			MGETHDR(m, M_DONTWAIT, MT_HEADER);	/* MAC-OK */
 			if (!m) {
 				error = ENOBUFS;
 				ip6stat.ip6s_odropped++;
@@ -1100,6 +1103,11 @@ skip_ipsec2:;
 			m->m_pkthdr.len = len + hlen + sizeof(*ip6f);
 			m->m_pkthdr.rcvif = 0;
 			m->m_pkthdr.socket_id = m0->m_pkthdr.socket_id;
+#ifdef __darwin8_notyet
+#if CONFIG_MACF_NET
+			mac_create_fragment(m0, m);
+#endif
+#endif
 			ip6f->ip6f_reserved = 0;
 			ip6f->ip6f_ident = id;
 			ip6f->ip6f_nxt = nextproto;
@@ -1151,11 +1159,8 @@ done:
 	}
 
 #if IPSEC
-	if (sp != NULL) {
-		lck_mtx_lock(sadb_mutex);
-		key_freesp(sp);
-		lck_mtx_unlock(sadb_mutex);
-	}
+	if (sp != NULL)
+		key_freesp(sp, KEY_SADB_UNLOCKED);
 #endif /* IPSEC */
 
 	return(error);
@@ -1267,7 +1272,7 @@ ip6_insert_jumboopt(exthdrs, plen)
 			n->m_len = oldoptlen + JUMBOOPTLEN;
 			bcopy(mtod(mopt, caddr_t), mtod(n, caddr_t),
 			      oldoptlen);
-			optbuf = mtod(n, caddr_t) + oldoptlen;
+			optbuf = (u_char *) (mtod(n, caddr_t) + oldoptlen);
 			m_freem(mopt);
 			mopt = exthdrs->ip6e_hbh = n;
 		} else {
@@ -1344,7 +1349,7 @@ ip6_insertfraghdr(m0, m, hlen, frghdrp)
 	return(0);
 }
 
-extern int load_ipfw();
+extern int load_ipfw(void);
 
 /*
  * IP6 socket option processing.
@@ -1357,9 +1362,9 @@ ip6_ctloutput(so, sopt)
 	int privileged;
 	struct inpcb *in6p = sotoinpcb(so);
 	int error, optval;
-	int level, op, optname;
-	int optlen;
-	struct proc *p;
+	int level, op = -1, optname = 0;
+	int optlen = 0;
+	struct proc *p = NULL;
 
 	level = error = optval = 0;
 	if (sopt == NULL) 
@@ -1388,10 +1393,10 @@ ip6_ctloutput(so, sopt)
 					break;
 				}
 				error = soopt_getm(sopt, &m); /* XXX */
-				if (error != NULL)
+				if (error != 0)
 					break;
 				error = soopt_mcopyin(sopt, m); /* XXX */
-				if (error != NULL)
+				if (error != 0)
 					break;
 				error = ip6_pcbopts(&in6p->in6p_outputopts,
 						    m, so, sopt);
@@ -1591,15 +1596,14 @@ do { \
 					req = mtod(m, caddr_t);
 					len = m->m_len;
 				}
-				lck_mtx_lock(sadb_mutex);
 				error = ipsec6_set_policy(in6p, optname, req,
 				                          len, privileged);
-				lck_mtx_unlock(sadb_mutex);
 				m_freem(m);
 			    }
 				break;
 #endif /* KAME IPSEC */
 
+#if IPFIREWALL
 			case IPV6_FW_ADD:
 			case IPV6_FW_DEL:
 			case IPV6_FW_FLUSH:
@@ -1611,6 +1615,7 @@ do { \
 				error = (*ip6_fw_ctl_ptr)(sopt);
 				}
 				break;
+#endif /* IPFIREWALL */
 
 			default:
 				error = ENOPROTOOPT;
@@ -1737,18 +1742,16 @@ do { \
                                         break;
                                 }
 				error = soopt_getm(sopt, &m); /* XXX */
-				if (error != NULL)
+				if (error != 0)
 					break;
 				error = soopt_mcopyin(sopt, m); /* XXX */
-				if (error != NULL)
+				if (error != 0)
 					break;
 				if (m) {
 					req = mtod(m, caddr_t);
 					len = m->m_len;
 				}
-				lck_mtx_lock(sadb_mutex);
 				error = ipsec6_get_policy(in6p, req, len, mp);
-				lck_mtx_unlock(sadb_mutex);
 				if (error == 0)
 					error = soopt_mcopyout(sopt, m); /*XXX*/
 				if (error == 0 && m)
@@ -1757,6 +1760,7 @@ do { \
 			  }
 #endif /* KAME IPSEC */
 
+#if IPFIREWALL
 			case IPV6_FW_GET:
 				{
 				if (ip6_fw_ctl_ptr == NULL && load_ipfw() != 0)
@@ -1765,6 +1769,7 @@ do { \
 				error = (*ip6_fw_ctl_ptr)(sopt);
 				}
 				break;
+#endif /* IPFIREWALL */
 
 			default:
 				error = ENOPROTOOPT;
@@ -1783,11 +1788,11 @@ do { \
  * specifying behavior of outgoing packets.
  */
 static int
-ip6_pcbopts(pktopt, m, so, sopt)
-	struct ip6_pktopts **pktopt;
-	struct mbuf *m;
-	struct socket *so;
-	struct sockopt *sopt;
+ip6_pcbopts(
+	struct ip6_pktopts **pktopt,
+	struct mbuf *m,
+	__unused struct socket *so,
+	struct sockopt *sopt)
 {
 	struct ip6_pktopts *opt = *pktopt;
 	int error = 0;
@@ -1982,7 +1987,6 @@ ip6_setmoptions(
 	struct route_in6 ro;
 	struct sockaddr_in6 *dst;
 	struct in6_multi_mship *imm;
-	struct proc *p = current_proc();	/* XXX */
 
 	if (im6o == NULL) {
 		/*
@@ -2155,7 +2159,7 @@ ip6_setmoptions(
 			 *   XXX: is it a good approach?
 			 */
 			if (IN6_IS_ADDR_MC_NODELOCAL(&mreq->ipv6mr_multiaddr)) {
-				ifp = &loif[0];
+				ifp = lo_ifp;
 			} else {
 				ro.ro_rt = NULL;
 				dst = (struct sockaddr_in6 *)&ro.ro_dst;
@@ -2711,7 +2715,7 @@ ip6_splithdr(m, exthdrs)
 
 	ip6 = mtod(m, struct ip6_hdr *);
 	if (m->m_len > sizeof(*ip6)) {
-		MGETHDR(mh, M_DONTWAIT, MT_HEADER);
+		MGETHDR(mh, M_DONTWAIT, MT_HEADER);	/* MAC-OK */
 		if (mh == 0) {
 			m_freem(m);
 			return ENOBUFS;
@@ -2755,3 +2759,4 @@ ip6_optlen(in6p)
 	return len;
 #undef elen
 }
+

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995, 1997 Apple Computer, Inc. All Rights Reserved */
 /*
@@ -59,6 +65,12 @@
  *
  *	@(#)kern_descrip.c	8.8 (Berkeley) 2/14/95
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2006 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -92,28 +104,41 @@
 #include <kern/kalloc.h>
 #include <libkern/OSAtomic.h>
 
+#include <sys/ubc.h>
+
 struct psemnode;
 struct pshmnode;
 
-int fdopen(dev_t dev, int mode, int type, struct proc *p);
-int ogetdtablesize(struct proc *p, void *uap, register_t *retval);
-int finishdup(struct proc * p, struct filedesc *fdp, int old, int new, register_t *retval);
+int fdopen(dev_t dev, int mode, int type, proc_t p);
+int finishdup(proc_t p, struct filedesc *fdp, int old, int new, register_t *retval);
 
-int closef(struct fileglob *fg, struct proc *p);
-int falloc_locked(struct proc *p, struct fileproc **resultfp, int *resultfd, int locked);
-void fddrop(struct proc *p, int fd);
-int fdgetf_noref(struct proc *p, int fd, struct fileproc **resultfp);
+int falloc_locked(proc_t p, struct fileproc **resultfp, int *resultfd, vfs_context_t ctx, int locked);
+int fdgetf_noref(proc_t p, int fd, struct fileproc **resultfp);
 void fg_drop(struct fileproc * fp);
 void fg_free(struct fileglob *fg);
 void fg_ref(struct fileproc * fp);
 
-static int closef_finish(struct fileproc *fp, struct fileglob *fg, struct proc *p);
+/* flags for close_internal_locked */
+#define FD_DUP2RESV 1
+static int close_internal_locked(struct proc *p, int fd, struct fileproc *fp, int flags);
 
-extern void file_lock_init(void);
-extern int is_suser(void);
-extern int kqueue_stat(struct fileproc *fp, struct stat *st, struct proc *p);
-extern int soo_stat(struct socket *so, struct stat *ub);
-extern int vn_path_package_check(vnode_t vp, char *path, int pathlen, int *component);
+static int closef_finish(struct fileproc *fp, struct fileglob *fg, proc_t p, vfs_context_t ctx);
+
+/* We don't want these exported */
+__private_extern__
+int open1(vfs_context_t, struct nameidata *, int, struct vnode_attr *, register_t *);
+
+__private_extern__
+int unlink1(vfs_context_t, struct nameidata *, int);
+
+static void _fdrelse(struct proc * p, int fd);
+
+
+extern void file_lock_init(void) __attribute__((section("__TEXT, initcode")));
+extern int kqueue_stat(struct fileproc *fp, void *ub, int isstat4, proc_t p);
+#if SOCKETS
+extern int soo_stat(struct socket *so, void *ub, int isstat64);
+#endif /* SOCKETS */
 
 extern kauth_scope_t	kauth_scope_fileop;
 
@@ -138,14 +163,23 @@ lck_grp_t * file_lck_grp;
 lck_attr_t * file_lck_attr;
 
 lck_mtx_t * uipc_lock;
-lck_mtx_t * file_iterate_lcok;
 lck_mtx_t * file_flist_lock;
 
 
+/*
+ * file_lock_init
+ *
+ * Description:	Initialize the file lock group and the uipc and flist locks
+ *
+ * Parameters:	(void)
+ *
+ * Returns:	void
+ *
+ * Notes:	Called at system startup from bsd_init().
+ */
 void
 file_lock_init(void)
 {
-
 	/* allocate file lock group attribute and group */
 	file_lck_grp_attr= lck_grp_attr_alloc_init();
 
@@ -155,49 +189,86 @@ file_lock_init(void)
 	file_lck_attr = lck_attr_alloc_init();
 
 	uipc_lock = lck_mtx_alloc_init(file_lck_grp, file_lck_attr);
-	file_iterate_lcok = lck_mtx_alloc_init(file_lck_grp, file_lck_attr);
 	file_flist_lock = lck_mtx_alloc_init(file_lck_grp, file_lck_attr);
-
-	
-
 }
 
 
+/*
+ * proc_fdlock, proc_fdlock_spin
+ *
+ * Description:	Lock to control access to the per process struct fileproc
+ *		and struct filedesc
+ *
+ * Parameters:	p				Process to take the lock on
+ *
+ * Returns:	void
+ *
+ * Notes:	The lock is initialized in forkproc() and destroyed in
+ *		reap_child_process().
+ */
 void
-proc_fdlock(struct proc *p)
+proc_fdlock(proc_t p)
 {
 	lck_mtx_lock(&p->p_fdmlock);
 }
 
 void
-proc_fdunlock(struct proc *p)
+proc_fdlock_spin(proc_t p)
+{
+	lck_mtx_lock_spin(&p->p_fdmlock);
+}
+
+void
+proc_fdlock_assert(proc_t p, int assertflags)
+{
+	lck_mtx_assert(&p->p_fdmlock, assertflags);
+}
+
+
+/*
+ * proc_fdunlock
+ *
+ * Description:	Unlock the lock previously locked by a call to proc_fdlock()
+ *
+ * Parameters:	p				Process to drop the lock on
+ *
+ * Returns:	void
+ */
+void
+proc_fdunlock(proc_t p)
 {
 	lck_mtx_unlock(&p->p_fdmlock);
 }
+
 
 /*
  * System calls on descriptors.
  */
 
+
+/*
+ * getdtablesize
+ *
+ * Description:	Returns the per process maximum size of the descriptor table
+ *
+ * Parameters:	p				Process being queried
+ *		retval				Pointer to the call return area
+ *
+ * Returns:	0				Success
+ *
+ * Implicit returns:
+ *		*retval (modified)		Size of dtable
+ */
 int
-getdtablesize(struct proc *p, __unused struct getdtablesize_args *uap, register_t *retval)
+getdtablesize(proc_t p, __unused struct getdtablesize_args *uap, register_t *retval)
 {
-	proc_fdlock(p);
+	proc_fdlock_spin(p);
 	*retval = min((int)p->p_rlimit[RLIMIT_NOFILE].rlim_cur, maxfiles);
 	proc_fdunlock(p);
 
 	return (0);
 }
 
-int
-ogetdtablesize(struct proc *p, __unused void *uap, register_t *retval)
-{
-	proc_fdlock(p);
-	*retval = min((int)p->p_rlimit[RLIMIT_NOFILE].rlim_cur, NOFILE);
-	proc_fdunlock(p);
-
-	return (0);
-}
 
 void
 procfdtbl_reservefd(struct proc * p, int fd)
@@ -245,18 +316,31 @@ procfdtbl_clearfd(struct proc * p, int fd)
 	}
 }
 
-
-static __inline__ void
-_fdrelse(struct proc *p, int fd)
+/*
+ * _fdrelse
+ *
+ * Description:	Inline utility function to free an fd in a filedesc
+ *
+ * Parameters:	fdp				Pointer to filedesc fd lies in
+ *		fd				fd to free
+ *		reserv				fd should be reserved
+ *
+ * Returns:	void
+ *
+ * Locks:	Assumes proc_fdlock for process pointing to fdp is held by
+ *		the caller
+ */
+static void
+_fdrelse(struct proc * p, int fd)
 {
-struct filedesc *fdp = p->p_fd;
-int nfd = 0;
+	struct filedesc *fdp = p->p_fd;
+	int nfd = 0;
 
 	if (fd < fdp->fd_freefile)
 		fdp->fd_freefile = fd;
 #if DIAGNOSTIC
 	if (fd > fdp->fd_lastfile)
-		panic("fdrelse: fd_lastfile inconsistent");
+ 		panic("fdrelse: fd_lastfile inconsistent");
 #endif
 	procfdtbl_clearfd(p, fd);
 
@@ -266,18 +350,27 @@ int nfd = 0;
 		fdp->fd_lastfile--;
 }
 
+
 /*
- * Duplicate a file descriptor.
+ * dup
+ *
+ * Description:	Duplicate a file descriptor.
+ *
+ * Parameters:	p				Process performing the dup
+ *		uap->fd				The fd to dup
+ *		retval				Pointer to the call return area
+ *
+ * Returns:	0				Success
+ *		!0				Errno
+ *
+ * Implicit returns:
+ *		*retval (modified)		The new descriptor
  */
-/* ARGSUSED */
 int
-dup(p, uap, retval)
-	struct proc *p;
-	struct dup_args *uap;
-	register_t *retval;
+dup(proc_t p, struct dup_args *uap, register_t *retval)
 {
-	register struct filedesc *fdp = p->p_fd;
-	register int old = uap->fd;
+	struct filedesc *fdp = p->p_fd;
+	int old = uap->fd;
 	int new, error;
 	struct fileproc *fp;
 
@@ -298,18 +391,28 @@ dup(p, uap, retval)
 	return (error);
 }
 
+
 /*
- * Duplicate a file descriptor to a particular value.
+ * dup2
+ *
+ * Description:	Duplicate a file descriptor to a particular value.
+ *
+ * Parameters:	p				Process performing the dup
+ *		uap->fd				The fd to dup
+ *		uap->to				The fd to dup it to
+ *		retval				Pointer to the call return area
+ *
+ * Returns:	0				Success
+ *		!0				Errno
+ *
+ * Implicit returns:
+ *		*retval (modified)		The new descriptor
  */
-/* ARGSUSED */
 int
-dup2(p, uap, retval)
-	struct proc *p;
-	struct dup2_args *uap;
-	register_t *retval;
+dup2(proc_t p, struct dup2_args *uap, register_t *retval)
 {
-	register struct filedesc *fdp = p->p_fd;
-	register int old = uap->from, new = uap->to;
+	struct filedesc *fdp = p->p_fd;
+	int old = uap->from, new = uap->to;
 	int i, error;
 	struct fileproc *fp, *nfp;
 
@@ -321,7 +424,7 @@ startover:
 		return(error);
 	}
 	if (new < 0 ||
-		new >= p->p_rlimit[RLIMIT_NOFILE].rlim_cur ||
+		(rlim_t)new >= p->p_rlimit[RLIMIT_NOFILE].rlim_cur ||
 	    new >= maxfiles) {
 		fp_drop(p, old, fp, 1);
 		proc_fdunlock(p);
@@ -340,7 +443,7 @@ startover:
 			return (error);
 		}
 		if (new != i) {
-			_fdrelse(p, i);
+			fdrelse(p, i);
 			goto closeit;
 		}
 	} else {
@@ -348,18 +451,39 @@ closeit:
 		while ((fdp->fd_ofileflags[new] & UF_RESERVED) == UF_RESERVED)  {
 				fp_drop(p, old, fp, 1);
 				procfdtbl_waitfd(p, new);
+#if DIAGNOSTIC
+				proc_fdlock_assert(p, LCK_MTX_ASSERT_OWNED);
+#endif
 				goto startover;
 		}
 
 		if ((fdp->fd_ofiles[new] != NULL)  && ((error = fp_lookup(p, new, &nfp, 1)) == 0)) {
 			fp_drop(p, old, fp, 1);
-			close_internal(p, new, nfp, CLOSEINT_LOCKED | CLOSEINT_NOFDRELSE);
+			(void)close_internal_locked(p, new, nfp, FD_DUP2RESV);
+#if DIAGNOSTIC
+			proc_fdlock_assert(p, LCK_MTX_ASSERT_OWNED);
+#endif
 			procfdtbl_clearfd(p, new);
 			goto startover;
 		} else  {
+#if DIAGNOSTIC
+			if (fdp->fd_ofiles[new] != NULL)
+				panic("dup2: unable to get ref on a fileproc %d\n", new);
+#endif
 			procfdtbl_reservefd(p, new);
 		}
+
+#if DIAGNOSTIC
+		proc_fdlock_assert(p, LCK_MTX_ASSERT_OWNED);
+#endif
+
 	}
+#if DIAGNOSTIC
+	if (fdp->fd_ofiles[new] != 0)
+		panic("dup2-1: overwriting fd_ofiles with new %d\n", new);
+	if ((fdp->fd_ofileflags[new] & UF_RESERVED) == 0)
+		panic("dup2-1: unreserved  fileflags  with new %d\n", new);
+#endif
 	error = finishdup(p, fdp, old, new, retval);
 	fp_drop(p, old, fp, 1);
 	proc_fdunlock(p);
@@ -367,20 +491,97 @@ closeit:
 	return(error);
 }
 
+
 /*
- * The file control system call.
+ * fcntl
+ *
+ * Description:	The file control system call.
+ *
+ * Parameters:	p				Process performing the fcntl
+ *		uap->fd				The fd to operate against
+ *		uap->cmd			The command to perform
+ *		uap->arg			Pointer to the command argument
+ *		retval				Pointer to the call return area
+ *
+ * Returns:	0				Success
+ *		!0				Errno (see fcntl_nocancel)
+ *
+ * Implicit returns:
+ *		*retval (modified)		fcntl return value (if any)
+ *
+ * Notes:	This system call differs from fcntl_nocancel() in that it
+ *		tests for cancellation prior to performing a potentially
+ *		blocking operation.
  */
 int
-fcntl(p, uap, retval)
-	struct proc *p;
-	struct fcntl_args *uap;
-	register_t *retval;
+fcntl(proc_t p, struct fcntl_args *uap, register_t *retval)
+{
+	__pthread_testcancel(1);
+	return(fcntl_nocancel(p, (struct fcntl_nocancel_args *)uap, retval));
+}
+
+
+/*
+ * fcntl_nocancel
+ *
+ * Description:	A non-cancel-testing file control system call.
+ *
+ * Parameters:	p				Process performing the fcntl
+ *		uap->fd				The fd to operate against
+ *		uap->cmd			The command to perform
+ *		uap->arg			Pointer to the command argument
+ *		retval				Pointer to the call return area
+ *
+ * Returns:	0				Success
+ *		EINVAL
+ *	fp_lookup:EBADF				Bad file descriptor
+ * [F_DUPFD]
+ *	fdalloc:EMFILE
+ *	fdalloc:ENOMEM
+ *	finishdup:EBADF
+ *	finishdup:ENOMEM
+ * [F_SETOWN]
+ *		ESRCH
+ * [F_SETLK]
+ *		EBADF
+ *		EOVERFLOW
+ *	copyin:EFAULT
+ *	vnode_getwithref:???
+ *	VNOP_ADVLOCK:???
+ * [F_GETLK]
+ *		EBADF
+ *		EOVERFLOW
+ *	copyin:EFAULT
+ *	copyout:EFAULT
+ *	vnode_getwithref:???
+ *	VNOP_ADVLOCK:???
+ * [F_PREALLOCATE]
+ *		EBADF
+ *		EINVAL
+ *	copyin:EFAULT
+ *	copyout:EFAULT
+ *	vnode_getwithref:???
+ *	VNOP_ALLOCATE:???
+ * [F_SETSIZE,F_RDADVISE]
+ *		EBADF
+ *	copyin:EFAULT
+ *	vnode_getwithref:???
+ * [F_RDAHEAD,F_NOCACHE]
+ *		EBADF
+ *	vnode_getwithref:???
+ * [???]
+ *
+ * Implicit returns:
+ *		*retval (modified)		fcntl return value (if any)
+ */
+int
+fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, register_t *retval)
 {
 	int fd = uap->fd;
 	struct filedesc *fdp = p->p_fd;
 	struct fileproc *fp;
 	char *pop;
-	struct vnode *vp;
+	struct vnode *vp = NULLVP;	/* for AUDIT_ARG() at end */
 	int i, tmp, error, error2, flg = F_POSIX;
 	struct flock fl;
 	struct vfs_context context;
@@ -399,23 +600,32 @@ fcntl(p, uap, retval)
 		proc_fdunlock(p);
 		return(error);
 	}
-	context.vc_proc = p;
+	context.vc_thread = current_thread();
 	context.vc_ucred = fp->f_cred;
 	if (proc_is64bit(p)) {
 		argp = uap->arg;
 	}
 	else {
-		/* since the arg parameter is defined as a long but may be either
-		 * a long or a pointer we must take care to handle sign extension 
-		 * issues.  Our sys call munger will sign extend a long when we are
-		 * called from a 32-bit process.  Since we can never have an address
-		 * greater than 32-bits from a 32-bit process we lop off the top 
-		 * 32-bits to avoid getting the wrong address
+		/*
+		 * Since the arg parameter is defined as a long but may be
+		 * either a long or a pointer we must take care to handle
+		 * sign extension issues.  Our sys call munger will sign
+		 * extend a long when we are called from a 32-bit process.
+		 * Since we can never have an address greater than 32-bits
+		 * from a 32-bit process we lop off the top 32-bits to avoid
+		 * getting the wrong address
 		 */
 		argp = CAST_USER_ADDR_T(uap->arg);
 	}
 
 	pop = &fdp->fd_ofileflags[fd];
+
+#if CONFIG_MACF
+	error = mac_file_check_fcntl(proc_ucred(p), fp->f_fglob, uap->cmd,
+	    uap->arg);
+	if (error)
+		goto out;
+#endif
 
 	switch (uap->cmd) {
 
@@ -452,16 +662,16 @@ fcntl(p, uap, retval)
 		tmp = CAST_DOWN(int, uap->arg);
 		fp->f_flag |= FFLAGS(tmp) & FCNTLFLAGS;
 		tmp = fp->f_flag & FNONBLOCK;
-		error = fo_ioctl(fp, FIONBIO, (caddr_t)&tmp, p);
+		error = fo_ioctl(fp, FIONBIO, (caddr_t)&tmp, &context);
 		if (error)
 			goto out;
 		tmp = fp->f_flag & FASYNC;
-		error = fo_ioctl(fp, FIOASYNC, (caddr_t)&tmp, p);
+		error = fo_ioctl(fp, FIOASYNC, (caddr_t)&tmp, &context);
 		if (!error)
 			goto out;
 		fp->f_flag &= ~FNONBLOCK;
 		tmp = 0;
-		(void)fo_ioctl(fp, FIONBIO, (caddr_t)&tmp, p);
+		(void)fo_ioctl(fp, FIONBIO, (caddr_t)&tmp, &context);
 		goto out;
 
 	case F_GETOWN:
@@ -470,7 +680,7 @@ fcntl(p, uap, retval)
 			error = 0;
 			goto out;
 		}
-		error = fo_ioctl(fp, (int)TIOCGPGRP, (caddr_t)retval, p);
+		error = fo_ioctl(fp, (int)TIOCGPGRP, (caddr_t)retval, &context);
 		*retval = -*retval;
 		goto out;
 
@@ -482,21 +692,22 @@ fcntl(p, uap, retval)
 			goto out;
 		}
 		if (fp->f_type == DTYPE_PIPE) {
-			error =  fo_ioctl(fp, (int)TIOCSPGRP, (caddr_t)&tmp, p);
+			error =  fo_ioctl(fp, (int)TIOCSPGRP, (caddr_t)&tmp, &context);
 			goto out;
 		}
 
 		if (tmp <= 0) {
 			tmp = -tmp;
 		} else {
-			struct proc *p1 = pfind(tmp);
+			proc_t p1 = proc_find(tmp);
 			if (p1 == 0) {
 				error = ESRCH;
 				goto out;
 			}
-			tmp = (int)p1->p_pgrp->pg_id;
+			tmp = (int)p1->p_pgrpid;
+			proc_rele(p1);
 		}
-		error =  fo_ioctl(fp, (int)TIOCSPGRP, (caddr_t)&tmp, p);
+		error =  fo_ioctl(fp, (int)TIOCSPGRP, (caddr_t)&tmp, &context);
 		goto out;
 
 	case F_SETLKW:
@@ -515,16 +726,30 @@ fcntl(p, uap, retval)
 		proc_fdunlock(p);
 
 		/* Copy in the lock structure */
-		error = copyin(argp, (caddr_t)&fl, sizeof (fl));
+		error = copyin(argp, (caddr_t)&fl, sizeof(fl));
 		if (error) {
 			goto outdrop;
 		}
+
+		if ((fl.l_whence == SEEK_CUR) && (fl.l_start + offset < fl.l_start)) {
+		    error = EOVERFLOW;
+		    goto outdrop;
+		}
+
 		if ( (error = vnode_getwithref(vp)) ) {
 			goto outdrop;
 		}
 		if (fl.l_whence == SEEK_CUR)
 			fl.l_start += offset;
 
+#if CONFIG_MACF
+		error = mac_file_check_lock(proc_ucred(p), fp->f_fglob,
+		    F_SETLK, &fl);
+		if (error) {
+			(void)vnode_put(vp);
+			goto outdrop;
+		}
+#endif
 		switch (fl.l_type) {
 
 		case F_RDLCK:
@@ -533,7 +758,8 @@ fcntl(p, uap, retval)
 				error = EBADF;
 				goto outdrop;
 			}
-			OSBitOrAtomic(P_LADVLOCK, &p->p_ladvflag);
+			// XXX UInt32 unsafe for LP64 kernel
+			OSBitOrAtomic(P_LADVLOCK, (UInt32 *)&p->p_ladvflag);
 			error = VNOP_ADVLOCK(vp, (caddr_t)p, F_SETLK, &fl, flg, &context);
 			(void)vnode_put(vp);
 			goto outdrop;
@@ -544,7 +770,8 @@ fcntl(p, uap, retval)
 				error = EBADF;
 				goto outdrop;
 			}
-			OSBitOrAtomic(P_LADVLOCK, &p->p_ladvflag);
+			// XXX UInt32 unsafe for LP64 kernel
+			OSBitOrAtomic(P_LADVLOCK, (UInt32 *)&p->p_ladvflag);
 			error = VNOP_ADVLOCK(vp, (caddr_t)p, F_SETLK, &fl, flg, &context);
 			(void)vnode_put(vp);
 			goto outdrop;
@@ -572,20 +799,62 @@ fcntl(p, uap, retval)
 		proc_fdunlock(p);
 
 		/* Copy in the lock structure */
-		error = copyin(argp, (caddr_t)&fl, sizeof (fl));
+		error = copyin(argp, (caddr_t)&fl, sizeof(fl));
 		if (error)
 			goto outdrop;
+
+		/* Check starting byte and ending byte for EOVERFLOW in SEEK_CUR */
+		/* and ending byte for EOVERFLOW in SEEK_SET */
+		if (((fl.l_whence == SEEK_CUR) && 
+		     ((fl.l_start + offset < fl.l_start) ||
+		      ((fl.l_len > 0) && (fl.l_start+offset + fl.l_len - 1 < fl.l_start+offset)))) ||
+		    ((fl.l_whence == SEEK_SET) && (fl.l_len > 0) && (fl.l_start + fl.l_len - 1 < fl.l_start)))
+		{
+			/* lf_advlock doesn't check start/end for F_GETLK if file has no locks */
+			error = EOVERFLOW;
+			goto outdrop;
+		}
+
+		if ((fl.l_whence == SEEK_SET) && (fl.l_start < 0)) {
+			error = EINVAL;
+			goto outdrop;
+		}
+
+		switch (fl.l_type) {
+		case F_RDLCK:
+		case F_UNLCK:
+		case F_WRLCK:
+			break;
+		default:
+			error = EINVAL;
+			goto outdrop;
+		}
+
+		switch (fl.l_whence) {
+		case SEEK_CUR:
+		case SEEK_SET:
+		case SEEK_END:
+			break;
+		default:
+			error = EINVAL;
+			goto outdrop;
+		}
 
 		if ( (error = vnode_getwithref(vp)) == 0 ) {
 			if (fl.l_whence == SEEK_CUR)
 			        fl.l_start += offset;
 
+#if CONFIG_MACF
+			error = mac_file_check_lock(proc_ucred(p), fp->f_fglob,
+			    F_GETLK, &fl);
+			if (error == 0)
+#endif
 			error = VNOP_ADVLOCK(vp, (caddr_t)p, F_GETLK, &fl, F_POSIX, &context);
 
 			(void)vnode_put(vp);
 
 			if (error == 0)
-				error = copyout((caddr_t)&fl, argp, sizeof (fl));
+				error = copyout((caddr_t)&fl, argp, sizeof(fl));
 		}
 		goto outdrop;
 
@@ -607,7 +876,7 @@ fcntl(p, uap, retval)
 			goto outdrop;
 		}
 
-		error = copyin(argp, (caddr_t)&alloc_struct, sizeof (alloc_struct));
+		error = copyin(argp, (caddr_t)&alloc_struct, sizeof(alloc_struct));
 		if (error)
 			goto outdrop;
 
@@ -667,7 +936,7 @@ fcntl(p, uap, retval)
 					      &context);
 			(void)vnode_put(vp);
 
-			error2 = copyout((caddr_t)&alloc_struct, argp, sizeof (alloc_struct));
+			error2 = copyout((caddr_t)&alloc_struct, argp, sizeof(alloc_struct));
 
 			if (error == 0)
 				error = error2;
@@ -680,32 +949,41 @@ fcntl(p, uap, retval)
 			error = EBADF;
 			goto out;
 		}
+		vp = (struct vnode *)fp->f_data;
 		proc_fdunlock(p);
 
 		error = copyin(argp, (caddr_t)&offset, sizeof (off_t));
 		if (error)
 			goto outdrop;
 
+		error = vnode_getwithref(vp);
+		if (error)
+			goto outdrop;
+
+#if CONFIG_MACF
+		error = mac_vnode_check_truncate(&context,
+		    fp->f_fglob->fg_cred, vp);
+		if (error) {
+			(void)vnode_put(vp);
+			goto outdrop;
+		}
+#endif
 		/*
 		 * Make sure that we are root.  Growing a file
 		 * without zero filling the data is a security hole 
 		 * root would have access anyway so we'll allow it
 		 */
-
 		if (!is_suser()) {
 			error = EACCES;
-			goto outdrop;
-		}
-		vp = (struct vnode *)fp->f_data;
-
-		if ( (error = vnode_getwithref(vp)) == 0 ) {
-		        /*
+		} else {
+			/*
 			 * set the file size
 			 */
-		        error = vnode_setsize(vp, offset, IO_NOZEROFILL, &context);
-
-			(void)vnode_put(vp);
+			error = vnode_setsize(vp, offset, IO_NOZEROFILL,
+			    &context);
 		}
+
+		(void)vnode_put(vp);
 		goto outdrop;
 
 	case F_RDAHEAD:
@@ -713,40 +991,28 @@ fcntl(p, uap, retval)
 			error = EBADF;
 			goto out;
 		}
-		vp = (struct vnode *)fp->f_data;
-		proc_fdunlock(p);
+		if (uap->arg)
+		        fp->f_fglob->fg_flag &= ~FNORDAHEAD;
+		else
+		        fp->f_fglob->fg_flag |= FNORDAHEAD;
 
-		if ( (error = vnode_getwithref(vp)) == 0) {
-		        if (uap->arg)
-			        vnode_clearnoreadahead(vp);
-			else
-			        vnode_setnoreadahead(vp);
-
-			(void)vnode_put(vp);
-		}
-		goto outdrop;
+		goto out;
 
 	case F_NOCACHE:
 		if (fp->f_type != DTYPE_VNODE) {
 			error = EBADF;
 			goto out;
 		}
-		vp = (struct vnode *)fp->f_data;
-		proc_fdunlock(p);
+		if (uap->arg)
+		        fp->f_fglob->fg_flag |= FNOCACHE;
+		else
+		        fp->f_fglob->fg_flag &= ~FNOCACHE;
 
-		if ( (error = vnode_getwithref(vp)) == 0 ) {
-		        if (uap->arg)
-			        vnode_setnocache(vp);
-			else
-			        vnode_clearnocache(vp);
-
-			(void)vnode_put(vp);
-		}
-		goto outdrop;
+		goto out;
 
 	case F_GLOBAL_NOCACHE:
-		if (fp->f_type != DTYPE_VNODE) {
-			error = EBADF;
+	        if (fp->f_type != DTYPE_VNODE) {
+		        error = EBADF;
 			goto out;
 		}
 		vp = (struct vnode *)fp->f_data;
@@ -756,10 +1022,31 @@ fcntl(p, uap, retval)
 
 		        *retval = vnode_isnocache(vp);
 
-		        if (uap->arg)
+			if (uap->arg)
 			        vnode_setnocache(vp);
 			else
 			        vnode_clearnocache(vp);
+
+			(void)vnode_put(vp);
+		}
+		goto outdrop;
+
+	case F_CHECK_OPENEVT:
+	        if (fp->f_type != DTYPE_VNODE) {
+		        error = EBADF;
+			goto out;
+		}
+		vp = (struct vnode *)fp->f_data;
+		proc_fdunlock(p);
+
+		if ( (error = vnode_getwithref(vp)) == 0 ) {
+
+		        *retval = vnode_is_openevt(vp);
+
+			if (uap->arg)
+			        vnode_set_openevt(vp);
+			else
+			        vnode_clear_openevt(vp);
 
 			(void)vnode_put(vp);
 		}
@@ -775,7 +1062,7 @@ fcntl(p, uap, retval)
 		vp = (struct vnode *)fp->f_data;
 		proc_fdunlock(p);
 
-		if ( (error = copyin(argp, (caddr_t)&ra_struct, sizeof (ra_struct))) )
+		if ( (error = copyin(argp, (caddr_t)&ra_struct, sizeof(ra_struct))) )
 			goto outdrop;
 		if ( (error = vnode_getwithref(vp)) == 0 ) {
 		        error = VNOP_IOCTL(vp, F_RDADVISE, (caddr_t)&ra_struct, 0, &context);
@@ -824,7 +1111,8 @@ fcntl(p, uap, retval)
 				goto outdrop;
 			}
 		}
-		if (strcmp(vnode_mount(vp)->mnt_vfsstat.f_fstypename, "hfs") != 0) {
+		if (strncmp(vnode_mount(vp)->mnt_vfsstat.f_fstypename, "hfs",
+			sizeof(vnode_mount(vp)->mnt_vfsstat.f_fstypename)) != 0) {
 			error = EINVAL;
 		} else {
 			/*
@@ -868,7 +1156,7 @@ fcntl(p, uap, retval)
 			l2p_struct.l2p_contigbytes = 0;	/* for now */
 			l2p_struct.l2p_devoffset = bn * devBlockSize;
 			l2p_struct.l2p_devoffset += fp->f_offset - offset;
-			error = copyout((caddr_t)&l2p_struct, argp, sizeof (l2p_struct));
+			error = copyout((caddr_t)&l2p_struct, argp, sizeof(l2p_struct));
 		}
 		goto outdrop;
 		}
@@ -943,7 +1231,250 @@ fcntl(p, uap, retval)
 		}
 		break;
 	}
-	    
+
+	/*
+	 * SPI (private) for opening a file starting from a dir fd
+	 */
+	case F_OPENFROM: {
+		struct user_fopenfrom fopen;
+		struct vnode_attr va;
+		struct nameidata nd;
+		int cmode;
+
+		/* Check if this isn't a valid file descriptor */
+		if ((fp->f_type != DTYPE_VNODE) ||
+		    (fp->f_flag & FREAD) == 0) {
+			error = EBADF;
+			goto out;
+		}
+		vp = (struct vnode *)fp->f_data;
+		proc_fdunlock(p);
+
+		if (vnode_getwithref(vp)) {
+			error = ENOENT;
+			goto outdrop;
+		}
+		
+		/* Only valid for directories */
+		if (vp->v_type != VDIR) {
+			vnode_put(vp);
+			error = ENOTDIR;
+			goto outdrop;
+		}
+
+		/* Get flags, mode and pathname arguments. */
+		if (IS_64BIT_PROCESS(p)) {
+			error = copyin(argp, &fopen, sizeof(fopen));
+		} else {
+			struct fopenfrom fopen32;
+
+			error = copyin(argp, &fopen32, sizeof(fopen32));
+			fopen.o_flags = fopen32.o_flags;
+			fopen.o_mode = fopen32.o_mode;
+			fopen.o_pathname = CAST_USER_ADDR_T(fopen32.o_pathname);
+		}
+		if (error) {
+			vnode_put(vp);
+			goto outdrop;
+		}
+		VATTR_INIT(&va);
+		/* Mask off all but regular access permissions */
+		cmode = ((fopen.o_mode &~ fdp->fd_cmask) & ALLPERMS) & ~S_ISTXT;
+		VATTR_SET(&va, va_mode, cmode & ACCESSPERMS);
+
+		/* Start the lookup relative to the file descriptor's vnode. */
+		NDINIT(&nd, LOOKUP, USEDVP | FOLLOW | AUDITVNPATH1, UIO_USERSPACE,
+		       fopen.o_pathname, &context);
+		nd.ni_dvp = vp;
+
+		error = open1(&context, &nd, fopen.o_flags, &va, retval);
+
+		vnode_put(vp);
+		break;
+	}
+	/*
+	 * SPI (private) for unlinking a file starting from a dir fd
+	 */
+	case F_UNLINKFROM: {
+		struct nameidata nd;
+		user_addr_t pathname;
+
+		/* Check if this isn't a valid file descriptor */
+		if ((fp->f_type != DTYPE_VNODE) ||
+		    (fp->f_flag & FREAD) == 0) {
+			error = EBADF;
+			goto out;
+		}
+		vp = (struct vnode *)fp->f_data;
+		proc_fdunlock(p);
+
+		if (vnode_getwithref(vp)) {
+			error = ENOENT;
+			goto outdrop;
+		}
+		
+		/* Only valid for directories */
+		if (vp->v_type != VDIR) {
+			vnode_put(vp);
+			error = ENOTDIR;
+			goto outdrop;
+		}
+
+		/* Get flags, mode and pathname arguments. */
+		if (IS_64BIT_PROCESS(p)) {
+			pathname = (user_addr_t)argp;
+		} else {
+			pathname = CAST_USER_ADDR_T(argp);
+		}
+
+		/* Start the lookup relative to the file descriptor's vnode. */
+		NDINIT(&nd, DELETE, USEDVP | AUDITVNPATH1, UIO_USERSPACE, pathname, &context);
+		nd.ni_dvp = vp;
+
+		error = unlink1(&context, &nd, 0);
+		
+		vnode_put(vp);
+		break;
+
+	}
+
+	case F_ADDSIGS: {
+		struct user_fsignatures fs;
+		kern_return_t kr;
+		vm_address_t kernel_blob_addr;
+		vm_size_t kernel_blob_size;
+
+		if (fp->f_type != DTYPE_VNODE) {
+			error = EBADF;
+			goto out;
+		}
+		vp = (struct vnode *)fp->f_data;
+		proc_fdunlock(p);
+		error = vnode_getwithref(vp);
+		if (error)
+			goto outdrop;
+
+		if (IS_64BIT_PROCESS(p)) {
+			error = copyin(argp, &fs, sizeof (fs));
+		} else {
+			struct fsignatures fs32;
+
+			error = copyin(argp, &fs32, sizeof (fs32));
+			fs.fs_file_start = fs32.fs_file_start;
+			fs.fs_blob_start = CAST_USER_ADDR_T(fs32.fs_blob_start);
+			fs.fs_blob_size = fs32.fs_blob_size;
+		}
+
+		if (error) {
+			vnode_put(vp);
+			goto outdrop;
+		}
+
+#define CS_MAX_BLOB_SIZE (1ULL * 1024 * 1024) /* XXX ? */
+		if (fs.fs_blob_size > CS_MAX_BLOB_SIZE) {
+			error = E2BIG;
+			vnode_put(vp);
+			goto outdrop;
+		}
+
+		kernel_blob_size = CAST_DOWN(vm_size_t, fs.fs_blob_size);
+		kr = kmem_alloc(kernel_map,
+				&kernel_blob_addr,
+				kernel_blob_size);
+		if (kr != KERN_SUCCESS) {
+			error = ENOMEM;
+			vnode_put(vp);
+			goto outdrop;
+		}
+
+		error = copyin(fs.fs_blob_start,
+			       (void *) kernel_blob_addr,
+			       kernel_blob_size);
+		if (error) {
+			kmem_free(kernel_map,
+				  kernel_blob_addr,
+				  kernel_blob_size);
+			vnode_put(vp);
+			goto outdrop;
+		}
+
+		error = ubc_cs_blob_add(
+			vp,
+			CPU_TYPE_ANY,	/* not for a specific architecture */
+			fs.fs_file_start,
+			kernel_blob_addr,
+			kernel_blob_size);
+		if (error) {
+			kmem_free(kernel_map,
+				  kernel_blob_addr,
+				  kernel_blob_size);
+		} else {
+			/* ubc_blob_add() was consumed "kernel_blob_addr" */
+		}
+
+		(void) vnode_put(vp);
+		break;
+	}
+
+	case F_MARKDEPENDENCY: {
+		struct vnode *root_vp;
+		struct vnode_attr va;
+		vfs_context_t ctx = vfs_context_current();
+		kauth_cred_t cred;
+
+		if ((current_proc()->p_flag & P_DEPENDENCY_CAPABLE) == 0) {
+		    error = EPERM;
+		    goto out;
+		}
+		
+		if (fp->f_type != DTYPE_VNODE) {
+			error = EBADF;
+			goto out;
+		}
+
+		vp = (struct vnode *)fp->f_data;
+		proc_fdunlock(p);
+
+		if (vnode_getwithref(vp)) {
+			error = ENOENT;
+			goto outdrop;
+		}
+
+		// the passed in vnode must be the root dir of the file system
+		if (VFS_ROOT(vp->v_mount, &root_vp, ctx) != 0 || vp != root_vp) {
+		    error = EINVAL;
+		    vnode_put(vp);
+		    goto outdrop;
+		}
+		vnode_put(root_vp);
+
+		// get the owner of the root dir
+		VATTR_INIT(&va);
+		VATTR_WANTED(&va, va_uid);
+		if (vnode_getattr(vp, &va, ctx) != 0) {
+		    error = EINVAL;
+		    vnode_put(vp);
+		    goto outdrop;
+		}
+
+		// and last, check that the caller is the super user or
+		// the owner of the mount point
+		cred = vfs_context_ucred(ctx);
+		if (!is_suser() && va.va_uid != kauth_cred_getuid(cred)) {
+			error = EACCES;
+			vnode_put(vp);
+			goto outdrop;
+		}
+
+		// if all those checks pass then we can mark the dependency
+		vfs_markdependency(vp->v_mount);
+		error = 0;
+
+		vnode_put(vp);
+		
+		break;
+	}
+
 	default:
 		if (uap->cmd < FCNTL_FS_SPECIFIC_BASE) {
 			error = EINVAL;
@@ -978,30 +1509,85 @@ out:
 	return(error);
 }
 
+
 /*
- * Common code for dup, dup2, and fcntl(F_DUPFD).
+ * finishdup
+ *
+ * Description:	Common code for dup, dup2, and fcntl(F_DUPFD).
+ *
+ * Parameters:	p				Process performing the dup
+ *		old				The fd to dup
+ *		new				The fd to dup it to
+ *		retval				Pointer to the call return area
+ *
+ * Returns:	0				Success
+ *		EBADF
+ *		ENOMEM
+ *
+ * Implicit returns:
+ *		*retval (modified)		The new descriptor
+ *
+ * Locks:	Assumes proc_fdlock for process pointing to fdp is held by
+ *		the caller
+ *
+ * Notes:	This function may drop and reacquire this lock; it is unsafe
+ *		for a caller to assume that other state protected by the lock
+ *		has not been subsequently changes out from under it.
  */
 int
-finishdup(struct proc * p, struct filedesc *fdp, int old, int new, register_t *retval)
+finishdup(proc_t p, struct filedesc *fdp, int old, int new, register_t *retval)
 {
 	struct fileproc *nfp;
 	struct fileproc *ofp;
+#if CONFIG_MACF
+	int error;
+#endif
+
+#if DIAGNOSTIC
+	proc_fdlock_assert(p, LCK_MTX_ASSERT_OWNED);
+#endif
 
 	if ((ofp = fdp->fd_ofiles[old]) == NULL ||
 			(fdp->fd_ofileflags[old] & UF_RESERVED)) {
-		_fdrelse(p, new);
+		fdrelse(p, new);
 		return (EBADF);
 	}
 	fg_ref(ofp);
+
+#if CONFIG_MACF
+	error = mac_file_check_dup(proc_ucred(p), ofp->f_fglob, new);
+	if (error) {
+		fg_drop(ofp);
+		fdrelse(p, new);
+		return (error);
+	}
+#endif
+
 	proc_fdunlock(p);
 
 	MALLOC_ZONE(nfp, struct fileproc *, sizeof(struct fileproc), M_FILEPROC, M_WAITOK);
-	bzero(nfp, sizeof(struct fileproc));
+	/* Failure check follows proc_fdlock() due to handling requirements */
 
 	proc_fdlock(p);
+
+	if (nfp == NULL) {
+		fg_drop(ofp);
+		fdrelse(p, new);
+		return (ENOMEM);
+	}
+
+	bzero(nfp, sizeof(struct fileproc));
+
 	nfp->f_flags = 0;
 	nfp->f_fglob = ofp->f_fglob;
 	nfp->f_iocount = 0;
+
+#if DIAGNOSTIC
+	if (fdp->fd_ofiles[new] != 0)
+		panic("finishdup: overwriting fd_ofiles with new %d\n", new);
+	if ((fdp->fd_ofileflags[new] & UF_RESERVED) == 0)
+		panic("finishdup: unreserved  fileflags  with new %d\n", new);
+#endif
 
 	if (new > fdp->fd_lastfile)
 		fdp->fd_lastfile = new;
@@ -1011,8 +1597,32 @@ finishdup(struct proc * p, struct filedesc *fdp, int old, int new, register_t *r
 }
 
 
+/*
+ * close
+ *
+ * Description:	The implementation of the close(2) system call
+ *
+ * Parameters:	p			Process in whose per process file table
+ *					the close is to occur
+ *		uap->fd			fd to be closed
+ *		retval			<unused>
+ *
+ * Returns:	0			Success
+ *	fp_lookup:EBADF			Bad file descriptor
+ *	close_internal:EBADF
+ *	close_internal:??? 		Anything returnable by a per-fileops
+ *					close function
+ */
 int
-close(struct proc *p, struct close_args *uap, __unused register_t *retval)
+close(proc_t p, struct close_args *uap, register_t *retval)
+{
+	__pthread_testcancel(1);
+	return(close_nocancel(p, (struct close_nocancel_args *)uap, retval));
+}
+
+
+int
+close_nocancel(proc_t p, struct close_nocancel_args *uap, __unused register_t *retval)
 {
 	struct fileproc *fp;
 	int fd = uap->fd;
@@ -1027,7 +1637,7 @@ close(struct proc *p, struct close_args *uap, __unused register_t *retval)
 		return(error);
 	}
 
-	error = close_internal(p, fd, fp, CLOSEINT_LOCKED);
+	error = close_internal_locked(p, fd, fp, 0);
 
 	proc_fdunlock(p);
 
@@ -1036,33 +1646,55 @@ close(struct proc *p, struct close_args *uap, __unused register_t *retval)
 
 
 /*
+ * close_internal_locked
+ *
  * Close a file descriptor.
+ *
+ * Parameters:	p			Process in whose per process file table
+ *					the close is to occur
+ *		fd			fd to be closed
+ *		fp			fileproc associated with the fd
+ *
+ * Returns:	0			Success
+ *		EBADF			fd already in close wait state
+ *	closef_locked:??? 		Anything returnable by a per-fileops
+ *					close function
+ *
+ * Locks:	Assumes proc_fdlock for process is held by the caller and returns
+ *		with lock held
+ *
+ * Notes:	This function may drop and reacquire this lock; it is unsafe
+ *		for a caller to assume that other state protected by the lock
+ *		has not been subsequently changes out from under it, if the
+ *		caller made the call with the lock held.
  */
-int
-close_internal(struct proc *p, int fd, struct fileproc *fp, int flags)
+static int
+close_internal_locked(proc_t p, int fd, struct fileproc *fp, int flags)
 {
 	struct filedesc *fdp = p->p_fd;
 	int error =0;
-	int locked = flags & CLOSEINT_LOCKED;
-	int waitonclose = flags & CLOSEINT_WAITONCLOSE;
-	int norelse = flags & CLOSEINT_NOFDRELSE;
-	int nofdref = flags & CLOSEINT_NOFDNOREF;
-	int slpstate = PRIBIO;
+	int resvfd = flags & FD_DUP2RESV;
 
-	if (!locked)
-		proc_fdlock(p);
+
+#if DIAGNOSTIC
+	proc_fdlock_assert(p, LCK_MTX_ASSERT_OWNED);
+#endif
 
 	/* Keep people from using the filedesc while we are closing it */
 	procfdtbl_markclosefd(p, fd);
+
+
 	if ((fp->f_flags & FP_CLOSING) == FP_CLOSING) {
 		panic("close_internal_locked:  being called on already closing fd\n");
 	}
 
 
+#if DIAGNOSTIC
+	if ((fdp->fd_ofileflags[fd] & UF_RESERVED) == 0)
+		panic("close_internal: unreserved  fileflags  with fd %d\n", fd);
+#endif
 
 	fp->f_flags |= FP_CLOSING;
-	if (nofdref)
-		fp->f_iocount++;
 
 	if ( (fp->f_flags & FP_AIOISSUED) || kauth_authorize_fileop_has_listeners() ) {
 
@@ -1099,63 +1731,108 @@ close_internal(struct proc *p, int fd, struct fileproc *fp, int flags)
 
 	if ((fp->f_flags & FP_INCHRREAD) == 0)
 		fileproc_drain(p, fp);
-	if (norelse == 0)
+
+	if (resvfd == 0)
 		_fdrelse(p, fd);
+
 	error = closef_locked(fp, fp->f_fglob, p);
 	if ((fp->f_flags & FP_WAITCLOSE) == FP_WAITCLOSE)
 		wakeup(&fp->f_flags);
 	fp->f_flags &= ~(FP_WAITCLOSE | FP_CLOSING);
 
-	if (!locked)
-		proc_fdunlock(p);
+	proc_fdunlock(p);
 
-	FREE_ZONE(fp, sizeof *fp, M_FILEPROC);	
+	FREE_ZONE(fp, sizeof(*fp), M_FILEPROC);	
+
+	proc_fdlock(p);
+
+#if DIAGNOSTIC
+	if (resvfd != 0) {
+		if ((fdp->fd_ofileflags[fd] & UF_RESERVED) == 0)
+			panic("close with reserved fd returns with freed fd:%d: proc: %x\n", fd, (unsigned int)p);
+	}
+#endif
+
 	return(error);
 }
 
+
 /*
- * Return status information about a file descriptor.
+ * fstat1
  *
- * XXX switch on node type is bogus; need a stat in struct fileops instead.
+ * Description:	Return status information about a file descriptor.
+ *
+ * Parameters:	p				The process doing the fstat
+ *		fd				The fd to stat
+ *		ub				The user stat buffer
+ *		xsecurity			The user extended security
+ *						buffer, or 0 if none
+ *		xsecurity_size			The size of xsecurity, or 0
+ *						if no xsecurity
+ *		isstat64			Flag to indicate 64 bit version
+ *						for inode size, etc.
+ *
+ * Returns:	0				Success
+ *		EBADF
+ *		EFAULT
+ *	fp_lookup:EBADF				Bad file descriptor
+ *	vnode_getwithref:???
+ *	copyout:EFAULT
+ *	vnode_getwithref:???
+ *	vn_stat:???
+ *	soo_stat:???
+ *	pipe_stat:???
+ *	pshm_stat:???
+ *	kqueue_stat:???
+ *
+ * Notes:	Internal implementation for all other fstat() related
+ *		functions
+ *
+ *		XXX switch on node type is bogus; need a stat in struct
+ *		XXX fileops instead.
  */
 static int
-fstat1(struct proc *p, int fd, user_addr_t ub, user_addr_t xsecurity, user_addr_t xsecurity_size)
+fstat1(proc_t p, int fd, user_addr_t ub, user_addr_t xsecurity, user_addr_t xsecurity_size, int isstat64)
 {
 	struct fileproc *fp;
 	struct stat sb;
+	struct stat64 sb64;
 	struct user_stat user_sb;
+	struct user_stat64 user_sb64;
 	int error, my_size;
 	int funnel_state;
 	file_type_t type;
 	caddr_t data;
 	kauth_filesec_t fsec;
-	ssize_t xsecurity_bufsize;
-	int entrycount;
-	struct vfs_context context;
+	user_size_t xsecurity_bufsize;
+	vfs_context_t ctx = vfs_context_current();
+	void * sbptr;
 
 
 	AUDIT_ARG(fd, fd);
 
-	if ((error = fp_lookup(p, fd, &fp, 0)) != 0)
+	if ((error = fp_lookup(p, fd, &fp, 0)) != 0) {
 		return(error);
+	}
 	type = fp->f_type;
 	data = fp->f_data;
 	fsec = KAUTH_FILESEC_NONE;
 
+	sbptr = (isstat64 != 0) ? (void *)&sb64: (void *)&sb;
+
 	switch (type) {
 
 	case DTYPE_VNODE:
-		context.vc_proc = current_proc();
-		context.vc_ucred = kauth_cred_get();
 		if ((error = vnode_getwithref((vnode_t)data)) == 0) {
 			/*
-			 * If the caller has the file open, and is not requesting extended security,
-			 * we are going to let them get the basic stat information.
+			 * If the caller has the file open, and is not
+			 * requesting extended security information, we are
+			 * going to let them get the basic stat information.
 			 */
 			if (xsecurity == USER_ADDR_NULL) {
-				error = vn_stat_noauth((vnode_t)data, &sb, NULL, &context);
+				error = vn_stat_noauth((vnode_t)data, sbptr, NULL, isstat64, ctx);
 			} else {
-				error = vn_stat((vnode_t)data, &sb, &fsec, &context);
+				error = vn_stat((vnode_t)data, sbptr, &fsec, isstat64, ctx);
 			}
 
 			AUDIT_ARG(vnpath, (struct vnode *)data, ARG_VNODE1);
@@ -1163,21 +1840,23 @@ fstat1(struct proc *p, int fd, user_addr_t ub, user_addr_t xsecurity, user_addr_
 		}
 		break;
 
+#if SOCKETS
 	case DTYPE_SOCKET:
-		error = soo_stat((struct socket *)data, &sb);
+		error = soo_stat((struct socket *)data, sbptr, isstat64);
 		break;
+#endif /* SOCKETS */
 
 	case DTYPE_PIPE:
-		error = pipe_stat((void *)data, &sb);
+		error = pipe_stat((void *)data, sbptr, isstat64);
 		break;
 
 	case DTYPE_PSXSHM:
-		error = pshm_stat((void *)data, &sb);
+		error = pshm_stat((void *)data, sbptr, isstat64);
 		break;
 
 	case DTYPE_KQUEUE:
 	        funnel_state = thread_funnel_set(kernel_flock, TRUE);
-		error = kqueue_stat(fp, &sb, p);
+		error = kqueue_stat(fp, sbptr, isstat64, p);
 		thread_funnel_set(kernel_flock, funnel_state);
 		break;
 
@@ -1185,21 +1864,35 @@ fstat1(struct proc *p, int fd, user_addr_t ub, user_addr_t xsecurity, user_addr_
 		error = EBADF;
 		goto out;
 	}
-	/* Zap spare fields */
-	sb.st_lspare = 0;
-	sb.st_qspare[0] = 0LL;
-	sb.st_qspare[1] = 0LL;
 	if (error == 0) {
 		caddr_t sbp;
-		if (IS_64BIT_PROCESS(current_proc())) {
-			munge_stat(&sb, &user_sb); 
-			my_size = sizeof(user_sb);
-			sbp = (caddr_t)&user_sb;
+
+		if (isstat64 != 0) {
+			sb64.st_lspare = 0;
+			sb64.st_qspare[0] = 0LL;
+			sb64.st_qspare[1] = 0LL;
+			if (IS_64BIT_PROCESS(current_proc())) {
+				munge_stat64(&sb64, &user_sb64); 
+				my_size = sizeof(user_sb64);
+				sbp = (caddr_t)&user_sb64;
+			} else {
+				my_size = sizeof(sb64);
+				sbp = (caddr_t)&sb64;
+			}
+		} else {
+			sb.st_lspare = 0;
+			sb.st_qspare[0] = 0LL;
+			sb.st_qspare[1] = 0LL;
+			if (IS_64BIT_PROCESS(current_proc())) {
+				munge_stat(&sb, &user_sb); 
+				my_size = sizeof(user_sb);
+				sbp = (caddr_t)&user_sb;
+			} else {
+				my_size = sizeof(sb);
+				sbp = (caddr_t)&sb;
+			}
 		}
-		else {
-			my_size = sizeof(sb);
-			sbp = (caddr_t)&sb;
-		}
+
 		error = copyout(sbp, ub, my_size);
 	}
 
@@ -1234,31 +1927,117 @@ out:
 	return (error);
 }
 
-int
-fstat_extended(struct proc *p, struct fstat_extended_args *uap, __unused register_t *retval)
-{
-	return(fstat1(p, uap->fd, uap->ub, uap->xsecurity, uap->xsecurity_size));
-}
- 
-int
-fstat(struct proc *p, register struct fstat_args *uap, __unused register_t *retval)
-{
-	return(fstat1(p, uap->fd, uap->ub, 0, 0));
-}
 
 /*
- * Return pathconf information about a file descriptor.
+ * fstat_extended
+ *
+ * Description:	Extended version of fstat supporting returning extended
+ *		security information
+ *
+ * Parameters:	p				The process doing the fstat
+ *		uap->fd				The fd to stat
+ *		uap->ub				The user stat buffer
+ *		uap->xsecurity			The user extended security
+ *						buffer, or 0 if none
+ *		uap->xsecurity_size		The size of xsecurity, or 0
+ *
+ * Returns:	0				Success
+ *		!0				Errno (see fstat1)
  */
 int
-fpathconf(p, uap, retval)
-	struct proc *p;
-	register struct fpathconf_args *uap;
-	register_t *retval;
+fstat_extended(proc_t p, struct fstat_extended_args *uap, __unused register_t *retval)
+{
+	return(fstat1(p, uap->fd, uap->ub, uap->xsecurity, uap->xsecurity_size, 0));
+}
+ 
+
+/*
+ * fstat
+ *
+ * Description:	Get file status for the file associated with fd
+ *
+ * Parameters:	p				The process doing the fstat
+ *		uap->fd				The fd to stat
+ *		uap->ub				The user stat buffer
+ *
+ * Returns:	0				Success
+ *		!0				Errno (see fstat1)
+ */
+int
+fstat(proc_t p, register struct fstat_args *uap, __unused register_t *retval)
+{
+	return(fstat1(p, uap->fd, uap->ub, 0, 0, 0));
+}
+
+
+/*
+ * fstat64_extended
+ *
+ * Description:	Extended version of fstat64 supporting returning extended
+ *		security information
+ *
+ * Parameters:	p				The process doing the fstat
+ *		uap->fd				The fd to stat
+ *		uap->ub				The user stat buffer
+ *		uap->xsecurity			The user extended security
+ *						buffer, or 0 if none
+ *		uap->xsecurity_size		The size of xsecurity, or 0
+ *
+ * Returns:	0				Success
+ *		!0				Errno (see fstat1)
+ */
+int
+fstat64_extended(proc_t p, struct fstat64_extended_args *uap, __unused register_t *retval)
+{
+	return(fstat1(p, uap->fd, uap->ub, uap->xsecurity, uap->xsecurity_size, 1));
+}
+ 
+
+/*
+ * fstat64
+ *
+ * Description:	Get 64 bit version of the file status for the file associated
+ *		with fd
+ *
+ * Parameters:	p				The process doing the fstat
+ *		uap->fd				The fd to stat
+ *		uap->ub				The user stat buffer
+ *
+ * Returns:	0				Success
+ *		!0				Errno (see fstat1)
+ */
+int
+fstat64(proc_t p, register struct fstat64_args *uap, __unused register_t *retval)
+{
+	return(fstat1(p, uap->fd, uap->ub, 0, 0, 1));
+}
+
+
+/*
+ * fpathconf
+ *
+ * Description:	Return pathconf information about a file descriptor.
+ *
+ * Parameters:	p				Process making the request
+ *		uap->fd				fd to get information about
+ *		uap->name			Name of information desired
+ *		retval				Pointer to the call return area
+ *
+ * Returns:	0				Success
+ *		EINVAL
+ *	fp_lookup:EBADF				Bad file descriptor
+ *	vnode_getwithref:???
+ *	vn_pathconf:???
+ *
+ * Implicit returns:
+ *		*retval (modified)		Returned information (numeric)
+ */
+int
+fpathconf(proc_t p, struct fpathconf_args *uap, register_t *retval)
 {
 	int fd = uap->fd;
 	struct fileproc *fp;
 	struct vnode *vp;
-	struct vfs_context context;
 	int error = 0;
 	file_type_t type;
 	caddr_t data;
@@ -1292,10 +2071,7 @@ fpathconf(p, uap, retval)
 		if ( (error = vnode_getwithref(vp)) == 0) {
 		        AUDIT_ARG(vnpath, vp, ARG_VNODE1);
 
-			context.vc_proc = p;
-			context.vc_ucred = kauth_cred_get();
-
-			error = vn_pathconf(vp, uap->name, retval, &context);
+			error = vn_pathconf(vp, uap->name, retval, vfs_context_current());
 
 			(void)vnode_put(vp);
 		}
@@ -1316,18 +2092,35 @@ out:
 }
 
 /*
- * Allocate a file descriptor for the process.
+ * Statistics counter for the number of times a process calling fdalloc()
+ * has resulted in an expansion of the per process open file table.
+ *
+ * XXX This would likely be of more use if it were per process
  */
 int fdexpand;
 
+
+/*
+ * fdalloc
+ *
+ * Description:	Allocate a file descriptor for the process.
+ *
+ * Parameters:	p				Process to allocate the fd in
+ *		want				The fd we would prefer to get
+ *		result				Pointer to fd we got
+ *
+ * Returns:	0				Success
+ *		EMFILE
+ *		ENOMEM
+ *
+ * Implicit returns:
+ *		*result (modified)		The fd which was allocated
+ */
 int
-fdalloc(p, want, result)
-	struct proc *p;
-	int want;
-	int *result;
+fdalloc(proc_t p, int want, int *result)
 {
-	register struct filedesc *fdp = p->p_fd;
-	register int i;
+	struct filedesc *fdp = p->p_fd;
+	int i;
 	int lim, last, numfiles, oldnfiles;
 	struct fileproc **newofiles, **ofiles;
 	char *newofileflags;
@@ -1337,6 +2130,10 @@ fdalloc(p, want, result)
 	 * of want or fd_freefile.  If that fails, consider
 	 * expanding the ofile array.
 	 */
+#if DIAGNOSTIC
+	proc_fdlock_assert(p, LCK_MTX_ASSERT_OWNED);
+#endif
+
 	lim = min((int)p->p_rlimit[RLIMIT_NOFILE].rlim_cur, maxfiles);
 	for (;;) {
 		last = min(fdp->fd_nfiles, lim);
@@ -1384,15 +2181,15 @@ fdalloc(p, want, result)
 		 */
 		oldnfiles = fdp->fd_nfiles;
 		(void) memcpy(newofiles, fdp->fd_ofiles,
-				oldnfiles * sizeof *fdp->fd_ofiles);
+				oldnfiles * sizeof(*fdp->fd_ofiles));
 		(void) memset(&newofiles[oldnfiles], 0,
-				(numfiles - oldnfiles) * sizeof *fdp->fd_ofiles);
+				(numfiles - oldnfiles) * sizeof(*fdp->fd_ofiles));
 
 		(void) memcpy(newofileflags, fdp->fd_ofileflags,
-				oldnfiles * sizeof *fdp->fd_ofileflags);
+				oldnfiles * sizeof(*fdp->fd_ofileflags));
 		(void) memset(&newofileflags[oldnfiles], 0,
 				(numfiles - oldnfiles) *
-						sizeof *fdp->fd_ofileflags);
+						sizeof(*fdp->fd_ofileflags));
 		ofiles = fdp->fd_ofiles;
 		fdp->fd_ofiles = newofiles;
 		fdp->fd_ofileflags = newofileflags;
@@ -1402,14 +2199,26 @@ fdalloc(p, want, result)
 	}
 }
 
+
 /*
- * Check to see whether n user file descriptors
- * are available to the process p.
+ * fdavail
+ *
+ * Description:	Check to see whether n user file descriptors are available
+ *		to the process p.
+ *
+ * Parameters:	p				Process to check in
+ *		n				The number of fd's desired
+ *
+ * Returns:	0				No
+ *		1				Yes
+ *
+ * Locks:	Assumes proc_fdlock for process is held by the caller
+ *
+ * Notes:	The answer only remains valid so long as the proc_fdlock is
+ *		held by the caller.
  */
 int
-fdavail(p, n)
-	struct proc *p;
-	int n;
+fdavail(proc_t p, int n)
 {
 	struct filedesc *fdp = p->p_fd;
 	struct fileproc **fpp;
@@ -1427,45 +2236,50 @@ fdavail(p, n)
 	return (0);
 }
 
+
+/*
+ * fdrelse
+ *
+ * Description:	Legacy KPI wrapper function for _fdrelse
+ *
+ * Parameters:	p				Process in which fd lives
+ *		fd				fd to free
+ *
+ * Returns:	void
+ *
+ * Locks:	Assumes proc_fdlock for process is held by the caller
+ */
 void
-fdrelse(p, fd)
-	struct proc *p;
-	int fd;
+fdrelse(proc_t p, int fd)
 {
 	_fdrelse(p, fd);
 }
 
-void
-fddrop(p, fd)
-	struct proc *p;
-	int fd;
-{
-	struct filedesc *fdp = p->p_fd;
-	struct fileproc *fp;
 
-	if (fd < fdp->fd_freefile)
-		fdp->fd_freefile = fd;
-#if DIAGNOSTIC
-	if (fd > fdp->fd_lastfile)
-		panic("fdrelse: fd_lastfile inconsistent");
-#endif
-	fp = fdp->fd_ofiles[fd];
-	fdp->fd_ofiles[fd] = NULL;
-	fdp->fd_ofileflags[fd] = 0;
-
-	while ((fd = fdp->fd_lastfile) > 0 &&
-			fdp->fd_ofiles[fd] == NULL &&
-			!(fdp->fd_ofileflags[fd] & UF_RESERVED))
-		fdp->fd_lastfile--;
-	FREE_ZONE(fp, sizeof *fp, M_FILEPROC);
-}
-
-
+/*
+ * fdgetf_noref
+ *
+ * Description:	Get the fileproc pointer for the given fd from the per process
+ *		open file table without taking an explicit reference on it.
+ *
+ * Parameters:	p				Process containing fd
+ *		fd				fd to obtain fileproc for
+ *		resultfp			Pointer to pointer return area
+ *
+ * Returns:	0				Success
+ *		EBADF
+ *
+ * Implicit returns:
+ *		*resultfp (modified)		Pointer to fileproc pointer
+ *
+ * Locks:	Assumes proc_fdlock for process is held by the caller
+ *
+ * Notes:	Because there is no reference explicitly taken, the returned
+ *		fileproc pointer is only valid so long as the proc_fdlock
+ *		remains held by the caller.
+ */
 int
-fdgetf_noref(p, fd, resultfp)
-	struct proc *p;
-	int fd;
-	struct fileproc **resultfp;
+fdgetf_noref(proc_t p, int fd, struct fileproc **resultfp)
 {
 	struct filedesc *fdp = p->p_fd;
 	struct fileproc *fp;
@@ -1481,36 +2295,40 @@ fdgetf_noref(p, fd, resultfp)
 }
 
 
-/* should be called only when proc_fdlock is held */
-void
-fp_setflags(proc_t p, struct fileproc * fp, int flags)
-{
-	proc_fdlock(p);
-	fp->f_flags |= flags;
-	proc_fdunlock(p);
-}
-
-void
-fp_clearflags(proc_t p, struct fileproc * fp, int flags)
-{
-
-	proc_fdlock(p);
-	if (fp)
-		fp->f_flags &= ~flags;
-	proc_fdunlock(p);
-}
-
+/*
+ * fp_getfvp
+ *
+ * Description:	Get fileproc and vnode pointer for a given fd from the per
+ *		process open file table of the specified process, and if
+ *		successful, increment the f_iocount
+ *
+ * Parameters:	p				Process in which fd lives
+ *		fd				fd to get information for
+ *		resultfp			Pointer to result fileproc
+ *						pointer area, or 0 if none
+ *		resultvp			Pointer to result vnode pointer
+ *						area, or 0 if none
+ *
+ * Returns:	0				Success
+ *		EBADF				Bad file descriptor
+ *		ENOTSUP				fd does not refer to a vnode
+ *
+ * Implicit returns:
+ *		*resultfp (modified)		Fileproc pointer
+ *		*resultvp (modified)		vnode pointer
+ *
+ * Notes:	The resultfp and resultvp fields are optional, and may be
+ *		independently specified as NULL to skip returning information
+ *
+ * Locks:	Internally takes and releases proc_fdlock
+ */
 int
-fp_getfvp(p, fd, resultfp, resultvp)
-	struct proc *p;
-	int fd;
-	struct fileproc **resultfp;
-	struct vnode  **resultvp;
+fp_getfvp(proc_t p, int fd, struct fileproc **resultfp, struct vnode **resultvp)
 {
 	struct filedesc *fdp = p->p_fd;
 	struct fileproc *fp;
 
-	proc_fdlock(p);
+	proc_fdlock_spin(p);
 	if (fd < 0 || fd >= fdp->fd_nfiles ||
 			(fp = fdp->fd_ofiles[fd]) == NULL ||
 			(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
@@ -1533,19 +2351,43 @@ fp_getfvp(p, fd, resultfp, resultvp)
 }
 
 
-
+/*
+ * fp_getfvpandvid
+ *
+ * Description:	Get fileproc, vnode pointer, and vid for a given fd from the
+ *		per process open file table of the specified process, and if
+ *		successful, increment the f_iocount
+ *
+ * Parameters:	p				Process in which fd lives
+ *		fd				fd to get information for
+ *		resultfp			Pointer to result fileproc
+ *						pointer area, or 0 if none
+ *		resultvp			Pointer to result vnode pointer
+ *						area, or 0 if none
+ *		vidp				Pointer to resuld vid area
+ *
+ * Returns:	0				Success
+ *		EBADF				Bad file descriptor
+ *		ENOTSUP				fd does not refer to a vnode
+ *
+ * Implicit returns:
+ *		*resultfp (modified)		Fileproc pointer
+ *		*resultvp (modified)		vnode pointer
+ *		*vidp				vid value
+ *
+ * Notes:	The resultfp and resultvp fields are optional, and may be
+ *		independently specified as NULL to skip returning information
+ *
+ * Locks:	Internally takes and releases proc_fdlock
+ */
 int
-fp_getfvpandvid(p, fd, resultfp, resultvp, vidp)
-	struct proc *p;
-	int fd;
-	struct fileproc **resultfp;
-	struct vnode  **resultvp;
-	uint32_t * vidp;
+fp_getfvpandvid(proc_t p, int fd, struct fileproc **resultfp,
+		struct vnode **resultvp, uint32_t *vidp)
 {
 	struct filedesc *fdp = p->p_fd;
 	struct fileproc *fp;
 
-	proc_fdlock(p);
+	proc_fdlock_spin(p);
 	if (fd < 0 || fd >= fdp->fd_nfiles ||
 			(fp = fdp->fd_ofiles[fd]) == NULL ||
 			(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
@@ -1569,25 +2411,40 @@ fp_getfvpandvid(p, fd, resultfp, resultvp, vidp)
 	return (0);
 }
 
+
 /*
+ * fp_getfsock
+ *
+ * Description:	Get fileproc and socket pointer for a given fd from the
+ *		per process open file table of the specified process, and if
+ *		successful, increment the f_iocount
+ *
+ * Parameters:	p				Process in which fd lives
+ *		fd				fd to get information for
+ *		resultfp			Pointer to result fileproc
+ *						pointer area, or 0 if none
+ *		results				Pointer to result socket
+ *						pointer area, or 0 if none
+ *
  * Returns:	EBADF			The file descriptor is invalid
  *		EOPNOTSUPP		The file descriptor is not a socket
  *		0			Success
+ *
+ * Implicit returns:
+ *		*resultfp (modified)		Fileproc pointer
+ *		*results (modified)		socket pointer
  *
  * Notes:	EOPNOTSUPP should probably be ENOTSOCK; this function is only
  *		ever called from accept1().
  */
 int
-fp_getfsock(p, fd, resultfp, results)
-	struct proc *p;
-	int fd;
-	struct fileproc **resultfp;
-	struct socket  **results;
+fp_getfsock(proc_t p, int fd, struct fileproc **resultfp,
+	    struct socket **results)
 {
 	struct filedesc *fdp = p->p_fd;
 	struct fileproc *fp;
 
-	proc_fdlock(p);
+	proc_fdlock_spin(p);
 	if (fd < 0 || fd >= fdp->fd_nfiles ||
 			(fp = fdp->fd_ofiles[fd]) == NULL ||
 			(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
@@ -1610,17 +2467,39 @@ fp_getfsock(p, fd, resultfp, results)
 }
 
 
+/*
+ * fp_getfkq
+ *
+ * Description:	Get fileproc and kqueue pointer for a given fd from the
+ *		per process open file table of the specified process, and if
+ *		successful, increment the f_iocount
+ *
+ * Parameters:	p				Process in which fd lives
+ *		fd				fd to get information for
+ *		resultfp			Pointer to result fileproc
+ *						pointer area, or 0 if none
+ *		resultkq			Pointer to result kqueue
+ *						pointer area, or 0 if none
+ *
+ * Returns:	EBADF			The file descriptor is invalid
+ *		EBADF			The file descriptor is not a socket
+ *		0			Success
+ *
+ * Implicit returns:
+ *		*resultfp (modified)		Fileproc pointer
+ *		*resultkq (modified)		kqueue pointer
+ *
+ * Notes:	The second EBADF should probably be something else to make
+ *		the error condition distinct.
+ */
 int
-fp_getfkq(p, fd, resultfp, resultkq)
-	struct proc *p;
-	int fd;
-	struct fileproc **resultfp;
-	struct kqueue  **resultkq;
+fp_getfkq(proc_t p, int fd, struct fileproc **resultfp,
+	  struct kqueue **resultkq)
 {
 	struct filedesc *fdp = p->p_fd;
 	struct fileproc *fp;
 
-	proc_fdlock(p);
+	proc_fdlock_spin(p);
 	if ( fd < 0 || fd >= fdp->fd_nfiles ||
 			(fp = fdp->fd_ofiles[fd]) == NULL ||
 			(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
@@ -1642,17 +2521,42 @@ fp_getfkq(p, fd, resultfp, resultkq)
 	return (0);
 }
 
+
+/*
+ * fp_getfpshm
+ *
+ * Description:	Get fileproc and POSIX shared memory pointer for a given fd
+ *		from the per process open file table of the specified process
+ *		and if successful, increment the f_iocount
+ *
+ * Parameters:	p				Process in which fd lives
+ *		fd				fd to get information for
+ *		resultfp			Pointer to result fileproc
+ *						pointer area, or 0 if none
+ *		resultpshm			Pointer to result POSIX
+ *						shared memory pointer
+ *						pointer area, or 0 if none
+ *
+ * Returns:	EBADF			The file descriptor is invalid
+ *		EBADF			The file descriptor is not a POSIX
+ *					shared memory area
+ *		0			Success
+ *
+ * Implicit returns:
+ *		*resultfp (modified)		Fileproc pointer
+ *		*resultpshm (modified)		POSIX shared memory pointer
+ *
+ * Notes:	The second EBADF should probably be something else to make
+ *		the error condition distinct.
+ */
 int
-fp_getfpshm(p, fd, resultfp, resultpshm)
-	struct proc *p;
-	int fd;
-	struct fileproc **resultfp;
-	struct pshmnode  **resultpshm;
+fp_getfpshm(proc_t p, int fd, struct fileproc **resultfp,
+	    struct pshmnode **resultpshm)
 {
 	struct filedesc *fdp = p->p_fd;
 	struct fileproc *fp;
 
-	proc_fdlock(p);
+	proc_fdlock_spin(p);
 	if (fd < 0 || fd >= fdp->fd_nfiles ||
 			(fp = fdp->fd_ofiles[fd]) == NULL ||
 			(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
@@ -1676,17 +2580,50 @@ fp_getfpshm(p, fd, resultfp, resultpshm)
 }
 
 
+/*
+ * fp_getfsem
+ *
+ * Description:	Get fileproc and POSIX semaphore pointer for a given fd from
+ *		the per process open file table of the specified process
+ *		and if successful, increment the f_iocount
+ *
+ * Parameters:	p				Process in which fd lives
+ *		fd				fd to get information for
+ *		resultfp			Pointer to result fileproc
+ *						pointer area, or 0 if none
+ *		resultpsem			Pointer to result POSIX
+ *						semaphore pointer area, or
+ *						0 if none
+ *
+ * Returns:	EBADF			The file descriptor is invalid
+ *		EBADF			The file descriptor is not a POSIX
+ *					semaphore
+ *		0			Success
+ *
+ * Implicit returns:
+ *		*resultfp (modified)		Fileproc pointer
+ *		*resultpsem (modified)		POSIX semaphore pointer
+ *
+ * Notes:	The second EBADF should probably be something else to make
+ *		the error condition distinct.
+ *
+ *		In order to support unnamed POSIX semaphores, the named
+ *		POSIX semaphores will have to move out of the per-process
+ *		open filetable, and into a global table that is shared with
+ *		unnamed POSIX semaphores, since unnamed POSIX semaphores
+ *		are typically used by declaring instances in shared memory,
+ *		and there's no other way to do this without changing the
+ *		underlying type, which would introduce binary compatibility
+ *		issues.
+ */
 int
-fp_getfpsem(p, fd, resultfp, resultpsem)
-	struct proc *p;
-	int fd;
-	struct fileproc **resultfp;
-	struct psemnode  **resultpsem;
+fp_getfpsem(proc_t p, int fd, struct fileproc **resultfp,
+	    struct psemnode **resultpsem)
 {
 	struct filedesc *fdp = p->p_fd;
 	struct fileproc *fp;
 
-	proc_fdlock(p);
+	proc_fdlock_spin(p);
 	if (fd < 0 || fd >= fdp->fd_nfiles ||
 			(fp = fdp->fd_ofiles[fd]) == NULL ||
 			(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
@@ -1709,17 +2646,39 @@ fp_getfpsem(p, fd, resultfp, resultpsem)
 }
 
 
+/*
+ * fp_getfpipe
+ *
+ * Description:	Get fileproc and pipe pointer for a given fd from the
+ *		per process open file table of the specified process
+ *		and if successful, increment the f_iocount
+ *
+ * Parameters:	p				Process in which fd lives
+ *		fd				fd to get information for
+ *		resultfp			Pointer to result fileproc
+ *						pointer area, or 0 if none
+ *		resultpipe			Pointer to result pipe
+ *						pointer area, or 0 if none
+ *
+ * Returns:	EBADF			The file descriptor is invalid
+ *		EBADF			The file descriptor is not a socket
+ *		0			Success
+ *
+ * Implicit returns:
+ *		*resultfp (modified)		Fileproc pointer
+ *		*resultpipe (modified)		pipe pointer
+ *
+ * Notes:	The second EBADF should probably be something else to make
+ *		the error condition distinct.
+ */
 int
-fp_getfpipe(p, fd, resultfp, resultpipe)
-	struct proc *p;
-	int fd;
-	struct fileproc **resultfp;
-	struct pipe  **resultpipe;
+fp_getfpipe(proc_t p, int fd, struct fileproc **resultfp,
+	    struct pipe **resultpipe)
 {
 	struct filedesc *fdp = p->p_fd;
 	struct fileproc *fp;
 
-	proc_fdlock(p);
+	proc_fdlock_spin(p);
 	if (fd < 0 || fd >= fdp->fd_nfiles ||
 			(fp = fdp->fd_ofiles[fd]) == NULL ||
 			(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
@@ -1742,18 +2701,44 @@ fp_getfpipe(p, fd, resultfp, resultpipe)
 }
 
 
-#define DTYPE_ATALK -1
+#define DTYPE_ATALK -1		/* XXX This does not belong here */
+
+
+/*
+ * fp_getfatalk
+ *
+ * Description:	Get fileproc and atalk pointer for a given fd from the
+ *		per process open file table of the specified process
+ *		and if successful, increment the f_iocount
+ *
+ * Parameters:	p				Process in which fd lives
+ *		fd				fd to get information for
+ *		resultfp			Pointer to result fileproc
+ *						pointer area, or 0 if none
+ *		resultatalk			Pointer to result atalk
+ *						pointer area, or 0 if none
+ * Returns:	EBADF			The file descriptor is invalid
+ *		EBADF			The file descriptor is not a socket
+ *		0			Success
+ *
+ * Implicit returns:
+ *		*resultfp (modified)		Fileproc pointer
+ *		*resultatalk (modified)		atalk pointer
+ *
+ * Notes:	The second EBADF should probably be something else to make
+ *		the error condition distinct.
+ *
+ *		XXX This code is specific to AppleTalk protocol support, and
+ *		XXX should be conditionally compiled
+ */
 int
-fp_getfatalk(p, fd, resultfp, resultatalk)
-	struct proc *p;
-	int fd;
-	struct fileproc **resultfp;
-	struct atalk  **resultatalk;
+fp_getfatalk(proc_t p, int fd, struct fileproc **resultfp,
+	     struct atalk **resultatalk)
 {
 	struct filedesc *fdp = p->p_fd;
 	struct fileproc *fp;
 
-	proc_fdlock(p);
+	proc_fdlock_spin(p);
 	if (fd < 0 || fd >= fdp->fd_nfiles ||
 			(fp = fdp->fd_ofiles[fd]) == NULL ||
 			(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
@@ -1775,19 +2760,40 @@ fp_getfatalk(p, fd, resultfp, resultatalk)
 	return (0);
 }
 
+
+/*
+ * fp_lookup
+ *
+ * Description:	Get fileproc pointer for a given fd from the per process
+ *		open file table of the specified process and if successful,
+ *		increment the f_iocount
+ *
+ * Parameters:	p				Process in which fd lives
+ *		fd				fd to get information for
+ *		resultfp			Pointer to result fileproc
+ *						pointer area, or 0 if none
+ *		locked				!0 if the caller holds the
+ *						proc_fdlock, 0 otherwise
+ *
+ * Returns:	0			Success
+ *		EBADF			Bad file descriptor
+ *
+ * Implicit returns:
+ *		*resultfp (modified)		Fileproc pointer
+ *
+ * Locks:	If the argument 'locked' is non-zero, then the caller is
+ *		expected to have taken and held the proc_fdlock; if it is
+ *		zero, than this routine internally takes and drops this lock.
+ */
 int
-fp_lookup(p, fd, resultfp, locked)
-	struct proc *p;
-	int fd;
-	struct fileproc **resultfp;
-	int locked;
+fp_lookup(proc_t p, int fd, struct fileproc **resultfp, int locked)
 {
 	struct filedesc *fdp = p->p_fd;
 	struct fileproc *fp;
 
 	if (!locked)
-		proc_fdlock(p);
-	if (fd < 0 || fd >= fdp->fd_nfiles ||
+		proc_fdlock_spin(p);
+	if (fd < 0 || fdp == NULL || fd >= fdp->fd_nfiles ||
 			(fp = fdp->fd_ofiles[fd]) == NULL ||
 			(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
 		if (!locked)
@@ -1804,12 +2810,32 @@ fp_lookup(p, fd, resultfp, locked)
 	return (0);
 }
 
+
+/*
+ * fp_drop_written
+ *
+ * Description:	Set the FP_WRITTEN flag on the fileproc and drop the I/O
+ *		reference previously taken by calling fp_lookup et. al.
+ *
+ * Parameters:	p				Process in which the fd lives
+ *		fd				fd associated with the fileproc
+ *		fp				fileproc on which to set the
+ *						flag and drop the reference
+ *
+ * Returns:	0				Success
+ *	fp_drop:EBADF				Bad file descriptor
+ *
+ * Locks:	This function internally takes and drops the proc_fdlock for
+ *		the supplied process
+ *
+ * Notes:	The fileproc must correspond to the fd in the supplied proc
+ */
 int
 fp_drop_written(proc_t p, int fd, struct fileproc *fp)
 {
         int error;
 
-	proc_fdlock(p);
+	proc_fdlock_spin(p);
 
 	fp->f_flags |= FP_WRITTEN;
 	
@@ -1821,12 +2847,31 @@ fp_drop_written(proc_t p, int fd, struct fileproc *fp)
 }
 
 
+/*
+ * fp_drop_event
+ *
+ * Description:	Set the FP_WAITEVENT flag on the fileproc and drop the I/O
+ *		reference previously taken by calling fp_lookup et. al.
+ *
+ * Parameters:	p				Process in which the fd lives
+ *		fd				fd associated with the fileproc
+ *		fp				fileproc on which to set the
+ *						flag and drop the reference
+ *
+ * Returns:	0				Success
+ *	fp_drop:EBADF				Bad file descriptor
+ *
+ * Locks:	This function internally takes and drops the proc_fdlock for
+ *		the supplied process
+ *
+ * Notes:	The fileproc must correspond to the fd in the supplied proc
+ */
 int
 fp_drop_event(proc_t p, int fd, struct fileproc *fp)
 {
         int error;
 
-	proc_fdlock(p);
+	proc_fdlock_spin(p);
 
 	fp->f_flags |= FP_WAITEVENT;
 	
@@ -1837,17 +2882,38 @@ fp_drop_event(proc_t p, int fd, struct fileproc *fp)
 	return (error);
 }
 
+
+/*
+ * fp_drop
+ *
+ * Description:	Drop the I/O reference previously taken by calling fp_lookup
+ *		et. al.
+ *
+ * Parameters:	p				Process in which the fd lives
+ *		fd				fd associated with the fileproc
+ *		fp				fileproc on which to set the
+ *						flag and drop the reference
+ *		locked				flag to internally take and
+ *						drop proc_fdlock if it is not
+ *						already held by the caller
+ *
+ * Returns:	0				Success
+ *		EBADF				Bad file descriptor
+ *
+ * Locks:	This function internally takes and drops the proc_fdlock for
+ *		the supplied process if 'locked' is non-zero, and assumes that
+ *		the caller already holds this lock if 'locked' is non-zero.
+ *
+ * Notes:	The fileproc must correspond to the fd in the supplied proc
+ */
 int
-fp_drop(p, fd, fp, locked)
-	struct proc *p;
-	int fd;
-	struct fileproc *fp;
-	int locked;
+fp_drop(proc_t p, int fd, struct fileproc *fp, int locked)
 {
 	struct filedesc *fdp = p->p_fd;
+	int	needwakeup = 0;
 
 	if (!locked)
-		proc_fdlock(p);
+		proc_fdlock_spin(p);
 	 if ((fp == FILEPROC_NULL) && (fd < 0 || fd >= fdp->fd_nfiles ||
 			(fp = fdp->fd_ofiles[fd]) == NULL ||
 			((fdp->fd_ofileflags[fd] & UF_RESERVED) &&
@@ -1860,22 +2926,60 @@ fp_drop(p, fd, fp, locked)
 
 	if (p->p_fpdrainwait && fp->f_iocount == 0) {
 	        p->p_fpdrainwait = 0;
-	        wakeup(&p->p_fpdrainwait);
+		needwakeup = 1;
 	}
 	if (!locked)
 		proc_fdunlock(p);
+	if (needwakeup)
+	        wakeup(&p->p_fpdrainwait);
 		
 	return (0);
 }
 
+
+/*
+ * file_vnode
+ *
+ * Description:	Given an fd, look it up in the current process's per process
+ *		open file table, and return its internal vnode pointer.
+ *
+ * Parameters:	fd				fd to obtain vnode from
+ *		vpp				pointer to vnode return area
+ *
+ * Returns:	0				Success
+ *		EINVAL				The fd does not refer to a
+ *						vnode fileproc entry
+ *	fp_lookup:EBADF				Bad file descriptor
+ *
+ * Implicit returns:
+ *		*vpp (modified)			Returned vnode pointer
+ *
+ * Locks:	This function internally takes and drops the proc_fdlock for
+ *		the current process
+ *
+ * Notes:	If successful, this function increments the f_iocount on the
+ *		fd's corresponding fileproc.
+ *
+ *		The fileproc referenced is not returned; because of this, care
+ *		must be taken to not drop the last reference (e.g. by closing
+ *		the file).  This is inhernely unsafe, since the reference may
+ *		not be recoverable from the vnode, if there is a subsequent
+ *		close that destroys the associate fileproc.  The caller should
+ *		therefore retain their own reference on the fileproc so that
+ *		the f_iocount can be dropped subsequently.  Failure to do this
+ *		can result in the returned pointer immediately becoming invalid
+ *		following the call.
+ *
+ *		Use of this function is discouraged.
+ */
 int
 file_vnode(int fd, struct vnode **vpp)
 {
-	struct proc * p = current_proc();
+	proc_t p = current_proc();
 	struct fileproc *fp;
 	int error;
 	
-	proc_fdlock(p);
+	proc_fdlock_spin(p);
 	if ( (error = fp_lookup(p, fd, &fp, 1)) ) {
 		proc_fdunlock(p);
 		return(error);
@@ -1892,14 +2996,48 @@ file_vnode(int fd, struct vnode **vpp)
 }
 
 
+/*
+ * file_socket
+ *
+ * Description:	Given an fd, look it up in the current process's per process
+ *		open file table, and return its internal socket pointer.
+ *
+ * Parameters:	fd				fd to obtain vnode from
+ *		sp				pointer to socket return area
+ *
+ * Returns:	0				Success
+ *		ENOTSOCK			Not a socket
+ *		fp_lookup:EBADF			Bad file descriptor
+ *
+ * Implicit returns:
+ *		*sp (modified)			Returned socket pointer
+ *
+ * Locks:	This function internally takes and drops the proc_fdlock for
+ *		the current process
+ *
+ * Notes:	If successful, this function increments the f_iocount on the
+ *		fd's corresponding fileproc.
+ *
+ *		The fileproc referenced is not returned; because of this, care
+ *		must be taken to not drop the last reference (e.g. by closing
+ *		the file).  This is inhernely unsafe, since the reference may
+ *		not be recoverable from the socket, if there is a subsequent
+ *		close that destroys the associate fileproc.  The caller should
+ *		therefore retain their own reference on the fileproc so that
+ *		the f_iocount can be dropped subsequently.  Failure to do this
+ *		can result in the returned pointer immediately becoming invalid
+ *		following the call.
+ *
+ *		Use of this function is discouraged.
+ */
 int
 file_socket(int fd, struct socket **sp)
 {
-	struct proc * p = current_proc();
+	proc_t p = current_proc();
 	struct fileproc *fp;
 	int error;
 	
-	proc_fdlock(p);
+	proc_fdlock_spin(p);
 	if ( (error = fp_lookup(p, fd, &fp, 1)) ) {
 		proc_fdunlock(p);
 		return(error);
@@ -1915,15 +3053,39 @@ file_socket(int fd, struct socket **sp)
 	return(0);
 }
 
+
+/*
+ * file_flags
+ *
+ * Description:	Given an fd, look it up in the current process's per process
+ *		open file table, and return its fileproc's flags field.
+ *
+ * Parameters:	fd				fd whose flags are to be
+ *						retrieved
+ *		flags				pointer to flags data area
+ *
+ * Returns:	0				Success
+ *		ENOTSOCK			Not a socket
+ *		fp_lookup:EBADF			Bad file descriptor
+ *
+ * Implicit returns:
+ *		*flags (modified)		Returned flags field
+ *
+ * Locks:	This function internally takes and drops the proc_fdlock for
+ *		the current process
+ *
+ * Notes:	This function will internally increment and decrement the
+ *		f_iocount of the fileproc as part of its operation.
+ */
 int
-file_flags(int fd, int * flags)
+file_flags(int fd, int *flags)
 {
 
-	struct proc * p = current_proc();
+	proc_t p = current_proc();
 	struct fileproc *fp;
 	int error;
 	
-	proc_fdlock(p);
+	proc_fdlock_spin(p);
 	if ( (error = fp_lookup(p, fd, &fp, 1)) ) {
 		proc_fdunlock(p);
 		return(error);
@@ -1936,13 +3098,50 @@ file_flags(int fd, int * flags)
 }
 
 
+/*
+ * file_drop
+ *
+ * Description:	Drop an iocount reference on an fd, and wake up any waiters
+ *		for draining (i.e. blocked in fileproc_drain() called during
+ *		the last attempt to close a file).
+ *
+ * Parameters:	fd				fd on which an ioreference is
+ *						to be dropped
+ *
+ * Returns:	0				Success
+ *		EBADF				Bad file descriptor
+ *
+ * Description:	Given an fd, look it up in the current process's per process
+ *		open file table, and drop it's fileproc's f_iocount by one
+ *
+ * Notes:	This is intended as a corresponding operation to the functions
+ *		file_vnode() and file_socket() operations.
+ *
+ *		Technically, the close reference is supposed to be protected
+ *		by a fileproc_drain(), however, a drain will only block if
+ *		the fd refers to a character device, and that device has had
+ *		preparefileread() called on it.  If it refers to something
+ *		other than a character device, then the drain will occur and
+ *		block each close attempt, rather than merely the last close.
+ *
+ *		Since it's possible for an fd that refers to a character
+ *		device to have an intermediate close followed by an open to
+ *		cause a different file to correspond to that descriptor,
+ *		unless there was a cautionary reference taken on the fileproc,
+ *		this is an inherently unsafe function.  This happens in the
+ *		case where multiple fd's in a process refer to the same
+ *		character device (e.g. stdin/out/err pointing to a tty, etc.).
+ *
+ *		Use of this function is discouraged.
+ */
 int 
 file_drop(int fd)
 {
 	struct fileproc *fp;
-	struct proc *p = current_proc();
+	proc_t p = current_proc();
+	int	needwakeup = 0;
 
-	proc_fdlock(p);
+	proc_fdlock_spin(p);
 	if (fd < 0 || fd >= p->p_fd->fd_nfiles ||
 			(fp = p->p_fd->fd_ofiles[fd]) == NULL ||
 			((p->p_fd->fd_ofileflags[fd] & UF_RESERVED) &&
@@ -1954,38 +3153,105 @@ file_drop(int fd)
 
 	if (p->p_fpdrainwait && fp->f_iocount == 0) {
 	        p->p_fpdrainwait = 0;
-	        wakeup(&p->p_fpdrainwait);
+		needwakeup = 1;
 	}
 	proc_fdunlock(p);
+
+	if (needwakeup)
+	        wakeup(&p->p_fpdrainwait);
 	return(0);
-
-
 }
 
+
+/*
+ * falloc
+ *
+ * Description:	Allocate an entry in the per process open file table and
+ *		return the corresponding fileproc and fd.
+ *
+ * Parameters:	p				The process in whose open file
+ *						table the fd is to be allocated
+ *		resultfp			Pointer to fileproc pointer
+ *						return area
+ *		resultfd			Pointer to fd return area
+ *		ctx				VFS context
+ *
+ * Returns:	0				Success
+ *	falloc:ENFILE				Too many open files in system
+ *	falloc:EMFILE				Too many open files in process
+ *	falloc:ENOMEM				M_FILEPROC or M_FILEGLOB zone
+ *						exhausted
+ *
+ * Implicit returns:
+ *		*resultfd (modified)		Returned fileproc pointer
+ *		*resultfd (modified)		Returned fd
+ *
+ * Locks:	This function takes and drops the proc_fdlock; if this lock
+ *		is alread held, use falloc_locked() instead.
+ *
+ * Notes:	This function takes separate process and context arguments
+ *		solely to support kern_exec.c; otherwise, it would take
+ *		neither, and expect falloc_locked() to use the
+ *		vfs_context_current() routine internally.
+ */
 int
-falloc(p, resultfp, resultfd )
-	struct proc *p;
-	struct fileproc **resultfp;
-	int *resultfd;
+falloc(proc_t p, struct fileproc **resultfp, int *resultfd, vfs_context_t ctx)
 {
 	int error;
 
 	proc_fdlock(p);
-	error = falloc_locked(p, resultfp, resultfd, 1);
+	error = falloc_locked(p, resultfp, resultfd, ctx, 1);
 	proc_fdunlock(p);
 
 	return(error);
 }
+
+
 /*
+ * falloc_locked
+ *
  * Create a new open file structure and allocate
  * a file decriptor for the process that refers to it.
+ *
+ * Returns:	0			Success
+ *
+ * Description:	Allocate an entry in the per process open file table and
+ *		return the corresponding fileproc and fd.
+ *
+ * Parameters:	p				The process in whose open file
+ *						table the fd is to be allocated
+ *		resultfp			Pointer to fileproc pointer
+ *						return area
+ *		resultfd			Pointer to fd return area
+ *		ctx				VFS context
+ *		locked				Flag to indicate whether the
+ *						caller holds proc_fdlock
+ *
+ * Returns:	0				Success
+ *		ENFILE				Too many open files in system
+ *		fdalloc:EMFILE			Too many open files in process
+ *		ENOMEM				M_FILEPROC or M_FILEGLOB zone
+ *						exhausted
+ *	fdalloc:ENOMEM
+ *
+ * Implicit returns:
+ *		*resultfd (modified)		Returned fileproc pointer
+ *		*resultfd (modified)		Returned fd
+ *
+ * Locks:	If the parameter 'locked' is zero, this function takes and
+ *		drops the proc_fdlock; if non-zero, the caller must hold the
+ *		lock.
+ *
+ * Notes:	If you intend to use a non-zero 'locked' parameter, use the
+ *		utility function falloc() instead.
+ *
+ *		This function takes separate process and context arguments
+ *		solely to support kern_exec.c; otherwise, it would take
+ *		neither, and use the vfs_context_current() routine internally.
  */
 int
-falloc_locked(p, resultfp, resultfd, locked)
-	struct proc *p;
-	struct fileproc **resultfp;
-	int *resultfd;
-	int locked;
+falloc_locked(proc_t p, struct fileproc **resultfp, int *resultfd,
+	      vfs_context_t ctx, int locked)
 {
 	struct fileproc *fp, *fq;
 	struct fileglob *fg;
@@ -2004,6 +3270,15 @@ falloc_locked(p, resultfp, resultfd, locked)
 		tablefull("file");
 		return (ENFILE);
 	}
+#if CONFIG_MACF
+	error = mac_file_check_create(proc_ucred(p));
+	if (error) {
+		if (!locked)
+			proc_fdunlock(p);
+		return (error);
+	}
+#endif
+
 	/*
 	 * Allocate a new file descriptor.
 	 * If the process has file descriptor zero open, add to the list
@@ -2013,7 +3288,18 @@ falloc_locked(p, resultfp, resultfd, locked)
 	proc_fdunlock(p);
 
 	MALLOC_ZONE(fp, struct fileproc *, sizeof(struct fileproc), M_FILEPROC, M_WAITOK);
+	if (fp == NULL) {
+		if (locked)
+			proc_fdlock(p);
+		return (ENOMEM);
+	}
 	MALLOC_ZONE(fg, struct fileglob *, sizeof(struct fileglob), M_FILEGLOB, M_WAITOK);
+	if (fg == NULL) {
+		FREE_ZONE(fp, sizeof(*fp), M_FILEPROC);
+		if (locked)
+			proc_fdlock(p);
+		return (ENOMEM);
+	}
 	bzero(fp, sizeof(struct fileproc));
 	bzero(fg, sizeof(struct fileglob));
 	lck_mtx_init(&fg->fg_lock, file_lck_grp, file_lck_attr);
@@ -2021,12 +3307,21 @@ falloc_locked(p, resultfp, resultfd, locked)
 	fp->f_iocount = 1;
 	fg->fg_count = 1;
 	fp->f_fglob = fg;
+#if CONFIG_MACF
+	mac_file_label_init(fg);
+#endif
+
+	kauth_cred_ref(ctx->vc_ucred);
 
 	proc_fdlock(p);
 
-	fp->f_cred = kauth_cred_proc_ref(p);
+	fp->f_cred = ctx->vc_ucred;
 
-	lck_mtx_lock(file_flist_lock);
+#if CONFIG_MACF
+	mac_file_label_associate(fp->f_cred, fg);
+#endif
+
+	lck_mtx_lock_spin(file_flist_lock);
 
 	nfiles++;
 
@@ -2050,14 +3345,23 @@ falloc_locked(p, resultfp, resultfd, locked)
 	return (0);
 }
 
+
 /*
- * Free a file structure.
+ * fg_free
+ *
+ * Description:	Free a file structure; drop the global open file count, and
+ *		drop the credential reference, if the fileglob has one, and
+ *		destroy the instance mutex before freeing
+ *
+ * Parameters:	fg				Pointer to fileglob to be
+ *						freed
+ *
+ * Returns:	void
  */
 void
-fg_free(fg)
-	struct fileglob *fg;
+fg_free(struct fileglob *fg)
 {
-	lck_mtx_lock(file_flist_lock);
+	lck_mtx_lock_spin(file_flist_lock);
 	LIST_REMOVE(fg, f_list);
 	nfiles--;
 	lck_mtx_unlock(file_flist_lock);
@@ -2067,49 +3371,111 @@ fg_free(fg)
 	}
 	lck_mtx_destroy(&fg->fg_lock, file_lck_grp);
 
+#if CONFIG_MACF
+	mac_file_label_destroy(fg);
+#endif
 	FREE_ZONE(fg, sizeof *fg, M_FILEGLOB);
 }
 
+
+/*
+ * fdexec
+ *
+ * Description:	Perform close-on-exec processing for all files in a process
+ *		that are either marked as close-on-exec, or which were in the
+ *		process of being opened at the time of the execve
+ *
+ * Parameters:	p				Pointer to process calling
+ *						execve
+ *
+ * Returns:	void
+ *
+ * Locks:	This function internally takes and drops proc_fdlock()
+ *
+ * Notes:	This function drops and retakes the kernel funnel; this is
+ *		inherently unsafe, since another thread may have the
+ *		proc_fdlock.
+ *
+ * XXX:		We should likely reverse the lock and funnel drop/acquire
+ *		order to avoid the small race window; it's also possible that
+ *		if the program doing the exec has an outstanding listen socket
+ *		and a network connection is completed asyncrhonously that we
+ *		will end up with a "ghost" socket reference in the new process.
+ *
+ *		This needs reworking to make it safe to remove the funnel from
+ *		the execve and posix_spawn system calls.
+ */
 void
-fdexec(p)
-	struct proc *p;
+fdexec(proc_t p)
 {
 	struct filedesc *fdp = p->p_fd;
 	int i = fdp->fd_lastfile;
 	struct fileproc *fp;
-	int funnel_state;
 
-	funnel_state = thread_funnel_set(kernel_flock, FALSE);
 	proc_fdlock(p);
-
 	while (i >= 0) {
+
 		fp = fdp->fd_ofiles[i];
-		if ((fdp->fd_ofileflags[i] & (UF_RESERVED|UF_EXCLOSE)) == UF_EXCLOSE) {
-
-			if (i < fdp->fd_knlistsize)
-					knote_fdclose(p, i);
-
+		if (
+		    ((fdp->fd_ofileflags[i] & (UF_RESERVED|UF_EXCLOSE)) == UF_EXCLOSE)
+#if CONFIG_MACF
+		    || (fp && mac_file_check_inherit(proc_ucred(p), fp->f_fglob))
+#endif
+		) {
+                        if (i < fdp->fd_knlistsize)
+                                knote_fdclose(p, i);
 			procfdtbl_clearfd(p, i);
 			if (i == fdp->fd_lastfile && i > 0)
 				fdp->fd_lastfile--;
 			if (i < fdp->fd_freefile)
 				fdp->fd_freefile = i;
 			closef_locked(fp, fp->f_fglob, p);
-			FREE_ZONE(fp, sizeof *fp, M_FILEPROC);
+			FREE_ZONE(fp, sizeof(*fp), M_FILEPROC);
 		}
-
 		i--;
 	}
 	proc_fdunlock(p);
-	thread_funnel_set(kernel_flock, funnel_state);
 }
 
+
 /*
- * Copy a filedesc structure.
+ * fdcopy
+ *
+ * Description:	Copy a filedesc structure.  This is normally used as part of
+ *		forkproc() when forking a new process, to copy the per process
+ *		open file table over to the new process.
+ *
+ * Parameters:	p				Process whose open file table
+ *						is to be copied (parent)
+ *		uth_cdir			Per thread current working
+ *						cirectory, or NULL
+ *
+ * Returns:	NULL				Copy failed
+ *		!NULL				Pointer to new struct filedesc
+ *
+ * Locks:	This function internally takes and drops proc_fdlock()
+ *
+ * Notes:	Files are copied directly, ignoring the new resource limits
+ *		for the process that's being copied into.  Since the descriptor
+ *		references are just additional references, this does not count
+ *		against the number of open files on the system.
+ *
+ *		The struct filedesc includes the current working directory,
+ *		and the current root directory, if the process is chroot'ed.
+ *
+ *		If the exec was called by a thread using a per thread current
+ *		working directory, we inherit the working directory from the
+ *		thread making the call, rather than from the process.
+ *
+ *		In the case of a failure to obtain a reference, for most cases,
+ *		the file entry will be silently droppped.  There's an exception
+ *		for the case of a chroot dir, since a failure to to obtain a
+ *		reference there would constitute an "escape" from the chroot
+ *		environment, which must not be allowed.  In that case, we will
+ *		deny the execve() operation, rather than allowing the escape.
  */
 struct filedesc *
-fdcopy(p)
-	struct proc *p;
+fdcopy(proc_t p, vnode_t uth_cdir)
 {
 	struct filedesc *newfdp, *fdp = p->p_fd;
 	int i;
@@ -2129,7 +3495,15 @@ fdcopy(p)
 	(void) memcpy(newfdp, fdp, sizeof(*newfdp));
 
 	/*
-	 * for both fd_cdir and fd_rdir make sure we get
+	 * If we are running with per-thread current working directories,
+	 * inherit the new current working directory from the current thread
+	 * instead, before we take our references.
+	 */
+	if (uth_cdir != NULLVP)
+		newfdp->fd_cdir = uth_cdir;
+
+	/*
+	 * For both fd_cdir and fd_rdir make sure we get
 	 * a valid reference... if we can't, than set
 	 * set the pointer(s) to NULL in the child... this
 	 * will keep us from using a non-referenced vp
@@ -2163,21 +3537,24 @@ fdcopy(p)
 			if ( (vnode_ref(v_dir)) )
 			        newfdp->fd_rdir = NULL;
 			vnode_put(v_dir);
-		} else
+		} else {
 		        newfdp->fd_rdir = NULL;
+		}
 	}
+	/* Coming from a chroot environment and unable to get a reference... */
 	if (newfdp->fd_rdir == NULL && fdp->fd_rdir) {
 	        /*
-		 * we couldn't get a new reference on
-		 * the root directory being
-		 * inherited... we might as well drop
-		 * our reference from the parent also
-		 * since the vnode has gone DEAD making
-		 * it useless... by dropping it we'll
-		 * be that much closer to recyling it
+		 * We couldn't get a new reference on
+		 * the chroot directory being
+		 * inherited... this is fatal, since
+		 * otherwise it would constitute an
+		 * escape from a chroot environment by
+		 * the new process.
 		 */
-	        vnode_rele(fdp->fd_rdir);
-		fdp->fd_rdir = NULL;
+		if (newfdp->fd_cdir)
+		        vnode_rele(newfdp->fd_cdir);
+		FREE_ZONE(newfdp, sizeof *newfdp, M_FILEDESC);
+		return(NULL);
 	}
 	newfdp->fd_refcnt = 1;
 
@@ -2209,7 +3586,7 @@ fdcopy(p)
 		if (newfdp->fd_rdir)
 			vnode_rele(newfdp->fd_rdir);
 
-		FREE_ZONE(newfdp, sizeof *newfdp, M_FILEDESC);
+		FREE_ZONE(newfdp, sizeof(*newfdp), M_FILEDESC);
 		return(NULL);
 	}
 	(void) memset(newfdp->fd_ofiles, 0, i * OFILESIZE);
@@ -2223,9 +3600,9 @@ fdcopy(p)
 		char *flags;
 
 		(void) memcpy(newfdp->fd_ofiles, fdp->fd_ofiles,
-					(newfdp->fd_lastfile + 1) * sizeof *fdp->fd_ofiles);
+					(newfdp->fd_lastfile + 1) * sizeof(*fdp->fd_ofiles));
 		(void) memcpy(newfdp->fd_ofileflags, fdp->fd_ofileflags,
-					(newfdp->fd_lastfile + 1) * sizeof *fdp->fd_ofileflags);
+					(newfdp->fd_lastfile + 1) * sizeof(*fdp->fd_ofileflags));
 
 		/*
 		 * kq descriptors cannot be copied.
@@ -2252,13 +3629,21 @@ fdcopy(p)
 		for (i = newfdp->fd_lastfile + 1; --i >= 0; fpp++, flags++)
 			if ((ofp = *fpp) != NULL && !(*flags & UF_RESERVED)) {
 				MALLOC_ZONE(fp, struct fileproc *, sizeof(struct fileproc), M_FILEPROC, M_WAITOK);
-				bzero(fp, sizeof(struct fileproc));
-				fp->f_flags = ofp->f_flags;
-				//fp->f_iocount = ofp->f_iocount;
-				fp->f_iocount = 0;
-				fp->f_fglob = ofp->f_fglob;
-				(void)fg_ref(fp);
-				*fpp = fp;
+				if (fp == NULL) {
+					/*
+					 * XXX no room to copy, unable to
+					 * XXX safely unwind state at present
+					 */
+					*fpp = NULL;
+				} else {
+					bzero(fp, sizeof(struct fileproc));
+					fp->f_flags = ofp->f_flags;
+					//fp->f_iocount = ofp->f_iocount;
+					fp->f_iocount = 0;
+					fp->f_fglob = ofp->f_fglob;
+					(void)fg_ref(fp);
+					*fpp = fp;
+				}
 			} else {
 				if (i < newfdp->fd_freefile)
 					newfdp->fd_freefile = i;
@@ -2271,12 +3656,23 @@ fdcopy(p)
 	return (newfdp);
 }
 
+
 /*
- * Release a filedesc structure.
+ * fdfree
+ *
+ * Description:	Release a filedesc (per process open file table) structure;
+ *		this is done on process exit(), or from forkproc_free() if
+ *		the fork fails for some reason subsequent to a successful
+ *		call to fdcopy()
+ *
+ * Parameters:	p				Pointer to process going away
+ *
+ * Returns:	void
+ *
+ * Locks:	This function internally takes and drops proc_fdlock()
  */
 void
-fdfree(p)
-	struct proc *p;
+fdfree(proc_t p)
 {
 	struct filedesc *fdp;
 	struct fileproc *fp;
@@ -2301,7 +3697,7 @@ fdfree(p)
 			if ((fp = fdp->fd_ofiles[i]) != NULL) {
 			  
 			  if (fdp->fd_ofileflags[i] & UF_RESERVED)
-			    panic("fdfree: found fp with UF_RESERVED\n");
+			    	panic("fdfree: found fp with UF_RESERVED\n");
 
 				/* closef drops the iocount ... */
 				if ((fp->f_flags & FP_INCHRREAD) != 0) 
@@ -2313,7 +3709,7 @@ fdfree(p)
 				if (fp->f_flags & FP_WAITEVENT) 
 					(void)waitevent_close(p, fp);
 				(void) closef_locked(fp, fp->f_fglob, p);
-				FREE_ZONE(fp, sizeof *fp, M_FILEPROC);
+				FREE_ZONE(fp, sizeof(*fp), M_FILEPROC);
 			}
 		}
 		FREE_ZONE(fdp->fd_ofiles, fdp->fd_nfiles * OFILESIZE, M_OFILETABL);
@@ -2328,7 +3724,7 @@ fdfree(p)
 	if (fdp->fd_rdir)
 		vnode_rele(fdp->fd_rdir);
 
-	proc_fdlock(p);
+	proc_fdlock_spin(p);
 	p->p_fd = NULL;
 	proc_fdunlock(p);
 
@@ -2337,38 +3733,48 @@ fdfree(p)
 	if (fdp->fd_knhash)
 		FREE(fdp->fd_knhash, M_KQUEUE);
 
-	FREE_ZONE(fdp, sizeof *fdp, M_FILEDESC);
+	FREE_ZONE(fdp, sizeof(*fdp), M_FILEDESC);
 }
 
+
+/*
+ * closef_finish
+ *
+ * Description:	Called on last open instance for a fileglob for a file being
+ *		closed.
+ *
+ * Parameters:	fp			Pointer to fileproc for fd
+ *		fg			Pointer to fileglob for fd
+ *		p			Pointer to proc structure
+ *
+ * Returns:	0			Success
+ *	<fo_close>:???			Anything returnable by a per-fileops
+ *					close function
+ *
+ * Note:	fp can only be non-NULL if p is also non-NULL.  If p is NULL,
+ *		then fg must eith be locked (FHASLOCK) or must not have a
+ *		type of DTYPE_VNODE.
+ *
+ *		On return, the fg is freed.
+ *
+ *		This function may block draining output to a character
+ *		device on last close of that device.
+ */
 static int
-closef_finish(fp, fg, p)
-	struct fileproc *fp;
-	struct fileglob *fg;
-	struct proc *p;
+closef_finish(struct fileproc *fp, struct fileglob *fg, proc_t p, vfs_context_t ctx)
 {
-	struct vnode *vp;
-	struct flock lf;
 	int error;
-	struct vfs_context context;
 
-	if ((fg->fg_flag & FHASLOCK) && fg->fg_type == DTYPE_VNODE) {
-		lf.l_whence = SEEK_SET;
-		lf.l_start = 0;
-		lf.l_len = 0;
-		lf.l_type = F_UNLCK;
-		vp = (struct vnode *)fg->fg_data;
-		context.vc_proc = p;
-		context.vc_ucred = fg->fg_cred;
 
-		(void) VNOP_ADVLOCK(vp, (caddr_t)fg, F_UNLCK, &lf, F_FLOCK, &context);
-	}
+	/* fg_ops completed initialization? */
 	if (fg->fg_ops)
-		error = fo_close(fg, p);
+		error = fo_close(fg, ctx);
 	else
 		error = 0;
 
+	/* if fp is non-NULL, drain it out */
 	if (((fp != (struct fileproc *)0) && ((fp->f_flags & FP_INCHRREAD) != 0))) {
-	        proc_fdlock(p);
+	        proc_fdlock_spin(p);
 		if ( ((fp->f_flags & FP_INCHRREAD) != 0) ) {
 		        fileproc_drain(p, fp);
 		}
@@ -2379,30 +3785,28 @@ closef_finish(fp, fg, p)
 	return (error);
 }
 
-int
-closef(fg, p)
-	struct fileglob *fg;
-	struct proc *p;
-{
-	int error;
-
-	proc_fdlock(p);
-	error = closef_locked((struct fileproc *)0, fg, p);
-	proc_fdunlock(p);
-
-	return(error);
-}
 /*
- * Internal form of close.
- * Decrement reference count on file structure.
- * Note: p may be NULL when closing a file
- * that was being passed in a message.
+ * closef_locked
+ *
+ * Description:	Internal form of closef; called with proc_fdlock held
+ *
+ * Parameters:	fp			Pointer to fileproc for fd
+ *		fg			Pointer to fileglob for fd
+ *		p			Pointer to proc structure
+ *
+ * Returns:	0			Success
+ *	closef_finish:??? 		Anything returnable by a per-fileops
+ *					close function
+ *
+ * Note:	Decrements reference count on file structure; if this was the
+ *		last reference, then closef_finish() is called
+ *
+ *		p and fp are allowed to  be NULL when closing a file that was
+ *		being passed in a message (but only if we are called when this
+ *		is NOT the last reference).
  */
 int
-closef_locked(fp, fg, p)
-	struct fileproc *fp;
-	struct fileglob *fg;
-	struct proc *p;
+closef_locked(struct fileproc *fp, struct fileglob *fg, proc_t p)
 {
 	struct vnode *vp;
 	struct flock lf;
@@ -2412,6 +3816,14 @@ closef_locked(fp, fg, p)
 	if (fg == NULL) {
 		return (0);
 	}
+
+	/* Set up context with cred stashed in fg */
+	if (p == current_proc())
+		context.vc_thread = current_thread();
+	else
+		context.vc_thread = NULL;
+	context.vc_ucred = fg->fg_cred;
+
 	/*
 	 * POSIX record locking dictates that any close releases ALL
 	 * locks owned by this process.  This is handled by setting
@@ -2430,23 +3842,22 @@ closef_locked(fp, fg, p)
 		vp = (struct vnode *)fg->fg_data;
 
 		if ( (error = vnode_getwithref(vp)) == 0 ) {
-		        context.vc_proc = p;
-			context.vc_ucred = fg->fg_cred;
 			(void) VNOP_ADVLOCK(vp, (caddr_t)p, F_UNLCK, &lf, F_POSIX, &context);
-
 			(void)vnode_put(vp);
 		}
 		proc_fdlock(p);
 	}
-	lck_mtx_lock(&fg->fg_lock);
+	lck_mtx_lock_spin(&fg->fg_lock);
 	fg->fg_count--;
 
 	if (fg->fg_count > 0) {
 		lck_mtx_unlock(&fg->fg_lock);
 		return (0);
 	}
+#if DIAGNOSTIC
 	if (fg->fg_count != 0)
-		panic("fg: being freed with bad fg_count (%d)", fg, fg->fg_count);
+		panic("fg %p: being freed with bad fg_count (%d)", fg, fg->fg_count);
+#endif
 
 	if (fp && (fp->f_flags & FP_WRITTEN))
 	        fg->fg_flag |= FWASWRITTEN;
@@ -2455,62 +3866,128 @@ closef_locked(fp, fg, p)
 	lck_mtx_unlock(&fg->fg_lock);
 
 	proc_fdunlock(p);
-	error = closef_finish(fp, fg, p);
+	error = closef_finish(fp, fg, p, &context);
 	proc_fdlock(p);
 
 	return(error);
 }
 
 
+/* sleep address to permit wakeup of select by fileproc_drain() */
 extern int selwait;
+
+
+/*
+ * fileproc_drain
+ *
+ * Description:	Drain out pending I/O operations
+ *
+ * Parameters:	p				Process closing this file
+ *		fp				fileproc struct for the open
+ *						instance on the file
+ *
+ * Returns:	void
+ *
+ * Locks:	Assumes the caller holds the proc_fdlock
+ *
+ * Notes:	For character devices, this occurs on the last close of the
+ *		device; for all other file descriptos, this occurs on each
+ *		close to prevent fd's from being closed out from under
+ *		operations currently in progress and blocked
+ *
+ * See Also: 	file_vnode(), file_socket(), file_drop(), and the cautions
+ *		regarding their use and interaction with this function.
+ */
 void
-fileproc_drain(struct proc *p, struct fileproc * fp)
+fileproc_drain(proc_t p, struct fileproc * fp)
 {
+	struct vfs_context context;
+
+	context.vc_thread = proc_thread(p);	/* XXX */
+	context.vc_ucred = fp->f_fglob->fg_cred;
+
 	fp->f_iocount-- ; /* (the one the close holds) */
 
 	while (fp->f_iocount) {
+
+	        lck_mtx_convert_spin(&p->p_fdmlock);
+
 		if (((fp->f_flags & FP_INSELECT)== FP_INSELECT)) {
 			wait_queue_wakeup_all((wait_queue_t)fp->f_waddr, &selwait, THREAD_INTERRUPTED);
 		} else  {
 			if (fp->f_fglob->fg_ops->fo_drain) {
-				(*fp->f_fglob->fg_ops->fo_drain)(fp, p);
+				(*fp->f_fglob->fg_ops->fo_drain)(fp, &context);
 			}
 		}
 		p->p_fpdrainwait = 1;
 
-		msleep(&p->p_fpdrainwait, &p->p_fdmlock, PRIBIO, "fpdrain",0);
+		msleep(&p->p_fpdrainwait, &p->p_fdmlock, PRIBIO, "fpdrain", NULL);
 
-		//panic("successful wait after drain\n");
 	}
-}
-
-int
-fp_free(struct proc * p, int fd, struct fileproc * fp)
-{
-        proc_fdlock(p);
-	fdrelse(p, fd);
-        proc_fdunlock(p);
-
-	fg_free(fp->f_fglob);
-	FREE_ZONE(fp, sizeof *fp, M_FILEPROC);
 }
 
 
 /*
- * Apply an advisory lock on a file descriptor.
+ * fp_free
  *
- * Just attempt to get a record lock of the requested type on
- * the entire file (l_whence = SEEK_SET, l_start = 0, l_len = 0).
+ * Description:	Release the fd and free the fileproc associated with the fd
+ *		in the per process open file table of the specified process;
+ *		these values must correspond.
+ *
+ * Parameters:	p				Process containing fd
+ *		fd				fd to be released
+ *		fp				fileproc to be freed
+ *
+ * Returns:	0				Success
+ *
+ * Notes:	XXX function should be void - no one interprets the returns
+ *		XXX code
  */
 int
-flock(struct proc *p, register struct flock_args *uap, __unused register_t *retval)
+fp_free(proc_t p, int fd, struct fileproc * fp)
+{
+        proc_fdlock_spin(p);
+	fdrelse(p, fd);
+        proc_fdunlock(p);
+
+	fg_free(fp->f_fglob);
+	FREE_ZONE(fp, sizeof(*fp), M_FILEPROC);
+	return(0);
+}
+
+
+/*
+ * flock
+ *
+ * Description:	Apply an advisory lock on a file descriptor.
+ *
+ * Parameters:	p				Process making request
+ *		uap->fd				fd on which the lock is to be
+ *						attempted
+ *		uap->how			(Un)Lock bits, including type
+ *		retval				Pointer to the call return area
+ *		
+ * Returns:	0				Success
+ *	fp_getfvp:EBADF				Bad file descriptor
+ *	fp_getfvp:ENOTSUP			fd does not refer to a vnode
+ *	vnode_getwithref:???
+ *	VNOP_ADVLOCK:???
+ *
+ * Implicit returns:
+ *		*retval (modified)		Size of dtable
+ *
+ * Notes:	Just attempt to get a record lock of the requested type on
+ *		the entire file (l_whence = SEEK_SET, l_start = 0, l_len = 0).
+ */
+int
+flock(proc_t p, struct flock_args *uap, __unused register_t *retval)
 {
 	int fd = uap->fd;
 	int how = uap->how;
 	struct fileproc *fp;
 	struct vnode *vp;
 	struct flock lf;
-	struct vfs_context context;
+	vfs_context_t ctx = vfs_context_current();
 	int error=0;
 
 	AUDIT_ARG(fd, uap->fd);
@@ -2522,16 +3999,13 @@ flock(struct proc *p, register struct flock_args *uap, __unused register_t *retv
 	}
 	AUDIT_ARG(vnpath, vp, ARG_VNODE1);
 
-	context.vc_proc = p;
-	context.vc_ucred = fp->f_cred;
-
 	lf.l_whence = SEEK_SET;
 	lf.l_start = 0;
 	lf.l_len = 0;
 	if (how & LOCK_UN) {
 		lf.l_type = F_UNLCK;
 		fp->f_flag &= ~FHASLOCK;
-		error = VNOP_ADVLOCK(vp, (caddr_t)fp->f_fglob, F_UNLCK, &lf, F_FLOCK, &context);
+		error = VNOP_ADVLOCK(vp, (caddr_t)fp->f_fglob, F_UNLCK, &lf, F_FLOCK, ctx);
 		goto out;
 	}
 	if (how & LOCK_EX)
@@ -2542,12 +4016,17 @@ flock(struct proc *p, register struct flock_args *uap, __unused register_t *retv
 	        error = EBADF;
 		goto out;
 	}
+#if CONFIG_MACF
+	error = mac_file_check_lock(proc_ucred(p), fp->f_fglob, F_SETLK, &lf);
+	if (error)
+		goto out;
+#endif
 	fp->f_flag |= FHASLOCK;
 	if (how & LOCK_NB) {
-		error = VNOP_ADVLOCK(vp, (caddr_t)fp->f_fglob, F_SETLK, &lf, F_FLOCK, &context);
+		error = VNOP_ADVLOCK(vp, (caddr_t)fp->f_fglob, F_SETLK, &lf, F_FLOCK, ctx);
 		goto out;	
 	}
-	error = VNOP_ADVLOCK(vp, (caddr_t)fp->f_fglob, F_SETLK, &lf, F_FLOCK|F_WAIT, &context);
+	error = VNOP_ADVLOCK(vp, (caddr_t)fp->f_fglob, F_SETLK, &lf, F_FLOCK|F_WAIT, ctx);
 out:
 	(void)vnode_put(vp);
 out1:
@@ -2557,42 +4036,34 @@ out1:
 }
 
 /*
- * File Descriptor pseudo-device driver (/dev/fd/).
+ * dupfdopen
  *
- * Opening minor device N dup()s the file (if any) connected to file
- * descriptor N belonging to the calling process.  Note that this driver
- * consists of only the ``open()'' routine, because all subsequent
- * references to this file will be direct to the other driver.
+ * Description:	Duplicate the specified descriptor to a free descriptor;
+ *		this is the second half of fdopen(), above.
+ *
+ * Parameters:	fdp				filedesc pointer to fill in
+ *		indx				fd to dup to
+ *		dfd				fd to dup from
+ *		mode				mode to set on new fd
+ *		error				command code
+ *
+ * Returns:	0				Success
+ *		EBADF				Source fd is bad
+ *		EACCES				Requested mode not allowed
+ *		!0				'error', if not ENODEV or
+ *						ENXIO
+ *
+ * Notes:	XXX This is not thread safe; see fdopen() above
  */
 int
-fdopen(dev_t dev, __unused int mode, __unused int type, struct proc *p)
-{
-
-	/*
-	 * XXX Kludge: set curproc->p_dupfd to contain the value of the
-	 * the file descriptor being sought for duplication. The error 
-	 * return ensures that the vnode for this device will be released
-	 * by vn_open. Open will detect this special error and take the
-	 * actions in dupfdopen below. Other callers of vn_open or vnop_open
-	 * will simply report the error.
-	 */
-	p->p_dupfd = minor(dev);
-	return (ENODEV);
-}
-
-/*
- * Duplicate the specified descriptor to a free descriptor.
- */
-int
-dupfdopen(fdp, indx, dfd, mode, error)
-	register struct filedesc *fdp;
-	register int indx, dfd;
-	int mode;
-	int error;
+dupfdopen(struct filedesc *fdp, int indx, int dfd, int mode, int error)
 {
 	struct fileproc *wfp;
 	struct fileproc *fp;
-	struct proc * p = current_proc();
+#if CONFIG_MACF
+	int myerror;
+#endif
+	proc_t p = current_proc();
 
 	/*
 	 * If the to-be-dup'd fd number is greater than the allowed number
@@ -2611,6 +4082,13 @@ dupfdopen(fdp, indx, dfd, mode, error)
 	        proc_fdunlock(p);
 		return (EBADF);
 	}
+#if CONFIG_MACF
+	myerror = mac_file_check_dup(proc_ucred(p), wfp->f_fglob, dfd);
+	if (myerror) {
+		proc_fdunlock(p);
+		return (myerror);
+	}
+#endif
 	/*
 	 * There are two cases of interest here.
 	 *
@@ -2653,6 +4131,19 @@ dupfdopen(fdp, indx, dfd, mode, error)
 	/* NOTREACHED */
 }
 
+
+/*
+ * fg_ref
+ *
+ * Description:	Add a reference to a fileglob by fileproc
+ *
+ * Parameters:	fp				fileproc containing fileglob
+ *						pointer
+ *
+ * Returns:	void
+ *
+ * Notes:	XXX Should use OSAddAtomic?
+ */
 void
 fg_ref(struct fileproc * fp)
 {
@@ -2660,33 +4151,67 @@ fg_ref(struct fileproc * fp)
 
 	fg = fp->f_fglob;
 
-	lck_mtx_lock(&fg->fg_lock);
+	lck_mtx_lock_spin(&fg->fg_lock);
+
+#if DIAGNOSTIC
+	if ((fp->f_flags & ~((unsigned int)FP_VALID_FLAGS)) != 0)
+		panic("fg_ref: invalid bits on fp%x\n", (unsigned int)fp);
+
+	if (fg->fg_count == 0)
+		panic("fg_ref: adding fgcount to zeroed fg :fp %x, fg%x\n ", (unsigned int)fp, (unsigned int)fg);
+#endif
 	fg->fg_count++;
 	lck_mtx_unlock(&fg->fg_lock);
 }
 
+
+/*
+ * fg_drop
+ *
+ * Description:	Remove a reference to a fileglob by fileproc
+ *
+ * Parameters:	fp				fileproc containing fileglob
+ *						pointer
+ *
+ * Returns:	void
+ *
+ * Notes:	XXX Should use OSAddAtomic?
+ */
 void
 fg_drop(struct fileproc * fp)
 {
 	struct fileglob *fg;
 
 	fg = fp->f_fglob;
-	lck_mtx_lock(&fg->fg_lock);
+	lck_mtx_lock_spin(&fg->fg_lock);
 	fg->fg_count--;
 	lck_mtx_unlock(&fg->fg_lock);
 }
 
 
+/*
+ * fg_insertuipc
+ *
+ * Description:	Insert fileglob onto message queue
+ *
+ * Parameters:	fg				Fileglob pointer to insert
+ *
+ * Returns:	void
+ *
+ * Locks:	Takes and drops fg_lock, potentially many times
+ */
 void
 fg_insertuipc(struct fileglob * fg)
 {
-int insertque = 0;
+	int insertque = 0;
 
-	lck_mtx_lock(&fg->fg_lock);
+	lck_mtx_lock_spin(&fg->fg_lock);
 
 	while (fg->fg_lflags & FG_RMMSGQ) {
+		lck_mtx_convert_spin(&fg->fg_lock);
+
 		fg->fg_lflags |= FG_WRMMSGQ;
-		msleep(&fg->fg_lflags, &fg->fg_lock, 0, "fg_insertuipc", 0);
+		msleep(&fg->fg_lflags, &fg->fg_lock, 0, "fg_insertuipc", NULL);
 	}
 
 	fg->fg_count++;
@@ -2698,7 +4223,7 @@ int insertque = 0;
 	lck_mtx_unlock(&fg->fg_lock);
 
 	if (insertque) {
-		lck_mtx_lock(uipc_lock);
+		lck_mtx_lock_spin(uipc_lock);
 		unp_gc_wait();
 		LIST_INSERT_HEAD(&fmsghead, fg, f_msglist);
 		lck_mtx_unlock(uipc_lock);
@@ -2713,15 +4238,29 @@ int insertque = 0;
 
 }
 
+
+/*
+ * fg_removeuipc
+ *
+ * Description:	Remove fileglob from message queue
+ *
+ * Parameters:	fg				Fileglob pointer to remove
+ *
+ * Returns:	void
+ *
+ * Locks:	Takes and drops fg_lock, potentially many times
+ */
 void
 fg_removeuipc(struct fileglob * fg)
 {
-int removeque = 0;
+	int removeque = 0;
 
-	lck_mtx_lock(&fg->fg_lock);
+	lck_mtx_lock_spin(&fg->fg_lock);
 	while (fg->fg_lflags & FG_INSMSGQ) {
+		lck_mtx_convert_spin(&fg->fg_lock);
+
 		fg->fg_lflags |= FG_WINSMSGQ;
-		msleep(&fg->fg_lflags, &fg->fg_lock, 0, "fg_removeuipc", 0);
+		msleep(&fg->fg_lflags, &fg->fg_lock, 0, "fg_removeuipc", NULL);
 	}
 	fg->fg_msgcount--;
 	if (fg->fg_msgcount == 0) {
@@ -2731,7 +4270,7 @@ int removeque = 0;
 	lck_mtx_unlock(&fg->fg_lock);
 
 	if (removeque) {
-		lck_mtx_lock(uipc_lock);
+		lck_mtx_lock_spin(uipc_lock);
 		unp_gc_wait();
 		LIST_REMOVE(fg, f_msglist);
 		lck_mtx_unlock(uipc_lock);
@@ -2746,44 +4285,138 @@ int removeque = 0;
 }
 
 
+/*
+ * fo_read
+ *
+ * Description:	Generic fileops read indirected through the fileops pointer
+ *		in the fileproc structure
+ *
+ * Parameters:	fp				fileproc structure pointer
+ *		uio				user I/O structure pointer
+ *		flags				FOF_ flags
+ *		ctx				VFS context for operation
+ *
+ * Returns:	0				Success
+ *		!0				Errno from read
+ */
 int
-fo_read(struct fileproc *fp, struct uio *uio, kauth_cred_t cred, int flags, struct proc *p)
+fo_read(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 {
-	return ((*fp->f_ops->fo_read)(fp, uio, cred, flags, p));
+	return ((*fp->f_ops->fo_read)(fp, uio, flags, ctx));
 }
 
+
+/*
+ * fo_write
+ *
+ * Description:	Generic fileops write indirected through the fileops pointer
+ *		in the fileproc structure
+ *
+ * Parameters:	fp				fileproc structure pointer
+ *		uio				user I/O structure pointer
+ *		flags				FOF_ flags
+ *		ctx				VFS context for operation
+ *
+ * Returns:	0				Success
+ *		!0				Errno from write
+ */
 int
-fo_write(struct fileproc *fp, struct uio *uio, kauth_cred_t cred, int flags, struct proc *p)
+fo_write(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 {
-	return((*fp->f_ops->fo_write)(fp, uio, cred, flags, p));
+	return((*fp->f_ops->fo_write)(fp, uio, flags, ctx));
 }
 
+
+/*
+ * fo_ioctl
+ *
+ * Description:	Generic fileops ioctl indirected through the fileops pointer
+ *		in the fileproc structure
+ *
+ * Parameters:	fp				fileproc structure pointer
+ *		com				ioctl command
+ *		data				pointer to internalized copy
+ *						of user space ioctl command
+ *						parameter data in kernel space
+ *		ctx				VFS context for operation
+ *
+ * Returns:	0				Success
+ *		!0				Errno from ioctl
+ *
+ * Locks:	The caller is assumed to have held the proc_fdlock; this
+ *		function releases and reacquires this lock.  If the caller
+ *		accesses data protected by this lock prior to calling this
+ *		function, it will need to revalidate/reacquire any cached
+ *		protected data obtained prior to the call.
+ */
 int 
-fo_ioctl(struct fileproc *fp, u_long com, caddr_t data, struct proc *p)
+fo_ioctl(struct fileproc *fp, u_long com, caddr_t data, vfs_context_t ctx)
 {
-int error;
+	int error;
 
-	proc_fdunlock(p);
-	error = (*fp->f_ops->fo_ioctl)(fp, com, data, p);
-	proc_fdlock(p);
+	proc_fdunlock(vfs_context_proc(ctx));
+	error = (*fp->f_ops->fo_ioctl)(fp, com, data, ctx);
+	proc_fdlock(vfs_context_proc(ctx));
 	return(error);
 }       
 
+
+/*
+ * fo_select
+ *
+ * Description:	Generic fileops select indirected through the fileops pointer
+ *		in the fileproc structure
+ *
+ * Parameters:	fp				fileproc structure pointer
+ *		which				select which
+ *		wql				pointer to wait queue list
+ *		ctx				VFS context for operation
+ *
+ * Returns:	0				Success
+ *		!0				Errno from select
+ */
 int
-fo_select(struct fileproc *fp, int which, void *wql, struct proc *p)
+fo_select(struct fileproc *fp, int which, void *wql, vfs_context_t ctx)
 {       
-	return((*fp->f_ops->fo_select)(fp, which, wql, p));
+	return((*fp->f_ops->fo_select)(fp, which, wql, ctx));
 }
 
+
+/*
+ * fo_close
+ *
+ * Description:	Generic fileops close indirected through the fileops pointer
+ *		in the fileproc structure
+ *
+ * Parameters:	fp				fileproc structure pointer for
+ *						file to close
+ *		ctx				VFS context for operation
+ *
+ * Returns:	0				Success
+ *		!0				Errno from close
+ */
 int
-fo_close(struct fileglob *fg, struct proc *p)
+fo_close(struct fileglob *fg, vfs_context_t ctx)
 {       
-	return((*fg->fg_ops->fo_close)(fg, p));
+	return((*fg->fg_ops->fo_close)(fg, ctx));
 }
 
+
+/*
+ * fo_kqfilter
+ *
+ * Description:	Generic fileops kqueue filter indirected through the fileops
+ *		pointer in the fileproc structure
+ *
+ * Parameters:	fp				fileproc structure pointer
+ *		kn				pointer to knote to filter on
+ *		ctx				VFS context for operation
+ *
+ * Returns:	0				Success
+ *		!0				Errno from kqueue filter
+ */
 int
-fo_kqfilter(struct fileproc *fp, struct knote *kn, struct proc *p)
+fo_kqfilter(struct fileproc *fp, struct knote *kn, vfs_context_t ctx)
 {
-        return ((*fp->f_ops->fo_kqfilter)(fp, kn, p));
+        return ((*fp->f_ops->fo_kqfilter)(fp, kn, ctx));
 }
-

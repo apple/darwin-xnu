@@ -1,26 +1,31 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1997-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
- * Copyright (c) 1997 by Apple Computer, Inc., all rights reserved
  * Copyright (c) 1993 NeXT Computer, Inc.
  *
  * UNIX Device switch tables.
@@ -49,14 +54,14 @@ struct bdevsw	bdevsw[] =
 {
 	/*
 	 *	For block devices, every other block of 8 slots is 
-	 *	reserved to NeXT.  The other slots are available for
+	 *	reserved for Apple.  The other slots are available for
 	 *	the user.  This way we can both add new entries without
-	 *	running into each other.  Be sure to fill in NeXT's
+	 *	running into each other.  Be sure to fill in Apple's
 	 *	8 reserved slots when you jump over us -- we'll do the
 	 *	same for you.
 	 */
 
-	/* 0 - 7 are reserved to NeXT */
+	/* 0 - 7 are reserved for Apple */
 
 	NO_BDEVICE,							/* 0*/
 	NO_BDEVICE,							/* 1*/
@@ -77,7 +82,7 @@ struct bdevsw	bdevsw[] =
 	NO_BDEVICE,							/*14*/
 	NO_BDEVICE,							/*15*/
 
-	/* 16 - 23 are reserved to NeXT */
+	/* 16 - 23 are reserved for Apple */
 	NO_BDEVICE,							/*16*/
 	NO_BDEVICE,							/*17*/
 	NO_BDEVICE,							/*18*/
@@ -187,14 +192,14 @@ struct cdevsw	cdevsw[] =
 {
 	/*
 	 *	For character devices, every other block of 16 slots is
-	 *	reserved to NeXT.  The other slots are available for
+	 *	reserved for Apple.  The other slots are available for
 	 *	the user.  This way we can both add new entries without
-	 *	running into each other.  Be sure to fill in NeXT's
+	 *	running into each other.  Be sure to fill in Apple's
 	 *	16 reserved slots when you jump over us -- we'll do the
 	 *	same for you.
 	 */
 
-	/* 0 - 15 are reserved to NeXT */
+	/* 0 - 15 are reserved for Apple */
 
     {
 	cnopen,		cnclose,	cnread,		cnwrite,	/* 0*/

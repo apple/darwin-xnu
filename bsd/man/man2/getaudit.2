@@ -1,0 +1,61 @@
+.\"
+.\" Copyright (c) 2007 Apple Inc. All rights reserved.
+.\"
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+.\" 
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. The rights granted to you under the License
+.\" may not be used to create, or enable the creation or redistribution of,
+.\" unlawful or unlicensed copies of an Apple operating system, or to
+.\" circumvent, violate, or enable the circumvention or violation of, any
+.\" terms of an Apple operating system software license agreement.
+.\" 
+.\" Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this file.
+.\" 
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\" 
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+.\"
+.Dd July 30, 2007
+.Dt GETAUDIT 2
+.Os Darwin
+.Sh NAME
+.Nm getaudit
+.Nd get the audit information for the current process  
+.Sh SYNOPSIS
+.Fd #include <bsm/audit.h>
+.Ft int
+.Fn getaudit "struct auditinfo * auditinfo"
+.Sh DESCRIPTION
+The
+.Fn getaudit
+function returns a 
+.Fa struct auditinfo 
+describing the current user audit settings for the calling process. The
+information is returned in the struct pointed at by
+.Fa auditinfo .
+.Sh RETURN VALUES
+Upon successful completion a value of 0 is returned.
+Otherwise, a value of -1 is returned and
+.Va errno
+is set to indicate the error.
+.Sh SEE ALSO
+.Xr audit 2 ,
+.Xr auditon 2 ,
+.Xr auditctl 2 ,
+.Xr getauid 2 ,
+.Xr setauid 2 ,
+.Xr setaudit 2
+.Sh HISTORY
+The
+.Fn getaudit
+function call first appeared in Mac OS X 10.3 (Panther).

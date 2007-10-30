@@ -684,23 +684,6 @@ frag6_slowtimo()
 		frag6_freef(ip6q.ip6q_prev);
 	}
 	frag6_doing_reass = 0;
-
-#if 0
-	/*
-	 * Routing changes might produce a better route than we last used;
-	 * make sure we notice eventually, even if forwarding only for one
-	 * destination and the cache is never replaced.
-	 */
-	if (ip6_forward_rt.ro_rt) {
-		rtfree(ip6_forward_rt.ro_rt);
-		ip6_forward_rt.ro_rt = 0;
-	}
-	if (ipsrcchk_rt.ro_rt) {
-		rtfree(ipsrcchk_rt.ro_rt);
-		ipsrcchk_rt.ro_rt = 0;
-	}
-#endif
-
 	lck_mtx_unlock(inet6_domain_mutex);
 }
 

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2005-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <IOKit/assert.h>
@@ -55,30 +61,6 @@ enum
     kWalkClient       = 0x80
 };
 
-struct ExpansionData
-{
-    IOMDDMAWalkSegmentState fState;
-    IOMDDMACharacteristics  fMDSummary;
-
-    UInt64 fPreparedOffset;
-    UInt64 fPreparedLength;
-
-    UInt8  fCursor;
-    UInt8  fCheckAddressing;
-    UInt8  fIterateOnly;
-    UInt8  fMisaligned;
-    UInt8  fCopyContig;
-    UInt8  fPrepared;
-    UInt8  fDoubleBuffer;
-    UInt8  __pad[1];
-
-    ppnum_t  fCopyPageAlloc;
-    ppnum_t  fCopyPageCount;
-    addr64_t fCopyNext;
-
-    class IOBufferMemoryDescriptor * fCopyMD;
-};
-typedef ExpansionData IODMACommandInternal;
 
 #define fInternalState reserved
 #define fState         reserved->fState
@@ -110,8 +92,8 @@ typedef ExpansionData IODMACommandInternal;
 #define super OSObject
 OSDefineMetaClassAndStructors(IODMACommand, IOCommand);
 
-OSMetaClassDefineReservedUnused(IODMACommand,  0);
-OSMetaClassDefineReservedUnused(IODMACommand,  1);
+OSMetaClassDefineReservedUsed(IODMACommand,  0);
+OSMetaClassDefineReservedUsed(IODMACommand,  1);
 OSMetaClassDefineReservedUnused(IODMACommand,  2);
 OSMetaClassDefineReservedUnused(IODMACommand,  3);
 OSMetaClassDefineReservedUnused(IODMACommand,  4);
@@ -222,10 +204,10 @@ IODMACommand::initWithSpecification(SegmentFunction outSegFunc,
 	return false;
     };
 
-    reserved = IONew(ExpansionData, 1);
+    reserved = IONew(IODMACommandInternal, 1);
     if (!reserved)
 	return false;
-    bzero(reserved, sizeof(ExpansionData));
+    bzero(reserved, sizeof(IODMACommandInternal));
 
     fInternalState->fIterateOnly = (0 != (kIterateOnly & mappingOptions));
     
@@ -236,7 +218,7 @@ void
 IODMACommand::free()
 {
     if (reserved)
-	IODelete(reserved, ExpansionData, 1);
+	IODelete(reserved, IODMACommandInternal, 1);
 
     super::free();
 }
@@ -430,6 +412,7 @@ IODMACommand::walkAll(UInt8 op)
 	state->fCopyNext       = 0;
 	state->fCopyPageAlloc  = 0;
 	state->fCopyPageCount  = 0;
+	state->fNextRemapIndex = 0;
 	state->fCopyMD         = 0;
 
 	if (!(kWalkDoubleBuffer & op))
@@ -550,11 +533,85 @@ IODMACommand::walkAll(UInt8 op)
     return (ret);
 }
 
+IOReturn
+IODMACommand::prepareWithSpecification(SegmentFunction	outSegFunc,
+				       UInt8		numAddressBits,
+				       UInt64		maxSegmentSize,
+				       MappingOptions	mappingOptions,
+				       UInt64		maxTransferSize,
+				       UInt32		alignment,
+				       IOMapper		*mapper,
+				       UInt64		offset,
+				       UInt64		length,
+				       bool		flushCache,
+				       bool		synchronize)
+{
+    if (fActive)
+        return kIOReturnNotPermitted;
+
+    if (!outSegFunc || !numAddressBits)
+        return kIOReturnBadArgument;
+
+    bool is32Bit = (OutputHost32   == outSegFunc || OutputBig32 == outSegFunc
+                 || OutputLittle32 == outSegFunc);
+    if (is32Bit)
+    {
+	if (!numAddressBits)
+	    numAddressBits = 32;
+	else if (numAddressBits > 32)
+	    return kIOReturnBadArgument;		// Wrong output function for bits
+    }
+
+    if (numAddressBits && (numAddressBits < PAGE_SHIFT))
+	return kIOReturnBadArgument;
+
+    if (!maxSegmentSize)
+	maxSegmentSize--;	// Set Max segment to -1
+    if (!maxTransferSize)
+	maxTransferSize--;	// Set Max transfer to -1
+
+    if (!mapper)
+    {
+        IOMapper::checkForSystemMapper();
+	mapper = IOMapper::gSystem;
+    }
+
+    switch (MAPTYPE(mappingOptions))
+    {
+    case kMapped:                   break;
+    case kNonCoherent: fMapper = 0; break;
+    case kBypassed:
+	if (mapper && !mapper->getBypassMask(&fBypassMask))
+	    return kIOReturnBadArgument;
+	break;
+    default:
+	return kIOReturnBadArgument;
+    };
+
+    fNumSegments     = 0;
+    fBypassMask      = 0;
+    fOutSeg	     = outSegFunc;
+    fNumAddressBits  = numAddressBits;
+    fMaxSegmentSize  = maxSegmentSize;
+    fMappingOptions  = mappingOptions;
+    fMaxTransferSize = maxTransferSize;
+    if (!alignment)
+	alignment = 1;
+    fAlignMask	     = alignment - 1;
+    fMapper          = mapper;
+
+    fInternalState->fIterateOnly = (0 != (kIterateOnly & mappingOptions));
+
+    return prepare(offset, length, flushCache, synchronize);
+}
+
+
 IOReturn 
 IODMACommand::prepare(UInt64 offset, UInt64 length, bool flushCache, bool synchronize)
 {
     IODMACommandInternal * state = fInternalState;
     IOReturn               ret   = kIOReturnSuccess;
+    MappingOptions mappingOptions    = fMappingOptions;
 
     if (!length)
 	length = fMDSummary.fLength;
@@ -562,13 +619,11 @@ IODMACommand::prepare(UInt64 offset, UInt64 length, bool flushCache, bool synchr
     if (length > fMaxTransferSize)
 	return kIOReturnNoSpace;
 
-#if 0
     if (IS_NONCOHERENT(mappingOptions) && flushCache) {
 	IOMemoryDescriptor *poMD = const_cast<IOMemoryDescriptor *>(fMemory);
 
 	poMD->performOperation(kIOMemoryIncoherentIOStore, 0, fMDSummary.fLength);
     }
-#endif
     if (fActive++)
     {
 	if ((state->fPreparedOffset != offset)
@@ -587,6 +642,7 @@ IODMACommand::prepare(UInt64 offset, UInt64 length, bool flushCache, bool synchr
 	state->fCopyNext       = 0;
 	state->fCopyPageAlloc  = 0;
 	state->fCopyPageCount  = 0;
+	state->fNextRemapIndex = 0;
 	state->fCopyMD         = 0;
 
 	state->fCursor = state->fIterateOnly
@@ -619,22 +675,19 @@ IODMACommand::complete(bool invalidateCache, bool synchronize)
     {
 	if (!state->fCursor)
 	{
-	    IOOptionBits op = kWalkComplete;
-	    if (synchronize)
-		op |= kWalkSyncIn;
-	    ret = walkAll(op);
+		IOOptionBits op = kWalkComplete;
+		if (synchronize)
+			op |= kWalkSyncIn;
+		ret = walkAll(op);
 	}
 	state->fPrepared = false;
 
-#if 0
 	if (IS_NONCOHERENT(fMappingOptions) && invalidateCache)
 	{ 
-	    // XXX gvdl: need invalidate before Chardonnay ships
 	    IOMemoryDescriptor *poMD = const_cast<IOMemoryDescriptor *>(fMemory);
 
-	    poMD->performOperation(kIOMemoryIncoherentIOInvalidate, 0, fMDSummary.fLength);
+	    poMD->performOperation(kIOMemoryIncoherentIOFlush, 0, fMDSummary.fLength);
 	}
-#endif
     }
 
     return ret;
@@ -678,6 +731,97 @@ IODMACommand::synchronize(IOOptionBits options)
     return ret;
 }
 
+struct IODMACommandTransferContext
+{
+    void *   buffer;
+    UInt64   bufferOffset;
+    UInt64   remaining;
+    UInt32   op;
+};
+enum
+{
+    kIODMACommandTransferOpReadBytes  = 1,
+    kIODMACommandTransferOpWriteBytes = 2
+};
+
+IOReturn
+IODMACommand::transferSegment(void   *reference,
+			IODMACommand *target,
+			Segment64     segment,
+			void         *segments,
+			UInt32        segmentIndex)
+{
+    IODMACommandTransferContext * context = (IODMACommandTransferContext *) segments;
+    UInt64   length  = min(segment.fLength, context->remaining);
+    addr64_t ioAddr  = segment.fIOVMAddr;
+    addr64_t cpuAddr = ioAddr;
+
+    context->remaining -= length;
+
+    while (length)
+    {
+	UInt64 copyLen = length;
+	if ((kMapped == MAPTYPE(target->fMappingOptions))
+	    && target->fMapper)
+	{
+	    cpuAddr = target->fMapper->mapAddr(ioAddr);
+	    copyLen = min(copyLen, page_size - (ioAddr & (page_size - 1)));
+	    ioAddr += copyLen;
+	}
+
+	switch (context->op)
+	{
+	    case kIODMACommandTransferOpReadBytes:
+		copypv(cpuAddr, context->bufferOffset + (addr64_t) context->buffer, copyLen,
+				    cppvPsrc | cppvNoRefSrc | cppvFsnk | cppvKmap);
+		break;
+	    case kIODMACommandTransferOpWriteBytes:
+		copypv(context->bufferOffset + (addr64_t) context->buffer, cpuAddr, copyLen,
+				cppvPsnk | cppvFsnk | cppvNoRefSrc | cppvNoModSnk | cppvKmap);
+		break;
+	}
+	length                -= copyLen;
+	context->bufferOffset += copyLen;
+    }
+    
+    return (context->remaining ? kIOReturnSuccess : kIOReturnOverrun);
+}
+
+UInt64
+IODMACommand::transfer(IOOptionBits transferOp, UInt64 offset, void * buffer, UInt64 length)
+{
+    IODMACommandInternal *      state = fInternalState;
+    IODMACommandTransferContext context;
+    UInt32                      numSegments = 0-1;
+
+    if (fActive < 1)
+        return (0);
+
+    if (offset >= state->fPreparedLength)
+        return (0);
+    length = min(length, state->fPreparedLength - offset);
+
+    context.buffer       = buffer;
+    context.bufferOffset = 0;
+    context.remaining    = length;
+    context.op           = transferOp;
+    (void) genIOVMSegments(transferSegment, (void *) kWalkClient, &offset, &context, &numSegments);
+
+    return (length - context.remaining);
+}
+
+UInt64
+IODMACommand::readBytes(UInt64 offset, void *bytes, UInt64 length)
+{
+    return (transfer(kIODMACommandTransferOpReadBytes, offset, bytes, length));
+}
+
+UInt64
+IODMACommand::writeBytes(UInt64 offset, const void *bytes, UInt64 length)
+{
+    return (transfer(kIODMACommandTransferOpWriteBytes, offset, const_cast<void *>(bytes), length));
+}
+
 IOReturn
 IODMACommand::genIOVMSegments(UInt64 *offsetP,
 			      void   *segmentsP,
@@ -707,17 +851,18 @@ IODMACommand::genIOVMSegments(InternalSegmentFunction outSegFunc,
     IOMDDMAWalkSegmentArgs *state =
 	(IOMDDMAWalkSegmentArgs *) fState;
 
-    UInt64 offset = *offsetP + internalState->fPreparedOffset;
+    UInt64 offset    = *offsetP + internalState->fPreparedOffset;
     UInt64 memLength = internalState->fPreparedOffset + internalState->fPreparedLength;
 
     if (offset >= memLength)
 	return kIOReturnOverrun;
 
-    if (!offset || offset != state->fOffset) {
-	state->fOffset   = 0;
-	state->fIOVMAddr = 0;
-	state->fMapped = (IS_MAPPED(fMappingOptions) && fMapper);
-	mdOp = kIOMDFirstSegment;
+    if ((offset == internalState->fPreparedOffset) || (offset != state->fOffset)) {
+	state->fOffset                 = 0;
+	state->fIOVMAddr               = 0;
+	internalState->fNextRemapIndex = 0;
+	state->fMapped                 = (IS_MAPPED(fMappingOptions) && fMapper);
+	mdOp                           = kIOMDFirstSegment;
     };
 	
     UInt64    bypassMask = fBypassMask;
@@ -808,13 +953,22 @@ IODMACommand::genIOVMSegments(InternalSegmentFunction outSegFunc,
 		    else if (gIOCopyMapper)
 		    {
 			DEBG("sparse switch %qx, %qx ", curSeg.fIOVMAddr, curSeg.fLength);
-			// Cache this!
-			for (UInt checkRemapIndex = 0; checkRemapIndex < internalState->fCopyPageCount; checkRemapIndex++)
+			if (trunc_page_64(curSeg.fIOVMAddr) == gIOCopyMapper->mapAddr(
+							    ptoa_64(internalState->fCopyPageAlloc + internalState->fNextRemapIndex)))
+			{
+
+			    curSeg.fIOVMAddr = ptoa_64(internalState->fCopyPageAlloc + internalState->fNextRemapIndex)
+						+ (curSeg.fIOVMAddr & PAGE_MASK);
+			    internalState->fNextRemapIndex += atop_64(round_page(curSeg.fLength));
+			}
+			else for (UInt checkRemapIndex = 0; checkRemapIndex < internalState->fCopyPageCount; checkRemapIndex++)
 			{
 			    if (trunc_page_64(curSeg.fIOVMAddr) == gIOCopyMapper->mapAddr(
 							    ptoa_64(internalState->fCopyPageAlloc + checkRemapIndex)))
 			    {
-				curSeg.fIOVMAddr = ptoa_64(internalState->fCopyPageAlloc + checkRemapIndex) + (curSeg.fIOVMAddr & PAGE_MASK);
+				curSeg.fIOVMAddr = ptoa_64(internalState->fCopyPageAlloc + checkRemapIndex) 
+						    + (curSeg.fIOVMAddr & PAGE_MASK);
+				internalState->fNextRemapIndex = checkRemapIndex + atop_64(round_page(curSeg.fLength));
 				break;
 			    }
 			}

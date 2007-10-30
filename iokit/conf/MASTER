@@ -46,13 +46,49 @@
 #  IOKIT      = [iokitcpp debug]
 #
 #######################################################################
+#  SYSTEM SIZE CONFIGURATION (select exactly one)
+#
+#	xlarge = extra large scale system configuration
+#	large  = large scale system configuration
+#	medium = medium scale system configuration
+#	small  = small scale system configuration
+#	xsmall = extra small scale system configuration
+#	bsmall = special extra small scale system configuration
 #
 ident		IOKIT
 
+options		HIBERNATION	# system hibernation	# <hibernation>
 options		KERNOBJC	# Objective-C implementation	# <kernobjc>
 options		IOKITCPP	# C++ implementation		# <iokitcpp>
 options		KDEBUG		# kernel tracing		# <kdebug>
+options		NETWORKING	# kernel networking		# <networking>
+options		CRYPTO		# want crypto code		# <crypto>
+options		KPIDIRECT	# direct access			# <kpidirect>
+options     CONFIG_DTRACE # enable dtrace       # <config_dtrace>
+
 #makeoptions	LIBDRIVER = "libDriver_kern.o"			# <libdriver>
 #makeoptions	LIBOBJC   = "libkobjc.o"			# <kernobjc>
 
+#
+#  configurable kernel related resources 
+#
+options   CONFIG_MAX_THREADS=32		# <medium,large,xlarge>
+options   CONFIG_MAX_THREADS=32		# <small,xsmall>
+options   CONFIG_MAX_THREADS=32		# <bsmall>
 
+#
+#  configurable kernel - use these options to strip strings from panic
+#  and printf calls.
+#  no_panic_str - saves around 50K of kernel footprint.
+#  no_printf_str - saves around 45K of kernel footprint.
+#
+options   CONFIG_NO_PANIC_STRINGS		# <no_panic_str>
+options   CONFIG_NO_PRINTF_STRINGS		# <no_printf_str>
+options   CONFIG_NO_KPRINTF_STRINGS		# <no_kprintf_str>
+
+# configurable kernel - general switch to say we are building for an
+# embedded device
+#
+options   CONFIG_EMBEDDED                       # <config_embedded>
+
+options   MACH_ASSERT				# <mach_assert>

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1998 Apple Computer, Inc. All Rights Reserved */
 /*
@@ -121,8 +127,8 @@ synthfs_mount_fs(struct mount *mp, vnode_t devvp, __unused user_addr_t data,  st
 	MALLOC(priv_mnt_data, struct synthfs_mntdata *, sizeof(struct synthfs_mntdata), M_SYNTHFS, M_WAITOK);
 	DBG_VOP(("MALLOC succeeded...\n"));
 
-	strncpy(mp->mnt_vfsstat.f_fstypename, synthfs_fs_name, sizeof(mp->mnt_vfsstat.f_fstypename));
-	strncpy(mp->mnt_vfsstat.f_mntfromname, synthfs_fake_mntfromname, sizeof(mp->mnt_vfsstat.f_mntfromname));
+	strlcpy(mp->mnt_vfsstat.f_fstypename, synthfs_fs_name, sizeof(mp->mnt_vfsstat.f_fstypename));
+	strlcpy(mp->mnt_vfsstat.f_mntfromname, synthfs_fake_mntfromname, sizeof(mp->mnt_vfsstat.f_mntfromname));
     priv_mnt_data->synthfs_mounteddev = (dev_t)0;
     priv_mnt_data->synthfs_nextid = FIRST_SYNTHFS_ID;
     priv_mnt_data->synthfs_filecount = 0;
@@ -396,17 +402,14 @@ vn_mkdir(struct proc *p, char *path, int mode)
 	struct nameidata nd;
 	struct vnode *vp;
 	struct vnode_attr va;
-	struct vfs_context context;
+	vfs_context_t ctx = vfs_context_kernel();
 	int error;
 
-	context.vc_proc = p;
-	context.vc_ucred = kauth_cred_proc_ref(p);	/* XXX kauth_cred_get() ??? proxy */
 
-	NDINIT(&nd, CREATE, LOCKPARENT, UIO_SYSSPACE32, CAST_USER_ADDR_T(path), &context);
+	NDINIT(&nd, CREATE, LOCKPARENT, UIO_SYSSPACE32, CAST_USER_ADDR_T(path), ctx);
 	error = namei(&nd);
 	if (error) {
 		DBG_VOP(("vn_mkdir: error from namei, error = %d.\n", error));
-		kauth_cred_unref(&context.vc_ucred);
 		return (error);
 	};
 	vp = nd.ni_vp;
@@ -416,7 +419,7 @@ vn_mkdir(struct proc *p, char *path, int mode)
 		VATTR_SET(&va, va_type, VDIR);
 		VATTR_SET(&va, va_mode, (mode & ACCESSPERMS) &~ p->p_fd->fd_cmask);
 
-		error = vn_create(nd.ni_dvp, &nd.ni_vp, &nd.ni_cnd, &va, 0, &context);
+		error = vn_create(nd.ni_dvp, &nd.ni_vp, &nd.ni_cnd, &va, 0, ctx);
 		if (error)
 		        DBG_VOP(("vn_mkdir: error from vnop_mkdir (%d).\n", error));
 	} else {
@@ -428,7 +431,6 @@ vn_mkdir(struct proc *p, char *path, int mode)
 	        vnode_put(nd.ni_vp);
 	nameidone(&nd);
 
-	kauth_cred_unref(&context.vc_ucred);
 	return (error);
 }
 
@@ -438,15 +440,11 @@ int
 vn_symlink(struct proc *p, char *path, char *link) {
 	struct nameidata nd;
 	struct vnode_attr va;
-	struct vfs_context context;
+	vfs_context_t ctx = vfs_context_kernel();
 	int error;
 
-	context.vc_proc = p;
-	context.vc_ucred = kauth_cred_proc_ref(p);	/* XXX kauth_cred_get() ??? proxy */
-
-	NDINIT(&nd, CREATE, LOCKPARENT, UIO_SYSSPACE32, CAST_USER_ADDR_T(link), &context);
+	NDINIT(&nd, CREATE, LOCKPARENT, UIO_SYSSPACE32, CAST_USER_ADDR_T(link), ctx);
 	if ((error = namei(&nd))) {
-		kauth_cred_unref(&context.vc_ucred);
 		return error;
 	}
 
@@ -455,7 +453,7 @@ vn_symlink(struct proc *p, char *path, char *link) {
 		VATTR_SET(&va, va_type, VLNK);
 		VATTR_SET(&va, va_mode, ACCESSPERMS &~ p->p_fd->fd_cmask);
 
-		error = VNOP_SYMLINK(nd.ni_dvp, &nd.ni_vp, &nd.ni_cnd, &va, path, &context);
+		error = VNOP_SYMLINK(nd.ni_dvp, &nd.ni_vp, &nd.ni_cnd, &va, path, ctx);
 	} else
 	        error = EEXIST;
 
@@ -464,7 +462,6 @@ vn_symlink(struct proc *p, char *path, char *link) {
 		vnode_put(nd.ni_vp);
 	nameidone(&nd);
 
-	kauth_cred_unref(&context.vc_ucred);
 	return (error);
 }
 

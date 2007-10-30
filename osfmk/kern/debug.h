@@ -1,29 +1,36 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #ifndef	_KERN_DEBUG_H_
 #define _KERN_DEBUG_H_
 
 #include <sys/cdefs.h>
+#include <stdint.h>
 
 #ifdef	KERNEL_PRIVATE
 
@@ -42,7 +49,7 @@ extern unsigned int     current_debugger;
 
 extern unsigned int     active_debugger;
 extern unsigned int 	debug_mode; 
-extern unsigned int	disableDebugOuput;
+extern unsigned int	disable_debug_output;
 
 extern unsigned int     panicDebugging;
 extern unsigned int	logPanicDataToScreen;
@@ -62,6 +69,7 @@ extern int db_run_mode;
 
 extern const char		*panicstr;
 extern volatile unsigned int	nestedpanic;
+extern int unsigned long panic_caller;
 
 extern char *debug_buf;
 extern char *debug_buf_ptr;
@@ -71,6 +79,11 @@ extern void	debug_log_init(void);
 extern void	debug_putc(char);
 
 extern void	panic_init(void);
+
+int	packA(char *inbuf, uint32_t length, uint32_t buflen);
+void	unpackA(char *inbuf, uint32_t length);
+
+void	panic_display_system_configuration(void);
 
 #endif /* MACH_KERNEL_PRIVATE */
 
@@ -94,8 +107,22 @@ extern void	panic_init(void);
 
 __BEGIN_DECLS
 
-extern void	panic(const char *string, ...) __dead2;
+extern void panic(const char *string, ...) __printflike(1,2);
+#if CONFIG_NO_PANIC_STRINGS
+#define panic_plain(...) (panic)((char *)0)
+#define panic(...)  (panic)((char *)0)
+#else /* CONFIGS_NO_PANIC_STRINGS */
+#define panic_plain(ex, ...) \
+	(panic)(ex, ## __VA_ARGS__)
+#define __STRINGIFY(x) #x
+#define LINE_NUMBER(x) __STRINGIFY(x)
+#define PANIC_LOCATION __FILE__ ":" LINE_NUMBER(__LINE__)
+#define panic(ex, ...) \
+	(panic)(# ex "@" PANIC_LOCATION, ## __VA_ARGS__)
+#endif /* CONFIGS_NO_PANIC_STRINGS */
 
+void 		populate_model_name(char *);
+unsigned	panic_active(void);
 __END_DECLS
 
 #endif	/* _KERN_DEBUG_H_ */

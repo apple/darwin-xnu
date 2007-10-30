@@ -43,9 +43,15 @@
 .Sh SYNOPSIS
 .Fd #include <sys/time.h>
 .Ft int
-.Fn gettimeofday "struct timeval *tp" "struct timezone *tzp"
+.Fo gettimeofday
+.Fa "struct timeval *restrict tp"
+.Fa "void *restrict tzp"
+.Fc
 .Ft int
-.Fn settimeofday "const struct timeval *tp" "const struct timezone *tzp"
+.Fo settimeofday
+.Fa "const struct timeval *tp"
+.Fa "const struct timezone *tzp"
+.Fc
 .Sh DESCRIPTION
 .Bf -symbolic
 Note: timezone is no longer used; this information is kept outside
@@ -77,8 +83,8 @@ as:
 .Pp
 .Bd -literal
 struct timeval {
-	long	tv_sec;		/* seconds since Jan. 1, 1970 */
-	long	tv_usec;	/* and microseconds */
+	time_t       tv_sec;   /* seconds since Jan. 1, 1970 */
+	suseconds_t  tv_usec;  /* and microseconds */
 };
 
 struct timezone {
@@ -86,6 +92,14 @@ struct timezone {
 	int	tz_dsttime;	/* type of dst correction to apply */
 };
 .Ed
+.Pp
+The 
+.Fa timeval
+structure specifies a time value in seconds and microseconds.
+The values in
+.Fa timeval
+are opaque types whose length may vary on different machines;
+depending on them to have any given length may lead to errors.
 .Pp
 The 
 .Fa timezone
@@ -118,10 +132,24 @@ An argument address referenced invalid memory.
 .It Bq Er EPERM
 A user other than the super-user attempted to set the time.
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/time.h>
+.Pp
+.Ft int
+.br
+.Fo gettimeofday
+.Fa "struct timeval *tp"
+.Fa "struct timezone *tzp"
+.Fc ;
+.Pp
+The type of
+.Fa tzp
+has changed.
 .Sh SEE ALSO
 .Xr date 1 ,
 .Xr adjtime 2 ,
 .Xr ctime 3 ,
+.Xr compat 5 ,
 .Xr timed 8
 .Sh HISTORY
 The

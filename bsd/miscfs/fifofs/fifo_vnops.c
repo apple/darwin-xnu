@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -73,8 +79,8 @@
 
 #define VOPFUNC int (*)(void *)
 
-extern int	soo_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, struct proc *p);
-extern int	soo_select(struct fileproc *fp, int which, void * wql, struct proc *p);
+extern int	soo_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, vfs_context_t ctx);
+extern int	soo_select(struct fileproc *fp, int which, void * wql, vfs_context_t ctx);
 
 int (**fifo_vnodeop_p)(void *);
 struct vnodeopv_entry_desc fifo_vnodeop_entries[] = {
@@ -124,13 +130,7 @@ struct vnodeopv_desc fifo_vnodeop_opv_desc =
  */
 /* ARGSUSED */
 int
-fifo_lookup(ap)
-	struct vnop_lookup_args /* {
-		struct vnode * a_dvp;
-		struct vnode ** a_vpp;
-		struct componentname * a_cnp;
-		vfs_context_t a_context;
-	} */ *ap;
+fifo_lookup(struct vnop_lookup_args *ap)
 {
 	
 	*ap->a_vpp = NULL;
@@ -143,12 +143,7 @@ fifo_lookup(ap)
  */
 /* ARGSUSED */
 int
-fifo_open(ap)
-	struct vnop_open_args /* {
-		struct vnode *a_vp;
-		int  a_mode;
-		vfs_context_t a_context;
-	} */ *ap;
+fifo_open(struct vnop_open_args *ap)
 {
 	struct vnode *vp = ap->a_vp;
 	struct fifoinfo *fip;
@@ -167,7 +162,7 @@ retry:
 	if ((fip->fi_flags & FIFO_CREATED) == 0) {
 		if (fip->fi_flags & FIFO_INCREATE) {
 			fip->fi_flags |= FIFO_CREATEWAIT;	
-			error = msleep(&fip->fi_flags, &vp->v_lock, PRIBIO | PCATCH, "fifocreatewait", 0);
+			error = msleep(&fip->fi_flags, &vp->v_lock, PRIBIO | PCATCH, "fifocreatewait", NULL);
 			if (error) {
 				vnode_unlock(vp);
 				return(error);
@@ -248,7 +243,7 @@ retry:
 	if ((ap->a_mode & FREAD) && (ap->a_mode & O_NONBLOCK) == 0) {
 		if (fip->fi_writers == 0) {
 			error = msleep((caddr_t)&fip->fi_readers, &vp->v_lock,
-					PCATCH | PSOCK, "fifoor", 0);
+					PCATCH | PSOCK, "fifoor", NULL);
 			if (error)
 				goto bad;
 			if (fip->fi_readers == 1) {
@@ -266,7 +261,7 @@ retry:
 		} else {
 			if (fip->fi_readers == 0) {
 				error = msleep((caddr_t)&fip->fi_writers,&vp->v_lock,
-						PCATCH | PSOCK, "fifoow", 0);
+						PCATCH | PSOCK, "fifoow", NULL);
 				if (error)
 					goto bad;
 				if (fip->fi_writers == 1) {
@@ -302,13 +297,7 @@ bad1:
  * Vnode op for read
  */
 int
-fifo_read(ap)
-	struct vnop_read_args /* {
-		struct vnode *a_vp;
-		struct uio *a_uio;
-		int  a_ioflag;
-		vfs_context_t a_context;
-	} */ *ap;
+fifo_read(struct vnop_read_args *ap)
 {
 	struct uio *uio = ap->a_uio;
 	struct socket *rso = ap->a_vp->v_fifoinfo->fi_readsock;
@@ -363,13 +352,7 @@ fifo_read(ap)
  * Vnode op for write
  */
 int
-fifo_write(ap)
-	struct vnop_write_args /* {
-		struct vnode *a_vp;
-		struct uio *a_uio;
-		int  a_ioflag;
-		vfs_context_t a_context;
-	} */ *ap;
+fifo_write(struct vnop_write_args *ap)
 {
 	struct socket *wso = ap->a_vp->v_fifoinfo->fi_writesock;
 	int error;
@@ -378,7 +361,7 @@ fifo_write(ap)
 	if (ap->a_uio->uio_rw != UIO_WRITE)
 		panic("fifo_write mode");
 #endif
-	error = sosend(wso, (struct sockaddr *)0, ap->a_uio, 0,
+	error = sosend(wso, (struct sockaddr *)0, ap->a_uio, NULL,
 		       (struct mbuf *)0, (ap->a_ioflag & IO_NDELAY) ? MSG_NBIO : 0);
 
 	return (error);
@@ -388,16 +371,8 @@ fifo_write(ap)
  * Device ioctl operation.
  */
 int
-fifo_ioctl(ap)
-	struct vnop_ioctl_args /* {
-		struct vnode *a_vp;
-		int  a_command;
-		caddr_t  a_data;
-		int  a_fflag;
-		vfs_context_t a_context;
-	} */ *ap;
+fifo_ioctl(struct vnop_ioctl_args *ap)
 {
-	struct proc *p = vfs_context_proc(ap->a_context);
 	struct fileproc filetmp;
 	struct fileglob filefg;
 	int error;
@@ -408,13 +383,13 @@ fifo_ioctl(ap)
 	filetmp.f_fglob = &filefg;
 	if (ap->a_fflag & FREAD) {
 		filetmp.f_fglob->fg_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_readsock;
-		error = soo_ioctl(&filetmp, ap->a_command, ap->a_data, p);
+		error = soo_ioctl(&filetmp, ap->a_command, ap->a_data, ap->a_context);
 		if (error)
 			return (error);
 	}
 	if (ap->a_fflag & FWRITE) {
 		filetmp.f_fglob->fg_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_writesock;
-		error = soo_ioctl(&filetmp, ap->a_command, ap->a_data, p);
+		error = soo_ioctl(&filetmp, ap->a_command, ap->a_data, ap->a_context);
 		if (error)
 			return (error);
 	}
@@ -422,16 +397,8 @@ fifo_ioctl(ap)
 }
 
 int
-fifo_select(ap)
-	struct vnop_select_args /* {
-		struct vnode *a_vp;
-		int  a_which;
-		int  a_fflags;
-		void * a_wql;
-		vfs_context_t a_context;
-	} */ *ap;
+fifo_select(struct vnop_select_args *ap)
 {
-	struct proc *p = vfs_context_proc(ap->a_context);
 	struct fileproc filetmp;
 	struct fileglob filefg;
 	int ready;
@@ -440,13 +407,13 @@ fifo_select(ap)
 	filetmp.f_fglob = &filefg;
 	if (ap->a_which & FREAD) {
 		filetmp.f_fglob->fg_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_readsock;
-		ready = soo_select(&filetmp, ap->a_which, ap->a_wql, p);
+		ready = soo_select(&filetmp, ap->a_which, ap->a_wql, ap->a_context);
 		if (ready)
 			return (ready);
 	}
 	if (ap->a_which & FWRITE) {
 		filetmp.f_fglob->fg_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_writesock;
-		ready = soo_select(&filetmp, ap->a_which, ap->a_wql, p);
+		ready = soo_select(&filetmp, ap->a_which, ap->a_wql, ap->a_context);
 		if (ready)
 			return (ready);
 	}
@@ -464,12 +431,7 @@ fifo_inactive(__unused struct vnop_inactive_args *ap)
  * Device close routine
  */
 int
-fifo_close(ap)
-	struct vnop_close_args /* {
-		struct vnode *a_vp;
-		int  a_fflag;
-		vfs_context_t a_context;
-	} */ *ap;
+fifo_close(struct vnop_close_args *ap)
 {
 	return fifo_close_internal(ap->a_vp, ap->a_fflag, ap->a_context, 0);
 }
@@ -477,7 +439,7 @@ fifo_close(ap)
 int
 fifo_close_internal(vnode_t vp, int fflag, __unused vfs_context_t context, int locked)
 {
-	register struct fifoinfo *fip = vp->v_fifoinfo;
+	struct fifoinfo *fip = vp->v_fifoinfo;
 	int error1, error2;
 	struct socket *rso;
 	struct socket *wso;
@@ -525,8 +487,8 @@ fifo_close_internal(vnode_t vp, int fflag, __unused vfs_context_t context, int l
 
 	wso = fip->fi_writesock;
 	rso = fip->fi_readsock;
-	fip->fi_readsock = 0;
-	fip->fi_writesock = 0;
+	fip->fi_readsock = NULL;
+	fip->fi_writesock = NULL;
 	fip->fi_flags &= ~FIFO_CREATED;
 	if (!locked)
 		vnode_unlock(vp);
@@ -538,33 +500,26 @@ fifo_close_internal(vnode_t vp, int fflag, __unused vfs_context_t context, int l
 	return (error2);
 }
 
-
+#if !CONFIG_NO_PRINTF_STRINGS
 /*
  * Print out internal contents of a fifo vnode.
  */
 void
-fifo_printinfo(vp)
-	struct vnode *vp;
+fifo_printinfo(struct vnode *vp)
 {
-	register struct fifoinfo *fip = vp->v_fifoinfo;
+	struct fifoinfo *fip = vp->v_fifoinfo;
 
-	printf(", fifo with %d readers and %d writers",
+	printf(", fifo with %ld readers and %ld writers",
 		fip->fi_readers, fip->fi_writers);
 }
+#endif /* !CONFIG_NO_PRINTF_STRINGS */
 
 /*
  * Return POSIX pathconf information applicable to fifo's.
  */
 int
-fifo_pathconf(ap)
-	struct vnop_pathconf_args /* {
-		struct vnode *a_vp;
-		int a_name;
-		int *a_retval;
-		vfs_context_t a_context;
-	} */ *ap;
+fifo_pathconf(struct vnop_pathconf_args *ap)
 {
-
 	switch (ap->a_name) {
 	case _PC_LINK_MAX:
 		*ap->a_retval = LINK_MAX;
@@ -573,7 +528,7 @@ fifo_pathconf(ap)
 		*ap->a_retval = PIPE_BUF;
 		return (0);
 	case _PC_CHOWN_RESTRICTED:
-		*ap->a_retval = 1;
+		*ap->a_retval = 200112;		/* _POSIX_CHOWN_RESTRICTED */
 		return (0);
 	default:
 		return (EINVAL);

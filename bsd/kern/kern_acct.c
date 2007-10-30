@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*-
@@ -64,6 +70,12 @@
  *	Purged old history
  *  	New version based on 4.4
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 
 #include <sys/param.h>
@@ -82,6 +94,9 @@
 #include <sys/tty.h>
 #include <sys/sysproto.h>
 #include <machine/spl.h>
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
 
 /*
  * The routines implemented in this file are described in:
@@ -129,17 +144,16 @@ int	acctchkfreq = 15;	/* frequency (in seconds) to check space */
  * previous implementation done by Mark Tinguely.
  */
 int
-acct(struct proc *p, struct acct_args *uap, __unused int *retval)
+acct(proc_t p, struct acct_args *uap, __unused int *retval)
 {
 	struct nameidata nd;
 	int error;
-	struct vfs_context context;
+	struct vfs_context *ctx; 
 
-	context.vc_proc = p;
-	context.vc_ucred = kauth_cred_get();
+	ctx = vfs_context_current();
 
 	/* Make sure that the caller is root. */
-	if ((error = suser(kauth_cred_get(), &p->p_acflag)))
+	if ((error = suser(vfs_context_ucred(ctx), &p->p_acflag)))
 		return (error);
 
 	/*
@@ -147,16 +161,31 @@ acct(struct proc *p, struct acct_args *uap, __unused int *retval)
 	 * writing and make sure it's a 'normal'.
 	 */
 	if (uap->path != USER_ADDR_NULL) {
-		NDINIT(&nd, LOOKUP, NOFOLLOW, UIO_USERSPACE, uap->path, &context);
+		NDINIT(&nd, LOOKUP, NOFOLLOW, UIO_USERSPACE, uap->path, ctx);
 		if ((error = vn_open(&nd, FWRITE, 0)))
 			return (error);
+#if CONFIG_MACF
+		error = mac_system_check_acct(vfs_context_ucred(ctx), nd.ni_vp);
+		if (error) {
+			vnode_put(nd.ni_vp);
+			vn_close(nd.ni_vp, FWRITE, ctx);
+			return (error);
+		}
+#endif
 		vnode_put(nd.ni_vp);
 
 		if (nd.ni_vp->v_type != VREG) {
-			vn_close(nd.ni_vp, FWRITE, kauth_cred_get(), p);
+			vn_close(nd.ni_vp, FWRITE, ctx);
 			return (EACCES);
 		}
 	}
+#if CONFIG_MACF
+	else {
+		error = mac_system_check_acct(vfs_context_ucred(ctx), NULL);
+		if (error)
+			return (error);
+	}
+#endif
 
 	/*
 	 * If accounting was previously enabled, kill the old space-watcher,
@@ -164,8 +193,8 @@ acct(struct proc *p, struct acct_args *uap, __unused int *retval)
 	 */
 	if (acctp != NULLVP || suspend_acctp != NULLVP) {
 		untimeout(acctwatch_funnel, NULL);
-		error = vn_close((acctp != NULLVP ? acctp : suspend_acctp), FWRITE,
-		    kauth_cred_get(), p);
+		error = vn_close((acctp != NULLVP ? acctp : suspend_acctp),
+				FWRITE, vfs_context_current());
 
 		acctp = suspend_acctp = NULLVP;
 	}
@@ -188,16 +217,17 @@ acct(struct proc *p, struct acct_args *uap, __unused int *retval)
  * "acct.h" header file.)
  */
 int
-acct_process(p)
-	struct proc *p;
+acct_process(proc_t p)
 {
 	struct acct an_acct;
-	struct rusage *r;
+	struct rusage rup, *r;
 	struct timeval ut, st, tmp;
 	int t;
 	int error;
 	struct vnode *vp;
 	kauth_cred_t safecred;
+	struct session * sessp;
+	boolean_t fstate;
 
 	/* If accounting isn't enabled, don't bother */
 	vp = acctp;
@@ -217,13 +247,16 @@ acct_process(p)
 	an_acct.ac_stime = encode_comp_t(st.tv_sec, st.tv_usec);
 
 	/* (3) The elapsed time the commmand ran (and its starting time) */
-	an_acct.ac_btime = p->p_stats->p_start.tv_sec;
+	an_acct.ac_btime = p->p_start.tv_sec;
 	microtime(&tmp);
-	timevalsub(&tmp, &p->p_stats->p_start);
+	timevalsub(&tmp, &p->p_start);
 	an_acct.ac_etime = encode_comp_t(tmp.tv_sec, tmp.tv_usec);
 
 	/* (4) The average amount of memory used */
-	r = &p->p_stats->p_ru;
+	proc_lock(p);
+	rup = p->p_stats->p_ru;
+	proc_unlock(p);
+	r = &rup;
 	tmp = ut;
 	timevaladd(&tmp, &st);
 	t = tmp.tv_sec * hz + tmp.tv_usec / tick;
@@ -236,19 +269,27 @@ acct_process(p)
 	an_acct.ac_io = encode_comp_t(r->ru_inblock + r->ru_oublock, 0);
 
 	/* (6) The UID and GID of the process */
-	an_acct.ac_uid = p->p_ucred->cr_ruid;
-	an_acct.ac_gid = p->p_ucred->cr_rgid;
+	safecred = kauth_cred_proc_ref(p);
+
+	an_acct.ac_uid = safecred->cr_ruid;
+	an_acct.ac_gid = safecred->cr_rgid;
 
 	/* (7) The terminal from which the process was started */
-	if ((p->p_flag & P_CONTROLT) && p->p_pgrp->pg_session->s_ttyp)
-		an_acct.ac_tty = p->p_pgrp->pg_session->s_ttyp->t_dev;
-	else
+	
+	sessp = proc_session(p);
+	if ((p->p_flag & P_CONTROLT) && (sessp != SESSION_NULL) && (sessp->s_ttyp != TTY_NULL)) {
+		fstate = thread_funnel_set(kernel_flock, TRUE);
+		an_acct.ac_tty = sessp->s_ttyp->t_dev;
+		(void) thread_funnel_set(kernel_flock, fstate);
+	 }else
 		an_acct.ac_tty = NODEV;
+
+	if (sessp != SESSION_NULL)
+		session_rele(sessp);
 
 	/* (8) The boolean flags that tell how the process terminated, etc. */
 	an_acct.ac_flag = p->p_acflag;
 
-	safecred = kauth_cred_proc_ref(p);
 	/*
 	 * Now, just write the accounting information to the file.
 	 */
@@ -258,6 +299,7 @@ acct_process(p)
 				(int *)0, p);
 		vnode_put(vp);
 	}
+
 	kauth_cred_unref(&safecred);
 	return (error);
 }
@@ -273,8 +315,7 @@ acct_process(p)
 #define	MAXFRACT	((1 << MANTSIZE) - 1)	/* Maximum fractional value. */
 
 comp_t
-encode_comp_t(s, us)
-	u_long s, us;
+encode_comp_t(u_long s, u_long us)
 {
 	int exp, rnd;
 
@@ -302,8 +343,7 @@ encode_comp_t(s, us)
 }
 
 void
-acctwatch_funnel(a)
-	void *a;
+acctwatch_funnel(void *a)
 {
         thread_funnel_set(kernel_flock, TRUE);
 	acctwatch(a);
@@ -321,14 +361,12 @@ acctwatch_funnel(a)
 void
 acctwatch(__unused void *a)
 {
-	struct vfs_context context;
+	vfs_context_t ctx = vfs_context_current();
 	struct vfs_attr va;
 
 	VFSATTR_INIT(&va);
 	VFSATTR_WANTED(&va, f_blocks);
 	VFSATTR_WANTED(&va, f_bavail);
-	context.vc_proc = current_proc();
-	context.vc_ucred = kauth_cred_get();
 
 	if (suspend_acctp != NULLVP) {
 		/*
@@ -337,11 +375,11 @@ acctwatch(__unused void *a)
 		 * below a low watermark
 		 */
 		if (suspend_acctp->v_type == VBAD) {
-			(void) vn_close(suspend_acctp, FWRITE, NOCRED, NULL);
+			(void) vn_close(suspend_acctp, FWRITE, vfs_context_kernel());
 			suspend_acctp = NULLVP;
 			return;
 		}
-		(void)vfs_getattr(suspend_acctp->v_mount, &va, &context);
+		(void)vfs_getattr(suspend_acctp->v_mount, &va, ctx);
 		if (va.f_bavail > acctresume * va.f_blocks / 100) {
 			acctp = suspend_acctp;
 			suspend_acctp = NULLVP;
@@ -354,11 +392,11 @@ acctwatch(__unused void *a)
 		 * goes over a high watermark
 		 */
 		if (acctp->v_type == VBAD) {
-			(void) vn_close(acctp, FWRITE, NOCRED, NULL);
+			(void) vn_close(acctp, FWRITE, vfs_context_kernel());
 			acctp = NULLVP;
 			return;
 		}
-		(void)vfs_getattr(acctp->v_mount, &va, &context);
+		(void)vfs_getattr(acctp->v_mount, &va, ctx);
 		if (va.f_bavail <= acctsuspend * va.f_blocks / 100) {
 			suspend_acctp = acctp;
 			acctp = NULLVP;

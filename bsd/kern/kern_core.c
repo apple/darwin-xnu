@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1991 NeXT Computer, Inc.  All rights reserved.
  *
@@ -59,23 +65,38 @@
 
 typedef struct {
 	int	flavor;			/* the number for this flavor */
-	int	count;			/* count of ints in this flavor */
+	mach_msg_type_number_t	count;	/* count of ints in this flavor */
 } mythread_state_flavor_t;
 
 #if defined (__ppc__)
+/* 64 bit */
+mythread_state_flavor_t thread_flavor_array64[]={
+		{PPC_THREAD_STATE64 , PPC_THREAD_STATE64_COUNT},
+		{PPC_FLOAT_STATE, PPC_FLOAT_STATE_COUNT}, 
+		{PPC_EXCEPTION_STATE64, PPC_EXCEPTION_STATE64_COUNT},
+		{PPC_VECTOR_STATE, PPC_VECTOR_STATE_COUNT}
+		};
 
+/* 32 bit */
 mythread_state_flavor_t thread_flavor_array[]={
 		{PPC_THREAD_STATE , PPC_THREAD_STATE_COUNT},
 		{PPC_FLOAT_STATE, PPC_FLOAT_STATE_COUNT}, 
 		{PPC_EXCEPTION_STATE, PPC_EXCEPTION_STATE_COUNT},
 		{PPC_VECTOR_STATE, PPC_VECTOR_STATE_COUNT}
 		};
-int mynum_flavors=4;
+
 #elif defined (__i386__)
 mythread_state_flavor_t thread_flavor_array [] = { 
 		{x86_THREAD_STATE, x86_THREAD_STATE_COUNT},
 		{x86_FLOAT_STATE, x86_FLOAT_STATE_COUNT},
 		{x86_EXCEPTION_STATE, x86_EXCEPTION_STATE_COUNT},
+		};
+int mynum_flavors=3;
+#elif defined (__arm__)
+mythread_state_flavor_t thread_flavor_array[]={
+		{ARM_THREAD_STATE , ARM_THREAD_STATE_COUNT},
+		{ARM_VFP_STATE, ARM_VFP_STATE_COUNT}, 
+		{ARM_EXCEPTION_STATE, ARM_EXCEPTION_STATE_COUNT}
 		};
 int mynum_flavors=3;
 
@@ -89,6 +110,7 @@ typedef struct {
 	int  hoffset;
 	mythread_state_flavor_t *flavors;
 	int tstate_size;
+	int flavor_count;
 } tir_t;
 
 /* XXX should be static */
@@ -129,7 +151,7 @@ collectth_state(thread_t th_act, void *tirp)
 		 * the appropriate thread state struct for each
 		 * thread state flavor.
 		 */
-		for (i = 0; i < mynum_flavors; i++) {
+		for (i = 0; i < t->flavor_count; i++) {
 			*(mythread_state_flavor_t *)(header+hoffset) =
 			  flavors[i];
 			hoffset += sizeof(mythread_state_flavor_t);
@@ -142,18 +164,34 @@ collectth_state(thread_t th_act, void *tirp)
 		t->hoffset = hoffset;
 }
 
+
 /*
- * Create a core image on the file "core".
+ * coredump
+ *
+ * Description:	Create a core image on the file "core" for the process
+ *		indicated
+ *
+ * Parameters:	core_proc			Process to dump core [*]
+ *
+ * Returns:	0				Success
+ *		EFAULT				Failed
+ *
+ * IMPORTANT:	This function can only be called on the current process, due
+ *		to assumptions below; see variable declaration section for
+ *		details.
  */
 #define	MAX_TSTATE_FLAVORS	10
 int
-coredump(struct proc *p)
+coredump(proc_t core_proc)
 {
-	int error=0;
-	kauth_cred_t cred = kauth_cred_get();
+/* Begin assumptions that limit us to only the current process */
+	vfs_context_t ctx = vfs_context_current();
+	vm_map_t	map = current_map();
+	task_t		task = current_task();
+/* End assumptions */
+	kauth_cred_t cred = vfs_context_ucred(ctx);
+	int error = 0;
 	struct vnode_attr va;
-	struct vfs_context context;
-	vm_map_t	map;
 	int		thread_count, segment_count;
 	int		command_size, header_size, tstate_size;
 	int		hoffset;
@@ -164,21 +202,21 @@ coredump(struct proc *p)
 	vm_prot_t	prot;
 	vm_prot_t	maxprot;
 	vm_inherit_t	inherit;
-	int		error1;
-	task_t		task;
-	char		core_name[MAXCOMLEN+6];
+	int		error1 = 0;
+	char		stack_name[MAXCOMLEN+6];
+	char		*alloced_name = NULL;
 	char		*name;
 	mythread_state_flavor_t flavors[MAX_TSTATE_FLAVORS];
 	vm_size_t	mapsize;
 	int		i;
-	int nesting_depth = 0;
+	uint32_t nesting_depth = 0;
 	kern_return_t	kret;
 	struct vm_region_submap_info_64 vbr;
-	int vbrcount=0;
+	mach_msg_type_number_t vbrcount = 0;
 	tir_t tir1;
 	struct vnode * vp;
-	struct mach_header	*mh;
-	struct mach_header_64	*mh64;
+	struct mach_header	*mh = NULL;	/* protected by is_64 */
+	struct mach_header_64	*mh64 = NULL;	/* protected by is_64 */
 	int		is_64 = 0;
 	size_t		mach_header_sz = sizeof(struct mach_header);
 	size_t		segment_command_sz = sizeof(struct segment_command);
@@ -191,47 +229,46 @@ coredump(struct proc *p)
 		return (EFAULT);
 	}
 
-	if (IS_64BIT_PROCESS(p)) {
+	if (IS_64BIT_PROCESS(core_proc)) {
 		is_64 = 1;
 		mach_header_sz = sizeof(struct mach_header_64);
 		segment_command_sz = sizeof(struct segment_command_64);
 	}
 
-	task = current_task();
-	map = current_map();
 	mapsize = get_vmmap_size(map);
 
-	if (mapsize >=  p->p_rlimit[RLIMIT_CORE].rlim_cur)
+	if (mapsize >=  core_proc->p_rlimit[RLIMIT_CORE].rlim_cur)
 		return (EFAULT);
 	(void) task_suspend(task);
 
+	MALLOC(alloced_name, char *, MAXPATHLEN, M_TEMP, M_NOWAIT | M_ZERO);
+
 	/* create name according to sysctl'able format string */
-	name = proc_core_name(p->p_comm, kauth_cred_getuid(cred), p->p_pid);
-
 	/* if name creation fails, fall back to historical behaviour... */
-	if (name == NULL) {
-		sprintf(core_name, "/cores/core.%d", p->p_pid);
-		name = core_name;
-	}
-	context.vc_proc = p;
-	context.vc_ucred = cred;
+	if (proc_core_name(core_proc->p_comm, kauth_cred_getuid(cred),
+			   core_proc->p_pid, alloced_name, MAXPATHLEN)) {
+		snprintf(stack_name, sizeof(stack_name),
+			 "/cores/core.%d", core_proc->p_pid);
+		name = stack_name;
+	} else
+		name = alloced_name;
 
-	if ((error = vnode_open(name, (O_CREAT | FWRITE | O_NOFOLLOW), S_IRUSR, VNODE_LOOKUP_NOFOLLOW, &vp, &context)))
-	        return (error);
+	if ((error = vnode_open(name, (O_CREAT | FWRITE | O_NOFOLLOW), S_IRUSR, VNODE_LOOKUP_NOFOLLOW, &vp, ctx)))
+		goto out2;
 
 	VATTR_INIT(&va);
 	VATTR_WANTED(&va, va_nlink);
 	/* Don't dump to non-regular files or files with links. */
 	if (vp->v_type != VREG ||
-	    vnode_getattr(vp, &va, &context) || va.va_nlink != 1) {
+	    vnode_getattr(vp, &va, ctx) || va.va_nlink != 1) {
 		error = EFAULT;
 		goto out;
 	}
 
 	VATTR_INIT(&va);	/* better to do it here than waste more stack in vnode_setsize */
 	VATTR_SET(&va, va_data_size, 0);
-	vnode_setattr(vp, &va, &context);
-	p->p_acflag |= ACORE;
+	vnode_setattr(vp, &va, ctx);
+	core_proc->p_acflag |= ACORE;
 
 	/*
 	 *	If the task is modified while dumping the file
@@ -241,12 +278,21 @@ coredump(struct proc *p)
 
 	thread_count = get_task_numacts(task);
 	segment_count = get_vmmap_entries(map);	/* XXX */
-	bcopy(thread_flavor_array,flavors,sizeof(thread_flavor_array));
+#if defined (__ppc__)
+	if (is_64) {
+		tir1.flavor_count = sizeof(thread_flavor_array64)/sizeof(mythread_state_flavor_t);
+		bcopy(thread_flavor_array64, flavors,sizeof(thread_flavor_array64));
+	} else {
+#endif	/* __ppc __ */
+		tir1.flavor_count = sizeof(thread_flavor_array)/sizeof(mythread_state_flavor_t);
+		bcopy(thread_flavor_array, flavors,sizeof(thread_flavor_array));
+#if defined (__ppc__)
+	}
+#endif	/* __ppc __ */
 	tstate_size = 0;
-	for (i = 0; i < mynum_flavors; i++)
+	for (i = 0; i < tir1.flavor_count; i++)
 		tstate_size += sizeof(mythread_state_flavor_t) +
 		  (flavors[i].count * sizeof(int));
-
 	command_size = segment_count * segment_command_sz +
 	  thread_count*sizeof(struct thread_command) +
 	  tstate_size*thread_count;
@@ -384,8 +430,8 @@ coredump(struct proc *p)
 					xfer_vmsize = INT_MAX;
 				error = vn_rdwr_64(UIO_WRITE, vp,
 						vmoffset, xfer_vmsize, xfer_foffset,
-					(IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32), 
-					IO_NODELOCKED|IO_UNIT, cred, (int *) 0, p);
+					(IS_64BIT_PROCESS(core_proc) ? UIO_USERSPACE64 : UIO_USERSPACE32), 
+					IO_NODELOCKED|IO_UNIT, cred, (int *) 0, core_proc);
 				tmp_vmsize -= xfer_vmsize;
 				xfer_foffset += xfer_vmsize;
 			}
@@ -406,8 +452,10 @@ coredump(struct proc *p)
 	 */
 	if (is_64) {
 		mh64->ncmds -= segment_count;
+		mh64->sizeofcmds -= segment_count * segment_command_sz;
 	} else {
 		mh->ncmds -= segment_count;
+		mh->sizeofcmds -= segment_count * segment_command_sz;
 	}
 
 	tir1.header = header;
@@ -421,10 +469,13 @@ coredump(struct proc *p)
 	 *	file.  OK to use a 32 bit write for this.
 	 */
 	error = vn_rdwr(UIO_WRITE, vp, (caddr_t)header, header_size, (off_t)0,
-			UIO_SYSSPACE32, IO_NODELOCKED|IO_UNIT, cred, (int *) 0, p);
+			UIO_SYSSPACE32, IO_NODELOCKED|IO_UNIT, cred, (int *) 0, core_proc);
 	kmem_free(kernel_map, header, header_size);
 out:
-	error1 = vnode_close(vp, FWRITE, &context);
+	error1 = vnode_close(vp, FWRITE, ctx);
+out2:
+	if (alloced_name != NULL)
+		FREE(alloced_name, M_TEMP);
 	if (error == 0)
 		error = error1;
 

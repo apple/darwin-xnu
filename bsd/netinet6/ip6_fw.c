@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 /*	$FreeBSD: src/sys/netinet6/ip6_fw.c,v 1.2.2.9 2002/04/28 05:40:27 suz Exp $	*/
@@ -93,6 +99,8 @@
 #include <sys/syslog.h>
 #include <sys/lock.h>
 #include <sys/time.h>
+#include <sys/kern_event.h>
+
 #include <net/if.h>
 #include <net/route.h>
 #include <netinet/in_systm.h>
@@ -120,7 +128,7 @@
 
 MALLOC_DEFINE(M_IP6FW, "Ip6Fw/Ip6Acct", "Ip6Fw/Ip6Acct chain's");
 
-static int fw6_debug = 1;
+static int fw6_debug = 0;
 #ifdef IPV6FIREWALL_VERBOSE
 static int fw6_verbose = 1;
 #else
@@ -134,14 +142,35 @@ static int fw6_verbose_limit = 0;
 
 LIST_HEAD (ip6_fw_head, ip6_fw_chain) ip6_fw_chain;
 
+static void ip6fw_kev_post_msg(u_int32_t );
+
 #ifdef SYSCTL_NODE
+static int ip6fw_sysctl SYSCTL_HANDLER_ARGS;
+
 SYSCTL_DECL(_net_inet6_ip6);
-SYSCTL_NODE(_net_inet6_ip6, OID_AUTO, fw, CTLFLAG_RW, 0, "Firewall");
-SYSCTL_INT(_net_inet6_ip6_fw, OID_AUTO, enable, CTLFLAG_RW,
-	&ip6_fw_enable, 0, "Enable ip6fw");
+SYSCTL_NODE(_net_inet6_ip6, OID_AUTO, fw, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "Firewall");
+SYSCTL_PROC(_net_inet6_ip6_fw, OID_AUTO, enable, 
+	CTLTYPE_INT | CTLFLAG_RW,
+	&ip6_fw_enable, 0, ip6fw_sysctl, "I", "Enable ip6fw");
 SYSCTL_INT(_net_inet6_ip6_fw, OID_AUTO, debug, CTLFLAG_RW, &fw6_debug, 0, "");
 SYSCTL_INT(_net_inet6_ip6_fw, OID_AUTO, verbose, CTLFLAG_RW, &fw6_verbose, 0, "");
 SYSCTL_INT(_net_inet6_ip6_fw, OID_AUTO, verbose_limit, CTLFLAG_RW, &fw6_verbose_limit, 0, "");
+
+static int
+ip6fw_sysctl SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+	int error;
+	
+	error = sysctl_handle_int(oidp, oidp->oid_arg1, oidp->oid_arg2, req);
+	if (error || !req->newptr)
+		return (error);
+	
+	ip6fw_kev_post_msg(KEV_IP6FW_ENABLE);
+	
+	return error;
+}
+
 #endif
 
 #define dprintf(a)	do {						\
@@ -386,7 +415,7 @@ ip6fw_report(struct ip6_fw *f, struct ip6_hdr *ip6,
 	struct udphdr *const udp = (struct udphdr *) ((caddr_t) ip6+ off);
 	struct icmp6_hdr *const icmp6 = (struct icmp6_hdr *) ((caddr_t) ip6+ off);
 	int count;
-	char *action;
+	const char *action;
 	char action2[32], proto[102], name[18];
 	int len;
 
@@ -837,7 +866,7 @@ got_match:
 			}
 			bcopy(&ti, ip6, sizeof(ti));
 			tcp_respond(NULL, ip6, (struct tcphdr *)(ip6 + 1),
-				*m, ack, seq, flags);
+				*m, ack, seq, flags, NULL);
 			*m = NULL;
 			break;
 		  }
@@ -1226,6 +1255,23 @@ ip6_fw_ctl(int stage, struct mbuf **mm)
 }
 #endif
 
+static void
+ip6fw_kev_post_msg(u_int32_t event_code)
+{
+	struct kev_msg		ev_msg;
+
+	bzero(&ev_msg, sizeof(struct kev_msg));
+	
+	ev_msg.vendor_code = KEV_VENDOR_APPLE;
+	ev_msg.kev_class = KEV_FIREWALL_CLASS;
+	ev_msg.kev_subclass = KEV_IP6FW_SUBCLASS;
+	ev_msg.event_code = event_code;
+
+	kev_post_msg(&ev_msg);
+
+}
+
+
 static int
 ip6_fw_ctl(struct sockopt *sopt)
 {
@@ -1246,7 +1292,7 @@ ip6_fw_ctl(struct sockopt *sopt)
 
 	/* save sopt->sopt_valsize */
 	valsize = sopt->sopt_valsize;
-	if (error = sooptcopyin(sopt, &rule, sizeof(rule), sizeof(rule)))
+	if ((error = sooptcopyin(sopt, &rule, sizeof(rule), sizeof(rule))))
 		return error;
 
 	if (rule.version != IPV6_FW_CURRENT_API_VERSION) return EINVAL;
@@ -1299,6 +1345,7 @@ ip6_fw_ctl(struct sockopt *sopt)
 				FREE(fcp, M_IP6FW);
 			}
 			splx(spl);
+			ip6fw_kev_post_msg(KEV_IP6FW_FLUSH);
 			break;
 
 		case IPV6_FW_ZERO:
@@ -1306,9 +1353,11 @@ ip6_fw_ctl(struct sockopt *sopt)
 			break;
 
 		case IPV6_FW_ADD:
-			if (check_ip6fw_struct(&rule))
+			if (check_ip6fw_struct(&rule)) {
 				error = add_entry6(&ip6_fw_chain, &rule);
-			else
+
+				ip6fw_kev_post_msg(KEV_IP6FW_ADD);
+			} else
 				error = EINVAL;
 			break;
 
@@ -1318,8 +1367,11 @@ ip6_fw_ctl(struct sockopt *sopt)
 				dprintf(("%s can't delete rule 65535\n", err_prefix));
 				error = EINVAL;
 			}
-			else
+			else {
 				error = del_entry6(&ip6_fw_chain, rule.fw_number);
+
+				ip6fw_kev_post_msg(KEV_IP6FW_DEL);
+			}
 			break;
 
 		default:
@@ -1350,7 +1402,7 @@ ip6_fw_init(void)
 	default_rule.fw_flg |= IPV6_FW_F_IN | IPV6_FW_F_OUT;
 	if (check_ip6fw_struct(&default_rule) == NULL ||
 		add_entry6(&ip6_fw_chain, &default_rule))
-		panic(__FUNCTION__);
+		panic("%s", __FUNCTION__);
 
 	printf("IPv6 packet filtering initialized, ");
 #ifdef IPV6FIREWALL_DEFAULT_TO_ACCEPT

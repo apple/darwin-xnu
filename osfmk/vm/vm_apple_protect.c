@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <sys/errno.h>
@@ -46,6 +52,7 @@
 #include <default_pager/default_pager_types.h>
 #include <default_pager/default_pager_object_server.h>
 
+#include <vm/vm_fault.h>
 #include <vm/vm_map.h>
 #include <vm/vm_pageout.h>
 #include <vm/memory_object.h>
@@ -82,7 +89,8 @@ kern_return_t apple_protect_pager_terminate(memory_object_t mem_obj);
 kern_return_t apple_protect_pager_data_request(memory_object_t mem_obj,
 					       memory_object_offset_t offset,
 					       vm_size_t length,
-					       vm_prot_t protection_required);
+					       vm_prot_t protection_required,
+					       memory_object_fault_info_t fault_info);
 kern_return_t apple_protect_pager_data_return(memory_object_t mem_obj,
 					      memory_object_offset_t offset,
 					      vm_size_t	data_cnt,
@@ -299,89 +307,40 @@ apple_protect_pager_data_request(
 #if !DEBUG
 	__unused
 #endif
-	vm_prot_t		protection_required)
+	vm_prot_t		protection_required,
+	memory_object_fault_info_t mo_fault_info)
 {
 	apple_protect_pager_t	pager;
 	memory_object_control_t	mo_control;
-	upl_t			upl = NULL;
+	upl_t			upl;
 	int			upl_flags;
 	upl_size_t		upl_size;
 	upl_page_info_t		*upl_pl;
 	vm_object_t		src_object, dst_object;
 	kern_return_t		kr, retval;
-	vm_map_offset_t		src_mapping = 0, dst_mapping = 0;
+	vm_map_offset_t		kernel_mapping;
 	vm_offset_t		src_vaddr, dst_vaddr;
 	vm_offset_t		cur_offset;
-	boolean_t		src_map_page_by_page;
 	vm_map_entry_t		map_entry;
+	kern_return_t		error_code;
+	vm_prot_t		prot;
+	vm_page_t		src_page, top_page;
+	int			interruptible;
+	vm_object_fault_info_t	fault_info;
 
-	PAGER_DEBUG(PAGER_ALL, ("apple_protect_pager_data_request: %x, %llx, %llxx, %x\n", mem_obj, offset, length, protection_required));
+	PAGER_DEBUG(PAGER_ALL, ("apple_protect_pager_data_request: %p, %llx, %x, %x\n", mem_obj, offset, length, protection_required));
+
+	src_object = VM_OBJECT_NULL;
+	kernel_mapping = 0;
+	upl = NULL;
+	fault_info = (vm_object_fault_info_t) mo_fault_info;
+	interruptible = fault_info->interruptible;
 
 	pager = apple_protect_pager_lookup(mem_obj);
 	assert(pager->is_ready);
 	assert(pager->ref_count > 1); /* pager is alive and mapped */
 
-	PAGER_DEBUG(PAGER_PAGEIN, ("apple_protect_pager_data_request: %x, %llx, %llx, %x, pager %x\n", mem_obj, offset, length, protection_required, pager));
-
-	/*
-	 * Map the encrypted data in the kernel address space from the 
-	 * backing VM object (itself backed by the encrypted file via
-	 * the vnode pager).
-	 */
-	src_object = pager->backing_object;
-	assert(src_object != VM_OBJECT_NULL);
-	vm_object_reference(src_object); /* ref. for the mapping */
-	src_mapping = 0;
-	kr = vm_map_enter(kernel_map,
-			  &src_mapping,
-			  length,
-			  0,
-			  VM_FLAGS_ANYWHERE,
-			  src_object,
-			  offset,
-			  FALSE,
-			  VM_PROT_READ,
-			  VM_PROT_READ,
-			  VM_INHERIT_NONE);
-	switch (kr) {
-	case KERN_SUCCESS:
-		/* wire the memory to make sure it is available */
-		kr = vm_map_wire(kernel_map,
-				 src_mapping,
-				 src_mapping + length,
-				 VM_PROT_READ,
-				 FALSE);
-		if (kr != KERN_SUCCESS) {
-			/*
-			 * Wiring failed, so unmap source and fall back
-			 * to page by page mapping of the source.
-			 */
-			kr = vm_map_remove(kernel_map,
-					   src_mapping,
-					   src_mapping + length,
-					   VM_MAP_NO_FLAGS);
-			assert(kr == KERN_SUCCESS);
-			src_mapping = 0;
-			src_vaddr = 0;
-			src_map_page_by_page = TRUE;
-			break;
-		}
-		/* source region is now fully mapped and wired */
-		src_map_page_by_page = FALSE;
-		src_vaddr = CAST_DOWN(vm_offset_t, src_mapping);
-		break;
-	case KERN_NO_SPACE:
-		/* we couldn't map the entire source, so map it page by page */
-		src_map_page_by_page = TRUE;
-		/* release the reference for the failed mapping */
-		vm_object_deallocate(src_object);
-		break;
-	default:
-		vm_object_deallocate(src_object);
-		retval = kr;
-		goto done;
-	}
-
+	PAGER_DEBUG(PAGER_PAGEIN, ("apple_protect_pager_data_request: %p, %llx, %x, %x, pager %p\n", mem_obj, offset, length, protection_required, pager));
 
 	/*
 	 * Gather in a UPL all the VM pages requested by VM.
@@ -402,18 +361,19 @@ apple_protect_pager_data_request(
 		retval = kr;
 		goto done;
 	}
-
-	/*
-	 * Reserve a virtual page in the kernel address space to map each
-	 * destination physical page when it's its turn to be filled.
-	 */
 	dst_object = mo_control->moc_object;
 	assert(dst_object != VM_OBJECT_NULL);
-	dst_mapping = 0;
+
+
+	/*
+	 * Reserve 2 virtual pages in the kernel address space to map each
+	 * source and destination physical pages when it's their turn to
+	 * be processed.
+	 */
 	vm_object_reference(kernel_object);	/* ref. for mapping */
 	kr = vm_map_find_space(kernel_map,
-			       &dst_mapping,
-			       PAGE_SIZE_64,
+			       &kernel_mapping,
+			       2 * PAGE_SIZE_64,
 			       0,
 			       0,
 			       &map_entry);
@@ -423,9 +383,19 @@ apple_protect_pager_data_request(
 		goto done;
 	}
 	map_entry->object.vm_object = kernel_object;
-	map_entry->offset = dst_mapping - VM_MIN_KERNEL_ADDRESS;
+	map_entry->offset = kernel_mapping - VM_MIN_KERNEL_ADDRESS;
 	vm_map_unlock(kernel_map);
-	dst_vaddr = CAST_DOWN(vm_offset_t, dst_mapping);
+	src_vaddr = CAST_DOWN(vm_offset_t, kernel_mapping);
+	dst_vaddr = CAST_DOWN(vm_offset_t, kernel_mapping + PAGE_SIZE_64);
+
+	/*
+	 * We'll map the encrypted data in the kernel address space from the 
+	 * backing VM object (itself backed by the encrypted file via
+	 * the vnode pager).
+	 */
+	src_object = pager->backing_object;
+	assert(src_object != VM_OBJECT_NULL);
+	vm_object_reference(src_object); /* to keep the source object alive */
 
 	/*
 	 * Fill in the contents of the pages requested by VM.
@@ -442,52 +412,63 @@ apple_protect_pager_data_request(
 		/*
 		 * Map the source (encrypted) page in the kernel's
 		 * virtual address space.
+		 * We already hold a reference on the src_object.
 		 */
-		if (src_map_page_by_page) {
-			vm_object_reference(src_object); /* ref. for mapping */
-			kr = vm_map_enter(kernel_map,
-					  &src_mapping,
-					  PAGE_SIZE_64,
-					  0,
-					  VM_FLAGS_ANYWHERE,
-					  src_object,
-					  offset + cur_offset,
-					  FALSE,
-					  VM_PROT_READ,
-					  VM_PROT_READ,
-					  VM_INHERIT_NONE);
-			if (kr != KERN_SUCCESS) {
-				vm_object_deallocate(src_object);
-				retval = kr;
-				goto done;
+	retry_src_fault:
+		vm_object_lock(src_object);
+		vm_object_paging_begin(src_object);
+		error_code = 0;
+		prot = VM_PROT_READ;
+		kr = vm_fault_page(src_object,
+				   offset + cur_offset,
+				   VM_PROT_READ,
+				   FALSE,
+				   &prot,
+				   &src_page,
+				   &top_page,
+				   NULL,
+				   &error_code,
+				   FALSE,
+				   FALSE,
+				   fault_info);
+		switch (kr) {
+		case VM_FAULT_SUCCESS:
+			break;
+		case VM_FAULT_RETRY:
+			goto retry_src_fault;
+		case VM_FAULT_MEMORY_SHORTAGE:
+			if (vm_page_wait(interruptible)) {
+				goto retry_src_fault;
 			}
-			kr = vm_map_wire(kernel_map,
-					 src_mapping,
-					 src_mapping + PAGE_SIZE_64,
-					 VM_PROT_READ,
-					 FALSE);
-			if (kr != KERN_SUCCESS) {
-				retval = kr;
-				kr = vm_map_remove(kernel_map,
-						   src_mapping,
-						   src_mapping + PAGE_SIZE_64,
-						   VM_MAP_NO_FLAGS);
-				assert(kr == KERN_SUCCESS);
-				src_mapping = 0;
-				src_vaddr = 0;
-				printf("apple_protect_pager_data_request: "
-				       "failed to resolve page fault for src "
-				       "object %p offset 0x%llx "
-				       "preempt %d error 0x%x\n",
-				       src_object, offset + cur_offset,
-				       get_preemption_level(), retval);
-				goto done;
+			/* fall thru */
+		case VM_FAULT_INTERRUPTED:
+			retval = MACH_SEND_INTERRUPTED;
+			goto done;
+		case VM_FAULT_MEMORY_ERROR:
+			/* the page is not there ! */
+			if (error_code) {
+				retval = error_code;
+			} else {
+				retval = KERN_MEMORY_ERROR;
 			}
-			src_vaddr = CAST_DOWN(vm_offset_t, src_mapping);
-		} else {
-			src_vaddr = src_mapping + cur_offset;
+			goto done;
+		default:
+			retval = KERN_FAILURE;
+			goto done;
 		}
-
+		assert(src_page != VM_PAGE_NULL);
+		assert(src_page->busy);
+		
+		/*
+		 * Establish an explicit mapping of the source
+		 * physical page.
+		 */
+		pmap_enter(kernel_pmap,
+			   kernel_mapping,
+			   src_page->phys_page,
+			   VM_PROT_READ,
+			   src_object->wimg_bits & VM_WIMG_MASK,
+			   TRUE);
 		/*
 		 * Establish an explicit pmap mapping of the destination
 		 * physical page.
@@ -497,10 +478,12 @@ apple_protect_pager_data_request(
 		dst_pnum = (addr64_t)
 			upl_phys_page(upl_pl, cur_offset / PAGE_SIZE);
 		assert(dst_pnum != 0);
-		pmap_enter(kernel_pmap, dst_mapping, dst_pnum,
+		pmap_enter(kernel_pmap,
+			   kernel_mapping + PAGE_SIZE_64,
+			   dst_pnum,
 			   VM_PROT_READ | VM_PROT_WRITE,
 			   dst_object->wimg_bits & VM_WIMG_MASK,
-			   FALSE);
+			   TRUE);
 
 		/*
 		 * Decrypt the encrypted contents of the source page
@@ -510,41 +493,32 @@ apple_protect_pager_data_request(
 				     (void *) dst_vaddr);
 
 		/*
-		 * Remove the pmap mapping of the destination page
+		 * Remove the pmap mapping of the source and destination pages
 		 * in the kernel.
 		 */
 		pmap_remove(kernel_pmap,
-			    (addr64_t) dst_mapping,
-			    (addr64_t) (dst_mapping + PAGE_SIZE_64));
+			    (addr64_t) kernel_mapping,
+			    (addr64_t) (kernel_mapping + (2 * PAGE_SIZE_64)));
 
-		if (src_map_page_by_page) {
-			/*
-			 * Remove the wired kernel mapping of the source page.
-			 * This releases the extra reference we took on
-			 * src_object.
-			 */
-			kr = vm_map_remove(kernel_map,
-					   src_mapping,
-					   src_mapping + PAGE_SIZE_64,
-					   VM_MAP_REMOVE_KUNWIRE);
-			assert(kr == KERN_SUCCESS);
-			src_mapping = 0;
-			src_vaddr = 0;
+		/*
+		 * Cleanup the result of vm_fault_page() of the source page.
+		 */
+		PAGE_WAKEUP_DONE(src_page);
+		vm_object_paging_end(src_page->object);
+		vm_object_unlock(src_page->object);
+		if (top_page != VM_PAGE_NULL) {
+			vm_object_t top_object;
+
+			top_object = top_page->object;
+			vm_object_lock(top_object);
+			VM_PAGE_FREE(top_page);
+			vm_object_paging_end(top_object);
+			vm_object_unlock(top_object);
 		}
 	}
 
 	retval = KERN_SUCCESS;
 done:
-	if (src_mapping != 0) {
-		/* remove the wired mapping of the source pages */
-		kr = vm_map_remove(kernel_map,
-				   src_mapping,
-				   src_mapping + length,
-				   VM_MAP_REMOVE_KUNWIRE);
-		assert(kr == KERN_SUCCESS);
-		src_mapping = 0;
-		src_vaddr = 0;
-	}
 	if (upl != NULL) {
 		/* clean up the UPL */
 
@@ -568,15 +542,19 @@ done:
 		upl_deallocate(upl);
 		upl = NULL;
 	}
-	if (dst_mapping != 0) {
-		/* clean up the mapping of the destination pages */
+	if (kernel_mapping != 0) {
+		/* clean up the mapping of the source and destination pages */
 		kr = vm_map_remove(kernel_map,
-				   dst_mapping,
-				   dst_mapping + PAGE_SIZE_64,
+				   kernel_mapping,
+				   kernel_mapping + (2 * PAGE_SIZE_64),
 				   VM_MAP_NO_FLAGS);
 		assert(kr == KERN_SUCCESS);
-		dst_mapping = 0;
+		kernel_mapping = 0;
+		src_vaddr = 0;
 		dst_vaddr = 0;
+	}
+	if (src_object != VM_OBJECT_NULL) {
+		vm_object_deallocate(src_object);
 	}
 
 	return retval;
@@ -691,7 +669,7 @@ apple_protect_pager_deallocate_internal(
 	if (pager->ref_count == 1) {
 		/*
 		 * Only the "named" reference is left, which means that
-		 * no one is realy holding on to this pager anymore.
+		 * no one is really holding on to this pager anymore.
 		 * Terminate it.
 		 */
 		apple_protect_pager_dequeue(pager);
@@ -734,7 +712,7 @@ apple_protect_pager_deallocate(
 {
 	apple_protect_pager_t	pager;
 
-	PAGER_DEBUG(PAGER_ALL, ("apple_protect_pager_deallocate: %x\n", mem_obj));
+	PAGER_DEBUG(PAGER_ALL, ("apple_protect_pager_deallocate: %p\n", mem_obj));
 	pager = apple_protect_pager_lookup(mem_obj);
 	apple_protect_pager_deallocate_internal(pager, FALSE);
 }
@@ -749,7 +727,7 @@ apple_protect_pager_terminate(
 #endif
 	memory_object_t	mem_obj)
 {
-	PAGER_DEBUG(PAGER_ALL, ("apple_protect_pager_terminate: %x\n", mem_obj));
+	PAGER_DEBUG(PAGER_ALL, ("apple_protect_pager_terminate: %p\n", mem_obj));
 
 	return KERN_SUCCESS;
 }
@@ -766,7 +744,7 @@ apple_protect_pager_synchronize(
 {
 	apple_protect_pager_t	pager;
 
-	PAGER_DEBUG(PAGER_ALL, ("apple_protect_pager_synchronize: %x\n", mem_obj));
+	PAGER_DEBUG(PAGER_ALL, ("apple_protect_pager_synchronize: %p\n", mem_obj));
 
 	pager = apple_protect_pager_lookup(mem_obj);
 
@@ -790,7 +768,7 @@ apple_protect_pager_map(
 {
 	apple_protect_pager_t	pager;
 
-	PAGER_DEBUG(PAGER_ALL, ("apple_protect_pager_map: %x\n", mem_obj));
+	PAGER_DEBUG(PAGER_ALL, ("apple_protect_pager_map: %p\n", mem_obj));
 
 	pager = apple_protect_pager_lookup(mem_obj);
 
@@ -822,7 +800,7 @@ apple_protect_pager_unmap(
 	apple_protect_pager_t	pager;
 	int			count_unmapped;
 
-	PAGER_DEBUG(PAGER_ALL, ("apple_protect_pager_unmap: %x\n", mem_obj));
+	PAGER_DEBUG(PAGER_ALL, ("apple_protect_pager_unmap: %p\n", mem_obj));
 
 	pager = apple_protect_pager_lookup(mem_obj);
 

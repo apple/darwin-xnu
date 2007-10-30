@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *	Copyright (c) 1996-1998 Apple Computer, Inc.
@@ -46,10 +52,11 @@
 #include <netat/ddp.h>
 #include <netat/at_pcb.h>
 #include <netat/atp.h>
+#include <netat/asp.h>
 #include <netat/debug.h>
 
-void atp_free();
-void atp_send(struct atp_trans *);
+extern   struct atp_rcb_qhead atp_need_rel;
+extern struct atp_trans *trp_tmo_rcb;
 
 /*
  *	The request timer retries a request, if all retries are used up
@@ -252,12 +259,10 @@ register struct atp_rcb *rcbp;
  *	The rcb timer just frees the rcb, this happens when we missed a release for XO
  */
 
-void atp_rcb_timer()
+void atp_rcb_timer(__unused struct atp_trans *junk)
 {  
     register struct atp_rcb *rcbp;
 	register struct atp_rcb *next_rcbp;
-	extern   struct atp_rcb_qhead atp_need_rel;
-	extern struct atp_trans *trp_tmo_rcb;
 	struct timeval timenow;
 
 l_again:
@@ -273,7 +278,7 @@ l_again:
 	atp_timout(atp_rcb_timer, trp_tmo_rcb, 10 * HZ);
 }
 
-atp_iocack(atp, m)
+void atp_iocack(atp, m)
 struct   atp_state *atp;
 register gbuf_t *m;
 {
@@ -290,7 +295,7 @@ register gbuf_t *m;
 		atalk_putnext(atp->atp_gref, m);
 }
 
-atp_iocnak(atp, m, err)
+void atp_iocnak(atp, m, err)
 struct   atp_state *atp;
 register gbuf_t *m;
 register int err;
@@ -315,7 +320,7 @@ register int err;
  *	Generate a transaction id for a socket
  */
 static int lasttid;
-atp_tid(atp)
+int atp_tid(atp)
 register struct atp_state *atp;
 {
 	register int i;

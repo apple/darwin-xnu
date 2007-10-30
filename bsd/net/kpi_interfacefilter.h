@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*!
 	@header kpi_interfacefilter.h
@@ -34,6 +40,8 @@
 #include <net/kpi_interface.h>
 
 struct kev_msg;
+
+__BEGIN_DECLS
 
 /*!
 	@typedef iff_input_func
@@ -114,14 +122,19 @@ typedef	void (*iff_event_func)(void* cookie, ifnet_t interface, protocol_family_
 		interface. The interface is only valid for the duration of the
 		filter call. If you need to keep a reference to the interface,
 		be sure to call ifnet_reference and ifnet_release.
+		
+		All undefined ioctls are reserved for future use by Apple. If
+		you need to communicate with your kext using an ioctl, please
+		use SIOCSIFKPI and SIOCGIFKPI.
 	@param cookie The cookie specified when this filter was attached.
 	@param interface The interface the packet is being transmitted on.
 	@param ioctl_cmd The ioctl command.
 	@param ioctl_arg A pointer to the ioctl argument.
 	@result Return:
-		0 - The caller will continue with normal processing of the packet.
-		EJUSTRETURN - The caller will stop processing the packet, the packet will not be freed.
-		Anything Else - The caller will free the packet and stop processing.
+		0 - This filter function handled the ioctl.
+		EOPNOTSUPP - This filter function does not understand/did not handle this ioctl.
+		EJUSTRETURN - This filter function handled the ioctl, processing should stop.
+		Anything Else - Processing will stop, the error will be returned.
 */
 typedef	errno_t (*iff_ioctl_func)(void* cookie, ifnet_t interface, protocol_family_t protocol,
 								  u_long ioctl_cmd, void* ioctl_arg);
@@ -192,3 +205,5 @@ errno_t iflt_attach(ifnet_t interface, const struct iff_filter* filter,
  */
 void iflt_detach(interface_filter_t filter_ref);
 
+__END_DECLS
+#endif

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* 																							
  	Emulate.s 
@@ -145,8 +151,7 @@ eExit:		b		EXT(EmulExit)					; Just return for now...
 
 ;
 ;			Fetch the failing instruction.
-;			Image returned in R10 if CR0_EQ is false, otherwise, an ISI should be generated/
-;			The cr bit kernAccess is set if this was a kernel access.
+;			Image returned in R10 if CR0_EQ is false, otherwise, an ISI should be generated.
 ;			R1 has the DSISR if access failed.
 ;
 
@@ -155,15 +160,15 @@ eExit:		b		EXT(EmulExit)					; Just return for now...
 eIFetch:	lwz		r23,savesrr1+4(r13)				; Get old MSR
 			mflr	r28								; Save return
 
-			rlwinm.	r22,r23,0,MSR_PR_BIT,MSR_PR_BIT	; Within kernel?
-
+			rlwinm	r3,r23,32-MSR_DR_BIT+MSR_IR_BIT,MSR_DR_BIT,MSR_DR_BIT	; Move IR to DR for ifetch
 			mfmsr	r30								; Save the MSR for now
-			lwz		r23,savesrr0+4(r13)				; Get instruction address
+			rlwimi	r3,r23,32-MSR_RI_BIT+MSR_DR_BIT,MSR_RI_BIT,MSR_RI_BIT	; Move DR to RI for ifetch
 			
-			ori		r22,r30,lo16(MASK(MSR_DR)|MASK(MSR_RI))		; Set RI and DR onto access MSR
-
+			lwz		r23,savesrr0+4(r13)				; Get instruction address
+			or		r3,r23,r3						; Turn on the DR and RI bit if translation was on
+			
 			crset	cr0_eq							; Set this to see if we failed
-			mtmsr	r22								; Flip DR, RI, and maybe PR on
+			mtmsr	r3								; Flip RI and, if IR was set, DR
 			isync
 			
 			lwz		r10,0(r23)						; Fetch the instruction
@@ -183,7 +188,7 @@ eRedriveAsISI:
 			lwz		r6,savesrr1+4(r13)				; Get the srr1 value
 			lwz		r4,SAVflags(r13)				; Pick up the flags
 			li		r11,T_INSTRUCTION_ACCESS		; Set failing instruction fetch code
-			rlwimi	r6,r1,0,0,4						; Move the DSISR bits to the SRR1
+			rlwimi	r6,r1,0,1,4						; Move the DSISR bits to the SRR1
 			oris	r4,r4,hi16(SAVredrive)			; Set the redrive bit
 			stw		r11,saveexception(r13)			; Set the replacement code
 			stw		r4,SAVflags(r13)				; Set redrive request
@@ -243,9 +248,11 @@ aan64:		lwz		r20,savedsisr(r13)				; Get the DSISR
 			dcbz	r29,r31							; Clear and allocate a cache line for us to work in
 			rlwinm	r24,r20,3,24,28					; Get displacement to register to update if update form
 			rlwimi	r20,r20,24,28,28				; Move load/store indication to the bottom of index
-			ori		r22,r30,lo16(MASK(MSR_DR)|MASK(MSR_RI))		; Set RI onto access MSR
+			rlwinm	r22,r22,0,MSR_DR_BIT,MSR_DR_BIT	; Move rupt DR to DR for ifetch
 			rlwimi	r20,r20,26,27,27				; Move single/double indication to just above the bottom
+			rlwimi	r22,r22,32-MSR_RI_BIT+MSR_DR_BIT,MSR_RI_BIT,MSR_RI_BIT	; Move DR to RI for i-fetch
 			lis		r29,hi16(EXT(aaFPopTable))		; High part of FP branch table
+			or		r22,r30,r22						; Set the DR and RI bits if translation was on
 			bf-		iFloat,aaNotFloat				; This is not a floating point instruction...
 			ori		r29,r29,lo16(EXT(aaFPopTable))	; Low part of FP branch table
 			
@@ -1012,9 +1019,10 @@ aaPassAlong:
 			.align	5
 			
 aaComExitrd:
+			lis		r11,hi16(srr1clr)				; Get the bits we need to clear
 			oris	r9,r9,hi16(SAVredrive)			; Set the redrive bit
+			andc	r12,r12,r11						; Clear what needs to be cleared
 			li		r11,T_TRACE						; Set trace interrupt
-			rlwinm	r12,r12,0,16,31					; Clear top half of SRR1
 			stw		r9,SAVflags(r13)				; Set the flags
 			stw		r11,saveexception(r13)			; Set the exception code
 			b		EXT(EmulExit)					; Exit and do trace interrupt...

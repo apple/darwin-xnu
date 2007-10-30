@@ -40,10 +40,13 @@
 .Nm mprotect
 .Nd control the protection of pages
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
 .Fd #include <sys/mman.h>
 .Ft int
-.Fn mprotect "caddr_t addr" "size_t len" "int prot"
+.Fo mprotect
+.Fa "void *addr"
+.Fa "size_t len"
+.Fa "int prot"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn mprotect
@@ -58,11 +61,58 @@ a value of 0 is returned.
 Otherwise, a value of -1 is returned and
 .Va errno
 is set to indicate the error.
+.Sh ERRORS
+.Fn mprotect
+will fail if:
+.Bl -tag -width Er
+.\" ===========
+.It Bq Er EACCES
+The requested protection conflicts with
+the access permissions of the process
+on the specified address range.
+.\" ===========
+.\" .It Bq Er EAGAIN
+.\" Insufficient memory resources exist to allow locking a private page
+.\" under PROT_WRITE.
+.\" ===========
+.It Bq Er EINVAL
+.Fa addr
+is not a multiple of the page size.
+.\" ===========
+.\" .It Bq Er ENOMEM
+.\" The specified address range is outside of the address range
+.\" of the process or includes an unmapped page.
+.\" ===========
+.It Bq Er ENOTSUP
+The combination of accesses requested in
+.Fa prot
+is not supported.
+.El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/mman.h>
+.Pp
+The include file
+.In sys/types.h
+is necessary.
+.Pp
+.Ft int
+.br
+.Fo mprotect
+.Fa "caddr_t addr"
+.Fa "size_t len"
+.Fa "int prot"
+.Fc ;
+.Pp
+The type of
+.Fa addr
+has changed.
 .Sh SEE ALSO
 .Xr madvise 2 , 
 .Xr mincore 2 , 
 .Xr msync 2 ,
-.Xr munmap 2
+.Xr munmap 2 ,
+.Xr compat 5
 .Sh HISTORY
 The
 .Fn mprotect

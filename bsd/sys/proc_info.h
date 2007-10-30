@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
- *
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- *
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- *
- * @APPLE_LICENSE_HEADER_END@
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #ifndef _SYS_PROC_INFO_H
@@ -79,6 +85,7 @@ struct proc_bsdinfo {
 #define PROC_FLAG_SLEADER	0x20
 #define PROC_FLAG_CTTY		0x40
 #define PROC_FLAG_CONTROLT	0x80
+#define PROC_FLAG_THCWD		0x100
 
 
 struct proc_taskinfo {
@@ -119,6 +126,7 @@ struct proc_threadinfo {
 	int32_t			pth_curpri;		/* cur priority*/
 	int32_t			pth_priority;		/*  priority*/
 	int32_t			pth_maxpriority;		/* max priority*/
+	char *			pth_name[64];		/* thread name, if any */
 };
 
 struct proc_regioninfo {
@@ -140,9 +148,9 @@ struct proc_regioninfo {
 	uint32_t		pri_private_pages_resident;
 	uint32_t		pri_shared_pages_resident;
 	uint32_t		pri_obj_id;
+	uint32_t		pri_depth;
 	uint64_t		pri_address;
 	uint64_t		pri_size;
-	uint32_t		pri_depth;
 };
 
 #define PROC_REGION_SUBMAP	1
@@ -184,11 +192,42 @@ struct proc_fileinfo {
 	int32_t			fi_type;
 };
 
+/* stats flags in proc_fileinfo */
+#define PROC_FP_SHARED	1	/* shared by more than one fd */
+#define PROC_FP_CLEXEC	2	/* close on exec */
+
+/*
+ * A copy of stat64 with static sized fields.
+ */
+struct vinfo_stat {
+	uint32_t	vst_dev;	/* [XSI] ID of device containing file */
+	uint16_t	vst_mode;	/* [XSI] Mode of file (see below) */
+	uint16_t	vst_nlink;	/* [XSI] Number of hard links */
+	uint64_t	vst_ino;	/* [XSI] File serial number */
+	uid_t		vst_uid;	/* [XSI] User ID of the file */
+	gid_t		vst_gid;	/* [XSI] Group ID of the file */
+	int64_t		vst_atime;	/* [XSI] Time of last access */
+	int64_t		vst_atimensec;	/* nsec of last access */
+	int64_t		vst_mtime;	/* [XSI] Last data modification time */
+	int64_t		vst_mtimensec;	/* last data modification nsec */
+	int64_t		vst_ctime;	/* [XSI] Time of last status change */
+	int64_t		vst_ctimensec;	/* nsec of last status change */
+	int64_t		vst_birthtime;	/*  File creation time(birth)  */
+	int64_t		vst_birthtimensec;	/* nsec of File creation time */
+	off_t		vst_size;	/* [XSI] file size, in bytes */
+	int64_t		vst_blocks;	/* [XSI] blocks allocated for file */
+	int32_t		vst_blksize;	/* [XSI] optimal blocksize for I/O */
+	uint32_t	vst_flags;	/* user defined flags for file */
+	uint32_t	vst_gen;	/* file generation number */
+	uint32_t	vst_rdev;	/* [XSI] Device ID */
+	int64_t		vst_qspare[2];	/* RESERVED: DO NOT USE! */
+};
 
 struct vnode_info {
-	struct stat 	vi_stat;
-	int		vi_type;
-	fsid_t		vi_fsid;
+	struct vinfo_stat	vi_stat;
+	int			vi_type;
+	fsid_t			vi_fsid;
+	int			vi_pad;
 };
 
 struct vnode_info_path {
@@ -197,16 +236,14 @@ struct vnode_info_path {
 };
 
 struct vnode_fdinfo {
-	struct proc_fileinfo pfi;
+	struct proc_fileinfo	pfi;
 	struct vnode_info	pvi;
 };
 
 struct vnode_fdinfowithpath {
 	struct proc_fileinfo pfi;
 	struct vnode_info_path pvip;
-
 };
-
 
 struct proc_regionwithpathinfo {
 	struct proc_regioninfo prp_prinfo;
@@ -218,6 +255,10 @@ struct proc_vnodepathinfo {
 	struct vnode_info_path pvi_rdir;
 };
 
+struct proc_threadwithpathinfo {
+	struct proc_threadinfo pt;
+	struct vnode_info_path pvip;
+};
 
 /*
  *  Socket 
@@ -423,7 +464,7 @@ struct socket_fdinfo {
 
 
 struct psem_info {
-	struct stat 	psem_stat;
+	struct vinfo_stat 	psem_stat;
 	char			psem_name[MAXPATHLEN];
 };
 
@@ -435,7 +476,7 @@ struct psem_fdinfo {
 
 
 struct pshm_info  {
-	struct stat		pshm_stat;
+	struct vinfo_stat		pshm_stat;
 	uint64_t		pshm_mappaddr;
 	char			pshm_name[MAXPATHLEN];
 };
@@ -447,7 +488,7 @@ struct pshm_fdinfo {
 
 
 struct pipe_info {
-	struct stat pipe_stat;
+	struct vinfo_stat pipe_stat;
 	uint64_t	pipe_handle;
 	uint64_t	pipe_peerhandle;
 	int			pipe_status;
@@ -460,7 +501,7 @@ struct pipe_fdinfo {
 
 
 struct kqueue_info {
-	struct stat 	kq_stat;
+	struct vinfo_stat 	kq_stat;
 	uint32_t	kq_state;
 };
 #define PROC_KQUEUE_SELECT	1
@@ -472,7 +513,7 @@ struct kqueue_fdinfo {
 };
 
 struct appletalk_info {
-	struct stat 	atalk_stat;
+	struct vinfo_stat 	atalk_stat;
 };
 
 struct appletalk_fdinfo {
@@ -525,6 +566,13 @@ struct proc_fdinfo {
 
 #define PROC_PIDVNODEPATHINFO 9
 #define PROC_PIDVNODEPATHINFO_SIZE  (sizeof(struct proc_vnodepathinfo))
+
+#define PROC_PIDTHREADPATHINFO 10
+#define PROC_PIDTHREADPATHINFO_SIZE  (sizeof(struct proc_threadwithpathinfo))
+
+#define PROC_PIDPATHINFO 11
+#define PROC_PIDPATHINFO_SIZE  (MAXPATHLEN)
+#define PROC_PIDPATHINFO_MAXSIZE  (4*MAXPATHLEN)
 
 /* Flavors for proc_pidfdinfo */
 

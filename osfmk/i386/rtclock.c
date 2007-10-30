@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -50,7 +56,6 @@
 #include <vm/pmap.h>
 #include <vm/vm_kern.h>		/* for kernel_map */
 #include <i386/ipl.h>
-#include <i386/pit.h>
 #include <architecture/i386/pio.h>
 #include <i386/misc_protos.h>
 #include <i386/proc_reg.h>
@@ -68,9 +73,6 @@
 #include <i386/tsc.h>
 #include <i386/hpet.h>
 #include <i386/rtclock.h>
-
-#define MAX(a,b) (((a)>(b))?(a):(b))
-#define MIN(a,b) (((a)>(b))?(b):(a))
 
 #define NSEC_PER_HZ			(NSEC_PER_SEC / 100) /* nsec per tick */
 
@@ -91,46 +93,19 @@ extern clock_timer_func_t	rtclock_timer_expire;
 static void	rtc_set_timescale(uint64_t cycles);
 static uint64_t	rtc_export_speed(uint64_t cycles);
 
-extern void		rtc_nanotime_store(
+extern void		_rtc_nanotime_store(
 					uint64_t		tsc,
 					uint64_t		nsec,
 					uint32_t		scale,
 					uint32_t		shift,
 					rtc_nanotime_t	*dst);
 
-extern void		rtc_nanotime_load(
-					rtc_nanotime_t	*src,
-					rtc_nanotime_t	*dst);
+extern uint64_t		_rtc_nanotime_read(
+					rtc_nanotime_t	*rntp,
+					int		slow );
 
-rtc_nanotime_t	rtc_nanotime_info;
+rtc_nanotime_t	rtc_nanotime_info = {0,0,0,0,1,0};
 
-/*
- * tsc_to_nanoseconds:
- *
- * Basic routine to convert a raw 64 bit TSC value to a
- * 64 bit nanosecond value.  The conversion is implemented
- * based on the scale factor and an implicit 32 bit shift.
- */
-static inline uint64_t
-_tsc_to_nanoseconds(uint64_t value)
-{
-    asm volatile("movl	%%edx,%%esi	;"
-				 "mull	%%ecx		;"
-				 "movl	%%edx,%%edi	;"
-				 "movl	%%esi,%%eax	;"
-				 "mull	%%ecx		;"
-				 "addl	%%edi,%%eax	;"	
-				 "adcl	$0,%%edx	 "
-				 		: "+A" (value) : "c" (rtc_nanotime_info.scale) : "esi", "edi");
-
-    return (value);
-}
-
-uint64_t
-tsc_to_nanoseconds(uint64_t value)
-{
-	return _tsc_to_nanoseconds(value);
-}
 
 static uint32_t
 deadline_to_decrementer(
@@ -150,20 +125,12 @@ deadline_to_decrementer(
 void
 rtc_lapic_start_ticking(void)
 {
-	uint64_t	abstime;
-	uint64_t	first_tick;
-	cpu_data_t      *cdp = current_cpu_datap();
-
-	abstime = mach_absolute_time();
-	rtclock_tick_interval = NSEC_PER_HZ;
-
-	first_tick = abstime + rtclock_tick_interval;
-	cdp->rtclock_intr_deadline = first_tick;
+	x86_lcpu_t	*lcpu = x86_lcpu();
 
 	/*
 	 * Force a complete re-evaluation of timer deadlines.
 	 */
-	cdp->rtcPop = EndOfAllTime;
+	lcpu->rtcPop = EndOfAllTime;
 	etimer_resync_deadlines();
 }
 
@@ -217,7 +184,7 @@ _rtc_nanotime_init(rtc_nanotime_t *rntp, uint64_t base)
 {
 	uint64_t	tsc = rdtsc64();
 
-	rtc_nanotime_store(tsc, base, rntp->scale, rntp->shift, rntp);
+	_rtc_nanotime_store(tsc, base, rntp->scale, rntp->shift, rntp);
 }
 
 static void
@@ -247,56 +214,21 @@ rtc_nanotime_init_commpage(void)
 }
 
 /*
- * rtc_nanotime_update:
- *
- * Update the nanotime info from the base time.  Since
- * the base value might be from a lower resolution clock,
- * we compare it to the TSC derived value, and use the
- * greater of the two values.
- *
- * N.B. In comparison to the above init routine, this assumes
- * that the TSC has remained monotonic compared to the tsc_base
- * value, which is not the case after S3 sleep.
- */
-static inline void
-_rtc_nanotime_update(rtc_nanotime_t *rntp, uint64_t	base)
-{
-	uint64_t	nsecs, tsc = rdtsc64();
-
-	nsecs = rntp->ns_base + _tsc_to_nanoseconds(tsc - rntp->tsc_base);
-	rtc_nanotime_store(tsc, MAX(nsecs, base), rntp->scale, rntp->shift, rntp);
-}
-
-static void
-rtc_nanotime_update(
-	uint64_t		base)
-{
-	rtc_nanotime_t	*rntp = &rtc_nanotime_info;
-
-	assert(!ml_get_interrupts_enabled());
-        
-	_rtc_nanotime_update(rntp, base);
-	rtc_nanotime_set_commpage(rntp);
-}
-
-/*
  * rtc_nanotime_read:
  *
  * Returns the current nanotime value, accessable from any
  * context.
  */
-static uint64_t
+static inline uint64_t
 rtc_nanotime_read(void)
 {
-	rtc_nanotime_t	rnt, *rntp = &rtc_nanotime_info;
-	uint64_t		result;
-
-	do {
-		rtc_nanotime_load(rntp, &rnt);
-		result = rnt.ns_base + _tsc_to_nanoseconds(rdtsc64() - rnt.tsc_base);
-	} while (rntp->tsc_base != rnt.tsc_base);
-
-	return (result);
+	
+#if CONFIG_EMBEDDED
+	if (gPEClockFrequencyInfo.timebase_frequency_hz > SLOW_TSC_THRESHOLD)
+		return	_rtc_nanotime_read( &rtc_nanotime_info, 1 );	/* slow processor */
+	else
+#endif
+	return	_rtc_nanotime_read( &rtc_nanotime_info, 0 );	/* assume fast processor */
 }
 
 /*
@@ -304,15 +236,24 @@ rtc_nanotime_read(void)
  *
  * Invoked from power manangement when we have awoken from a nap (C3/C4)
  * during which the TSC lost counts.  The nanotime data is updated according
- * to the provided nanosecond base value.
+ * to the provided value which indicates the number of nanoseconds that the
+ * TSC was not counting.
  *
  * The caller must guarantee non-reentrancy.
  */
 void
 rtc_clock_napped(
-	uint64_t		base)
+	uint64_t		delta)
 {
-	rtc_nanotime_update(base);
+	rtc_nanotime_t	*rntp = &rtc_nanotime_info;
+	uint32_t	generation;
+
+	assert(!ml_get_interrupts_enabled());
+	generation = rntp->generation;
+	rntp->generation = 0;
+	rntp->ns_base += delta;
+	rntp->generation = ((generation + 1) != 0) ? (generation + 1) : 1;
+	rtc_nanotime_set_commpage(rntp);
 }
 
 void
@@ -326,7 +267,7 @@ void
 rtc_clock_stepped(__unused uint32_t new_frequency,
 		  __unused uint32_t old_frequency)
 {
-	panic("rtc_clock_stepping unsupported");
+	panic("rtc_clock_stepped unsupported");
 }
 
 /*
@@ -405,7 +346,11 @@ static void
 rtc_set_timescale(uint64_t cycles)
 {
 	rtc_nanotime_info.scale = ((uint64_t)NSEC_PER_SEC << 32) / cycles;
-	rtc_nanotime_info.shift = 32;
+
+	if (cycles <= SLOW_TSC_THRESHOLD)
+		rtc_nanotime_info.shift = cycles;
+	else
+		rtc_nanotime_info.shift = 32;
 
 	rtc_nanotime_init(0);
 }
@@ -489,7 +434,7 @@ clock_gettimeofday_set_commpage(
 
 	*secs += epoch;
 
-	commpage_set_timestamp(abstime - remain, *secs, NSEC_PER_SEC);
+	commpage_set_timestamp(abstime - remain, *secs);
 }
 
 void
@@ -518,13 +463,15 @@ rtclock_intr(
 	boolean_t	user_mode = FALSE;
 	uint64_t	abstime;
 	uint32_t	latency;
-	cpu_data_t	*pp = current_cpu_datap();
+	x86_lcpu_t	*lcpu = x86_lcpu();
 
 	assert(get_preemption_level() > 0);
 	assert(!ml_get_interrupts_enabled());
 
 	abstime = rtc_nanotime_read();
-	latency = (uint32_t) abstime - pp->rtcPop;
+	latency = (uint32_t)(abstime - lcpu->rtcDeadline);
+	if (abstime < lcpu->rtcDeadline)
+		latency = 1;
 
 	if (is_saved_state64(tregs) == TRUE) {
 	        x86_saved_state64_t	*regs;
@@ -571,23 +518,6 @@ setPop(
 	lapic_set_timer(TRUE, one_shot, divide_by_1, (uint32_t) count);
 
 	return decr;				/* Pass back what we set */
-}
-
-
-void
-resetPop(void)
-{
-	uint64_t	now;
-	uint32_t	decr;
-	uint64_t	count;
-	cpu_data_t	*cdp = current_cpu_datap();
-
-	now = rtc_nanotime_read();
-
-	decr = deadline_to_decrementer(cdp->rtcPop, now);
-
-	count = tmrCvt(decr, busFCvtn2t);
-	lapic_set_timer(TRUE, one_shot, divide_by_1, (uint32_t)count);
 }
 
 

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*	$NetBSD: msg.h,v 1.4 1994/06/29 06:44:43 cgd Exp $	*/
 
@@ -38,6 +44,12 @@
  * but requiring it would be too onerous.
  *
  * This software is provided ``AS IS'' without any warranties of any kind.
+ */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
  */
 
 #ifndef _SYS_MSG_H_
@@ -84,9 +96,11 @@ typedef	__darwin_ssize_t	ssize_t;
 
 /* [XSI] Used for the number of messages in the message queue */
 typedef unsigned long		msgqnum_t;
+typedef unsigned long long	user_msgqnum_t;
 
 /* [XSI] Used for the number of bytes allowed in a message queue */
 typedef unsigned long		msglen_t;
+typedef unsigned long long	user_msglen_t;
 
 
 /*
@@ -102,7 +116,8 @@ typedef unsigned long		msglen_t;
  * legacy interface there for binary compatibility only.  Currently, we
  * are only forcing this for programs requesting standards conformance.
  */
-#if defined(__POSIX_C_SOURCE) || defined(kernel) || defined(__LP64__)
+#if __DARWIN_UNIX03 || defined(KERNEL)
+#pragma pack(4)
 /*
  * Structure used internally.
  * 
@@ -115,7 +130,13 @@ typedef unsigned long		msglen_t;
  *
  * NOTES:	Reserved fields are not preserved across IPC_SET/IPC_STAT.
  */
-struct __msqid_ds_new {
+#if (defined(_POSIX_C_SOURCE) && !defined(_DARWIN_C_SOURCE))
+struct msqid_ds
+#else
+#define	msqid_ds	__msqid_ds_new
+struct __msqid_ds_new
+#endif
+{
 	struct __ipc_perm_new	msg_perm; /* [XSI] msg queue permissions */
 	__int32_t	msg_first;	/* RESERVED: kernel use only */
 	__int32_t	msg_last;	/* RESERVED: kernel use only */
@@ -132,12 +153,12 @@ struct __msqid_ds_new {
 	__int32_t	msg_pad3;	/* RESERVED: DO NOT USE */
 	__int32_t	msg_pad4[4];	/* RESERVED: DO NOT USE */
 };
-#define	msqid_ds	__msqid_ds_new
-#else	/* !_POSIX_C_SOURCE */
+#pragma pack()
+#else	/* !__DARWIN_UNIX03 */
 #define	msqid_ds	__msqid_ds_old
-#endif	/* !_POSIX_C_SOURCE */
+#endif	/* !__DARWIN_UNIX03 */
 
-#if !defined(__POSIX_C_SOURCE) && !defined(__LP64__)
+#if !__DARWIN_UNIX03
 struct __msqid_ds_old {
 	struct __ipc_perm_old	msg_perm; /* [XSI] msg queue permissions */
 	__int32_t	msg_first;	/* RESERVED: kernel use only */
@@ -155,13 +176,11 @@ struct __msqid_ds_old {
 	__int32_t	msg_pad3;	/* RESERVED: DO NOT USE */
 	__int32_t	msg_pad4[4];	/* RESERVED: DO NOT USE */
 };
-#endif	/* !_POSIX_C_SOURCE */
+#endif	/* !__DARWIN_UNIX03 */
 
 #ifdef KERNEL
 #ifdef __APPLE_API_PRIVATE
 #include <machine/types.h>
-
-// LP64todo - should this move?
 
 #if __DARWIN_ALIGN_NATURAL
 #pragma options align=natural
@@ -171,9 +190,9 @@ struct user_msqid_ds {
 	struct ipc_perm	msg_perm;	/* [XSI] msg queue permissions */
 	struct msg	*msg_first;	/* first message in the queue */
 	struct msg	*msg_last;	/* last message in the queue */
-	msglen_t	msg_cbytes;	/* # of bytes on the queue */
-	msgqnum_t	msg_qnum;	/* [XSI] number of msgs on the queue */
-	msglen_t	msg_qbytes;	/* [XSI] max bytes on the queue */
+	user_msglen_t	msg_cbytes;	/* # of bytes on the queue */
+	user_msgqnum_t	msg_qnum;	/* [XSI] number of msgs on the queue */
+	user_msglen_t	msg_qbytes;	/* [XSI] max bytes on the queue */
 	pid_t		msg_lspid;	/* [XSI] pid of last msgsnd() */
 	pid_t		msg_lrpid;	/* [XSI] pid of last msgrcv() */
 	user_time_t	msg_stime;	/* [XSI] time of last msgsnd() */
@@ -189,11 +208,21 @@ struct user_msqid_ds {
 #pragma options align=reset
 #endif
 
+struct label;
+
+/*
+ * Kernel wrapper for the user-level structure
+ */
+struct msqid_kernel {
+	struct	user_msqid_ds u;
+	struct	label *label;	/* MAC framework label */
+};
+
 #endif	/* __APPLE_API_PRIVATE */
 #endif	/* KERNEL */
 
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #ifdef __APPLE_API_UNSTABLE
 /* XXX kernel only; protect with macro later */
 
@@ -204,6 +233,7 @@ struct msg {
     					/* 0 -> free header */
 	unsigned short	msg_ts;		/* size of this message */
 	short		msg_spot;	/* location of msg start in buffer */
+	struct label	*label;		/* MAC label */
 };
 
 /*
@@ -283,26 +313,28 @@ struct msgmap {
 extern char *msgpool;		/* MSGMAX byte long msg buffer pool */
 extern struct msgmap *msgmaps;	/* MSGSEG msgmap structures */
 extern struct msg *msghdrs;	/* MSGTQL msg headers */
-extern struct user_msqid_ds	*msqids; /* MSGMNI user_msqid_ds struct's */
+extern struct msqid_kernel *msqids;	/* MSGMNI user_msqid_ds struct's */
 
 #define MSG_LOCKED	01000	/* Is this msqid_ds locked? */
 
 #endif	/* KERNEL */
 #endif	/* __APPLE_API_UNSTABLE */
-#endif	/* !_POSIX_C_SOURCE */
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 #ifndef KERNEL
 
 __BEGIN_DECLS
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 int msgsys(int, ...);
-#endif	/* !_POSIX_C_SOURCE */
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 int msgctl(int, int, struct msqid_ds *) __DARWIN_ALIAS(msgctl);
 int msgget(key_t, int);
-ssize_t msgrcv(int, void *, size_t, long, int);
-int msgsnd(int, const void *, size_t, int);
+ssize_t msgrcv(int, void *, size_t, long, int) __DARWIN_ALIAS_C(msgrcv);
+int msgsnd(int, const void *, size_t, int) __DARWIN_ALIAS_C(msgsnd);
 __END_DECLS
 
 #endif /* !KERNEL */
 
 #endif /* !_SYS_MSG_H_ */
+
+

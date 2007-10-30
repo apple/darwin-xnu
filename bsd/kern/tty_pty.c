@@ -1,25 +1,30 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1997-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-/* Copyright (c) 1997 Apple Computer, Inc. All Rights Reserved */
 /*
  * Copyright (c) 1982, 1986, 1989, 1993
  *      The Regents of the University of California.  All rights reserved.
@@ -75,11 +80,6 @@
 #include <sys/user.h>
 #include <sys/signalvar.h>
 
-#ifndef NeXT
-
-#define FREE_BSDSTATIC	static
-#else
-#define FREE_BSDSTATIC __private_extern__
 #define d_devtotty_t    struct tty **
 
 #ifdef d_stop_t
@@ -87,44 +87,27 @@
 #endif
 typedef void d_stop_t(struct tty *tp, int rw);
 
-#endif /* NeXT */
-
 /* XXX function should be removed??? */
 int pty_init(int n_ptys);
 
-#ifdef notyet
-static void ptyattach(int n);
-#endif
+/* XXX should be a devfs function */
+int _devfs_setattr(void * handle, unsigned short mode, uid_t uid, gid_t gid);
+
 static void ptsstart(struct tty *tp);
 static void ptcwakeup(struct tty *tp, int flag);
 
-FREE_BSDSTATIC	d_open_t	ptsopen;
-FREE_BSDSTATIC	d_close_t	ptsclose;
-FREE_BSDSTATIC	d_read_t	ptsread;
-FREE_BSDSTATIC	d_write_t	ptswrite;
-FREE_BSDSTATIC	d_ioctl_t	ptyioctl;
-FREE_BSDSTATIC	d_stop_t	ptsstop;
-FREE_BSDSTATIC	d_devtotty_t	ptydevtotty;
-FREE_BSDSTATIC	d_open_t	ptcopen;
-FREE_BSDSTATIC	d_close_t	ptcclose;
-FREE_BSDSTATIC	d_read_t	ptcread;
-FREE_BSDSTATIC	d_write_t	ptcwrite;
-FREE_BSDSTATIC	d_select_t	ptcselect;
-
-#ifndef NeXT
-#define CDEV_MAJOR_S 5
-#define CDEV_MAJOR_C 6
-static struct cdevsw pts_cdevsw = 
-	{ ptsopen,	ptsclose,	ptsread,	ptswrite,	/*5*/
-	  ptyioctl,	ptsstop,	nullreset,	ptydevtotty,/* ttyp */
-	  ttselect,	nommap,		NULL,	"pts",	NULL,	-1 };
-
-static struct cdevsw ptc_cdevsw = 
-	{ ptcopen,	ptcclose,	ptcread,	ptcwrite,	/*6*/
-	  ptyioctl,	nullstop,	nullreset,	ptydevtotty,/* ptyp */
-	  ptcselect,	nommap,		NULL,	"ptc",	NULL,	-1 };
-#endif /* !NeXT */
-
+__private_extern__	d_open_t	ptsopen;
+__private_extern__	d_close_t	ptsclose;
+__private_extern__	d_read_t	ptsread;
+__private_extern__	d_write_t	ptswrite;
+__private_extern__	d_ioctl_t	ptyioctl;
+__private_extern__	d_stop_t	ptsstop;
+__private_extern__	d_devtotty_t	ptydevtotty;
+__private_extern__	d_open_t	ptcopen;
+__private_extern__	d_close_t	ptcclose;
+__private_extern__	d_read_t	ptcread;
+__private_extern__	d_write_t	ptcwrite;
+__private_extern__	d_select_t	ptcselect;
 
 #if NPTY == 1
 #undef NPTY
@@ -132,38 +115,21 @@ static struct cdevsw ptc_cdevsw =
 #warning	You have only one pty defined, redefining to 32.
 #endif
 
-#ifndef NeXT
-#ifdef DEVFS
-#define MAXUNITS (8 * 32)
-static	void	*devfs_token_pts[MAXUNITS];
-static	void	*devfs_token_ptc[MAXUNITS];
-static  const	char jnames[] = "pqrsPQRS";
-#if NPTY > MAXUNITS
-#undef NPTY
-#define NPTY MAXUNITS
-#warning	Can't have more than 256 pty's with DEVFS defined.
-#endif /* NPTY > MAXUNITS */
-#endif /* DEVFS */
-#endif /* !NeXT */
-
 #define BUFSIZ 100		/* Chunk size iomoved to/from user */
 
 /*
  * pts == /dev/tty[pqrsPQRS][0123456789abcdefghijklmnopqrstuv]
  * ptc == /dev/pty[pqrsPQRS][0123456789abcdefghijklmnopqrstuv]
  */
-#ifndef NeXT
-FREE_BSDSTATIC struct	tty pt_tty[NPTY];	/* XXX */
-#else /* NeXT */
-/* NeXT All references to have been changed to indirections in the file */
-FREE_BSDSTATIC struct	tty *pt_tty[NPTY] = { NULL };
-#endif /* ! NeXT */
+/* All references to have been changed to indirections in the file */
+__private_extern__ struct	tty *pt_tty[NPTY] = { NULL };
 
 static struct	pt_ioctl {
 	int	pt_flags;
 	struct	selinfo pt_selr, pt_selw;
 	u_char	pt_send;
 	u_char	pt_ucntl;
+	void	*pt_devhandle;	/* slave device handle for grantpt() */
 } pt_ioctl[NPTY];		/* XXX */
 static int	npty = NPTY;		/* for pstat -t */
 
@@ -172,38 +138,6 @@ static int	npty = NPTY;		/* for pstat -t */
 #define	PF_REMOTE	0x20		/* remote and flow controlled input */
 #define	PF_NOSTOP	0x40
 #define PF_UCNTL	0x80		/* user control mode */
-
-#ifdef notyet
-/*
- * Establish n (or default if n is 1) ptys in the system.
- *
- * XXX cdevsw & pstat require the array `pty[]' to be an array
- */
-FREEBSD_STATIC void
-ptyattach(n)
-	int n;
-{
-	char *mem;
-	register u_long ntb;
-#define	DEFAULT_NPTY	32
-
-	/* maybe should allow 0 => none? */
-	if (n <= 1)
-		n = DEFAULT_NPTY;
-	ntb = n * sizeof(struct tty);
-#ifndef NeXT
-	mem = malloc(ntb + ALIGNBYTES + n * sizeof(struct pt_ioctl),
-	    M_DEVBUF, M_WAITOK);
-#else
-	MALLOC(mem, char *, ntb + ALIGNBYTES + n * sizeof(struct pt_ioctl),
-			M_DEVBUF, M_WAITOK);
-#endif /* !NeXT */
-	pt_tty = (struct tty *)mem;
-	mem = (char *)ALIGN(mem + ntb);
-	pt_ioctl = (struct pt_ioctl *)mem;
-	npty = n;
-}
-#endif
 
 #ifndef DEVFS
 int
@@ -227,7 +161,7 @@ pty_init(int n_ptys)
 	    int m = j * HEX_BASE + i;
 	    if (m == n_ptys)
 		goto done;
-	    (void)devfs_make_node(makedev(4, m), 
+	    pt_ioctl[m].pt_devhandle = devfs_make_node(makedev(4, m), 
 				  DEVFS_CHAR, UID_ROOT, GID_WHEEL, 0666, 
 				  "tty%c%x", j + START_CHAR, i);
 	    (void)devfs_make_node(makedev(5, m), 
@@ -240,18 +174,14 @@ pty_init(int n_ptys)
 }
 #endif /* DEVFS */
 
-/*ARGSUSED*/
-FREE_BSDSTATIC int
+__private_extern__ int
 ptsopen(dev_t dev, int flag, __unused int devtype, __unused struct proc *p)
 {
-	register struct tty *tp;
+	struct tty *tp;
 	int error;
 	boolean_t   funnel_state;
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
-#ifndef NeXT
-	tp = &pt_tty[minor(dev)];
-#else
 	/*
 	 * You will see this sort of code coming up in diffs later both
 	 * the ttymalloc and the tp indirection.
@@ -261,10 +191,16 @@ ptsopen(dev_t dev, int flag, __unused int devtype, __unused struct proc *p)
 		goto out;
 	}
 	if (!pt_tty[minor(dev)]) {
-		tp = pt_tty[minor(dev)] = ttymalloc();
+		/*
+		 * If we can't allocate a new one, act as if we had run out
+		 * of device nodes.
+		 */
+		if ((tp = pt_tty[minor(dev)] = ttymalloc()) == NULL) {
+			error = ENXIO;
+			goto out;
+		}
 	} else
 		tp = pt_tty[minor(dev)];
-#endif
 	if ((tp->t_state & TS_ISOPEN) == 0) {
 		ttychars(tp);		/* Set up default chars */
 		tp->t_iflag = TTYDEF_IFLAG;
@@ -295,40 +231,48 @@ out:
 	return (error);
 }
 
-FREE_BSDSTATIC int
+__private_extern__ int
 ptsclose(dev_t dev, int flag, __unused int mode, __unused proc_t p)
 {
-	register struct tty *tp;
+	struct tty *tp;
 	int err;
 	boolean_t   funnel_state;
-
+	/*
+	 * This is temporary until the VSX conformance tests
+	 * are fixed.  They are hanging with a deadlock
+	 * where close(pts) will not complete without t_timeout set
+	 */
+#define	FIX_VSX_HANG	1
+#ifdef	FIX_VSX_HANG
+	int save_timeout;
+#endif
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	tp = pt_tty[minor(dev)];
+#ifdef	FIX_VSX_HANG
+	save_timeout = tp->t_timeout;
+	tp->t_timeout = 60;
+#endif
 	err = (*linesw[tp->t_line].l_close)(tp, flag);
 	ptsstop(tp, FREAD|FWRITE);
 	(void) ttyclose(tp);
-
+#ifdef	FIX_VSX_HANG
+	tp->t_timeout = save_timeout;
+#endif
 	(void) thread_funnel_set(kernel_flock, funnel_state);
 	return (err);
 }
 
-FREE_BSDSTATIC int
-ptsread(dev, uio, flag)
-	dev_t dev;
-	struct uio *uio;
-	int flag;
+__private_extern__ int
+ptsread(dev_t dev, struct uio *uio, int flag)
 {
-#ifndef NeXT
-	struct proc *p = curproc;
-#else
 	struct proc *p = current_proc();
-#endif /* NeXT */
-	register struct tty *tp = pt_tty[minor(dev)];
-	register struct pt_ioctl *pti = &pt_ioctl[minor(dev)];
+	struct tty *tp = pt_tty[minor(dev)];
+	struct pt_ioctl *pti = &pt_ioctl[minor(dev)];
 	int error = 0;
 	struct uthread *ut;
 	boolean_t   funnel_state;
+	struct pgrp *pg;
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
@@ -339,12 +283,25 @@ again:
 		while (isbackground(p, tp)) {
 			if ((p->p_sigignore & sigmask(SIGTTIN)) ||
 			    (ut->uu_sigmask & sigmask(SIGTTIN)) ||
-			    p->p_pgrp->pg_jobc == 0 ||
-			    p->p_flag & P_PPWAIT) {
+			    p->p_lflag & P_LPPWAIT) {
 				error = EIO;
 				goto out;
 			}
-			pgsignal(p->p_pgrp, SIGTTIN, 1);
+
+
+			pg = proc_pgrp(p);
+			if (pg == PGRP_NULL) {
+				error = EIO;
+				goto out;
+			}
+			if (pg->pg_jobc == 0) {
+				pg_rele(pg);
+				error = EIO;
+				goto out;
+			}
+			pgsignal(pg, SIGTTIN, 1);
+			pg_rele(pg);
+
 			error = ttysleep(tp, &lbolt, TTIPRI | PCATCH | PTTYBLOCK, "ptsbg",
 					 0);
 			if (error)
@@ -366,7 +323,7 @@ again:
 			cc = min(uio_resid(uio), BUFSIZ);
 			// Don't copy the very last byte
 			cc = min(cc, tp->t_canq.c_cc - 1);
-			cc = q_to_b(&tp->t_canq, buf, cc);
+			cc = q_to_b(&tp->t_canq, (u_char *)buf, cc);
 			error = uiomove(buf, cc, uio);
 			if (error)
 				break;
@@ -389,13 +346,10 @@ out:
  * Wakeups of controlling tty will happen
  * indirectly, when tty driver calls ptsstart.
  */
-FREE_BSDSTATIC int
-ptswrite(dev, uio, flag)
-	dev_t dev;
-	struct uio *uio;
-	int flag;
+__private_extern__ int
+ptswrite(dev_t dev, struct uio *uio, int flag)
 {
-	register struct tty *tp;
+	struct tty *tp;
 	int error;
 	boolean_t   funnel_state;
 
@@ -416,10 +370,9 @@ ptswrite(dev, uio, flag)
  * Wake up process selecting or sleeping for input from controlling tty.
  */
 static void
-ptsstart(tp)
-	struct tty *tp;
+ptsstart(struct tty *tp)
 {
-	register struct pt_ioctl *pti = &pt_ioctl[minor(tp->t_dev)];
+	struct pt_ioctl *pti = &pt_ioctl[minor(tp->t_dev)];
 	boolean_t   funnel_state;
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
@@ -437,9 +390,7 @@ out:
 }
 
 static void
-ptcwakeup(tp, flag)
-	struct tty *tp;
-	int flag;
+ptcwakeup(struct tty *tp, int flag)
 {
 	struct pt_ioctl *pti = &pt_ioctl[minor(tp->t_dev)];
 	boolean_t   funnel_state;
@@ -457,10 +408,10 @@ ptcwakeup(tp, flag)
 	(void) thread_funnel_set(kernel_flock, funnel_state);
 }
 
-FREE_BSDSTATIC int
+__private_extern__ int
 ptcopen(dev_t dev, __unused int flag, __unused int devtype, __unused proc_t p)
 {
-	register struct tty *tp;
+	struct tty *tp;
 	struct pt_ioctl *pti;
 	int error = 0;
 	boolean_t   funnel_state;
@@ -475,8 +426,9 @@ ptcopen(dev_t dev, __unused int flag, __unused int devtype, __unused proc_t p)
 		tp = pt_tty[minor(dev)] = ttymalloc();
 	} else
 		tp = pt_tty[minor(dev)];
-	if (tp->t_oproc) {
-		error = EIO;
+	/* If master is open OR slave is still draining, pty is still busy */
+	if (tp->t_oproc || (tp->t_state & TS_ISOPEN)) {
+		error = EBUSY;
 		goto out;
 	}
 	tp->t_oproc = ptsstart;
@@ -495,10 +447,10 @@ out:
 	return (error);
 }
 
-FREE_BSDSTATIC int
+__private_extern__ int
 ptcclose(dev_t dev, __unused int flags, __unused int fmt, __unused proc_t p)
 {
-	register struct tty *tp;
+	struct tty *tp;
 	boolean_t   funnel_state;
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
@@ -526,13 +478,10 @@ ptcclose(dev_t dev, __unused int flags, __unused int fmt, __unused proc_t p)
 	return (0);
 }
 
-FREE_BSDSTATIC int
-ptcread(dev, uio, flag)
-	dev_t dev;
-	struct uio *uio;
-	int flag;
+__private_extern__ int
+ptcread(dev_t dev, struct uio *uio, int flag)
 {
-	register struct tty *tp = pt_tty[minor(dev)];
+	struct tty *tp = pt_tty[minor(dev)];
 	struct pt_ioctl *pti = &pt_ioctl[minor(dev)];
 	char buf[BUFSIZ];
 	int error = 0, cc;
@@ -584,7 +533,7 @@ ptcread(dev, uio, flag)
 	if (pti->pt_flags & (PF_PKT|PF_UCNTL))
 		error = ureadc(0, uio);
 	while (uio_resid(uio) > 0 && error == 0) {
-		cc = q_to_b(&tp->t_outq, buf, min(uio_resid(uio), BUFSIZ));
+		cc = q_to_b(&tp->t_outq, (u_char *)buf, min(uio_resid(uio), BUFSIZ));
 		if (cc <= 0)
 			break;
 		error = uiomove(buf, cc, uio);
@@ -596,10 +545,8 @@ out:
 	return (error);
 }
 
-FREE_BSDSTATIC void
-ptsstop(tp, flush)
-	register struct tty *tp;
-	int flush;
+__private_extern__ void
+ptsstop(struct tty *tp, int flush)
 {
 	struct pt_ioctl *pti = &pt_ioctl[minor(tp->t_dev)];
 	int flag;
@@ -625,14 +572,10 @@ ptsstop(tp, flush)
 	(void) thread_funnel_set(kernel_flock, funnel_state);
 }
 
-FREE_BSDSTATIC int
-ptcselect(dev, rw, wql, p)
-	dev_t dev;
-	int rw;
-	void * wql;
-	struct proc *p;
+__private_extern__ int
+ptcselect(dev_t dev, int rw, void *wql, struct proc *p)
 {
-	register struct tty *tp = pt_tty[minor(dev)];
+	struct tty *tp = pt_tty[minor(dev)];
 	struct pt_ioctl *pti = &pt_ioctl[minor(dev)];
 	int retval = 0;
 	boolean_t   funnel_state;
@@ -679,7 +622,7 @@ ptcselect(dev, rw, wql, p)
 				    retval = 1;
 				    goto out;
 			    }
-			    if (tp->t_canq.c_cc == 0 && (tp->t_iflag&ICANON)) {
+			    if (tp->t_canq.c_cc == 0 && (tp->t_lflag&ICANON)) {
 				    retval = 1;
 				    goto out;
 			    }
@@ -694,15 +637,12 @@ out:
 	return (retval);
 }
 
-FREE_BSDSTATIC int
-ptcwrite(dev, uio, flag)
-	dev_t dev;
-	register struct uio *uio;
-	int flag;
+__private_extern__ int
+ptcwrite(dev_t dev, struct uio *uio, int flag)
 {
-	register struct tty *tp = pt_tty[minor(dev)];
-	register u_char *cp = NULL;
-	register int cc = 0;
+	struct tty *tp = pt_tty[minor(dev)];
+	u_char *cp = NULL;
+	int cc = 0;
 	u_char locbuf[BUFSIZ];
 	int wcnt = 0;
 	struct pt_ioctl *pti = &pt_ioctl[minor(dev)];
@@ -735,7 +675,7 @@ again:
 				}
 			}
 			if (cc > 0) {
-				cc = b_to_q((char *)cp, cc, &tp->t_canq);
+				cc = b_to_q((u_char *)cp, cc, &tp->t_canq);
 				/*
 				 * XXX we don't guarantee that the canq size
 				 * is >= TTYHOG, so the above b_to_q() may
@@ -772,7 +712,7 @@ again:
 		}
 		while (cc > 0) {
 			if ((tp->t_rawq.c_cc + tp->t_canq.c_cc) >= TTYHOG - 2 &&
-			   (tp->t_canq.c_cc > 0 || !(tp->t_iflag&ICANON))) {
+			   (tp->t_canq.c_cc > 0 || !(tp->t_lflag&ICANON))) {
 				wakeup(TSA_HUP_OR_INPUT(tp));
 				goto block;
 			}
@@ -812,40 +752,12 @@ block:
 	goto again;
 }
 
-#ifndef NeXT
-/* XXX we eventually want to go to this model,
- * but premier can't change the cdevsw */
-static	struct tty *
-ptydevtotty(dev)
-	dev_t		dev;
+__private_extern__ int
+ptyioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 {
-	if (minor(dev) >= npty)
-		return (NULL);
-
-	return &pt_tty[minor(dev)];
-}
-#endif /* !NeXT */
-
-/*ARGSUSED*/
-FREE_BSDSTATIC int
-#ifndef NeXT
-ptyioctl(dev, cmd, data, flag)
-	dev_t dev;
-	int cmd;
-	caddr_t data;
-	int flag;
-#else
-ptyioctl(dev, cmd, data, flag, p)
-	dev_t dev;
-	u_long cmd;
-	caddr_t data;
-	int flag;
-	struct proc *p;
-#endif
-{
-	register struct tty *tp = pt_tty[minor(dev)];
-	register struct pt_ioctl *pti = &pt_ioctl[minor(dev)];
-	register u_char *cc = tp->t_cc;
+	struct tty *tp = pt_tty[minor(dev)];
+	struct pt_ioctl *pti = &pt_ioctl[minor(dev)];
+	u_char *cc = tp->t_cc;
 	int stop, error = 0;
 	boolean_t   funnel_state;
 
@@ -877,11 +789,7 @@ ptyioctl(dev, cmd, data, flag, p)
 		}
 		goto out;
 	} else
-#ifndef NeXT
-	if (cdevsw[major(dev)]->d_open == ptcopen)
-#else
 	if (cdevsw[major(dev)].d_open == ptcopen)
-#endif
 		switch (cmd) {
 
 		case TIOCGPGRP:
@@ -941,24 +849,66 @@ ptyioctl(dev, cmd, data, flag, p)
 			}
 			if ((tp->t_lflag&NOFLSH) == 0)
 				ttyflush(tp, FREAD|FWRITE);
-			pgsignal(tp->t_pgrp, *(unsigned int *)data, 1);
+			tty_pgsignal(tp, *(unsigned int *)data, 1);
 			if ((*(unsigned int *)data == SIGINFO) &&
 			    ((tp->t_lflag&NOKERNINFO) == 0))
 				ttyinfo(tp);
+			goto out;
+
+		case TIOCPTYGRANT:	/* grantpt(3) */
+			/*
+			 * Change the uid of the slave to that of the calling
+			 * thread, change the gid of the slave to GID_TTY,
+			 * change the mode to 0620 (rw--w----).
+			 */
+			{
+				_devfs_setattr(pti->pt_devhandle, 0620, kauth_getuid(), GID_TTY);
+				goto out;
+			}
+
+		case TIOCPTYGNAME:	/* ptsname(3) */
+			/*
+			 * Report the name of the slave device in *data
+			 * (128 bytes max.).  Use the same derivation method
+			 * used for calling devfs_make_node() to create it.
+			 */
+			snprintf(data, 128, "/dev/tty%c%x",
+				START_CHAR + (minor(dev) / HEX_BASE),
+				minor(dev) % HEX_BASE);
+			error = 0;
+			goto out;
+		
+		case TIOCPTYUNLK:	/* unlockpt(3) */
+			/*
+			 * Unlock the slave device so that it can be opened.
+			 */
+			error = 0;
 			goto out;
 		}
 	error = (*linesw[tp->t_line].l_ioctl)(tp, cmd, data, flag, p);
 	if (error == ENOTTY) {
 		error = ttioctl(tp, cmd, data, flag, p);
-		if (error == ENOTTY
-		&&  pti->pt_flags & PF_UCNTL && (cmd & ~0xff) == UIOCCMD(0)) {
-			/* Process the UIOCMD ioctl group */
-			if (cmd & 0xff) {
-				pti->pt_ucntl = (u_char)cmd;
-				ptcwakeup(tp, FREAD);
+		if (error == ENOTTY) {
+			if (pti->pt_flags & PF_UCNTL && (cmd & ~0xff) == UIOCCMD(0)) {
+				/* Process the UIOCMD ioctl group */
+				if (cmd & 0xff) {
+					pti->pt_ucntl = (u_char)cmd;
+					ptcwakeup(tp, FREAD);
+				}
+				error = 0;
+				goto out;
+			} else if (cmd == TIOCSBRK || cmd == TIOCCBRK) {
+				/*
+				 * POSIX conformance; rdar://3936338
+				 *
+				 * Clear ENOTTY in the case of setting or
+				 * clearing a break failing because pty's
+				 * don't support break like real serial
+				 * ports.
+				 */
+				error = 0;
+				goto out;
 			}
-			error = 0;
-			goto out;
 		}
 	}
 
@@ -1008,40 +958,3 @@ out:
 	(void) thread_funnel_set(kernel_flock, funnel_state);
 	return (error);
 }
-
-#ifndef NeXT
-static ptc_devsw_installed = 0;
-
-static void
-ptc_drvinit(void *unused)
-{
-#ifdef DEVFS
-	int i,j,k;
-#endif
-	dev_t dev;
-
-	if( ! ptc_devsw_installed ) {
-		dev = makedev(CDEV_MAJOR_S, 0);
-		cdevsw_add(&dev, &pts_cdevsw, NULL);
-		dev = makedev(CDEV_MAJOR_C, 0);
-		cdevsw_add(&dev, &ptc_cdevsw, NULL);
-		ptc_devsw_installed = 1;
-#ifdef DEVFS
-		for ( i = 0 ; i<NPTY ; i++ ) {
-			j = i / 32;
-			k = i % 32;
-			devfs_token_pts[i] = 
-				devfs_add_devswf(&pts_cdevsw,i,
-						DV_CHR,0,0,0666,
-						"tty%c%n",jnames[j],k);
-			devfs_token_ptc[i] =
-				devfs_add_devswf(&ptc_cdevsw,i,
-						DV_CHR,0,0,0666,
-						"pty%c%n",jnames[j],k);
-		}
-#endif
-    	}
-}
-
-SYSINIT(ptcdev,SI_SUB_DRIVERS,SI_ORDER_MIDDLE+CDEV_MAJOR_C,ptc_drvinit,NULL)
-#endif /* !NeXT */

@@ -42,6 +42,9 @@ sub WriteFile {
 my $versfile = "MasterVersion";
 $versfile = "$ENV{'SRCROOT'}/config/$versfile" if ($ENV{'SRCROOT'});
 my $BUILD_OBJROOT=$ENV{'OBJROOT'} . "/" . $ENV{'KERNEL_CONFIG'} . '_' . $ENV{'ARCH_CONFIG'};
+if($ENV{'MACHINE_CONFIG'} ne "DEFAULT") {
+    $BUILD_OBJROOT .= '_' . $ENV{'MACHINE_CONFIG'};
+}
 my $BUILD_DATE = `date`;
 $BUILD_DATE =~ s/[\n\t]//g;
 my $BUILDER=`whoami`;

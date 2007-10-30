@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -66,7 +72,7 @@
 #define	T_NO_FPU		7		/* no floating point */
 #define	T_DOUBLE_FAULT		8		/* double fault */
 #define	T_FPU_FAULT		9
-/*				10 */
+#define T_INVALID_TSS		10
 #define	T_SEGMENT_NOT_PRESENT	11
 #define	T_STACK_FAULT		12
 #define	T_GENERAL_PROTECTION	13
@@ -76,6 +82,8 @@
 #define	T_WATCHPOINT		17
 #define T_MACHINE_CHECK		18
 #define T_SSE_FLOAT_ERROR       19
+/*                          20-126 */
+#define T_DTRACE_RET            127
 #define T_PREEMPT		255
 
 #define TRAP_NAMES "divide error", "debug trap", "NMI", "breakpoint", \
@@ -83,7 +91,7 @@
 		   "no coprocessor", "double fault", "coprocessor overrun", \
 		   "invalid TSS", "segment not present", "stack bounds", \
 		   "general protection", "page fault", "(reserved)", \
-		   "coprocessor error", "watchpoint", "(reserved)", "SSE floating point"
+		   "coprocessor error", "watchpoint", "machine check", "SSE floating point"
 
 /*
  * Page-fault trap codes.
@@ -103,13 +111,14 @@
 #include <i386/thread.h>
 
 extern void		i386_exception(
-				int		exc,
-				int		code,
-				int		subcode);
+				int			exc,
+				mach_exception_code_t	code,
+				mach_exception_subcode_t subcode);
 
 extern void		sync_iss_to_iks(x86_saved_state32_t *regs);
 
-extern void		sync_iss_to_iks_unconditionally(x86_saved_state32_t *regs);
+extern void		sync_iss_to_iks_unconditionally(
+				x86_saved_state_t	*regs);
 
 extern void		kernel_trap(x86_saved_state_t *regs);
 
@@ -136,13 +145,13 @@ extern perfCallback perfTrapHook;
 extern perfCallback perfASTHook;
 extern perfCallback perfIntHook;
 
+extern void		panic_i386_backtrace(void *, int);
 #if MACH_KDP
 extern boolean_t	kdp_i386_trap(
 				unsigned int,
 				x86_saved_state32_t *,
 				kern_return_t,
 				vm_offset_t);
-extern void		panic_i386_backtrace(void *, int);
 #endif /* MACH_KDP */
 #endif	/* !ASSEMBLER && MACH_KERNEL */
 

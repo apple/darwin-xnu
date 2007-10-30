@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -57,6 +63,7 @@
  *	data blocks for which quick allocation/deallocation is possible.
  */
 #include <zone_debug.h>
+#include <zone_alias_addr.h>
 #include <norma_vm.h>
 #include <mach_kdb.h>
 
@@ -86,11 +93,16 @@
 
 #include <machine/machparam.h>
 
+#include <libkern/OSDebug.h>
+#include <sys/kdebug.h>
+
 #if defined(__ppc__)
 /* for fake zone stat routines */
 #include <ppc/savearea.h>
 #include <ppc/mappings.h>
 #endif
+
+int check_freed_element = 0;
 
 #if	MACH_ASSERT
 /* Detect use of zone elt after freeing it by two methods:
@@ -120,7 +132,7 @@ boolean_t zfree_clear = FALSE;
 #define ADD_TO_ZONE(zone, element)					\
 MACRO_BEGIN								\
 		if (zfree_clear)					\
-		{   unsigned int i;						\
+		{   unsigned int i;					\
 		    for (i=1;						\
 			 i < zone->elem_size/sizeof(vm_offset_t) - 1;	\
 			 i++)						\
@@ -147,6 +159,11 @@ MACRO_END
 #define ADD_TO_ZONE(zone, element)					\
 MACRO_BEGIN								\
 		*((vm_offset_t *)(element)) = (zone)->free_elements;	\
+		if (check_freed_element) {  \
+			if ((zone)->elem_size >= (2 * sizeof(vm_offset_t)))	\
+				((vm_offset_t *)(element))[((zone)->elem_size/sizeof(vm_offset_t))-1] = \
+					(zone)->free_elements;				\
+		}	\
 		(zone)->free_elements = (vm_offset_t) (element);	\
 		(zone)->count--;					\
 MACRO_END
@@ -155,6 +172,12 @@ MACRO_END
 MACRO_BEGIN								\
 	(ret) = (type) (zone)->free_elements;				\
 	if ((ret) != (type) 0) {					\
+		if (check_freed_element) {		\
+	        if ((zone)->elem_size >= (2 * sizeof(vm_offset_t)) &&		\
+		    ((vm_offset_t *)(ret))[((zone)->elem_size/sizeof(vm_offset_t))-1] != \
+		    ((vm_offset_t *)(ret))[0])				\
+		        panic("a freed zone element has been modified");\
+		}		\
 		(zone)->count++;					\
 		(zone)->free_elements = *((vm_offset_t *)(ret));	\
 	}								\
@@ -230,26 +253,32 @@ vm_size_t	zdata_size;
 
 #define lock_zone(zone)					\
 MACRO_BEGIN						\
-	mutex_lock(&(zone)->lock);			\
+	lck_mtx_lock(&(zone)->lock);			\
 MACRO_END
 
 #define unlock_zone(zone)				\
 MACRO_BEGIN						\
-	mutex_unlock(&(zone)->lock);			\
+	lck_mtx_unlock(&(zone)->lock);			\
 MACRO_END
 
 #define zone_wakeup(zone) thread_wakeup((event_t)(zone))
 #define zone_sleep(zone)				\
-	thread_sleep_mutex((event_t)(zone),	\
-				&(zone)->lock,		\
-				THREAD_UNINT)
+	(void) lck_mtx_sleep(&(zone)->lock, 0, (event_t)(zone), THREAD_UNINT);
+
+extern int snprintf(char *, size_t, const char *, ...) __printflike(3,4);
 
 #define lock_zone_init(zone)				\
 MACRO_BEGIN						\
-	mutex_init(&zone->lock, 0);	\
+	char _name[32];					\
+	(void) snprintf(_name, sizeof (_name), "zone.%s", (zone)->zone_name); \
+	lck_grp_attr_setdefault(&(zone)->lock_grp_attr);		\
+	lck_grp_init(&(zone)->lock_grp, _name, &(zone)->lock_grp_attr);	\
+	lck_attr_setdefault(&(zone)->lock_attr);			\
+	lck_mtx_init_ext(&(zone)->lock, &(zone)->lock_ext,		\
+	    &(zone)->lock_grp, &(zone)->lock_attr);			\
 MACRO_END
 
-#define lock_try_zone(zone)	mutex_try(&zone->lock)
+#define lock_try_zone(zone)	lck_mtx_try_lock(&zone->lock)
 
 kern_return_t		zget_space(
 				vm_offset_t size,
@@ -273,9 +302,15 @@ unsigned int			zone_pages;
  */
 decl_mutex_data(,		zone_gc_lock)
 
+#if	!ZONE_ALIAS_ADDR
 #define from_zone_map(addr, size) \
 	((vm_offset_t)(addr) >= zone_map_min_address && \
 	 ((vm_offset_t)(addr) + size -1) <  zone_map_max_address)
+#else
+#define from_zone_map(addr, size) \
+	((vm_offset_t)(zone_virtual_addr((vm_map_address_t)addr)) >= zone_map_min_address && \
+	 ((vm_offset_t)(zone_virtual_addr((vm_map_address_t)addr)) + size -1) <  zone_map_max_address)
+#endif
 
 #define	ZONE_PAGE_USED  0
 #define ZONE_PAGE_UNUSED -1
@@ -338,6 +373,11 @@ zinit(
 	 * This size will be used unless
 	 * the user suggestion is larger AND has less fragmentation
 	 */
+#if	ZONE_ALIAS_ADDR
+	if ((size < PAGE_SIZE) && (PAGE_SIZE % size <= PAGE_SIZE / 10))
+		alloc = PAGE_SIZE;
+	else
+#endif
 	{	vm_size_t best, waste; unsigned int i;
 		best  = PAGE_SIZE;
 		waste = best % size;
@@ -379,7 +419,7 @@ use_this_allocation:
 	z->async_pending = FALSE;
 
 #if	ZONE_DEBUG
-	z->active_zones.next = z->active_zones.prev = 0;	
+	z->active_zones.next = z->active_zones.prev = NULL;	
 	zone_debug_enable(z);
 #endif	/* ZONE_DEBUG */
 	lock_zone_init(z);
@@ -473,6 +513,10 @@ zget_space(
 				space_to_add, 0, KMA_KOBJECT|KMA_NOPAGEWAIT);
 			if (retval != KERN_SUCCESS)
 				return(retval);
+#if	ZONE_ALIAS_ADDR
+		 	if (space_to_add == PAGE_SIZE)
+				new_space = zone_alias_addr(new_space);
+#endif
 			zone_page_init(new_space, space_to_add,
 							ZONE_PAGE_USED);
 			simple_lock(&zget_space_lock);
@@ -568,6 +612,12 @@ zone_bootstrap(void)
 {
 	vm_size_t zone_zone_size;
 	vm_offset_t zone_zone_space;
+	char temp_buf[16];
+
+	/* see if we want freed zone element checking */
+	if (PE_parse_boot_arg("-zc", temp_buf)) {
+		check_freed_element = 1;
+	}
 
 	simple_lock_init(&all_zones_lock, 0);
 
@@ -686,11 +736,11 @@ zalloc_canblock(
 			if (zone->collectable) {
 				vm_offset_t space;
 				vm_size_t alloc_size;
-				boolean_t retry = FALSE;
+				int retry = 0;
 
 				for (;;) {
 
-				        if (vm_pool_low() || retry == TRUE)
+				        if (vm_pool_low() || retry >= 1)
 					        alloc_size = 
 						  round_page(zone->elem_size);
 					else
@@ -700,16 +750,24 @@ zalloc_canblock(
 									&space, alloc_size, 0,
 									KMA_KOBJECT|KMA_NOPAGEWAIT);
 					if (retval == KERN_SUCCESS) {
+#if	ZONE_ALIAS_ADDR
+						if (alloc_size == PAGE_SIZE)
+							space = zone_alias_addr(space);
+#endif
 					        zone_page_init(space, alloc_size,
 							       ZONE_PAGE_USED);
 						zcram(zone, (void *)space, alloc_size);
 
 						break;
 					} else if (retval != KERN_RESOURCE_SHORTAGE) {
-					        /* would like to cause a zone_gc() */
-					        if (retry == TRUE)
+						retry++;
+
+						if (retry == 2) {
+							zone_gc();
+							printf("zalloc did gc\n");
+						}
+					        if (retry == 3)
 						        panic("zalloc: \"%s\" (%d elements) retry fail %d", zone->zone_name, zone->count, retval);
-						retry = TRUE;
 					} else {
 					        break;
 					}
@@ -752,7 +810,8 @@ zalloc_canblock(
 					if (zone_debug_enabled(zone))
 						space += ZONE_DEBUG_OFFSET;
 #endif
-					return((void *)space);
+					addr = space;
+					goto success;
 				}
 				if (retval == KERN_RESOURCE_SHORTAGE) {
 					unlock_zone(zone);
@@ -768,7 +827,7 @@ zalloc_canblock(
 			REMOVE_FROM_ZONE(zone, addr, vm_offset_t);
 	}
 
-	if ((addr == 0) && !canblock && (zone->async_pending == FALSE) && (!vm_pool_low())) {
+	if ((addr == 0) && !canblock && (zone->async_pending == FALSE) && (zone->exhaustible == FALSE) && (!vm_pool_low())) {
 		zone->async_pending = TRUE;
 		unlock_zone(zone);
 		thread_call_enter(&zone->call_async_alloc);
@@ -784,6 +843,9 @@ zalloc_canblock(
 #endif
 
 	unlock_zone(zone);
+
+success:
+	TRACE_MACHLEAKS(ZALLOC_CODE, ZALLOC_CODE_2, zone->elem_size, addr);
 
 	return((void *)addr);
 }
@@ -870,6 +932,8 @@ zfree(
 	if (zone == zone_zone)
 		panic("zfree: freeing to zone_zone breaks zone_gc!");
 #endif
+
+	TRACE_MACHLEAKS(ZFREE_CODE, ZFREE_CODE_2, zone->elem_size, (int)addr);
 
 	if (zone->collectable && !zone->allows_foreign &&
 	    !from_zone_map(elem, zone->elem_size)) {
@@ -958,7 +1022,6 @@ zone_change(
 			/* break; */
 #endif
 	}
-	lock_zone_init(zone);
 }
 
 /*
@@ -1013,6 +1076,9 @@ zone_page_collectable(
 	struct zone_page_table_entry	*zp;
 	natural_t i, j;
 
+#if	ZONE_ALIAS_ADDR
+	addr = zone_virtual_addr(addr);
+#endif
 #if MACH_ASSERT
 	if (!from_zone_map(addr, size))
 		panic("zone_page_collectable");
@@ -1036,6 +1102,9 @@ zone_page_keep(
 	struct zone_page_table_entry	*zp;
 	natural_t i, j;
 
+#if	ZONE_ALIAS_ADDR
+	addr = zone_virtual_addr(addr);
+#endif
 #if MACH_ASSERT
 	if (!from_zone_map(addr, size))
 		panic("zone_page_keep");
@@ -1056,6 +1125,9 @@ zone_page_collect(
 	struct zone_page_table_entry	*zp;
 	natural_t i, j;
 
+#if	ZONE_ALIAS_ADDR
+	addr = zone_virtual_addr(addr);
+#endif
 #if MACH_ASSERT
 	if (!from_zone_map(addr, size))
 		panic("zone_page_collect");
@@ -1077,6 +1149,9 @@ zone_page_init(
 	struct zone_page_table_entry	*zp;
 	natural_t i, j;
 
+#if	ZONE_ALIAS_ADDR
+	addr = zone_virtual_addr(addr);
+#endif
 #if MACH_ASSERT
 	if (!from_zone_map(addr, size))
 		panic("zone_page_init");
@@ -1099,6 +1174,9 @@ zone_page_alloc(
 	struct zone_page_table_entry	*zp;
 	natural_t i, j;
 
+#if	ZONE_ALIAS_ADDR
+	addr = zone_virtual_addr(addr);
+#endif
 #if MACH_ASSERT
 	if (!from_zone_map(addr, size))
 		panic("zone_page_alloc");
@@ -1128,6 +1206,9 @@ zone_page_free_element(
 	struct zone_page_table_entry	*zp;
 	natural_t i, j;
 
+#if	ZONE_ALIAS_ADDR
+	addr = zone_virtual_addr(addr);
+#endif
 #if MACH_ASSERT
 	if (!from_zone_map(addr, size))
 		panic("zone_page_free_element");
@@ -1155,6 +1236,36 @@ zone_page_free_element(
 struct zone_free_element {
 	struct zone_free_element * next;
 };
+
+/*
+ * Add a linked list of pages starting at base back into the zone
+ * free list. Tail points to the last element on the list.
+ */
+
+#define ADD_LIST_TO_ZONE(zone, base, tail)				\
+MACRO_BEGIN								\
+	(tail)->next = (void *)((zone)->free_elements);			\
+	if (check_freed_element) {					\
+		if ((zone)->elem_size >= (2 * sizeof(vm_offset_t)))	\
+			((vm_offset_t *)(tail))[((zone)->elem_size/sizeof(vm_offset_t))-1] = \
+                                        (zone)->free_elements;		\
+	}								\
+	(zone)->free_elements = (unsigned long)(base);			\
+MACRO_END
+
+/*
+ * Add an element to the chain pointed to by prev.
+ */
+
+#define ADD_ELEMENT(zone, prev, elem)						\
+MACRO_BEGIN								\
+	(prev)->next = (elem);						\
+	if (check_freed_element) {					\
+		if ((zone)->elem_size >= (2 * sizeof(vm_offset_t)))     \
+			((vm_offset_t *)(prev))[((zone)->elem_size/sizeof(vm_offset_t))-1] = \
+					(vm_offset_t)(elem); 		\
+        }								\
+MACRO_END
 
 struct {
 	uint32_t	pgs_freed;
@@ -1213,9 +1324,11 @@ zone_gc(void)
 		 * (i.e we need a whole allocation block's worth of free
 		 * elements before we can garbage collect) and
 		 * the zone has more than 10 percent of it's elements free
+		 * or the element size is a multiple of the PAGE_SIZE 
 		 */
-		if (((z->cur_size - z->count * elt_size) <= (2 * z->alloc_size)) ||
-		    ((z->cur_size - z->count * elt_size) <= (z->cur_size / 10))) {
+		if ((elt_size & PAGE_MASK) && 
+		     (((z->cur_size - z->count * elt_size) <= (2 * z->alloc_size)) ||
+		      ((z->cur_size - z->count * elt_size) <= (z->cur_size / 10)))) {
 			unlock_zone(z);		
 			continue;
 		}
@@ -1254,11 +1367,14 @@ zone_gc(void)
 			else {
 				if (keep == NULL)
 					keep = tail = elt;
-				else
-					tail = tail->next = elt;
+				else {
+					ADD_ELEMENT(z, tail, elt);
+					tail = elt;
+				}
 
-				elt = prev->next = elt->next;
-				tail->next = NULL;
+				ADD_ELEMENT(z, prev, elt->next);
+				elt = elt->next;
+				ADD_ELEMENT(z, tail, NULL);
 			}
 
 			/*
@@ -1270,8 +1386,7 @@ zone_gc(void)
 					lock_zone(z);
 
 					if (keep != NULL) {
-						tail->next = (void *)z->free_elements;
-						z->free_elements = (vm_offset_t) keep;
+						ADD_LIST_TO_ZONE(z, keep, tail);
 						tail = keep = NULL;
 					} else {
 						m =0;
@@ -1282,9 +1397,8 @@ zone_gc(void)
 							elt = elt->next;
 						}
 						if (m !=0 ) {
-							prev->next = (void *)z->free_elements;
-							z->free_elements = (vm_offset_t) base_elt;
-							base_prev->next = elt;
+							ADD_LIST_TO_ZONE(z, base_elt, prev);
+							ADD_ELEMENT(z, base_prev, elt);
 							prev = base_prev;
 						}
 					}
@@ -1307,8 +1421,7 @@ zone_gc(void)
 		if (keep != NULL) {
 			lock_zone(z);
 
-			tail->next = (void *)z->free_elements;
-			z->free_elements = (vm_offset_t) keep;
+			ADD_LIST_TO_ZONE(z, keep, tail);
 
 			unlock_zone(z);
 		}
@@ -1321,7 +1434,6 @@ zone_gc(void)
 		 */
 
 		size_freed = 0;
-		prev = (void *)&scan;
 		elt = scan;
 		n = 0; tail = keep = NULL;
 		while (elt != NULL) {
@@ -1330,7 +1442,7 @@ zone_gc(void)
 				zone_page_free_element(&zone_free_pages,
 										(vm_offset_t)elt, elt_size);
 
-				elt = prev->next = elt->next;
+				elt = elt->next;
 
 				++zgc_stats.elems_freed;
 			}
@@ -1339,11 +1451,13 @@ zone_gc(void)
 
 				if (keep == NULL)
 					keep = tail = elt;
-				else
-					tail = tail->next = elt;
+				else {
+					ADD_ELEMENT(z, tail, elt);
+					tail = elt;
+				}
 
-				elt = prev->next = elt->next;
-				tail->next = NULL;
+				elt = elt->next;
+				ADD_ELEMENT(z, tail, NULL);
 
 				++zgc_stats.elems_kept;
 			}
@@ -1360,8 +1474,7 @@ zone_gc(void)
 				size_freed = 0;
 
 				if (keep != NULL) {
-					tail->next = (void *)z->free_elements;
-					z->free_elements = (vm_offset_t) keep;
+					ADD_LIST_TO_ZONE(z, keep, tail);
 				}
 
 				if (z->waiting) {
@@ -1387,8 +1500,7 @@ zone_gc(void)
 			z->cur_size -= size_freed;
 
 			if (keep != NULL) {
-				tail->next = (void *)z->free_elements;
-				z->free_elements = (vm_offset_t) keep;
+				ADD_LIST_TO_ZONE(z, keep, tail);
 			}
 
 		}
@@ -1407,6 +1519,9 @@ zone_gc(void)
 
 	while ((zp = zone_free_pages) != NULL) {
 		zone_free_pages = zp->link;
+#if	ZONE_ALIAS_ADDR
+		z = zone_virtual_addr((vm_map_address_t)z);
+#endif
 		kmem_free(zone_map, zone_map_min_address + PAGE_SIZE *
 										(zp - zone_page_table), PAGE_SIZE);
 		++zgc_stats.pgs_freed;
@@ -1441,6 +1556,38 @@ consider_zone_gc(void)
 	}
 }
 
+struct fake_zone_info {
+	const char* name;
+	void (*func)(int *, vm_size_t *, vm_size_t *, vm_size_t *, vm_size_t *,
+		    int *, int *);
+};
+
+static struct fake_zone_info fake_zones[] = {
+	{
+		.name = "kernel_stacks",
+		.func = stack_fake_zone_info,
+	},
+#ifdef ppc
+	{
+		.name = "save_areas",
+		.func = save_fake_zone_info,
+	},
+	{
+		.name = "pmap_mappings",
+		.func = mapping_fake_zone_info,
+	},
+#endif /* ppc */
+#ifdef i386
+	{
+		.name = "page_tables",
+		.func = pt_fake_zone_info,
+	},
+#endif /* i386 */
+	{
+		.name = "kalloc.large",
+		.func = kalloc_fake_zone_info,
+	},
+};
 
 kern_return_t
 host_zone_info(
@@ -1461,9 +1608,12 @@ host_zone_info(
 	zone_name_t    *zn;
 	zone_info_t    *zi;
 	kern_return_t	kr;
+	size_t		num_fake_zones;
 
 	if (host == HOST_NULL)
 		return KERN_INVALID_HOST;
+
+	num_fake_zones = sizeof fake_zones / sizeof fake_zones[0];
 
 	/*
 	 *	We assume that zones aren't freed once allocated.
@@ -1471,11 +1621,7 @@ host_zone_info(
 	 */
 
 	simple_lock(&all_zones_lock);
-#ifdef ppc
-	max_zones = num_zones + 4;
-#else
-	max_zones = num_zones + 3; /* ATN: count the number below!! */
-#endif
+	max_zones = num_zones + num_fake_zones;
 	z = first_zone;
 	simple_unlock(&all_zones_lock);
 
@@ -1528,6 +1674,7 @@ host_zone_info(
 		/* assuming here the name data is static */
 		(void) strncpy(zn->zn_name, zcopy.zone_name,
 			       sizeof zn->zn_name);
+		zn->zn_name[sizeof zn->zn_name - 1] = '\0';
 
 		zi->zi_count = zcopy.count;
 		zi->zi_cur_size = zcopy.cur_size;
@@ -1540,36 +1687,21 @@ host_zone_info(
 		zn++;
 		zi++;
 	}
-	strcpy(zn->zn_name, "kernel_stacks");
-	stack_fake_zone_info(&zi->zi_count, &zi->zi_cur_size, &zi->zi_max_size, &zi->zi_elem_size,
-			     &zi->zi_alloc_size, &zi->zi_collectable, &zi->zi_exhaustible);
-	zn++;
-	zi++;
-#ifdef ppc
-	strcpy(zn->zn_name, "save_areas");
-	save_fake_zone_info(&zi->zi_count, &zi->zi_cur_size, &zi->zi_max_size, &zi->zi_elem_size,
-			    &zi->zi_alloc_size, &zi->zi_collectable, &zi->zi_exhaustible);
-	zn++;
-	zi++;
 
-	strcpy(zn->zn_name, "pmap_mappings");
-	mapping_fake_zone_info(&zi->zi_count, &zi->zi_cur_size, &zi->zi_max_size, &zi->zi_elem_size,
-			       &zi->zi_alloc_size, &zi->zi_collectable, &zi->zi_exhaustible);
-	zn++;
-	zi++;
-#endif
-
-#ifdef i386
-	strcpy(zn->zn_name, "page_tables");
-	pt_fake_zone_info(&zi->zi_count, &zi->zi_cur_size, &zi->zi_max_size, &zi->zi_elem_size,
-			  &zi->zi_alloc_size, &zi->zi_collectable, &zi->zi_exhaustible);
-	zn++;
-	zi++;
-#endif
-
-	strcpy(zn->zn_name, "kalloc.large");
-	kalloc_fake_zone_info(&zi->zi_count, &zi->zi_cur_size, &zi->zi_max_size, &zi->zi_elem_size,
-			       &zi->zi_alloc_size, &zi->zi_collectable, &zi->zi_exhaustible);
+	/*
+	 * loop through the fake zones and fill them using the specialized
+	 * functions
+	 */
+	for (i = 0; i < num_fake_zones; i++) {
+		strncpy(zn->zn_name, fake_zones[i].name, sizeof zn->zn_name);
+		zn->zn_name[sizeof zn->zn_name - 1] = '\0';
+		fake_zones[i].func(&zi->zi_count, &zi->zi_cur_size,
+				   &zi->zi_max_size, &zi->zi_elem_size,
+				   &zi->zi_alloc_size, &zi->zi_collectable,
+				   &zi->zi_exhaustible);
+		zn++;
+		zi++;
+	}
 
 	if (names != *namesp) {
 		vm_size_t used;
@@ -1651,11 +1783,8 @@ db_print_zone(
 
 /*ARGSUSED*/
 void
-db_show_one_zone(
-        db_expr_t       	addr,
-        int			have_addr,
-        __unused db_expr_t	count,
-        __unused char *	modif)
+db_show_one_zone(db_expr_t addr, boolean_t have_addr,
+		 __unused db_expr_t count, __unused char *modif)
 {
 	struct zone *z = (zone_t)((char *)0 + addr);
 
@@ -1670,11 +1799,8 @@ db_show_one_zone(
 
 /*ARGSUSED*/
 void
-db_show_all_zones(
-        __unused db_expr_t	addr,
-        int			have_addr,
-        db_expr_t		count,
-        __unused char *	modif)
+db_show_all_zones(__unused db_expr_t addr, boolean_t have_addr, db_expr_t count,
+		  __unused char *modif)
 {
 	zone_t		z;
 	unsigned total = 0;
@@ -1723,13 +1849,13 @@ db_zone_check_active(
 	while (count < zone->count) {
 		count++;
 		if (tmp_elem == 0) {
-			printf("unexpected zero element, zone=0x%x, count=%d\n",
+			printf("unexpected zero element, zone=%p, count=%d\n",
 				zone, count);
 			assert(FALSE);
 			break;
 		}
 		if (queue_end(tmp_elem, &zone->active_zones)) {
-			printf("unexpected queue_end, zone=0x%x, count=%d\n",
+			printf("unexpected queue_end, zone=%p, count=%d\n",
 				zone, count);
 			assert(FALSE);
 			break;
@@ -1737,7 +1863,7 @@ db_zone_check_active(
 		tmp_elem = queue_next(tmp_elem);
 	}
 	if (!queue_end(tmp_elem, &zone->active_zones)) {
-		printf("not at queue_end, zone=0x%x, tmp_elem=0x%x\n",
+		printf("not at queue_end, zone=%p, tmp_elem=%p\n",
 			zone, tmp_elem);
 		assert(FALSE);
 	}
@@ -1751,7 +1877,7 @@ db_zone_print_active(
 	queue_t	tmp_elem;
 
 	if (!zone_debug_enabled(zone)) {
-		printf("zone 0x%x debug not enabled\n", zone);
+		printf("zone %p debug not enabled\n", zone);
 		return;
 	}
 	if (!zone_check) {
@@ -1759,11 +1885,11 @@ db_zone_print_active(
 		return;
 	}
 
-	printf("zone 0x%x, active elements %d\n", zone, zone->count);
+	printf("zone %p, active elements %d\n", zone, zone->count);
 	printf("active list:\n");
 	tmp_elem = queue_first(&zone->active_zones);
 	while (count < zone->count) {
-		printf("  0x%x", tmp_elem);
+		printf("  %p", tmp_elem);
 		count++;
 		if ((count % 6) == 0)
 			printf("\n");
@@ -1778,7 +1904,7 @@ db_zone_print_active(
 		tmp_elem = queue_next(tmp_elem);
 	}
 	if (!queue_end(tmp_elem, &zone->active_zones))
-		printf("\nnot at queue_end, tmp_elem=0x%x\n", tmp_elem);
+		printf("\nnot at queue_end, tmp_elem=%p\n", tmp_elem);
 	else
 		printf("\n");
 }
@@ -1793,7 +1919,7 @@ db_zone_print_free(
 	vm_offset_t elem;
 
 	freecount = zone_free_count(zone);
-	printf("zone 0x%x, free elements %d\n", zone, freecount);
+	printf("zone %p, free elements %d\n", zone, freecount);
 	printf("free list:\n");
 	elem = zone->free_elements;
 	while (count < freecount) {
@@ -1829,11 +1955,11 @@ next_element(
 	char		*elt = (char *)prev;
 
 	if (!zone_debug_enabled(z))
-		return(0);
+		return(NULL);
 	elt -= ZONE_DEBUG_OFFSET;
 	elt = (char *) queue_next((queue_t) elt);
 	if ((queue_t) elt == &z->active_zones)
-		return(0);
+		return(NULL);
 	elt += ZONE_DEBUG_OFFSET;
 	return(elt);
 }
@@ -1845,9 +1971,9 @@ first_element(
 	char 		*elt;
 
 	if (!zone_debug_enabled(z))
-		return(0);
+		return(NULL);
 	if (queue_empty(&z->active_zones))
-		return(0);
+		return(NULL);
 	elt = (char *)queue_first(&z->active_zones);
 	elt += ZONE_DEBUG_OFFSET;
 	return(elt);
@@ -1903,6 +2029,6 @@ zone_debug_disable(
 	if (!zone_debug_enabled(z) || zone_in_use(z))
 		return;
 	z->elem_size -= ZONE_DEBUG_OFFSET;
-	z->active_zones.next = z->active_zones.prev = 0;	
+	z->active_zones.next = z->active_zones.prev = NULL;
 }
 #endif	/* ZONE_DEBUG */

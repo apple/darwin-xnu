@@ -16,6 +16,8 @@ MACH_PORT_FILES =mach_port_server.h mach_port_server.c
 
 EXC_FILES = exc_user.h exc_user.c  exc_server.c
 
+MACH_EXC_FILES = mach_exc_user.h mach_exc_user.c  mach_exc_server.c
+
 MEMORY_OBJECT_FILES = memory_object_user.h memory_object_user.c 
 
 MEMORY_OBJECT_DEFAULT_FILES = memory_object_default.h memory_object_default_user.c
@@ -37,7 +39,7 @@ SYNC_FILES = sync_server.h sync_server.c
 MACH_USER_FILES = mach_user.h mach_user.c
  
 OTHERS	= ${MACH_FILES} ${MACH_PORT_FILES} \
-	${EXC_FILES} \
+	${EXC_FILES} ${MACH_EXC_FILES} \
 	${MEMORY_OBJECT_FILES} ${MEMORY_OBJECT_DEFAULT_FILES} \
 	${PROF_FILES} ${MACH_HOST_FILES} ${LEDGER_FILES} \
 	${CLOCK_FILES} ${CLOCK_REPLY_FILES} ${BOOTSTRAP_FILES} \
@@ -71,6 +73,15 @@ ${EXC_FILES}: mach/exc.defs
 		-user exc_user.c                        \
 		-sheader exc_server.h                   \
 		-server exc_server.c                    \
+		$<
+
+.ORDER: ${MACH_EXC_FILES}               
+${MACH_EXC_FILES}: mach/mach_exc.defs
+	${_MIG_} ${_MIGFLAGS_} ${MIGKUFLAGS}            \
+		-header mach_exc_user.h                      \
+		-user mach_exc_user.c                        \
+		-sheader mach_exc_server.h                   \
+		-server mach_exc_server.c                    \
 		$<
 
 .ORDER: ${MEMORY_OBJECT_FILES}

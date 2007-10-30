@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2002-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1990, 1993, 1995
@@ -124,16 +130,11 @@ static void qf_rele(struct quotafile *);
 
 
 /*
- * Initialize the quota system.
+ * Initialize locks for the quota system.
  */
 void
-dqinit()
+dqinit(void)
 {
-
-	dqhashtbl = hashinit(desiredvnodes, M_DQUOT, &dqhash);
-	TAILQ_INIT(&dqfreelist);
-	TAILQ_INIT(&dqdirtylist);
-
 	/*
 	 * Allocate quota list lock group attribute and group
 	 */
@@ -161,6 +162,32 @@ dqinit()
 	 * Allocate quota file lock attribute
 	 */
 	qf_lck_attr = lck_attr_alloc_init();
+}
+
+/*
+ * Report whether dqhashinit has been run.
+ */
+int
+dqisinitialized(void)
+{
+	return (dqhashtbl != NULL);
+}
+
+/*
+ * Initialize hash table for dquot structures.
+ */
+void
+dqhashinit(void)
+{
+	dq_list_lock();
+	if (dqisinitialized())
+		goto out;
+
+	TAILQ_INIT(&dqfreelist);
+	TAILQ_INIT(&dqdirtylist);
+	dqhashtbl = hashinit(desiredvnodes, M_DQUOT, &dqhash);
+out:
+	dq_list_unlock();
 }
 
 
@@ -198,7 +225,7 @@ dq_lock_internal(struct dquot *dq)
 {
         while (dq->dq_lflags & DQ_LLOCK) {
 	        dq->dq_lflags |= DQ_LWANT;
-	        msleep(&dq->dq_lflags, quota_list_mtx_lock, PVFS, "dq_lock_internal", 0);
+	        msleep(&dq->dq_lflags, quota_list_mtx_lock, PVFS, "dq_lock_internal", NULL);
 	}
 	dq->dq_lflags |= DQ_LLOCK;
 }
@@ -256,7 +283,7 @@ qf_get(struct quotafile *qfp, int type)
 			}
 			if ( (qfp->qf_qflags & QTF_CLOSING) ) {
 		                qfp->qf_qflags |= QTF_WANTED;
-				msleep(&qfp->qf_qflags, quota_list_mtx_lock, PVFS, "qf_get", 0);
+				msleep(&qfp->qf_qflags, quota_list_mtx_lock, PVFS, "qf_get", NULL);
 			}
 		}
 		if (qfp->qf_vp != NULLVP)
@@ -274,7 +301,7 @@ qf_get(struct quotafile *qfp, int type)
 
 		while ( (qfp->qf_qflags & QTF_OPENING) || qfp->qf_refcnt ) {
 		        qfp->qf_qflags |= QTF_WANTED;
-			msleep(&qfp->qf_qflags, quota_list_mtx_lock, PVFS, "qf_get", 0);
+			msleep(&qfp->qf_qflags, quota_list_mtx_lock, PVFS, "qf_get", NULL);
 		}
 		if (qfp->qf_vp == NULLVP) {
 		        qfp->qf_qflags &= ~QTF_CLOSING;
@@ -382,9 +409,7 @@ dqfileinit(struct quotafile *qfp)
  * must be called with the quota file lock held
  */
 int
-dqfileopen(qfp, type)
-	struct quotafile *qfp;
-	int type;
+dqfileopen(struct quotafile *qfp, int type)
 {
 	struct dqfilehdr header;
 	struct vfs_context context;
@@ -393,7 +418,7 @@ dqfileopen(qfp, type)
 	int error = 0;
 	char uio_buf[ UIO_SIZEOF(1) ];
 
-	context.vc_proc = current_proc();
+	context.vc_thread = current_thread();
 	context.vc_ucred = qfp->qf_cred;
 	
 	/* Obtain the file size */
@@ -452,7 +477,7 @@ dqfileclose(struct quotafile *qfp, __unused int type)
 								  &uio_buf[0], sizeof(uio_buf));
 	uio_addiov(auio, CAST_USER_ADDR_T(&header), sizeof (header));
 
-	context.vc_proc = current_proc();
+	context.vc_thread = current_thread();
 	context.vc_ucred = qfp->qf_cred;
 	
 	if (VNOP_READ(qfp->qf_vp, auio, 0, &context) == 0) {
@@ -469,11 +494,7 @@ dqfileclose(struct quotafile *qfp, __unused int type)
  * reading the information from the file if necessary.
  */
 int
-dqget(id, qfp, type, dqp)
-	u_long id;
-	struct quotafile *qfp;
-	register int type;
-	struct dquot **dqp;
+dqget(u_long id, struct quotafile *qfp, int type, struct dquot **dqp)
 {
 	struct dquot *dq;
 	struct dquot *ndq = NULL;
@@ -482,6 +503,11 @@ dqget(id, qfp, type, dqp)
 	struct vnode *dqvp;
 	int error = 0;
 	int listlockval = 0;
+
+	if (!dqisinitialized()) {
+		*dqp = NODQUOT;
+		return (EINVAL);
+	}
 
 	if ( id == 0 || qfp->qf_vp == NULLVP ) {
 		*dqp = NODQUOT;
@@ -539,13 +565,6 @@ relookup:
 				TAILQ_REMOVE(&dqdirtylist, dq, dq_freelist);
 			else
 				TAILQ_REMOVE(&dqfreelist, dq, dq_freelist);
-		} else if (dq->dq_cnt == 0) {
-			/* We've overflowed */
-			--dq->dq_cnt;
-			dq_unlock_internal(dq);
-			dq_list_unlock();
-			*dqp = NODQUOT;
-			return (EINVAL);
 		}
 		dq_unlock_internal(dq);
 
@@ -765,11 +784,7 @@ relookup:
  * one is inserted.  The actual hash table index is returned.
  */
 static int
-dqlookup(qfp, id, dqb, index)
-	struct quotafile *qfp;
-	u_long id;
-	struct	dqblk *dqb;
-	u_int32_t *index;
+dqlookup(struct quotafile *qfp, u_long id, struct dqblk *dqb, uint32_t *index)
 {
 	struct vnode *dqvp;
 	struct vfs_context context;
@@ -784,7 +799,7 @@ dqlookup(qfp, id, dqb, index)
 
 	dqvp = qfp->qf_vp;
 
-	context.vc_proc = current_proc();
+	context.vc_thread = current_thread();
 	context.vc_ucred = qfp->qf_cred;
 
 	mask = qfp->qf_maxentries - 1;
@@ -799,11 +814,11 @@ dqlookup(qfp, id, dqb, index)
 		uio_addiov(auio, CAST_USER_ADDR_T(dqb), sizeof (struct dqblk));
 		error = VNOP_READ(dqvp, auio, 0, &context);
 		if (error) {
-			printf("dqlookup: error %d looking up id %d at index %d\n", error, id, i);
+			printf("dqlookup: error %d looking up id %lu at index %d\n", error, id, i);
 			break;
 		} else if (uio_resid(auio)) {
 			error = EIO;
-			printf("dqlookup: error looking up id %d at index %d\n", id, i);
+			printf("dqlookup: error looking up id %lu at index %d\n", id, i);
 			break;
 		}
 		/*
@@ -880,7 +895,7 @@ dqrele(struct dquot *dq)
  * Release a reference to a dquot but don't do any I/O.
  */
 void
-dqreclaim(register struct dquot *dq)
+dqreclaim(struct dquot *dq)
 {
 
 	if (dq == NODQUOT)
@@ -907,25 +922,17 @@ dqreclaim(register struct dquot *dq)
  * Update a quota file's orphaned disk quotas.
  */
 void
-dqsync_orphans(qfp)
-	struct quotafile *qfp;
+dqsync_orphans(struct quotafile *qfp)
 {
 	struct dquot *dq;
-	int listlockval = 0;
-
+	
 	dq_list_lock();
   loop:
-	listlockval = dq_list_lock_val();
-
 	TAILQ_FOREACH(dq, &dqdirtylist, dq_freelist) {
 		if (dq->dq_qfile != qfp)
 		        continue;
 
 		dq_lock_internal(dq);
-		if (dq_list_lock_changed(listlockval)) {
-			dq_unlock_internal(dq);
-			goto loop;
-		}
 
 		if (dq->dq_qfile != qfp) {
 		        /*
@@ -992,7 +999,6 @@ dqsync(struct dquot *dq)
 int
 dqsync_locked(struct dquot *dq)
 {
-	struct proc *p = current_proc();		/* XXX */
 	struct vfs_context context;
 	struct vnode *dqvp;
 	struct dqblk dqb, *dqblkp;
@@ -1013,7 +1019,7 @@ dqsync_locked(struct dquot *dq)
 								  UIO_WRITE, &uio_buf[0], sizeof(uio_buf));
 	uio_addiov(auio, CAST_USER_ADDR_T(&dqb), sizeof (struct dqblk));
 
-	context.vc_proc = p;
+	context.vc_thread = current_thread();	/* XXX */
 	context.vc_ucred = dq->dq_qfile->qf_cred;
 
 	dqblkp = &dq->dq_dqb;
@@ -1043,11 +1049,13 @@ dqsync_locked(struct dquot *dq)
  * Flush all entries from the cache for a particular vnode.
  */
 void
-dqflush(vp)
-	register struct vnode *vp;
+dqflush(struct vnode *vp)
 {
-	register struct dquot *dq, *nextdq;
+	struct dquot *dq, *nextdq;
 	struct dqhash *dqh;
+
+	if (!dqisinitialized())
+		return;
 
 	/*
 	 * Move all dquot's that used to refer to this quota

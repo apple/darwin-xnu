@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -71,6 +77,14 @@
 #include <sys/kernel.h>
 #include <kern/thread.h>
 #include <sys/lock.h>
+#include <sys/signalvar.h>
+#include <sys/conf.h>
+#include <sys/sysctl.h>
+#include <kern/kalloc.h>
+
+/* XXX should be in a common header somewhere */
+extern void klogwakeup(void);
+extern void logwakeup(void);
 
 #define LOG_RDPRI	(PZERO + 1)
 
@@ -85,14 +99,22 @@ struct logsoftc {
 } logsoftc;
 
 int	log_open;			/* also used in log() */
-struct msgbuf temp_msgbuf;
+char smsg_bufc[MSG_BSIZE]; /* static buffer */
+struct msgbuf temp_msgbuf = {0,MSG_BSIZE,0,0,smsg_bufc};
 struct msgbuf *msgbufp;
 static int _logentrypend = 0;
 static int log_inited = 0;
-void bsd_log_lock(void);
-/* the following two are implemented in osfmk/kern/printf.c  */
+/* the following are implemented in osfmk/kern/printf.c  */
+extern void bsd_log_lock(void);
 extern void bsd_log_unlock(void);
 extern void bsd_log_init(void);
+
+/* XXX wants a linker set so these can be static */
+extern d_open_t         logopen;
+extern d_close_t        logclose;
+extern d_read_t         logread;
+extern d_ioctl_t        logioctl;
+extern d_select_t       logselect;
 
 /*
  * Serialize log access.  Note that the log can be written at interrupt level,
@@ -105,10 +127,8 @@ extern void bsd_log_init(void);
 
 
 /*ARGSUSED*/
-logopen(dev, flags, mode, p)
-	dev_t dev;
-	int flags, mode;
-	struct proc *p;
+int
+logopen(__unused dev_t dev, __unused int flags, __unused int mode, struct proc *p)
 {
 	LOG_LOCK();
 	if (log_open) {
@@ -137,10 +157,8 @@ logopen(dev, flags, mode, p)
 
 /*ARGSUSED*/
 int
-logclose(dev, flag)
-	dev_t dev;
+logclose(__unused dev_t dev, __unused int flag, __unused int devtype, __unused struct proc *p)
 {
-	int oldpri;
 	LOG_LOCK();
 	log_open = 0;
 	selwakeup(&logsoftc.sc_selp);
@@ -151,16 +169,10 @@ logclose(dev, flag)
 
 /*ARGSUSED*/
 int
-logread(dev, uio, flag)
-	dev_t dev;
-	struct uio *uio;
-	int flag;
+logread(__unused dev_t dev, struct uio *uio, int flag)
 {
 	register long l;
-	register int s;
 	int error = 0;
-	char localbuff[MSG_BSIZE];
-	int copybytes;
 
 	LOG_LOCK();
 	while (msgbufp->msg_bufr == msgbufp->msg_bufx) {
@@ -179,8 +191,8 @@ logread(dev, uio, flag)
 		 * if there are any new characters. If that doesn't do it
 		 * then wait for 5 sec and reevaluate 
 		 */
-		if (error = tsleep((caddr_t)msgbufp, LOG_RDPRI | PCATCH,
-				"klog", 5 * hz)) {
+		if ((error = tsleep((caddr_t)msgbufp, LOG_RDPRI | PCATCH,
+				"klog", 5 * hz)) != 0) {
 			/* if it times out; ignore */
 			if (error != EWOULDBLOCK)
 				return (error);
@@ -189,23 +201,21 @@ logread(dev, uio, flag)
 	}
 	logsoftc.sc_state &= ~LOG_RDWAIT;
 
-
 	while (uio_resid(uio) > 0) {
 		l = msgbufp->msg_bufx - msgbufp->msg_bufr;
 		if (l < 0)
-			l = MSG_BSIZE - msgbufp->msg_bufr;
+			l = msgbufp->msg_size - msgbufp->msg_bufr;
 		l = min(l, uio_resid(uio));
 		if (l == 0)
 			break;
-		bcopy(&msgbufp->msg_bufc[msgbufp->msg_bufr], &localbuff[0], l);
 		LOG_UNLOCK();
-		error = uiomove((caddr_t)&localbuff[0],
+		error = uiomove((caddr_t)&msgbufp->msg_bufc[msgbufp->msg_bufr],
 			(int)l, uio);
 		LOG_LOCK();
 		if (error)
 			break;
 		msgbufp->msg_bufr += l;
-		if (msgbufp->msg_bufr < 0 || msgbufp->msg_bufr >= MSG_BSIZE)
+		if (msgbufp->msg_bufr < 0 || msgbufp->msg_bufr >= msgbufp->msg_size)
 			msgbufp->msg_bufr = 0;
 	}
 out:
@@ -215,13 +225,8 @@ out:
 
 /*ARGSUSED*/
 int
-logselect(dev, rw, wql, p)
-	dev_t dev;
-	int rw;
-	void * wql;
-	struct proc *p;
+logselect(__unused dev_t dev, int rw, void * wql, struct proc *p)
 {
-
 	switch (rw) {
 
 	case FREAD:
@@ -238,11 +243,9 @@ logselect(dev, rw, wql, p)
 }
 
 void
-logwakeup()
+logwakeup(void)
 {
-	struct proc *p;
 	int pgid;
-	boolean_t funnel_state;
 
 	LOG_LOCK();	
 	if (!log_open) {
@@ -255,8 +258,8 @@ logwakeup()
 		LOG_UNLOCK();
 		if (pgid < 0)
 			gsignal(-pgid, SIGIO); 
-		else if (p = pfind(pgid))
-			psignal(p, SIGIO);
+		else 
+			proc_signal(pgid, SIGIO);
 		LOG_LOCK();
 	}
 	if (logsoftc.sc_state & LOG_RDWAIT) {
@@ -267,9 +270,8 @@ logwakeup()
 }
 
 void
-klogwakeup()
+klogwakeup(void)
 {
-
 	if (_logentrypend) {
 		_logentrypend = 0;
 		logwakeup();
@@ -278,20 +280,18 @@ klogwakeup()
 
 /*ARGSUSED*/
 int
-logioctl(dev, com, data, flag)
-	caddr_t data;
+logioctl(__unused dev_t dev, u_long com, caddr_t data, __unused int flag, __unused struct proc *p)
 {
 	long l;
-	int s;
 
-	LOG_LOCK();	
+	LOG_LOCK();
 	switch (com) {
 
 	/* return number of characters immediately available */
 	case FIONREAD:
 		l = msgbufp->msg_bufx - msgbufp->msg_bufr;
 		if (l < 0)
-			l += MSG_BSIZE;
+			l += msgbufp->msg_size;
 		*(off_t *)data = l;
 		break;
 
@@ -326,7 +326,7 @@ logioctl(dev, com, data, flag)
 }
 
 void
-bsd_log_init()
+bsd_log_init(void)
 {
 	if (!log_inited) { 
 		msgbufp = &temp_msgbuf;
@@ -334,18 +334,33 @@ bsd_log_init()
 	}
 }
 
+
+/*
+ * log_putc_locked
+ *
+ * Decription:	Output a character to the log; assumes the LOG_LOCK() is held
+ *		by the caller.
+ *
+ * Parameters:	c				Character to output
+ *
+ * Returns:	(void)
+ *
+ * Notes:	This functions is used for multibyte output to the log; it
+ *		should be used preferrentially where possible to ensure that
+ *		log entries do not end up interspersed due to preemption or
+ *		SMP reentrancy.
+ */
 void
-log_putc(char c)
+log_putc_locked(char c)
 {
 	register struct msgbuf *mbp;
 
 	if (!log_inited) {
 		panic("bsd log is not inited");
 	}
-	LOG_LOCK();
 
 	mbp = msgbufp; 
-	if (mbp-> msg_magic != MSG_MAGIC) { 
+	if (mbp-> msg_magic != MSG_MAGIC) {
 		register int i;
 
 		mbp->msg_magic = MSG_MAGIC;
@@ -355,8 +370,139 @@ log_putc(char c)
 	}
 	mbp->msg_bufc[mbp->msg_bufx++] = c;
 	_logentrypend = 1;
-	if (mbp->msg_bufx < 0 || mbp->msg_bufx >= MSG_BSIZE)
+	if (mbp->msg_bufx < 0 || mbp->msg_bufx >= msgbufp->msg_size)
 		mbp->msg_bufx = 0;
+}
+
+
+/*
+ * log_putc
+ *
+ * Decription:	Output a character to the log; assumes the LOG_LOCK() is NOT
+ *		held by the caller.
+ *
+ * Parameters:	c				Character to output
+ *
+ * Returns:	(void)
+ *
+ * Notes:	This function is used for syingle byte output to the log.  It
+ *		primarily exists to maintain binary backward compatibility.
+ */
+void
+log_putc(char c)
+{
+	if (!log_inited) {
+		panic("bsd log is not inited");
+	}
+	LOG_LOCK();
+	log_putc_locked(c);
 	LOG_UNLOCK();
 }
 
+
+/*
+ * it is possible to increase the kernel log buffer size by adding
+ *   msgbuf=n
+ * to the kernel command line, and to read the current size using
+ *   sysctl kern.msgbuf
+ * If there is no parameter on the kernel command line, the buffer is
+ * allocated statically and is MSG_BSIZE characters in size, otherwise
+ * memory is dynamically allocated.
+ * This function may only be called once, during kernel initialization.
+ * Memory management must already be up. The buffer must not have
+ * overflown yet.
+ */
+void
+log_setsize(long size) {
+	char *new_logdata;
+	if (msgbufp->msg_size!=MSG_BSIZE) {
+		printf("log_setsize: attempt to change size more than once\n");
+		return;
+	}
+	if (size==MSG_BSIZE)
+		return;
+	if (size<MSG_BSIZE) { /* we don't support reducing the log size */
+		printf("log_setsize: can't decrease log size\n");
+		return;
+	}
+	if (!(new_logdata = (char*)kalloc(size))) {
+		printf("log_setsize: unable to allocate memory\n");
+		return;
+	}
+	LOG_LOCK();
+	bcopy(smsg_bufc, new_logdata, MSG_BSIZE);
+	bzero(new_logdata+MSG_BSIZE, size - MSG_BSIZE);
+	/* this memory is now dead - clear it so that it compresses better
+	   in case of suspend to disk etc. */
+	bzero(smsg_bufc, MSG_BSIZE);
+	msgbufp->msg_size = size;
+	msgbufp->msg_bufc = new_logdata;
+	LOG_UNLOCK();
+	printf("set system log size to %ld bytes\n", msgbufp->msg_size);
+}
+
+SYSCTL_LONG(_kern, OID_AUTO, msgbuf, CTLFLAG_RD, &temp_msgbuf.msg_size, "");
+
+/*
+ * This should be called by single user mode /sbin/dmesg only.
+ * It returns as much data still in the buffer as possible.
+ */
+int
+log_dmesg(user_addr_t buffer, uint32_t buffersize, register_t * retval) {
+	unsigned long i;
+	int error = 0, newl, skip;
+	char *localbuff, *p, *copystart, ch;
+	long localbuff_size = msgbufp->msg_size+2, copysize;
+
+	if (!(localbuff = (char *)kalloc(localbuff_size))) {
+		printf("log_dmesg: unable to allocate memory\n");
+		return (ENOMEM);
+	}
+	/* in between here, the log could become bigger, but that's fine */
+	LOG_LOCK();
+
+	/*
+	 * The message buffer is circular; start at the write pointer, and
+	 * make one loop up to write pointer - 1.
+	 */
+	p = msgbufp->msg_bufc + msgbufp->msg_bufx;
+	for (i = newl = skip = 0; p != msgbufp->msg_bufc + msgbufp->msg_bufx - 1; ++p) {
+		if (p >= msgbufp->msg_bufc + msgbufp->msg_size)
+			p = msgbufp->msg_bufc;
+		ch = *p;
+		/* Skip "\n<.*>" syslog sequences. */
+		if (skip) {
+			if (ch == '>')
+				newl = skip = 0;
+			continue;
+		}
+		if (newl && ch == '<') {
+			skip = 1;
+			continue;
+		}
+		if (ch == '\0')
+			continue;
+		newl = ch == '\n';
+		localbuff[i++] = ch;
+	}
+	if (!newl)
+		localbuff[i++] = '\n';
+	localbuff[i++] = 0;
+
+	if (buffersize >= i) {
+		copystart = localbuff;
+		copysize = i;
+	} else {
+		copystart = localbuff + i - buffersize;
+		copysize = buffersize;
+	}
+
+	LOG_UNLOCK();
+
+	error = copyout(copystart, buffer, copysize);
+	if (!error)
+		*retval = copysize;
+
+	kfree(localbuff, localbuff_size);
+	return (error);
+}

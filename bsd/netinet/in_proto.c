@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1993
@@ -115,7 +121,7 @@ struct protosw inetsw[] = {
   0,		0,		0,	{ 0, 0 },	0,	{ 0 }
 },
 { SOCK_DGRAM,	&inetdomain,	IPPROTO_UDP,	PR_ATOMIC|PR_ADDR|PR_PROTOLOCK|PR_PCBLOCK,
-  udp_input,	0,		udp_ctlinput,	ip_ctloutput,
+  udp_input,	0,		udp_ctlinput,	udp_ctloutput,
   0,
   udp_init,	0,		udp_slowtimo,		0,
   0,
@@ -123,10 +129,10 @@ struct protosw inetsw[] = {
   udp_lock,	udp_unlock,	udp_getlock,	{ 0, 0 },	0,	{ 0 }
 },
 { SOCK_STREAM,	&inetdomain,	IPPROTO_TCP, 
-	PR_CONNREQUIRED|PR_IMPLOPCL|PR_WANTRCVD|PR_PCBLOCK|PR_PROTOLOCK|PR_DISPOSE,
+	PR_CONNREQUIRED|PR_WANTRCVD|PR_PCBLOCK|PR_PROTOLOCK|PR_DISPOSE,
   tcp_input,	0,		tcp_ctlinput,	tcp_ctloutput,
   0,
-  tcp_init,	tcp_fasttimo,	tcp_slowtimo,	tcp_drain,
+  tcp_init,	0,	tcp_slowtimo,	tcp_drain,
   0,
   &tcp_usrreqs,
   tcp_lock,	tcp_unlock,	tcp_getlock,	{ 0, 0 },	0,	{ 0 }
@@ -163,6 +169,7 @@ struct protosw inetsw[] = {
   &rip_usrreqs,
   0,		rip_unlock,	0,	{ 0, 0 },	0,	{ 0 }
 },
+#if MROUTING
 { SOCK_RAW,	&inetdomain,	IPPROTO_RSVP,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
   rsvp_input,	0,		0,		rip_ctloutput,
   0,
@@ -171,6 +178,7 @@ struct protosw inetsw[] = {
   &rip_usrreqs,
   0,		rip_unlock,		0,	{ 0, 0 },	0,	{ 0 }
 },
+#endif /* MROUTING */
 #if IPSEC
 { SOCK_RAW,	&inetdomain,	IPPROTO_AH,	PR_ATOMIC|PR_ADDR|PR_PROTOLOCK,
   ah4_input,	0,	 	0,		0,
@@ -262,7 +270,7 @@ extern int in_inithead(void **, int);
 
 int in_proto_count = (sizeof (inetsw) / sizeof (struct protosw));
 
-extern void in_dinit(void);
+extern void in_dinit(void) __attribute__((section("__TEXT, initcode")));
 /* A routing init function, and a header size */
 struct domain inetdomain =
     { AF_INET, 
@@ -284,19 +292,19 @@ struct domain inetdomain =
 
 DOMAIN_SET(inet);
 
-SYSCTL_NODE(_net,      PF_INET,		inet,	CTLFLAG_RW, 0,
+SYSCTL_NODE(_net,      PF_INET,		inet,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 	"Internet Family");
 
-SYSCTL_NODE(_net_inet, IPPROTO_IP,	ip,	CTLFLAG_RW, 0,	"IP");
-SYSCTL_NODE(_net_inet, IPPROTO_ICMP,	icmp,	CTLFLAG_RW, 0,	"ICMP");
-SYSCTL_NODE(_net_inet, IPPROTO_UDP,	udp,	CTLFLAG_RW, 0,	"UDP");
-SYSCTL_NODE(_net_inet, IPPROTO_TCP,	tcp,	CTLFLAG_RW, 0,	"TCP");
-SYSCTL_NODE(_net_inet, IPPROTO_IGMP,	igmp,	CTLFLAG_RW, 0,	"IGMP");
+SYSCTL_NODE(_net_inet, IPPROTO_IP,	ip,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"IP");
+SYSCTL_NODE(_net_inet, IPPROTO_ICMP,	icmp,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"ICMP");
+SYSCTL_NODE(_net_inet, IPPROTO_UDP,	udp,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"UDP");
+SYSCTL_NODE(_net_inet, IPPROTO_TCP,	tcp,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"TCP");
+SYSCTL_NODE(_net_inet, IPPROTO_IGMP,	igmp,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"IGMP");
 #if IPSEC
-SYSCTL_NODE(_net_inet, IPPROTO_AH,	ipsec,	CTLFLAG_RW, 0,	"IPSEC");
+SYSCTL_NODE(_net_inet, IPPROTO_AH,	ipsec,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"IPSEC");
 #endif /* IPSEC */
-SYSCTL_NODE(_net_inet, IPPROTO_RAW,	raw,	CTLFLAG_RW, 0,	"RAW");
+SYSCTL_NODE(_net_inet, IPPROTO_RAW,	raw,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"RAW");
 #if IPDIVERT
-SYSCTL_NODE(_net_inet, IPPROTO_DIVERT,	div,	CTLFLAG_RW, 0,	"DIVERT");
+SYSCTL_NODE(_net_inet, IPPROTO_DIVERT,	div,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"DIVERT");
 #endif
 

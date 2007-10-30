@@ -339,7 +339,7 @@ static __inline__ void resetTo(ParseContext *c, CheckPoint *chk)
     c->fP = *chk;
 }
 
-static __inline__ const char *inCharFromCheck(ParseContext *c, CheckPoint *chk)
+static __inline__ const char *inCharFromCheck(CheckPoint *chk)
 {
     return chk->fInChar;
 }
@@ -519,7 +519,7 @@ static __inline__ Boolean isNext(ParseContext *c, char ch)
 }
 
 // Check the current input is ONE of the characters in str
-static Boolean charNext(ParseContext *c, char *str)
+static Boolean charNext(ParseContext *c, const char *str)
 {
     if (hasRemain(c, 1)) {
         char ch = peekNext(c);
@@ -542,7 +542,7 @@ static Boolean strNext(ParseContext *c, const char *str)
 
     do {
         if (!*str) {
-            c->fP.fInChar = (char *) cp;
+            c->fP.fInChar = (const char *) cp;
             return true;
         }
         else if (!*cp)
@@ -699,6 +699,7 @@ appendQualifiedClass(ParseContext *c, int entry)
 {
     BaseTypeData *iP, *oP, *sP, *endSP;
     const char *cp, *typeID;
+    char *cp_new;
     int sub, subEntry, prefixLen;
     int q_count;
 
@@ -714,8 +715,8 @@ appendQualifiedClass(ParseContext *c, int entry)
     for (q_count = 0; sP < endSP && (cp-typeID) < prefixLen; q_count++, sP++) {
         int count;
 
-        count = strtoul(cp, (char **) &cp, 10);
-        cp += count;
+        count = strtoul(cp, &cp_new, 10);
+	cp = cp_new + count;
 
         sP->fType = kNTClass;
         sP->fFundTypeID = typeID;
@@ -745,7 +746,7 @@ appendQualifiedClass(ParseContext *c, int entry)
 
         oP->fType = kNTSubstitute;	// Assume complete substitution
         oP->fLen = sub;
-        oP->fFundTypeID = 0;
+        oP->fFundTypeID = NULL;
 
         // We have a partial substitution so tag on the unmatched bit
         if (prefixLen != iP->fLen) {
@@ -792,7 +793,7 @@ appendType(ParseContext *c, int type)
     entry = tP->fStartEntry;
     numE  = tP->fNumEntries;
     lastEntry = entry + numE;
-    iP = 0;
+    iP = NULL;
     for (i = 0, found = false, sub = -1; i < numE; i++) {
         iP = &c->fInEntries[entry + i];
         switch (iP->fType) {
@@ -990,12 +991,14 @@ static Boolean parse_count(ParseContext *c, int *countP)
 {
     int count = 0;
     char ch;
+    char *newp;
 
     ch = peekNext(c);
     if (ch < '1' || ch > '9')
         return false;
 
-    count = strtol(c->fP.fInChar, (char **) &c->fP.fInChar, 10);
+    count = strtol(c->fP.fInChar, &newp, 10);
+    c->fP.fInChar = newp;
     if (countP)
         *countP = count;
 
@@ -1330,10 +1333,10 @@ static Boolean
 rotateFunction(ParseContext *c, int argStart, int retStart)
 {
     char returnTypeBuffer[MAX_RETURN_BUFFER];
-    int numArg, numRet;
-    int lenArg, lenRet;
+    unsigned int numArg, numRet;
+    unsigned int lenArg, lenRet;
     char *sArgP, *sRetP;
-    int i;
+    unsigned int i;
 
     TypeData *argTP = &c->fTypeList[argStart];
     TypeData *retTP = &c->fTypeList[retStart];
@@ -1393,7 +1396,7 @@ rotateFunction(ParseContext *c, int argStart, int retStart)
 // <function_type> ::= "F" <argument_types> "_" <type>
 static Boolean parse_function_type(ParseContext *c, Boolean forMethod)
 {
-    TypeData *bDictP = 0;
+    TypeData *bDictP = NULL;
     BaseTypeData *bP = c->fCurBaseP;
 
     int argTypeStart, retTypeStart;
@@ -1689,7 +1692,9 @@ abandonParse:
 static Boolean parse_declarators(ParseContext *c)
 {
     int count;
+    unsigned long l;
     BaseTypeData *dP;
+    char *newp;
 
     // Note we MUST go through the for loop at least once
     for (count = 0; ; count++) {
@@ -1728,8 +1733,9 @@ static Boolean parse_declarators(ParseContext *c)
             dP->fType = kNTArray;
 
             advance(c, 1); curDecl++;
-            curDecl = (void *)
-                strtoul(curDecl, (char **) &c->fP.fInChar, 10);
+            l = strtoul(curDecl, &newp, 10);
+            c->fP.fInChar = newp;
+            curDecl = (const char *)l;
             if (!curDecl)
                 goto abandonParse;
             dP->fFundTypeID = curDecl;
@@ -1873,7 +1879,7 @@ static Boolean parse_opinfo(ParseContext *c, const char **opInfoP)
     CheckPoint chk = *checkPoint(c);
     const char *op;
     char ch;
-    int i;
+    unsigned int i;
 
     if ('a' == (ch = peekNext(c))) {
         goto abandonParse;
@@ -2056,7 +2062,7 @@ static Boolean parse_mangled_name(ParseContext *c)
         if (atEnd(c))
             goto abandonParse;	// No Signature?
 
-        funcLen = inCharFromCheck(c, &dubBarChk) - func - 2;
+        funcLen = inCharFromCheck(&dubBarChk) - func - 2;
         if (parse_signature(c, func, funcLen, op))
             return true;
 

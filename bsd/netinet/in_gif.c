@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*	$KAME: in_gif.c,v 1.54 2001/05/14 14:02:16 itojun Exp $	*/
 
@@ -61,6 +67,7 @@
 #include <sys/sysctl.h>
 
 #include <sys/malloc.h>
+#include <libkern/OSAtomic.h>
 
 #include <net/if.h>
 #include <net/route.h>
@@ -95,9 +102,9 @@ in_gif_output(
 	struct ifnet	*ifp,
 	int		family,
 	struct mbuf	*m,
-	struct rtentry *rt)
+	__unused struct rtentry *rt)
 {
-	struct gif_softc *sc = (struct gif_softc*)ifp;
+	struct gif_softc *sc = ifnet_softc(ifp);
 	struct sockaddr_in *dst = (struct sockaddr_in *)&sc->gif_ro.ro_dst;
 	struct sockaddr_in *sin_src = (struct sockaddr_in *)sc->gif_psrc;
 	struct sockaddr_in *sin_dst = (struct sockaddr_in *)sc->gif_pdst;
@@ -119,7 +126,7 @@ in_gif_output(
 		struct ip *ip;
 
 		proto = IPPROTO_IPV4;
-		if (m->m_len < sizeof(*ip)) {
+		if (mbuf_len(m) < sizeof(*ip)) {
 			m = m_pullup(m, sizeof(*ip));
 			if (!m)
 				return ENOBUFS;
@@ -134,7 +141,7 @@ in_gif_output(
 	    {
 		struct ip6_hdr *ip6;
 		proto = IPPROTO_IPV6;
-		if (m->m_len < sizeof(*ip6)) {
+		if (mbuf_len(m) < sizeof(*ip6)) {
 			m = m_pullup(m, sizeof(*ip6));
 			if (!m)
 				return ENOBUFS;
@@ -173,7 +180,7 @@ in_gif_output(
 
 	/* prepend new IP header */
 	M_PREPEND(m, sizeof(struct ip), M_DONTWAIT);
-	if (m && m->m_len < sizeof(struct ip))
+	if (m && mbuf_len(m) < sizeof(struct ip))
 		m = m_pullup(m, sizeof(struct ip));
 	if (m == NULL) {
 		printf("ENOBUFS in in_gif_output %d\n", __LINE__);
@@ -214,7 +221,7 @@ in_gif_output(
 #endif
 	}
 
-	error = ip_output(m, NULL, &sc->gif_ro, 0, NULL);
+	error = ip_output(m, NULL, &sc->gif_ro, 0, NULL, NULL);
 	return(error);
 }
 
@@ -225,18 +232,18 @@ in_gif_input(m, off)
 {
 	struct ifnet *gifp = NULL;
 	struct ip *ip;
-	int i, af, proto;
+	int af, proto;
 	u_int8_t otos;
 
 	ip = mtod(m, struct ip *);
 	proto = ip->ip_p;
 
 
-	gifp = (struct ifnet *)encap_getarg(m);
+	gifp = ((struct gif_softc*)encap_getarg(m))->gif_if;
 
 	if (gifp == NULL || (gifp->if_flags & IFF_UP) == 0) {
 		m_freem(m);
-		ipstat.ips_nogif++;
+		OSAddAtomic(1, (SInt32*)&ipstat.ips_nogif);
 		return;
 	}
 
@@ -247,9 +254,8 @@ in_gif_input(m, off)
 #if INET
 	case IPPROTO_IPV4:
 	    {
-		struct ip *ip;
 		af = AF_INET;
-		if (m->m_len < sizeof(*ip)) {
+		if (mbuf_len(m) < sizeof(*ip)) {
 			m = m_pullup(m, sizeof(*ip));
 			if (!m)
 				return;
@@ -268,7 +274,7 @@ in_gif_input(m, off)
 		struct ip6_hdr *ip6;
 		u_int8_t itos;
 		af = AF_INET6;
-		if (m->m_len < sizeof(*ip6)) {
+		if (mbuf_len(m) < sizeof(*ip6)) {
 			m = m_pullup(m, sizeof(*ip6));
 			if (!m)
 				return;
@@ -285,7 +291,7 @@ in_gif_input(m, off)
 	    }
 #endif /* INET6 */
 	default:
-		ipstat.ips_nogif++;
+		OSAddAtomic(1, (SInt32*)&ipstat.ips_nogif);
 		m_freem(m);
 		return;
 	}
@@ -293,11 +299,22 @@ in_gif_input(m, off)
 	/* Should we free m if dlil_input returns an error? */
 	if (m->m_pkthdr.rcvif)	/* replace the rcvif by gifp for dlil to route it correctly */
 		m->m_pkthdr.rcvif = gifp;
-	dlil_input_packet(gifp, m, NULL);
+	ifnet_input(gifp, m, NULL);
 #else
 	gif_input(m, af, gifp);
 #endif
 	return;
+}
+
+static __inline__ void*
+_cast_non_const(const void * ptr) {
+	union {
+		const void*		cval;
+		void*			val;
+	} ret;
+	
+	ret.cval = ptr;
+	return (ret.val);
 }
 
 /*
@@ -305,11 +322,11 @@ in_gif_input(m, off)
  * matched the physical addr family.  see gif_encapcheck().
  */
 int
-gif_encapcheck4(m, off, proto, arg)
-	const struct mbuf *m;
-	int off;
-	int proto;
-	void *arg;
+gif_encapcheck4(
+	const struct mbuf *m,
+	__unused int off,
+	__unused int proto,
+	void *arg)
 {
 	struct ip ip;
 	struct gif_softc *sc;
@@ -322,8 +339,7 @@ gif_encapcheck4(m, off, proto, arg)
 	src = (struct sockaddr_in *)sc->gif_psrc;
 	dst = (struct sockaddr_in *)sc->gif_pdst;
 
-	/* LINTED const cast */
-	m_copydata((struct mbuf *)m, 0, sizeof(ip), (caddr_t)&ip);
+	mbuf_copydata(m, 0, sizeof(ip), &ip);
 
 	/* check for address match */
 	addrmatch = 0;
@@ -346,7 +362,7 @@ gif_encapcheck4(m, off, proto, arg)
 	for (ia4 = TAILQ_FIRST(&in_ifaddrhead); ia4;
 	     ia4 = TAILQ_NEXT(ia4, ia_link))
 	{
-		if ((ia4->ia_ifa.ifa_ifp->if_flags & IFF_BROADCAST) == 0)
+		if ((ifnet_flags(ia4->ia_ifa.ifa_ifp) & IFF_BROADCAST) == 0)
 			continue;
 		if (ip.ip_src.s_addr == ia4->ia_broadaddr.sin_addr.s_addr) {
 			lck_mtx_unlock(rt_mtx);
@@ -356,7 +372,7 @@ gif_encapcheck4(m, off, proto, arg)
 	lck_mtx_unlock(rt_mtx);
 
 	/* ingress filters on outer source */
-	if ((sc->gif_if.if_flags & IFF_LINK2) == 0 &&
+	if ((ifnet_flags(sc->gif_if) & IFF_LINK2) == 0 &&
 	    (m->m_flags & M_PKTHDR) != 0 && m->m_pkthdr.rcvif) {
 		struct sockaddr_in sin;
 		struct rtentry *rt;

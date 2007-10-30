@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <platforms.h>
@@ -151,13 +157,48 @@ Entry(flush_tlb64)
 	EMARF
 	ret
 
+Entry(set64_cr3)
+
+	FRAME
+
+	movl	B_ARG0, %eax
+	movl	B_ARG1, %edx
+
+	ENTER_64BIT_MODE()
+
+	/* %rax = %edx:%eax */
+	shl	$32, %rax
+	shrd	$32, %rdx, %rax
+
+	mov	%rax, %cr3
+
+	ENTER_COMPAT_MODE()
+
+	EMARF
+	ret
+
+Entry(get64_cr3)
+
+	FRAME
+
+	ENTER_64BIT_MODE()
+
+	mov	%cr3, %rax
+	mov	%rax, %rdx
+	shr	$32, %rdx		// %edx:%eax = %cr3
+
+	ENTER_COMPAT_MODE()
+
+	EMARF
+	ret
+
 /* FXSAVE and FXRSTOR operate in a mode dependent fashion, hence these variants.
-* Must be called with interrupts disabled.
-* We clear pending x87 exceptions here; this is technically incorrect, since we should
-* propagate those to the user, but the compatibility mode kernel is currently not
-* prepared to handle exceptions originating in 64-bit kernel mode. However, it may be possible
-* to work around this should it prove necessary.
-*/
+ * Must be called with interrupts disabled.
+ * We clear pending x87 exceptions here; this is technically incorrect, since we
+ * should propagate those to the user, but the compatibility mode kernel is
+ * currently not prepared to handle exceptions originating in 64-bit kernel mode.
+ * However, it may be possible to work around this should it prove necessary.
+ */
 
 Entry(fxsave64)
 	movl		S_ARG0,%eax

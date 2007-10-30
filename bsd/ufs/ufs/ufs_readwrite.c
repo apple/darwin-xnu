@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*-
@@ -120,7 +126,7 @@ ffs_read_internal(vnode_t vp, struct uio *uio, int ioflag)
 		return (EFBIG);
 
 	if (UBCINFOEXISTS(vp)) {
-		error = cluster_read(vp, uio, (off_t)ip->i_size, 0);
+		error = cluster_read(vp, uio, (off_t)ip->i_size, ioflag);
 	} else {
 	for (error = 0, bp = NULL; uio_resid(uio) > 0; 
 	    bp = NULL) {
@@ -193,7 +199,8 @@ ffs_read_internal(vnode_t vp, struct uio *uio, int ioflag)
 	}
 	if (bp != NULL)
 		buf_brelse(bp);
-	ip->i_flag |= IN_ACCESS;
+	if ((vnode_vfsvisflags(vp) & MNT_NOATIME) == 0)
+		ip->i_flag |= IN_ACCESS;
 	return (error);
 }
 
@@ -212,7 +219,7 @@ ffs_write(ap)
 }
 
 
-ffs_write_internal(vnode_t vp, struct uio *uio, int ioflag, ucred_t cred)
+ffs_write_internal(vnode_t vp, struct uio *uio, int ioflag, kauth_cred_t cred)
 {
 	buf_t	bp;
 	proc_t	p;
@@ -226,6 +233,9 @@ ffs_write_internal(vnode_t vp, struct uio *uio, int ioflag, ucred_t cred)
 	int error = 0;
 	int file_extended = 0;
 	int doingdirectory = 0;
+	user_ssize_t clippedsize = 0;	/* Truncate writes near fs->fs_maxfilesize */
+	user_ssize_t residcount, oldcount;
+	int partialwrite=0;
 
 #if REV_ENDIAN_FS
 	int rev_endian=0;
@@ -260,9 +270,18 @@ ffs_write_internal(vnode_t vp, struct uio *uio, int ioflag, ucred_t cred)
 	}
 
 	fs = ip->I_FS;
-	if (uio->uio_offset < 0 ||
-	    (u_int64_t)uio->uio_offset + uio_resid(uio) > fs->fs_maxfilesize)
+	if (uio->uio_offset < 0)
 		return (EFBIG);
+	if ( uio_resid(uio) > fs->fs_maxfilesize - uio->uio_offset ) {
+		residcount = uio_resid(uio);
+		clippedsize = residcount - (fs->fs_maxfilesize - uio->uio_offset);
+		if (clippedsize >= residcount) {
+		return (EFBIG);
+		} else {
+			uio_setresid(uio, residcount - clippedsize);
+			partialwrite = 1;
+		}
+	}
 	if (uio_resid(uio) == 0)
 	        return (0);
 
@@ -349,8 +368,7 @@ ffs_write_internal(vnode_t vp, struct uio *uio, int ioflag, ucred_t cred)
 			filesize -= rsd;
 	}
 
-	flags = ioflag & IO_SYNC ? IO_SYNC : 0;
-	/* flags |= IO_NOZEROVALID; */
+	flags = ioflag & ~(IO_TAILZEROFILL | IO_HEADZEROFILL | IO_NOZEROVALID | IO_NOZERODIRTY);
 
 	if((error == 0) && fblk && fboff) {
 		if( fblk > fs->fs_bsize) 
@@ -358,7 +376,6 @@ ffs_write_internal(vnode_t vp, struct uio *uio, int ioflag, ucred_t cred)
 		/* We need to zero out the head */
 		head_offset = uio->uio_offset - (off_t)fboff ;
 		flags |= IO_HEADZEROFILL;
-		/* flags &= ~IO_NOZEROVALID; */
 	}
 
 	if((error == 0) && blkalloc && ((blkalloc - xfersize) > 0)) {
@@ -470,6 +487,10 @@ ffs_write_internal(vnode_t vp, struct uio *uio, int ioflag, ucred_t cred)
 		microtime(&tv);		
 		error = ffs_update(vp, &tv, &tv, 1);
 	}
+	if (partialwrite) {
+		oldcount = uio_resid(uio);
+		uio_setresid(uio, oldcount + clippedsize);
+	}
 	return (error);
 }
 
@@ -499,12 +520,6 @@ ffs_pagein(ap)
 	int error;
 
 	ip = VTOI(vp);
-
-	/* check pageins for reg file only  and ubc info is present*/
-	if  (UBCINVALID(vp))
-		panic("ffs_pagein: Not a  VREG: vp=%x", vp);
-	if (UBCINFOMISSING(vp))
-		panic("ffs_pagein: No mapping: vp=%x", vp);
 
 #if DIAGNOSTIC
 	if (vp->v_type == VLNK) {
@@ -558,12 +573,6 @@ ffs_pageout(ap)
 	struct buf *bp;
 
 	ip = VTOI(vp);
-
-	/* check pageouts for reg file only  and ubc info is present*/
-	if  (UBCINVALID(vp))
-		panic("ffs_pageout: Not a  VREG: vp=%x", vp);
-	if (UBCINFOMISSING(vp))
-		panic("ffs_pageout: No mapping: vp=%x", vp);
 
         if (vp->v_mount->mnt_flag & MNT_RDONLY) {
 		if (!nocommit)

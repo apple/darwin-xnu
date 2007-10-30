@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1989, 1993
@@ -52,7 +58,12 @@
  * SUCH DAMAGE.
  *
  */
-
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2006 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 
 #include <sys/param.h>
@@ -83,10 +94,6 @@
 
 #include <net/dlil.h>
 
-#if LLC && CCITT
-extern struct ifqueue pkintrq;
-#endif
-
 #if BRIDGE
 #include <net/bridge.h>
 #endif
@@ -95,17 +102,35 @@ extern struct ifqueue pkintrq;
 #if NVLAN > 0
 #include <net/if_vlan_var.h>
 #endif /* NVLAN > 0 */
+#include <net/ether_if_module.h>
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
 
 /* Local function declerations */
-int ether_attach_inet(struct ifnet *ifp, u_long proto_family);
-int ether_detach_inet(struct ifnet *ifp, u_long proto_family);
+extern void *kdp_get_interface(void);
+extern void kdp_set_ip_and_mac_addresses(struct in_addr *ipaddr,
+										 struct ether_addr *macaddr);
 
-extern void * kdp_get_interface(void);
-extern void ipintr(void);
-extern void arp_input(struct mbuf* m);
+#if defined (__arm__)
+static __inline__ void
+_ip_copy(struct in_addr * dst, const struct in_addr * src)
+{
+	memcpy(dst, src, sizeof(*dst));
+	return;
+}
+
+#else
+static __inline__ void
+_ip_copy(struct in_addr * dst, const struct in_addr * src)
+{
+	*dst = *src;
+	return;
+}
+#endif
 
 static void
-inet_ether_arp_input(
+ether_inet_arp_input(
 	struct mbuf *m)
 {
 	struct ether_arp *ea;
@@ -137,9 +162,9 @@ inet_ether_arp_input(
 	bzero(&sender_ip, sizeof(sender_ip));
 	sender_ip.sin_len = sizeof(sender_ip);
 	sender_ip.sin_family = AF_INET;
-	sender_ip.sin_addr = *(struct in_addr*)ea->arp_spa;
+	_ip_copy(&sender_ip.sin_addr, (const struct in_addr *)ea->arp_spa);
 	target_ip = sender_ip;
-	target_ip.sin_addr = *(struct in_addr*)ea->arp_tpa;
+	_ip_copy(&target_ip.sin_addr, (const struct in_addr *)ea->arp_tpa);
 	
 	bzero(&sender_hw, sizeof(sender_hw));
 	sender_hw.sdl_len = sizeof(sender_hw);
@@ -158,38 +183,49 @@ inet_ether_arp_input(
  * the ether header, which is provided separately.
  */
 static errno_t
-inet_ether_input(
+ether_inet_input(
 	__unused ifnet_t			ifp,
 	__unused protocol_family_t	protocol_family,
-	mbuf_t						m,
-	char     					*frame_header)
+	mbuf_t						m_list)
 {
-    register struct ether_header *eh = (struct ether_header *) frame_header;
-    u_short ether_type;
-
-    ether_type = ntohs(eh->ether_type);
-
-    switch (ether_type) {
-
-		case ETHERTYPE_IP:
-			proto_input(PF_INET, m);
-			break;
+	mbuf_t	m;
+	mbuf_t	*tailptr = &m_list;
+	mbuf_t	nextpkt;
+	
+	/* Strip ARP and non-IP packets out of the list */
+	for (m = m_list; m; m = nextpkt) {
+    	struct ether_header *eh = mbuf_pkthdr_header(m);
+    	
+    	nextpkt = m->m_nextpkt;
 		
-		case ETHERTYPE_ARP: {
-			inet_ether_arp_input(m);
-		}
-		break;
-		
-		default: {
-			return ENOENT;
-		}
-    }
+    	if (eh->ether_type == htons(ETHERTYPE_IP)) {
+    		/* put this packet in the list */
+    		*tailptr = m;
+    		tailptr = &m->m_nextpkt;
+    	}
+    	else {
+    		/* Pass ARP packets to arp input */
+			m->m_nextpkt = NULL;
+    		if (eh->ether_type == htons(ETHERTYPE_ARP))
+    			ether_inet_arp_input(m);
+    		else
+    			mbuf_freem(m);
+    	}
+	}
+	
+	*tailptr = NULL;
+	
+	/* Pass IP list to ip input */
+	if (m_list != NULL && proto_input(PF_INET, m_list) != 0)
+	{
+		mbuf_freem_list(m_list);
+	}
 	
     return 0;
 }
 
 static errno_t
-inet_ether_pre_output(
+ether_inet_pre_output(
 	ifnet_t						ifp,
 	__unused protocol_family_t	protocol_family,
 	mbuf_t						*m0,
@@ -199,7 +235,7 @@ inet_ether_pre_output(
 	char						*edst)
 {
     register struct mbuf *m = *m0;
-    register struct ether_header *eh;
+    const struct ether_header *eh;
     errno_t	result = 0;
 
 
@@ -227,7 +263,7 @@ inet_ether_pre_output(
 		case pseudo_AF_HDRCMPLT:	
 		case AF_UNSPEC:
 			m->m_flags &= ~M_LOOP;
-			eh = (struct ether_header *)dst_netaddr->sa_data;
+			eh = (const struct ether_header *)dst_netaddr->sa_data;
 			(void)memcpy(edst, eh->ether_dhost, 6);
 			*(u_short *)type = eh->ether_type;
 			break;
@@ -274,7 +310,6 @@ ether_inet_resolve_multi(
 	return 0;
 }
 
-
 static errno_t
 ether_inet_prmod_ioctl(
     ifnet_t						ifp,
@@ -289,6 +324,7 @@ ether_inet_prmod_ioctl(
 
     switch (command) {
     case SIOCSIFADDR:
+    case SIOCAIFADDR:
 	if ((ifnet_flags(ifp) & IFF_RUNNING) == 0) {
 		ifnet_set_flags(ifp, IFF_UP, IFF_UP);
 		ifnet_ioctl(ifp, 0, SIOCSIFFLAGS, NULL);
@@ -300,13 +336,19 @@ ether_inet_prmod_ioctl(
 
 	    inet_arp_init_ifaddr(ifp, ifa);
 	    /*
-	     * Register new IP and MAC addresses with the kernel debugger
-	     * if the interface is the same as was registered by IOKernelDebugger. If
-		 * no interface was registered, fall back and just match against en0 interface.
+	     * Register new IP and MAC addresses with the kernel
+	     * debugger if the interface is the same as was registered
+	     * by IOKernelDebugger. If no interface was registered,
+	     * fall back and just match against en0 interface.
+	     * Do this only for the first address of the interface
+	     * and not for aliases.
 	     */
-	    if ((kdp_get_interface() != 0 && kdp_get_interface() == ifp->if_softc)
-		 || (kdp_get_interface() == 0 && ifp->if_unit == 0))
-			kdp_set_ip_and_mac_addresses(&(IA_SIN(ifa)->sin_addr), ifnet_lladdr(ifp));
+	    if (command == SIOCSIFADDR &&
+	        ((kdp_get_interface() != 0 &&
+	        kdp_get_interface() == ifp->if_softc) ||
+		(kdp_get_interface() == 0 && ifp->if_unit == 0)))
+			kdp_set_ip_and_mac_addresses(&(IA_SIN(ifa)->sin_addr),
+			    ifnet_lladdr(ifp));
 
 	    break;
 
@@ -317,18 +359,12 @@ ether_inet_prmod_ioctl(
 	break;
 
     case SIOCGIFADDR:
-	ifnet_lladdr_copy_bytes(ifp, ifr->ifr_addr.sa_data, ETHER_ADDR_LEN);
-    break;
-
-    case SIOCSIFMTU:
-	/*
-	 * IOKit IONetworkFamily will set the right MTU according to the driver
-	 */
-
-	 return (0);
+		ifnet_lladdr_copy_bytes(ifp, ifr->ifr_addr.sa_data, ETHER_ADDR_LEN);
+		break;
 
     default:
-	 return EOPNOTSUPP;
+		error = EOPNOTSUPP;
+		break;
     }
 
     return (error);
@@ -381,10 +417,10 @@ ether_inet_arp(
 		return EINVAL;
 	
 	if ((sender_ip && sender_ip->sin_family != AF_INET) ||
-		(target_ip && target_ip->sin_family != AF_INET))
+	    target_ip->sin_family != AF_INET)
 		return EAFNOSUPPORT;
 	
-	result = mbuf_gethdr(MBUF_WAITOK, MBUF_TYPE_DATA, &m);
+	result = mbuf_gethdr(MBUF_DONTWAIT, MBUF_TYPE_DATA, &m);
 	if (result != 0)
 		return result;
 	
@@ -398,10 +434,20 @@ ether_inet_arp(
 	mbuf_setdata(m, datap, sizeof(*ea));
 	ea = mbuf_data(m);
 	
-	/* Prepend the ethernet header, we will send the raw frame */
-	mbuf_prepend(&m, sizeof(*eh), MBUF_WAITOK);
+	/*
+	 * Prepend the ethernet header, we will send the raw frame;
+	 * callee frees the original mbuf when allocation fails.
+	 */
+	result = mbuf_prepend(&m, sizeof(*eh), MBUF_DONTWAIT);
+	if (result != 0)
+		return result;
+
 	eh = mbuf_data(m);
 	eh->ether_type = htons(ETHERTYPE_ARP);
+
+#if CONFIG_MACF_NET
+	mac_mbuf_label_associate_linklayer(ifp, m);
+#endif
 	
 	/* Fill out the arp header */
 	ea->arp_pro = htons(ETHERTYPE_IP);
@@ -462,12 +508,12 @@ ether_inet_arp(
 	return 0;
 }
 
-int
+errno_t
 ether_attach_inet(
 	struct ifnet	*ifp,
-	__unused u_long	proto_family)
+	__unused protocol_family_t proto_family)
 {
-	struct ifnet_attach_proto_param proto;
+	struct ifnet_attach_proto_param_v2 proto;
 	struct ifnet_demux_desc demux[2];
 	u_short en_native=htons(ETHERTYPE_IP);
 	u_short arp_native=htons(ETHERTYPE_ARP);
@@ -484,14 +530,14 @@ ether_attach_inet(
 	bzero(&proto, sizeof(proto));
 	proto.demux_list = demux;
 	proto.demux_count = sizeof(demux) / sizeof(demux[0]);
-	proto.input = inet_ether_input;
-	proto.pre_output = inet_ether_pre_output;
+	proto.input = ether_inet_input;
+	proto.pre_output = ether_inet_pre_output;
 	proto.ioctl = ether_inet_prmod_ioctl;
 	proto.event = ether_inet_event;
 	proto.resolve = ether_inet_resolve_multi;
 	proto.send_arp = ether_inet_arp;
 	
-	error = ifnet_attach_protocol(ifp, proto_family, &proto);
+	error = ifnet_attach_protocol_v2(ifp, proto_family, &proto);
 	if (error && error != EEXIST) {
 		printf("WARNING: ether_attach_inet can't attach ip to %s%d\n",
 			   ifp->if_name, ifp->if_unit);
@@ -499,15 +545,11 @@ ether_attach_inet(
 	return error;
 }
 
-int
+void
 ether_detach_inet(
 	struct ifnet *ifp,
-	u_long proto_family)
+	protocol_family_t proto_family)
 {
-    int         stat;
-
-	stat = dlil_detach_protocol(ifp, proto_family);
-
-    return stat;
+	(void)ifnet_detach_protocol(ifp, proto_family);
 }
 

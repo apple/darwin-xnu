@@ -9,6 +9,8 @@ kernserv	next	loadable_fs.h
 mach		kern	exc.defs
 mach		kern	exc.h
 mach		kern	mach.defs
+mach		kern	mach_exc.defs
+mach		kern	mach_exc.h
 mach		kern	mach_host.defs
 mach		kern	mach_host.h
 mach		kern	mach_interface.h

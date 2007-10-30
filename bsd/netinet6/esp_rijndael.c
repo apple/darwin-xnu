@@ -48,6 +48,8 @@
 
 #include <crypto/aes/aes.h>
 
+#include <netkey/key.h>
+
 #include <net/net_osdep.h>
 
 #define AES_BLOCKLEN 16
@@ -55,21 +57,22 @@
 extern lck_mtx_t *sadb_mutex;
 
 int
-esp_aes_schedlen(algo)
-	const struct esp_algorithm *algo;
+esp_aes_schedlen(
+	__unused const struct esp_algorithm *algo)
 {
 
 	return sizeof(aes_ctx);
 }
 
 int
-esp_aes_schedule(algo, sav)
-	const struct esp_algorithm *algo;
-	struct secasvar *sav;
+esp_aes_schedule(
+	__unused const struct esp_algorithm *algo,
+	struct secasvar *sav)
 {
+
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	aes_ctx *ctx = (aes_ctx*)sav->sched;
 	
-	gen_tabs();
 	aes_decrypt_key(_KEYBUF(sav->key_enc), _KEYLEN(sav->key_enc), &ctx->decrypt);
 	aes_encrypt_key(_KEYBUF(sav->key_enc), _KEYLEN(sav->key_enc), &ctx->encrypt);
 	
@@ -158,7 +161,6 @@ esp_cbc_decrypt_aes(m, off, sav, algo, ivlen)
 	/* grab iv */
 	m_copydata(m, ivoff, ivlen, iv);
 
-	lck_mtx_unlock(sadb_mutex);
 	s = m;
 	soff = sn = dn = 0;
 	d = d0 = dp = NULL;
@@ -204,15 +206,17 @@ esp_cbc_decrypt_aes(m, off, sav, algo, ivlen)
 			if (d && i > MLEN) {
 				MCLGET(d, M_DONTWAIT);
 				if ((d->m_flags & M_EXT) == 0) {
-					m_free(d);
-					d = NULL;
+					d = m_mbigget(d, M_DONTWAIT);
+					if ((d->m_flags & M_EXT) == 0) {
+						m_free(d);
+						d = NULL;
+					}
 				}
 			}
 			if (!d) {
 				m_freem(m);
 				if (d0)
 					m_freem(d0);
-				lck_mtx_lock(sadb_mutex);
 				return ENOBUFS;
 			}
 			if (!d0)
@@ -259,23 +263,22 @@ esp_cbc_decrypt_aes(m, off, sav, algo, ivlen)
 	/* just in case */
 	bzero(iv, sizeof(iv));
 	bzero(sbuf, sizeof(sbuf));
-	lck_mtx_lock(sadb_mutex);
 
 	return 0;
 }
 
 int
-esp_cbc_encrypt_aes(m, off, plen, sav, algo, ivlen)
-	struct mbuf *m;
-	size_t off;
-	size_t plen;
-	struct secasvar *sav;
-	const struct esp_algorithm *algo;
-	int ivlen;
+esp_cbc_encrypt_aes(
+	struct mbuf *m,
+	size_t off,
+	__unused size_t plen,
+	struct secasvar *sav,
+	const struct esp_algorithm *algo,
+	int ivlen)
 {
 	struct mbuf *s;
 	struct mbuf *d, *d0, *dp;
-	int soff, doff;	/* offset from the head of chain, to head of this mbuf */
+	int soff;	/* offset from the head of chain, to head of this mbuf */
 	int sn, dn;	/* offset from the head of the mbuf, to meat */
 	size_t ivoff, bodyoff;
 	u_int8_t *ivp, *dptr;
@@ -317,7 +320,6 @@ esp_cbc_encrypt_aes(m, off, plen, sav, algo, ivlen)
 		m_freem(m);
 		return EINVAL;
 	}
-	lck_mtx_unlock(sadb_mutex);
 
 	s = m;
 	soff = sn = dn = 0;
@@ -364,15 +366,17 @@ esp_cbc_encrypt_aes(m, off, plen, sav, algo, ivlen)
 			if (d && i > MLEN) {
 				MCLGET(d, M_DONTWAIT);
 				if ((d->m_flags & M_EXT) == 0) {
-					m_free(d);
-					d = NULL;
+					d = m_mbigget(d, M_DONTWAIT);
+					if ((d->m_flags & M_EXT) == 0) {
+						m_free(d);
+						d = NULL;
+					}
 				}
 			}
 			if (!d) {
 				m_freem(m);
 				if (d0)
 					m_freem(d0);
-				lck_mtx_lock(sadb_mutex);
 				return ENOBUFS;
 			}
 			if (!d0)
@@ -419,7 +423,6 @@ esp_cbc_encrypt_aes(m, off, plen, sav, algo, ivlen)
 
 	/* just in case */
 	bzero(sbuf, sizeof(sbuf));
-	lck_mtx_lock(sadb_mutex);
 	key_sa_stir_iv(sav);
 
 	return 0;

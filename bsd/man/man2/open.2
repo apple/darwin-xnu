@@ -40,23 +40,33 @@
 .Nm open
 .Nd open or create a file for reading or writing
 .Sh SYNOPSIS
+.\" OH??? .Fd #include <sys/stat.h>
 .Fd #include <fcntl.h>
 .Ft int
-.Fn open "const char *path" "int flags" "mode_t mode"
+.Fo open
+.Fa "const char *path"
+.Fa "int oflag"
+.Fa "..."
+.Fc
 .Sh DESCRIPTION
 The file name specified by
 .Fa path
 is opened
-for reading and/or writing as specified by the
-argument
-.Fa flags
-and the file descriptor returned to the calling process.
+for reading and/or writing,
+as specified by the argument
+.Fa oflag ;
+the file descriptor is returned to the calling process.
+.Pp
 The
-.Fa flags
-argument may indicate the file is to be
+.Fa oflag
+argument may indicate that the file is to be
 created if it does not exist (by specifying the
 .Dv O_CREAT
-flag), in which case the file is created with mode
+flag).  In this case,
+.Nm
+requires a third argument
+.Fa "mode_t mode" ;
+the file is created with mode
 .Fa mode
 as described in
 .Xr chmod 2
@@ -65,7 +75,7 @@ and modified by the process' umask value (see
 .Pp
 The flags specified are formed by
 .Em or Ns 'ing
-the following values
+the following values:
 .Pp
 .Bd -literal -offset indent -compact
 O_RDONLY	open for reading only
@@ -75,15 +85,16 @@ O_NONBLOCK	do not block on open or for data to become available
 O_APPEND	append on each write
 O_CREAT		create file if it does not exist
 O_TRUNC		truncate size to 0
-O_EXCL		error if create and file exists
+O_EXCL		error if O_CREAT and the file exists
 O_SHLOCK	atomically obtain a shared lock
 O_EXLOCK	atomically obtain an exclusive lock
+O_NOFOLLOW	do not follow symlinks
+O_SYMLINK	allow open of symlinks
 .Ed
 .Pp
 Opening a file with
 .Dv O_APPEND
-set causes each write on the file
-to be appended to the end.  If
+set causes each write on the file to be appended to the end.  If
 .Dv O_TRUNC
 is specified and the
 file exists, the file is truncated to zero length.
@@ -94,26 +105,26 @@ is set with
 and the file already
 exists,
 .Fn open
-returns an error.  This may be used to
-implement a simple exclusive access locking mechanism.
+returns an error.
+This may be used to implement a simple exclusive-access locking mechanism.
 If
 .Dv O_EXCL
-is set and the last component of the pathname is
-a symbolic link,
+is set and the last component of the pathname is a symbolic link,
 .Fn open
-will fail even if the symbolic
-link points to a non-existent name.
+will fail even if the symbolic link points to a non-existent name.
+.Pp
 If the
 .Dv O_NONBLOCK
-flag is specified, do not wait for the device or file to be ready or
-available.  If the
+flag is specified, do not wait for the device or file
+to be ready or available.  If the
 .Fn open
 call would result
-in the process being blocked for some reason (e.g., waiting for
-carrier on a dialup line),
+in the process being blocked for some reason
+(e.g., waiting for carrier on a dialup line),
 .Fn open
 returns immediately.
-This flag also has the effect of making all subsequent I/O on the open file non-blocking.
+This flag also has the effect of making all subsequent I/O
+on the open file non-blocking.
 .Pp
 When opening a file, a lock with
 .Xr flock 2
@@ -127,15 +138,31 @@ If creating a file with
 the request for the lock will never fail
 (provided that the underlying filesystem supports locking).
 .Pp
+If
+.Dv O_NOFOLLOW
+is used in the mask and the target file passed to
+.Fn open
+is a symbolic link then the
+.Fn open
+will fail.
+.Pp
+If
+.Dv O_SYMLINK
+is used in the mask and the target file passed to
+.Fn open
+is a symbolic link then the
+.Fn open
+will be for the symbolic link itself, not what it links to.
+.Pp
 If successful,
 .Fn open
 returns a non-negative integer, termed a file descriptor.
 It returns -1 on failure.
-The file pointer used to mark the current position within the
-file is set to the beginning of the file.
+The file pointer (used to mark the current position within the file)
+is set to the beginning of the file.
 .Pp
-When a new file is created it is given the group of the directory
-which contains it.
+When a new file is created,
+it is given the group of the directory which contains it.
 .Pp
 The new descriptor is set to remain open across
 .Xr execve
@@ -145,74 +172,42 @@ and
 .Xr fcntl 2 .
 .Pp
 The system imposes a limit on the number of file descriptors
-open simultaneously by one process.
+that can be held open simultaneously by one process.
 .Xr Getdtablesize 2
 returns the current system limit.
+.Sh RETURN VALUES
+If successful,
+.Fn open
+returns a non-negative integer, termed a file descriptor.
+It returns -1 on failure, and sets
+.Va errno
+to indicate the error.
 .Sh ERRORS
 The named file is opened unless:
 .Bl -tag -width Er
-.It Bq Er ENOTDIR
-A component of the path prefix is not a directory.
-.It Bq Er ENAMETOOLONG
-A component of a pathname exceeded 
-.Dv {NAME_MAX}
-characters, or an entire path name exceeded 
-.Dv {PATH_MAX}
-characters.
-.It Bq Er ENOENT
-.Dv O_CREAT
-is not set and the named file does not exist.
-.It Bq Er ENOENT
-A component of the path name that must exist does not exist.
+.\" ===========
 .It Bq Er EACCES
 Search permission is denied for a component of the path prefix.
+.\" ===========
 .It Bq Er EACCES
 The required permissions (for reading and/or writing)
 are denied for the given flags.
+.\" ===========
 .It Bq Er EACCES
 .Dv O_CREAT
 is specified,
 the file does not exist,
 and the directory in which it is to be created
 does not permit writing.
-.It Bq Er ELOOP
-Too many symbolic links were encountered in translating the pathname.
-.It Bq Er EISDIR
-The named file is a directory, and the arguments specify
-it is to be opened for writing.
-.It Bq Er EROFS
-The named file resides on a read-only file system,
-and the file is to be modified.
-.It Bq Er EMFILE
-The process has already reached its limit for open file descriptors.
-.It Bq Er ENFILE
-The system file table is full.
-.It Bq Er ENXIO
-The named file is a character special or block
-special file, and the device associated with this special file
-does not exist.
-.It Bq Er EINTR
-The
-.Fn open
-operation was interrupted by a signal.
-.It Bq Er EOPNOTSUPP
-.Dv O_SHLOCK
-or
-.Dv O_EXLOCK
-is specified but the underlying filesystem does not support locking.
-.It Bq Er ENOSPC
-.Dv O_CREAT
-is specified,
-the file does not exist,
-and the directory in which the entry for the new file is being placed
-cannot be extended because there is no space left on the file
-system containing the directory.
-.It Bq Er ENOSPC
-.Dv O_CREAT
-is specified,
-the file does not exist,
-and there are no free inodes on the file system on which the
-file is being created.
+.\" ===========
+.It Bq Er EACCES
+.Dv O_TRUNC
+is specified and write permission is denied.
+.\" ===========
+.It Bq Er EAGAIN
+.Fa path
+specifies the slave side of a locked pseudo-terminal device.
+.\" ===========
 .It Bq Er EDQUOT
 .Dv O_CREAT
 is specified,
@@ -221,32 +216,126 @@ and the directory in which the entry for the new file
 is being placed cannot be extended because the
 user's quota of disk blocks on the file system
 containing the directory has been exhausted.
+.\" ===========
 .It Bq Er EDQUOT
 .Dv O_CREAT
 is specified,
 the file does not exist,
-and the user's quota of inodes on the file system on
-which the file is being created has been exhausted.
+and the user's quota of inodes on the file system
+on which the file is being created has been exhausted.
+.\" ===========
+.It Bq Er EEXIST
+.Dv O_CREAT
+and
+.Dv O_EXCL
+are specified and the file exists.
+.\" ===========
+.It Bq Er EFAULT
+.Fa Path
+points outside the process's allocated address space.
+.\" ===========
+.It Bq Er EINTR
+The
+.Fn open
+operation is interrupted by a signal.
+.\" ===========
+.It Bq Er EINVAL
+The value of
+.Fa oflag
+is not valid.
+.\" ===========
 .It Bq Er EIO
-An I/O error occurred while making the directory entry or
+An I/O error occurs while making the directory entry or
 allocating the inode for
 .Dv O_CREAT .
+.\" ===========
+.It Bq Er EISDIR
+The named file is a directory, and the arguments specify
+that it is to be opened for writing.
+.\" ===========
+.It Bq Er ELOOP
+Too many symbolic links are encountered in translating the pathname.
+This is taken to be indicative of a looping symbolic link.
+.\" ===========
+.It Bq Er EMFILE
+The process has already reached its limit for open file descriptors.
+.\" ===========
+.It Bq Er ENAMETOOLONG
+A component of a pathname exceeds
+.Dv {NAME_MAX}
+characters, or an entire path name exceeded 
+.Dv {PATH_MAX}
+characters.
+.\" ===========
+.It Bq Er ENFILE
+The system file table is full.
+.\" ===========
+.It Bq Er ELOOP
+.Dv O_NOFOLLOW
+was specified and the target is a symbolic link.
+.\" ===========
+.It Bq Er ENOENT
+.Dv O_CREAT
+is not set and the named file does not exist.
+.\" ===========
+.It Bq Er ENOENT
+A component of the path name that must exist does not exist.
+.\" ===========
+.It Bq Er ENOSPC
+.Dv O_CREAT
+is specified,
+the file does not exist,
+and the directory in which the entry for the new file is being placed
+cannot be extended because there is no space left on the file
+system containing the directory.
+.\" ===========
+.It Bq Er ENOSPC
+.Dv O_CREAT
+is specified,
+the file does not exist,
+and there are no free inodes on the file system on which the
+file is being created.
+.\" ===========
+.It Bq Er ENOTDIR
+A component of the path prefix is not a directory.
+.\" ===========
+.It Bq Er ENXIO
+The named file is a character-special or block-special file
+and the device associated with this special file does not exist.
+.\" ===========
+.It Bq Er ENXIO
+O_NONBLOCK and O_WRONLY are set, the file is a FIFO,
+and no process has it open for reading.
+.\" ===========
+.It Bq Er EOPNOTSUPP
+.Dv O_SHLOCK
+or
+.Dv O_EXLOCK
+is specified, but the underlying filesystem does not support locking.
+.\" ===========
+.It Bq Er EOPNOTSUPP
+An attempt is made to open a socket (not currently implemented).
+.\" ===========
+.It Bq Er EOVERFLOW
+The named file is a regular file
+and its size does not fit in an object of type off_t.
+.\" ===========
+.It Bq Er EROFS
+The named file resides on a read-only file system,
+and the file is to be modified.
+.\" ===========
 .It Bq Er ETXTBSY
 The file is a pure procedure (shared text) file that is being
 executed and the
 .Fn open
 call requests write access.
-.It Bq Er EFAULT
-.Fa Path
-points outside the process's allocated address space.
-.It Bq Er EEXIST
-.Dv O_CREAT
-and
-.Dv O_EXCL
-were specified and the file exists.
-.It Bq Er EOPNOTSUPP
-An attempt was made to open a socket (not currently implemented).
 .El
+.Sh COMPATIBILITY
+.Fn open
+on a terminal device (i.e., /dev/console)
+will now make that device a controlling terminal for the process.
+Use the O_NOCTTY flag to open a terminal device
+without changing your controlling terminal.
 .Sh SEE ALSO
 .Xr chmod 2 ,
 .Xr close 2 ,
@@ -254,8 +343,8 @@ An attempt was made to open a socket (not currently implemented).
 .Xr getdtablesize 2 ,
 .Xr lseek 2 ,
 .Xr read 2 ,
-.Xr write 2 ,
-.Xr umask 2
+.Xr umask 2 ,
+.Xr write 2
 .Sh HISTORY
 An
 .Fn open

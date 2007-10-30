@@ -1,17 +1,50 @@
-How to build XNU:
+Table of contents:
+A. How to build XNU
+B. How to install a new header file from XNU
+
+=============================================
+A. How to build XNU:
 
 1) Type: "make"
 
-  This builds all the components for all architectures defined in 
-  ARCH_CONFIGS and for all kernel configurations defined in KERNEL_CONFIGS.
-  By default, ARCH_CONFIGS contains one architecture, the build machine 
-  architecture, and KERNEL_CONFIGS is set to build for RELEASE.
+  This builds all the components for kernel, architecture, and machine
+  configurations defined in TARGET_CONFIGS.  Additionally, we also support
+  architectures defined in ARCH_CONFIGS and kernel configurations defined in 
+  KERNEL_CONFIGS.  Note that TARGET_CONFIGS overrides any configurations defined
+  in ARCH_CONFIGS and KERNEL_CONFIGS.
+
+  By default, architecture defaults to the build machine 
+  architecture, and the kernel configuration is set to build for DEVELOPMENT.
+  The machine configuration defaults to MX31ADS for arm and nothing for i386 and ppc.
+  
   This will also create a bootable image, mach_kernel,  and a kernel binary 
   with symbols, mach_kernel.sys.
 
-  Example:
-    $(OBJROOT)/RELEASE_PPC/osfmk/RELEASE/osfmk.o: pre-linked object for osfmk component
-    $(OBJROOT)/RELEASE_PPC/mach_kernel: bootable image
+  Here are the valid arm machine configs:
+	LN2410SBC MX31ADS INTEGRATORCP S5I3000SMDK S5L8900XFPGA S5L8900XRB
+	OLOCREEK
+	
+  Examples:
+	/* make a debug kernel for MX31 arm board */
+	make TARGET_CONFIGS="debug arm MX31ADS"
+	
+    $(OBJROOT)/DEBUG_ARM_MX31ADS/osfmk/DEBUG/osfmk.o: pre-linked object for osfmk component
+    $(OBJROOT)/DEBUG_ARM_MX31ADS/mach_kernel: bootable image
+
+	/* make debug and development kernels for MX31 arm board */
+	make TARGET_CONFIGS="debug arm MX31ADS  development arm MX31ADS"
+	
+    $(OBJROOT)/DEBUG_ARM_MX31ADS/osfmk/DEBUG/osfmk.o: pre-linked object for osfmk component
+    $(OBJROOT)/DEBUG_ARM_MX31ADS/mach_kernel: bootable image
+    $(OBJROOT)/DEVELOPMENT_ARM/osfmk/DEVELOPMENT/osfmk.o: pre-linked object for osfmk component
+    $(OBJROOT)/DEVELOPMENT_ARM/mach_kernel: bootable image
+
+	/* this is all you need to do to build MX31ADS arm with DEVELOPMENT kernel configuration  */
+	make TARGET_CONFIGS="default arm default"
+	
+	or the following is equivalent
+	
+	make ARCH_CONFIGS=ARM
 
 2) Building a Component
 
@@ -30,11 +63,10 @@ How to build XNU:
 
     $ make all
 
-  This builds a component for all architectures defined in ARCH_CONFIGS 
-  and for all kernel configurations defined in KERNEL_CONFIGS. 
-  By default, ARCH_CONFIGS contains one architecture, the build machine 
-  architecture, and KERNEL_CONFIGS is set to build for RELEASE .
-
+  This builds a component for all architectures, kernel configurations, and
+  machine configurations defined in TARGET_CONFIGS (or alternately ARCH_CONFIGS
+  and KERNEL_CONFIGS).
+  
   Example:
     $(OBJROOT)/RELEASE_PPC/osfmk/RELEASE/osfmk.o: pre-linked object for osfmk component
 
@@ -50,14 +82,18 @@ How to build XNU:
 
 3) Building DEBUG
 
-  Define KERNEL_CONFIGS to DEBUG in your environment or when running a 
+  Define kernel configuration to DEBUG in your environment or when running a 
   make command.  Then, apply procedures 4, 5
+
+  $ make TARGET_CONFIGS="DEBUG PPC DEFAULT" all
+
+  or
 
   $ make KERNEL_CONFIGS=DEBUG all
 
   or
 
-  $ export KERNEL_CONFIGS=DEBUG
+  $ export TARGET_CONFIGS="DEBUG ARM MX31ADS"
   $ make all
 
   Example:
@@ -66,8 +102,12 @@ How to build XNU:
 
 4) Building fat
 
-  Define ARCH_CONFIGS in your environment or when running a make command.
+  Define architectures in your environment or when running a make command.
   Apply procedures 3, 4, 5
+
+  $ make TARGET_CONFIGS="RELEASE PPC default RELEASE I386 default" exporthdrs all
+
+  or
 
   $ make ARCH_CONFIGS="PPC I386" exporthdrs all
 
@@ -76,19 +116,156 @@ How to build XNU:
   $ export ARCH_CONFIGS="PPC I386"
   $ make exporthdrs all
 
-5) Build check before integration
+5) Verbose make 
+   To display complete tool invocations rather than an abbreviated version,
+   $ make VERBOSE=YES
+
+6) Debug information formats
+   By default, a DWARF debug information repository is created during the install phase; this is a "bundle" named mach_kernel.dSYM
+   To select the older STABS debug information format (where debug information is embedded in the mach_kernel.sys image), set the BUILD_STABS environment variable.
+   $ export BUILD_STABS=1
+   $ make
+
+7) Build check before integration
 
   From the top directory, run:
 
     $ ~rc/bin/buildit . -arch ppc -arch i386 -noinstallsrc -nosum
+	
+	or for multiple arm builds
+	
+    $ ~rc/bin/buildit . -noinstallsrc -nosum -- TARGET_CONFIGS="release arm MX31ADS release arm LN2410SBC"
+	
+	or for default arm build (kernel config DEVELOPMENT and machine config MX31ADS)
+	
+    $ ~rc/bin/buildit . -arch arm -noinstallsrc -nosum -- TARGET_CONFIGS="release arm MX31ADS release arm LN2410SBC"
+	
 
-6) Creating tags and cscope
+8) Creating tags and cscope
 
   Set up your build environment as per instructions in 2a
 
   From the top directory, run:
 
-    $ make tags		# this will build ctags and etags
+    $ make tags		# this will build ctags and etags on a case-sensitive
+			# volume, only ctags on case-insensitive
+
+    $ make TAGS		# this will build etags
 
     $ make cscope	# this will build cscope database
 
+=============================================
+B. How to install a new header file from XNU
+
+[Note: This does not covers installing header file in IOKit framework]
+
+1) XNU installs header files at the following locations -
+	a. $(DSTROOT)/System/Library/Frameworks/Kernel.framework/Headers
+	b. $(DSTROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders
+	c. $(DSTROOT)/System/Library/Frameworks/System.framework/Headers
+	d. $(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
+	e. $(DSTROOT)/usr/include/
+
+	Kernel.framework is used by kernel extensions.  System.framework 
+	and /usr/include are used by user level applications.  The header 
+	files in framework's "PrivateHeaders" are only available for Apple 
+	Internal development.
+
+2) The directory containing the header file should have a Makefile that 
+   creates the list of files that should be installed at different locations.
+   If you are adding first header file in a directory, you will need to 
+   create Makefile similar to xnu/bsd/sys/Makefile.
+
+   Add your header file to the correct file list depending on where you want 
+   to install it.   The default locations where the header files are installed 
+   from each file list are -
+
+   a. DATAFILES : To make header file available in user level -
+	  $(DSTROOT)/System/Library/Frameworks/System.framework/Headers
+	  $(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
+	  $(DSTROOT)/usr/include/
+
+   b. PRIVATE_DATAFILES : To make header file available to Apple internal in 
+      user level -
+	  $(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
+
+   c. KERNELFILES : To make header file available in kernel level - 
+	  $(DSTROOT)/System/Library/Frameworks/Kernel.framework/Headers
+	  $(DSTROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders
+
+   d. PRIVATE_KERNELFILES : To make header file available to Apple internal 
+      for kernel extensions - 
+	  $(DSTROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders
+
+3) The Makefile combines the file lists mentioned above into different 
+   install lists which are used by build system to install the header files.
+
+   If the install list that you are interested does not exists, create it
+   by adding the appropriate file lists.  The default install lists, its 
+   member file lists and their default location are described below - 
+
+   a. INSTALL_MI_LIST : Installs header file to location that is available to 
+      everyone in user level. 
+      Locations -
+   	  $(DSTROOT)/System/Library/Frameworks/System.framework/Headers
+	  $(DSTROOT)/usr/include/
+      Definition -
+	  INSTALL_MI_LIST = ${DATAFILES}
+
+   b. INSTALL_MI_LCL_LIST : Installs header file to location that is available
+      for Apple internal in user level.
+      Locations -
+	  $(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
+      Definition -
+	  INSTALL_MI_LCL_LIST = ${DATAFILES} ${PRIVATE_DATAFILES}
+
+   c. INSTALL_KF_MI_LIST : Installs header file to location that is available
+      to everyone for kernel extensions.
+      Locations -
+	  $(DSTROOT)/System/Library/Frameworks/Kernel.framework/Headers
+      Definition -
+	  INSTALL_KF_MI_LIST = ${KERNELFILES}
+
+   d. INSTALL_KF_MI_LCL_LIST : Installs header file to location that is 
+      available for Apple internal for kernel extensions.
+      Locations -
+	  $(DSTROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders
+      Definition -
+	  INSTALL_KF_MI_LCL_LIST = ${KERNELFILES} ${PRIVATE_KERNELFILES}
+
+4) If you want to install the header file in a sub-directory of the paths 
+   described in (1), specify the directory name using two variable 
+   INSTALL_MI_DIR and EXPORT_MI_DIR as follows - 
+
+   INSTALL_MI_DIR = dirname
+   EXPORT_MI_DIR = dirname
+
+5) A single header file can exist at different locations using the steps 
+   mentioned above.  However it might not be desirable to make all the code
+   in the header file available at all the locations.  For example, you 
+   want to export a function only to kernel level but not user level.
+
+   You can use C language's pre-processor directive (#ifdef, #endif, #ifndef)
+   to control the text generated before a header file is installed.  The kernel 
+   only includes the code if the conditional macro is TRUE and strips out 
+   code for FALSE conditions from the header file.  
+
+   Some pre-defined macros and their descriptions are -
+   a. PRIVATE : If true, code is available to all of the xnu kernel and is 
+      not available in kernel extensions and user level header files.  The 
+      header files installed in all the paths described above in (1) will not 
+      have code enclosed within this macro.
+
+   b. KERNEL_PRIVATE : Same as PRIVATE
+
+   c. BSD_KERNEL_PRIVATE : If true, code is available to the xnu/bsd part of 
+      the kernel and is not available to rest of the kernel, kernel extensions 
+      and user level header files.  The header files installed in all the 
+      paths described above in (1) will not have code enclosed within this 
+      macro.
+
+   d. KERNEL :  If true, code is available only in kernel and kernel 
+      extensions and is not available in user level header files.  Only the 
+      header files installed in following paths will have the code - 
+	  $(DSTROOT)/System/Library/Frameworks/Kernel.framework/Headers
+	  $(DSTROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders

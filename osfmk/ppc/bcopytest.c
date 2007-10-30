@@ -48,13 +48,9 @@ void bcopytest(void);
 void bcopytest(void) {
 
 	void *srcptr, *snkptr, *asrc, *asnk;
-	int bsrc, bsnk, size, iterations, i, ret, n; 
-	unsigned int makerand, timein, timeout, ticks;
+	int bsrc, bsnk, size, i, ret, n; 
 	volatile int dbg = 0;
 	unsigned int *sink, *source;
-	
-	long long tottime, totbytes;
-	long long tottime2, totbytes2;
 	
 	kern_return_t retr;
 	
@@ -451,8 +447,9 @@ void clrarea(unsigned int *source, unsigned int *sink) {
 	return;
 }
 
-void clrarea2(unsigned int *source, unsigned int *sink) {
-
+void
+clrarea2(unsigned int *source, __unused unsigned int *sink)
+{
 	unsigned int i;
 	unsigned char *ss;
 	
@@ -558,7 +555,7 @@ int tstcopy4(void *src, void *snk, unsigned int lgn) {
 
 int tstcopy5(void *src, void *snk, unsigned int lgn) {
 
-	unsigned int i, crap;
+	unsigned int i = 0, crap;
 	unsigned char ic, ec, oic, pc;
 	
 	oic = ((unsigned char *)snk)[0];				/* Original first sink character */
@@ -599,7 +596,7 @@ int tstcopy5(void *src, void *snk, unsigned int lgn) {
 }
 
 int dumbcopy(void *src, void *snk, unsigned int lgn) {
-	int i;
+	unsigned int i;
 	char *p = (char *)snk;
 	char *q = (char *)src;
 	

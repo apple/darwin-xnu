@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #ifndef __HFS_FORMAT__
 #define __HFS_FORMAT__
@@ -40,7 +46,6 @@ extern "C" {
 #endif
 
 /* some on-disk hfs structures have 68K alignment (misaligned) */
-#pragma options align=mac68k
 
 /* Signatures used to differentiate between HFS and HFS Plus volumes */
 enum {
@@ -59,25 +64,46 @@ enum {
 
 #ifdef __APPLE_API_PRIVATE
 /*
- * Mac OS X has a special directory for linked and unlinked files (HFS Plus only).
- * This directory and its contents are never exported from the filesystem under
- * Mac OS X.
+ * Mac OS X has two special directories on HFS+ volumes for hardlinked files
+ * and hardlinked directories as well as for open-unlinked files.
  *
- * To make this folder name sort last,  it has embedded null prefix.
- * (0xC0, 0x80 in UTF-8)
+ * These directories and their contents are not exported from the filesystem
+ * under Mac OS X.
  */
-#define HFSPLUSMETADATAFOLDER  "\xC0\x80\xC0\x80\xC0\x80\xC0\x80HFS+ Private Data"
+#define HFSPLUSMETADATAFOLDER       "\xE2\x90\x80\xE2\x90\x80\xE2\x90\x80\xE2\x90\x80HFS+ Private Data"
+#define HFSPLUS_DIR_METADATA_FOLDER ".HFS+ Private Directory Data\xd"
 
 /*
- * Files in the HFS Private Data folder have one of the following prefixes
- * followed by a decimal number (no leading zeros).  For indirect nodes this
- * number is a 32 bit random number.  For unlinked (deleted) files that are
- * still open, the number is the file ID for that file.
+ * Files in the "HFS+ Private Data" folder have one of the following prefixes
+ * followed by a decimal number (no leading zeros) for the file ID.
+ *
+ * Note: Earlier version of Mac OS X used a 32 bit random number for the link
+ * ref number instead of the file id.
  *
  * e.g.  iNode7182000 and temp3296
  */
 #define HFS_INODE_PREFIX	"iNode"
 #define HFS_DELETE_PREFIX	"temp"
+
+/*
+ * Files in the ".HFS+ Private Directory Data" folder have the following 
+ * prefix followed by a decimal number (no leading zeros) for the file ID.
+ *
+ * e.g. dir_555
+ */
+#define HFS_DIRINODE_PREFIX	"dir_"
+
+/*
+ * Hardlink inodes save the head of the link chain in
+ * an extended attribute named FIRST_LINK_XATTR_NAME.
+ * The attribute data is the decimal value in ASCII
+ * of the cnid for the first link in the chain.
+ *
+ * This extended attribute is private (i.e. its not
+ * exported in the getxattr/listxattr POSIX APIs).
+ */
+#define FIRST_LINK_XATTR_NAME	"com.apple.system.hfs.firstlink"
+#define FIRST_LINK_XATTR_REC_SIZE (sizeof(HFSPlusAttrData) - 2 + 12)
 
 #endif /* __APPLE_API_PRIVATE */
 
@@ -90,13 +116,22 @@ enum {
 };
 
 
+/*
+ *	File type and creator for symbolic links
+ */
+enum {
+      kSymLinkFileType  = 0x736C6E6B, /* 'slnk' */
+      kSymLinkCreator   = 0x72686170  /* 'rhap' */
+};
+
+
 #ifndef _HFSUNISTR255_DEFINED_
 #define _HFSUNISTR255_DEFINED_
 /* Unicode strings are used for HFS Plus file and folder names */
 struct HFSUniStr255 {
 	u_int16_t	length;		/* number of unicode characters */
 	u_int16_t	unicode[255];	/* unicode characters */
-};
+} __attribute__((aligned(2), packed));
 typedef struct HFSUniStr255 HFSUniStr255;
 typedef const HFSUniStr255 *ConstHFSUniStr255Param;
 #endif /* _HFSUNISTR255_DEFINED_ */
@@ -116,7 +151,7 @@ struct HFSExtentKey {
 	u_int8_t 	forkType;	/* 0 = data fork, FF = resource fork */
 	u_int32_t 	fileID;		/* file ID */
 	u_int16_t 	startBlock;	/* first file allocation block number in this extent */
-};
+} __attribute__((aligned(2), packed));
 typedef struct HFSExtentKey HFSExtentKey;
 
 /* HFS Plus Extent key */
@@ -126,7 +161,7 @@ struct HFSPlusExtentKey {
 	u_int8_t 	pad;			/* make the other fields align on 32-bit boundary */
 	u_int32_t 	fileID;			/* file ID */
 	u_int32_t 	startBlock;		/* first file allocation block number in this extent */
-};
+} __attribute__((aligned(2), packed));
 typedef struct HFSPlusExtentKey HFSPlusExtentKey;
 
 /* Number of extent descriptors per extent record */
@@ -139,14 +174,14 @@ enum {
 struct HFSExtentDescriptor {
 	u_int16_t 	startBlock;		/* first allocation block */
 	u_int16_t 	blockCount;		/* number of allocation blocks */
-};
+} __attribute__((aligned(2), packed));
 typedef struct HFSExtentDescriptor HFSExtentDescriptor;
 
 /* HFS Plus extent descriptor */
 struct HFSPlusExtentDescriptor {
 	u_int32_t 	startBlock;		/* first allocation block */
 	u_int32_t 	blockCount;		/* number of allocation blocks */
-};
+} __attribute__((aligned(2), packed));
 typedef struct HFSPlusExtentDescriptor HFSPlusExtentDescriptor;
 
 /* HFS extent record */
@@ -166,7 +201,7 @@ struct FndrFileInfo {
 	    int16_t	h;
 	} fdLocation;
 	int16_t 	opaque;
-};
+} __attribute__((aligned(2), packed));
 typedef struct FndrFileInfo FndrFileInfo;
 
 struct FndrDirInfo {
@@ -182,12 +217,12 @@ struct FndrDirInfo {
 	    u_int16_t	h;
 	} frLocation;
 	int16_t 	opaque;
-};
+} __attribute__((aligned(2), packed));
 typedef struct FndrDirInfo FndrDirInfo;
 
 struct FndrOpaqueInfo {
 	int8_t opaque[16];
-};
+} __attribute__((aligned(2), packed));
 typedef struct FndrOpaqueInfo FndrOpaqueInfo;
 
 
@@ -197,7 +232,7 @@ struct HFSPlusForkData {
 	u_int32_t 		clumpSize;	/* fork's clump size in bytes */
 	u_int32_t 		totalBlocks;	/* total blocks used by this fork */
 	HFSPlusExtentRecord 	extents;	/* initial set of extents */
-};
+} __attribute__((aligned(2), packed));
 typedef struct HFSPlusForkData HFSPlusForkData;
 
 
@@ -207,8 +242,8 @@ typedef struct HFSPlusForkData HFSPlusForkData;
  * should preserve, but not change, this information.
  */
 struct HFSPlusBSDInfo {
-	u_int32_t 	ownerID;	/* user or group ID of file/folder owner */
-	u_int32_t 	groupID;	/* additional user of group ID */
+	u_int32_t 	ownerID;	/* user-id of owner or hard link chain previous link */
+	u_int32_t 	groupID;	/* group-id of owner or hard link chain next link */
 	u_int8_t 	adminFlags;	/* super-user changeable flags */
 	u_int8_t 	ownerFlags;	/* owner changeable flags */
 	u_int16_t 	fileMode;	/* file type and permission bits */
@@ -217,8 +252,27 @@ struct HFSPlusBSDInfo {
 	    u_int32_t	linkCount;	/* links that refer to this indirect node */
 	    u_int32_t	rawDevice;	/* special file device (FBLK and FCHR only) */
 	} special;
-};
+} __attribute__((aligned(2), packed));
 typedef struct HFSPlusBSDInfo HFSPlusBSDInfo;
+
+/*
+ * Hardlink "links" resolve to an inode
+ * and the actual uid/gid comes from that
+ * inode.
+ *
+ * We repurpose the links's uid/gid fields
+ * for the hardlink link chain. The chain
+ * consists of a doubly linked list of file
+ * ids.
+ */
+ 
+#define hl_firstLinkID     reserved1         /* Valid only if HasLinkChain flag is set (indirect nodes only) */
+
+#define hl_prevLinkID      bsdInfo.ownerID   /* Valid only if HasLinkChain flag is set */
+#define hl_nextLinkID      bsdInfo.groupID   /* Valid only if HasLinkChain flag is set */
+
+#define hl_linkReference   bsdInfo.special.iNodeNum
+#define hl_linkCount       bsdInfo.special.linkCount
 
 
 /* Catalog file data structures */
@@ -232,6 +286,8 @@ enum {
 	kHFSAllocationFileID		= 6,	/* File ID of the allocation file (HFS Plus only) */
 	kHFSStartupFileID		= 7,	/* File ID of the startup file (HFS Plus only) */
 	kHFSAttributesFileID		= 8,	/* File ID of the attribute file (HFS Plus only) */
+	kHFSAttributeDataFileID         = 13,	/* Used in Mac OS X runtime for extent based attributes */
+	                                        /* kHFSAttributeDataFileID is never stored on disk. */
 	kHFSRepairCatalogFileID		= 14,	/* Used when rebuilding Catalog B-tree */
 	kHFSBogusExtentFileID		= 15,	/* Used for exchanging extents in extents file */
 	kHFSFirstUserCatalogNodeID	= 16
@@ -243,7 +299,7 @@ struct HFSCatalogKey {
 	u_int8_t 	reserved;		/* reserved (set to zero) */
 	u_int32_t 	parentID;		/* parent folder ID */
 	u_int8_t 	nodeName[kHFSMaxFileNameChars + 1]; /* catalog node name */
-};
+} __attribute__((aligned(2), packed));
 typedef struct HFSCatalogKey HFSCatalogKey;
 
 /* HFS Plus catalog key */
@@ -251,7 +307,7 @@ struct HFSPlusCatalogKey {
 	u_int16_t 		keyLength;	/* key length (in bytes) */
 	u_int32_t 		parentID;	/* parent folder ID */
 	HFSUniStr255 		nodeName;	/* catalog node name */
-};
+} __attribute__((aligned(2), packed));
 typedef struct HFSPlusCatalogKey HFSPlusCatalogKey;
 
 /* Catalog record types */
@@ -282,7 +338,16 @@ enum {
 	kHFSHasAttributesMask	= 0x0004,
 
 	kHFSHasSecurityBit	= 0x0003,	/* object has security data (ACLs) */
-	kHFSHasSecurityMask	= 0x0008
+	kHFSHasSecurityMask	= 0x0008,
+
+	kHFSHasFolderCountBit	= 0x0004,	/* only for HFSX, folder maintains a separate sub-folder count */
+	kHFSHasFolderCountMask	= 0x0010,	/* (sum of folder records and directory hard links) */
+
+	kHFSHasLinkChainBit	= 0x0005,	/* has hardlink chain (inode or link) */
+	kHFSHasLinkChainMask	= 0x0020,
+
+	kHFSHasChildLinkBit	= 0x0006,	/* folder has a child that's a dir link */
+	kHFSHasChildLinkMask	= 0x0040
 };
 
 
@@ -298,14 +363,14 @@ struct HFSCatalogFolder {
 	FndrDirInfo 		userInfo;		/* Finder information */
 	FndrOpaqueInfo		finderInfo;		/* additional Finder information */
 	u_int32_t 		reserved[4];		/* reserved - initialized as zero */
-};
+} __attribute__((aligned(2), packed));
 typedef struct HFSCatalogFolder HFSCatalogFolder;
 
 /* HFS Plus catalog folder record - 88 bytes */
 struct HFSPlusCatalogFolder {
 	int16_t 		recordType;		/* == kHFSPlusFolderRecord */
 	u_int16_t 		flags;			/* file flags */
-	u_int32_t 		valence;		/* folder's valence (limited to 2^16 in Mac OS) */
+	u_int32_t 		valence;		/* folder's item count */
 	u_int32_t 		folderID;		/* folder ID */
 	u_int32_t 		createDate;		/* date and time of creation */
 	u_int32_t 		contentModDate;		/* date and time of last content modification */
@@ -316,8 +381,8 @@ struct HFSPlusCatalogFolder {
 	FndrDirInfo 		userInfo;		/* Finder information */
 	FndrOpaqueInfo	 	finderInfo;		/* additional Finder information */
 	u_int32_t 		textEncoding;		/* hint for name conversions */
-	u_int32_t 		attrBlocks;		/* cached count of attribute data blocks */
-};
+	u_int32_t 		folderCount;		/* number of enclosed folders, active when HasFolderCount is set */
+} __attribute__((aligned(2), packed));
 typedef struct HFSPlusCatalogFolder HFSPlusCatalogFolder;
 
 /* HFS catalog file record - 102 bytes */
@@ -341,7 +406,7 @@ struct HFSCatalogFile {
 	HFSExtentRecord		dataExtents;		/* first data fork extent record */
 	HFSExtentRecord		rsrcExtents;		/* first resource fork extent record */
 	u_int32_t		reserved;		/* reserved - initialized as zero */
-};
+} __attribute__((aligned(2), packed));
 typedef struct HFSCatalogFile HFSCatalogFile;
 
 /* HFS Plus catalog file record - 248 bytes */
@@ -359,12 +424,12 @@ struct HFSPlusCatalogFile {
 	FndrFileInfo 		userInfo;		/* Finder information */
 	FndrOpaqueInfo	 	finderInfo;		/* additional Finder information */
 	u_int32_t 		textEncoding;		/* hint for name conversions */
-	u_int32_t 		attrBlocks;		/* cached count of attribute data blocks */
+	u_int32_t 		reserved2;		/* reserved - initialized as zero */
 
-	/* Note: these start on double long (64 bit) boundry */
+	/* Note: these start on double long (64 bit) boundary */
 	HFSPlusForkData 	dataFork;		/* size and block data for data fork */
 	HFSPlusForkData 	resourceFork;		/* size and block data for resource fork */
-};
+} __attribute__((aligned(2), packed));
 typedef struct HFSPlusCatalogFile HFSPlusCatalogFile;
 
 /* HFS catalog thread record - 46 bytes */
@@ -373,7 +438,7 @@ struct HFSCatalogThread {
 	int32_t 	reserved[2];		/* reserved - initialized as zero */
 	u_int32_t 	parentID;		/* parent ID for this catalog node */
 	u_int8_t 	nodeName[kHFSMaxFileNameChars + 1]; /* name of this catalog node */
-};
+} __attribute__((aligned(2), packed));
 typedef struct HFSCatalogThread HFSCatalogThread;
 
 /* HFS Plus catalog thread record -- 264 bytes */
@@ -382,7 +447,7 @@ struct HFSPlusCatalogThread {
 	int16_t 	reserved;		/* reserved - initialized as zero */
 	u_int32_t 	parentID;		/* parent ID for this catalog node */
 	HFSUniStr255 	nodeName;		/* name of this catalog node (variable length) */
-};
+} __attribute__((aligned(2), packed));
 typedef struct HFSPlusCatalogThread HFSPlusCatalogThread;
 
 #ifdef __APPLE_API_UNSTABLE
@@ -391,23 +456,23 @@ typedef struct HFSPlusCatalogThread HFSPlusCatalogThread;
   	chosen so that they wouldn't conflict with the catalog record types.
 */
 enum {
-	kHFSPlusAttrInlineData	= 0x10,    /* if size <  kAttrOverflowSize */
-	kHFSPlusAttrForkData	= 0x20,    /* if size >= kAttrOverflowSize */
-	kHFSPlusAttrExtents	= 0x30     /* overflow extents for large attributes */
+	kHFSPlusAttrInlineData	= 0x10,   /* attributes whose data fits in a b-tree node */
+	kHFSPlusAttrForkData	= 0x20,   /* extent based attributes (data lives in extents) */
+	kHFSPlusAttrExtents	= 0x30    /* overflow extents for large attributes */
 };
 
 
 /*
   	HFSPlusAttrForkData
   	For larger attributes, whose value is stored in allocation blocks.
-  	If the attribute has more than 8 extents, there will be additonal
+  	If the attribute has more than 8 extents, there will be additional
   	records (of type HFSPlusAttrExtents) for this attribute.
 */
 struct HFSPlusAttrForkData {
 	u_int32_t 	recordType;		/* == kHFSPlusAttrForkData*/
 	u_int32_t 	reserved;
 	HFSPlusForkData theFork;		/* size and first extents of value*/
-};
+} __attribute__((aligned(2), packed));
 typedef struct HFSPlusAttrForkData HFSPlusAttrForkData;
 
 /*
@@ -419,7 +484,7 @@ struct HFSPlusAttrExtents {
 	u_int32_t 		recordType;	/* == kHFSPlusAttrExtents*/
 	u_int32_t 		reserved;
 	HFSPlusExtentRecord	extents;	/* additional extents*/
-};
+} __attribute__((aligned(2), packed));
 typedef struct HFSPlusAttrExtents HFSPlusAttrExtents;
 
 /*
@@ -433,7 +498,7 @@ struct HFSPlusAttrData {
 	u_int32_t    reserved[2];
 	u_int32_t    attrSize;     /* size of attribute data in bytes */
 	u_int8_t     attrData[2];  /* variable length */
-};
+} __attribute__((aligned(2), packed));
 typedef struct HFSPlusAttrData HFSPlusAttrData;
 
 
@@ -443,7 +508,7 @@ struct HFSPlusAttrInlineData {
 	u_int32_t 	reserved;
 	u_int32_t 	logicalSize;
 	u_int8_t 	userData[2];
-};
+} __attribute__((aligned(2), packed));
 typedef struct HFSPlusAttrInlineData HFSPlusAttrInlineData;
 
 
@@ -463,10 +528,10 @@ struct HFSPlusAttrKey {
 	u_int16_t     keyLength;       /* key length (in bytes) */
 	u_int16_t     pad;	       /* set to zero */
 	u_int32_t     fileID;          /* file associated with attribute */
-	u_int32_t     startBlock;      /* first attribue allocation block number for extents */
+	u_int32_t     startBlock;      /* first allocation block number for extents */
 	u_int16_t     attrNameLen;     /* number of unicode characters */
 	u_int16_t     attrName[kHFSMaxAttrNameLen];   /* attribute name (Unicode) */
-};
+} __attribute__((aligned(2), packed));
 typedef struct HFSPlusAttrKey HFSPlusAttrKey;
 
 #define kHFSPlusAttrKeyMaximumLength   (sizeof(HFSPlusAttrKey) - sizeof(u_int16_t))
@@ -546,7 +611,7 @@ struct HFSMasterDirectoryBlock {
 	HFSExtentRecord		drXTExtRec;	/* extent record for extents overflow file */
 	u_int32_t 		drCTFlSize;	/* size of catalog file */
 	HFSExtentRecord 	drCTExtRec;	/* extent record for catalog file */
-};
+} __attribute__((aligned(2), packed));
 typedef struct HFSMasterDirectoryBlock	HFSMasterDirectoryBlock;
 
 
@@ -594,7 +659,7 @@ struct HFSPlusVolumeHeader {
 	HFSPlusForkData  catalogFile;		/* catalog B-tree file */
 	HFSPlusForkData  attributesFile;	/* extended attributes B-tree file */
 	HFSPlusForkData	 startupFile;		/* boot file (secondary loader) */
-};
+} __attribute__((aligned(2), packed));
 typedef struct HFSPlusVolumeHeader HFSPlusVolumeHeader;
 
 
@@ -619,7 +684,7 @@ struct BTNodeDescriptor {
 	u_int8_t 	height;			/* zero for header, map; child is one more than parent*/
 	u_int16_t 	numRecords;		/* number of records in this node*/
 	u_int16_t 	reserved;		/* reserved - initialized as zero */
-};
+} __attribute__((aligned(2), packed));
 typedef struct BTNodeDescriptor BTNodeDescriptor;
 
 /* Constants for BTNodeDescriptor kind */
@@ -647,7 +712,7 @@ struct BTHeaderRec {
 	u_int8_t 	keyCompareType;		/* Key string Comparison Type */
 	u_int32_t 	attributes;		/* persistent attributes about the tree */
 	u_int32_t 	reserved3[16];		/* reserved */
-};
+} __attribute__((aligned(2), packed));
 typedef struct BTHeaderRec BTHeaderRec;
 
 /* Constants for BTHeaderRec attributes */
@@ -671,7 +736,7 @@ struct JournalInfoBlock {
 	u_int64_t       offset;               // byte offset to the journal on the device
 	u_int64_t       size;                 // size in bytes of the journal
 	u_int32_t 	reserved[32];
-};
+} __attribute__((aligned(2), packed));
 typedef struct JournalInfoBlock JournalInfoBlock;
 
 enum {
@@ -680,8 +745,6 @@ enum {
     kJIJournalNeedInitMask      = 0x00000004
 };
 
-
-#pragma options align=reset
 
 #ifdef __cplusplus
 }

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_FREE_COPYRIGHT@
@@ -85,6 +91,7 @@
 #include <vc.h>
 
 #include <console/video_console.h>
+#include <console/serial_protos.h>
 
 #include <kern/kern_types.h>
 #include <kern/kalloc.h>
@@ -96,10 +103,13 @@
 #include <vm/pmap.h>
 #include <vm/vm_kern.h>
 #include <machine/io_map_entries.h>
+#include <machine/machine_cpu.h>
 
 #include <pexpert/pexpert.h>
 
 #include "iso_font.c"
+
+#include "sys/msgbuf.h"
 
 /*
  * Generic Console (Front-End)
@@ -120,22 +130,69 @@ static boolean_t vm_initialized = FALSE;
 static struct {
 	void (*initialize)(struct vc_info * info);
 	void (*enable)(boolean_t enable);
-	void (*paint_char)(int xx, int yy, unsigned char ch, int attrs, unsigned char ch_previous, int attrs_previous);
-	void (*clear_screen)(int xx, int yy, int top, int bottom, int which);
-	void (*scroll_down)(int num, int top, int bottom);
-	void (*scroll_up)(int num, int top, int bottom);
-	void (*hide_cursor)(int xx, int yy);
-	void (*show_cursor)(int xx, int yy);
+	void (*paint_char)(unsigned int xx, unsigned int yy, unsigned char ch,
+			   int attrs, unsigned char ch_previous,
+			   int attrs_previous);
+	void (*clear_screen)(unsigned int xx, unsigned int yy, unsigned int top,
+			     unsigned int bottom, int which);
+	void (*scroll_down)(int num, unsigned int top, unsigned int bottom);
+	void (*scroll_up)(int num, unsigned int top, unsigned int bottom);
+	void (*hide_cursor)(unsigned int xx, unsigned int yy);
+	void (*show_cursor)(unsigned int xx, unsigned int yy);
 	void (*update_color)(int color, boolean_t fore);
 } gc_ops;
 
-static unsigned char * gc_buffer_attributes = NULL;
-static unsigned char * gc_buffer_characters = NULL;
-static unsigned char * gc_buffer_colorcodes = NULL;
-static unsigned long   gc_buffer_columns    = 0;
-static unsigned long   gc_buffer_rows       = 0;
-static unsigned long   gc_buffer_size       = 0;
-decl_simple_lock_data(,gc_buffer_lock)
+static unsigned char *gc_buffer_attributes;
+static unsigned char *gc_buffer_characters;
+static unsigned char *gc_buffer_colorcodes;
+static unsigned long gc_buffer_columns;
+static unsigned long gc_buffer_rows;
+static unsigned long gc_buffer_size;
+
+#ifdef __i386__
+decl_simple_lock_data(static, vcputc_lock);
+
+#define VCPUTC_LOCK_INIT()				\
+MACRO_BEGIN						\
+	simple_lock_init(&vcputc_lock, 0);		\
+MACRO_END
+
+#define VCPUTC_LOCK_LOCK()				\
+MACRO_BEGIN						\
+	boolean_t istate = ml_get_interrupts_enabled();	\
+	while (!simple_lock_try(&vcputc_lock))		\
+	{						\
+		if (!istate)				\
+			handle_pending_TLB_flushes();	\
+		cpu_pause();				\
+	}						\
+MACRO_END
+
+#define VCPUTC_LOCK_UNLOCK()				\
+MACRO_BEGIN						\
+	simple_unlock(&vcputc_lock);			\
+MACRO_END
+#else
+static hw_lock_data_t vcputc_lock;
+
+#define VCPUTC_LOCK_INIT()				\
+MACRO_BEGIN						\
+	hw_lock_init(&vcputc_lock);			\
+MACRO_END
+
+#define VCPUTC_LOCK_LOCK()				\
+MACRO_BEGIN						\
+	if (!hw_lock_to(&vcputc_lock, LockTimeOut*10))	\
+	{						\
+		panic("VCPUTC_LOCK_LOCK");		\
+	}						\
+MACRO_END
+
+#define VCPUTC_LOCK_UNLOCK()				\
+MACRO_BEGIN						\
+	hw_lock_unlock(&vcputc_lock);			\
+MACRO_END
+#endif
 
 /*
 # Attribute codes: 
@@ -157,18 +214,22 @@ decl_simple_lock_data(,gc_buffer_lock)
 #define COLOR_CODE_GET(code, fore)        (((code) & ((fore) ? 0xF0 : 0x0F))            >> ((fore) ? 4 : 0))
 #define COLOR_CODE_SET(code, color, fore) (((code) & ((fore) ? 0x0F : 0xF0)) | ((color) << ((fore) ? 4 : 0)))
 
-static unsigned char gc_color_code = 0;
+static unsigned char gc_color_code;
 
 /* VT100 state: */
 #define MAXPARS	16
-static int gc_x = 0, gc_y = 0, gc_savex, gc_savey;
-static int gc_par[MAXPARS], gc_numpars, gc_hanging_cursor, gc_attr, gc_saveattr;
+static unsigned int gc_x, gc_y, gc_savex, gc_savey;
+static unsigned int gc_par[MAXPARS], gc_numpars, gc_hanging_cursor, gc_attr, gc_saveattr;
 
 /* VT100 tab stops & scroll region */
 static char gc_tab_stops[255];
-static int  gc_scrreg_top, gc_scrreg_bottom;
+static unsigned int gc_scrreg_top, gc_scrreg_bottom;
 
+#ifdef CONFIG_VC_PROGRESS_WHITE
+enum { kProgressAcquireDelay = 0 /* secs */ };
+#else
 enum { kProgressAcquireDelay = 5 /* secs */ };
+#endif
 
 enum vt100state_e {
 	ESnormal,		/* Nothing yet                             */
@@ -190,12 +251,14 @@ static int gc_charset_select = 0, gc_save_charset_s = 0;
 static int gc_charset[2] = { 0, 0 };
 static int gc_charset_save[2] = { 0, 0 };
 
-static void gc_clear_line(int xx, int yy, int which);
-static void gc_clear_screen(int xx, int yy, int top, int bottom, int which);
+static void gc_clear_line(unsigned int xx, unsigned int yy, int which);
+static void gc_clear_screen(unsigned int xx, unsigned int yy, int top,
+		unsigned int bottom, int which);
 static void gc_enable(boolean_t enable);
-static void gc_hide_cursor(int xx, int yy);
+static void gc_hide_cursor(unsigned int xx, unsigned int yy);
 static void gc_initialize(struct vc_info * info);
-static void gc_paint_char(int xx, int yy, unsigned char ch, int attrs);
+static void gc_paint_char(unsigned int xx, unsigned int yy, unsigned char ch,
+		int attrs);
 static void gc_putchar(char ch);
 static void gc_putc_askcmd(unsigned char ch);
 static void gc_putc_charsetcmd(int charset, unsigned char ch);
@@ -205,20 +268,18 @@ static void gc_putc_getpars(unsigned char ch);
 static void gc_putc_gotpars(unsigned char ch);
 static void gc_putc_normal(unsigned char ch);
 static void gc_putc_square(unsigned char ch);
-static void gc_refresh_screen(void);
 static void gc_reset_screen(void);
 static void gc_reset_tabs(void);
 static void gc_reset_vt100(void);
-static void gc_scroll_down(int num, int top, int bottom);
-static void gc_scroll_up(int num, int top, int bottom);
-static void gc_show_cursor(int xx, int yy);
+static void gc_scroll_down(int num, unsigned int top, unsigned int bottom);
+static void gc_scroll_up(int num, unsigned int top, unsigned int bottom);
+static void gc_show_cursor(unsigned int xx, unsigned int yy);
 static void gc_update_color(int color, boolean_t fore);
-extern int  vcputc(int l, int u, int c);
 
 static void 
-gc_clear_line(int xx, int yy, int which)
+gc_clear_line(unsigned int xx, unsigned int yy, int which)
 {
-	int     start, end, i;
+	unsigned int start, end, i;
 
 	/*
 	 * This routine runs extremely slowly.  I don't think it's
@@ -240,23 +301,20 @@ gc_clear_line(int xx, int yy, int which)
 		start = 0;
 		end = vinfo.v_columns-1;
 		break;
+	default:
+		return;
 	}
 
 	for (i = start; i <= end; i++) {
 		gc_paint_char(i, yy, ' ', ATTR_NONE);
 	}
-
 }
 
 static void 
-gc_clear_screen(int xx, int yy, int top, int bottom, int which)
+gc_clear_screen(unsigned int xx, unsigned int yy, int top, unsigned int bottom,
+		int which)
 {
-	spl_t    s;
-
         if (!gc_buffer_size) return;
-
-	s = splhigh();
-	simple_lock(&gc_buffer_lock);
 
 	if ( xx < gc_buffer_columns && yy < gc_buffer_rows && bottom <= gc_buffer_rows )
 	{
@@ -275,15 +333,16 @@ gc_clear_screen(int xx, int yy, int top, int bottom, int which)
 				start = (top * gc_buffer_columns);
 				end = (bottom * gc_buffer_columns) - 1;
 				break;
+			default:
+				start = 0;
+				end = 0;
+				break;
 		}
 
-		memset(gc_buffer_attributes + start, 0x00, end - start + 1);
-		memset(gc_buffer_characters + start, 0x00, end - start + 1);
+		memset(gc_buffer_attributes + start, ATTR_NONE, end - start + 1);
+		memset(gc_buffer_characters + start, ' ', end - start + 1);
 		memset(gc_buffer_colorcodes + start, gc_color_code, end - start + 1);
 	}
-
-	simple_unlock(&gc_buffer_lock);
-	splx(s);
 
 	gc_ops.clear_screen(xx, yy, top, bottom, which);
 }
@@ -291,24 +350,25 @@ gc_clear_screen(int xx, int yy, int top, int bottom, int which)
 static void
 gc_enable( boolean_t enable )
 {
-	unsigned char * buffer_attributes;
-	unsigned char * buffer_characters;
-	unsigned char * buffer_colorcodes;
-	unsigned long   buffer_columns;
-	unsigned long   buffer_rows;
-	unsigned long   buffer_size;
-
+	unsigned char *buffer_attributes = NULL;
+	unsigned char *buffer_characters = NULL;
+	unsigned char *buffer_colorcodes = NULL;
+	unsigned long buffer_columns = 0;
+	unsigned long buffer_rows = 0;
+	unsigned long buffer_size = 0;
 	spl_t s;
 
 	if ( enable == FALSE )
 	{
-		disableConsoleOutput = TRUE;
+		// only disable console output if it goes to the graphics console
+		if ( console_is_serial() == FALSE )
+			disableConsoleOutput = TRUE;
 		gc_enabled           = FALSE;
 		gc_ops.enable(FALSE);
 	}
 
 	s = splhigh( );
-	simple_lock( &gc_buffer_lock );
+	VCPUTC_LOCK_LOCK( );
 
 	if ( gc_buffer_size )
 	{
@@ -324,7 +384,7 @@ gc_enable( boolean_t enable )
 		gc_buffer_rows       = 0;
 		gc_buffer_size       = 0;
 
-		simple_unlock( &gc_buffer_lock );
+		VCPUTC_LOCK_UNLOCK( );
 		splx( s );
 
 		kfree( buffer_attributes, buffer_size );
@@ -333,7 +393,7 @@ gc_enable( boolean_t enable )
 	}
 	else
 	{
-		simple_unlock( &gc_buffer_lock );
+		VCPUTC_LOCK_UNLOCK( );
 		splx( s );
 	}
 
@@ -365,15 +425,15 @@ gc_enable( boolean_t enable )
 				}
 				else
 				{
-					memset( buffer_attributes, 0x00, buffer_size );
-					memset( buffer_characters, 0x00, buffer_size );
-					memset( buffer_colorcodes, 0x0F, buffer_size );
+					memset( buffer_attributes, ATTR_NONE, buffer_size );
+					memset( buffer_characters, ' ', buffer_size );
+					memset( buffer_colorcodes, COLOR_CODE_SET( 0, COLOR_FOREGROUND, TRUE ), buffer_size );
 				}
 			}
 		}
 
 		s = splhigh( );
-		simple_lock( &gc_buffer_lock );
+		VCPUTC_LOCK_LOCK( );
 
 		gc_buffer_attributes = buffer_attributes;
 		gc_buffer_characters = buffer_characters;
@@ -382,10 +442,13 @@ gc_enable( boolean_t enable )
 		gc_buffer_rows       = buffer_rows;
 		gc_buffer_size       = buffer_size;
 
-		simple_unlock( &gc_buffer_lock );
+		gc_reset_screen();
+
+		VCPUTC_LOCK_UNLOCK( );
 		splx( s );
 
-		gc_reset_screen();
+		gc_ops.clear_screen(gc_x, gc_y, 0, vinfo.v_rows, 2);
+		gc_ops.show_cursor(gc_x, gc_y);
 
 		gc_ops.enable(TRUE);
 		gc_enabled           = TRUE;
@@ -394,13 +457,8 @@ gc_enable( boolean_t enable )
 }
 
 static void
-gc_hide_cursor(int xx, int yy)
+gc_hide_cursor(unsigned int xx, unsigned int yy)
 {
-	spl_t s;
-
-	s = splhigh();
-	simple_lock(&gc_buffer_lock);
-
 	if ( xx < gc_buffer_columns && yy < gc_buffer_rows )
 	{
 		unsigned long index = (yy * gc_buffer_columns) + xx;
@@ -408,9 +466,6 @@ gc_hide_cursor(int xx, int yy)
 		unsigned char character = gc_buffer_characters[index];
 		unsigned char colorcode = gc_buffer_colorcodes[index];
 		unsigned char colorcodesave = gc_color_code;
-
-		simple_unlock(&gc_buffer_lock);
-		splx(s);
 
 		gc_update_color(COLOR_CODE_GET(colorcode, TRUE ), TRUE );
 		gc_update_color(COLOR_CODE_GET(colorcode, FALSE), FALSE);
@@ -422,9 +477,6 @@ gc_hide_cursor(int xx, int yy)
 	}
 	else
 	{
-		simple_unlock(&gc_buffer_lock);
-		splx(s);
-
 		gc_ops.hide_cursor(xx, yy);
 	}
 }
@@ -435,7 +487,7 @@ gc_initialize(struct vc_info * info)
 	if ( gc_initialized == FALSE )
 	{
 		/* Init our lock */
-		simple_lock_init(&gc_buffer_lock, 0);
+		VCPUTC_LOCK_INIT();
 
 		gc_initialized = TRUE;
 	}
@@ -447,13 +499,8 @@ gc_initialize(struct vc_info * info)
 }
 
 static void
-gc_paint_char(int xx, int yy, unsigned char ch, int attrs)
+gc_paint_char(unsigned int xx, unsigned int yy, unsigned char ch, int attrs)
 {
-	spl_t s;
-
-	s = splhigh();
-	simple_lock(&gc_buffer_lock);
-
 	if ( xx < gc_buffer_columns && yy < gc_buffer_rows )
 	{
 		unsigned long index = (yy * gc_buffer_columns) + xx;
@@ -462,9 +509,6 @@ gc_paint_char(int xx, int yy, unsigned char ch, int attrs)
 		gc_buffer_characters[index] = ch;
 		gc_buffer_colorcodes[index] = gc_color_code;
 	}
-
-	simple_unlock(&gc_buffer_lock);
-	splx(s);
 
 	gc_ops.paint_char(xx, yy, ch, attrs, 0, 0);
 }
@@ -507,18 +551,17 @@ gc_putchar(char ch)
 	}
 
 	if (gc_x >= vinfo.v_columns) {
-		gc_x = vinfo.v_columns - 1;
-	}
-	if (gc_x < 0) {
-		gc_x = 0;
+		if (0 == vinfo.v_columns)
+			gc_x = 0;
+		else
+			gc_x = vinfo.v_columns - 1;
 	}
 	if (gc_y >= vinfo.v_rows) {
-		gc_y = vinfo.v_rows - 1;
+		if (0 == vinfo.v_rows)
+			gc_y = 0;
+		else
+			gc_y = vinfo.v_rows - 1;
 	}
-	if (gc_y < 0) {
-		gc_y = 0;
-	}
-
 }
 
 static void
@@ -575,7 +618,7 @@ gc_putc_charsizecmd(unsigned char ch)
 			break;
 		case '8' :	/* fill 'E's */
 			{
-				int xx, yy;
+				unsigned int xx, yy;
 				for (yy = 0; yy < vinfo.v_rows; yy++)
 					for (xx = 0; xx < vinfo.v_columns; xx++)
 						gc_paint_char(xx, yy, 'E', ATTR_NONE);
@@ -687,7 +730,7 @@ gc_putc_getpars(unsigned char ch)
 static void 
 gc_putc_gotpars(unsigned char ch)
 {
-	int     i;
+	unsigned int i;
 
 	if (ch < ' ') {
 		/* special case for vttest for handling cursor
@@ -714,9 +757,12 @@ gc_putc_gotpars(unsigned char ch)
 			gc_x = vinfo.v_columns-1;
 		break;
 	case 'D':		/* Left			 */
-		gc_x -= gc_par[0] ? gc_par[0] : 1;
-		if (gc_x < 0)
+		if (gc_par[0] > gc_x)
 			gc_x = 0;
+		else if (gc_par[0])
+			gc_x -= gc_par[0];
+		else if (gc_x)
+			--gc_x;
 		break;
 	case 'H':		/* Set cursor position	 */
 	case 'f':
@@ -728,7 +774,6 @@ gc_putc_gotpars(unsigned char ch)
 		break;
 	case 'X':		/* clear p1 characters */
 		if (gc_numpars) {
-			int i;
 			for (i = gc_x; i < gc_x + gc_par[0]; i++)
 				gc_paint_char(i, gc_y, ' ', ATTR_NONE);
 		}
@@ -747,8 +792,6 @@ gc_putc_gotpars(unsigned char ch)
 				break;				
 			case 3:	/* Clear every tabs */
 				{
-					int i;
-
 					for (i = 0; i <= vinfo.v_columns; i++)
 						gc_tab_stops[i] = 0;
 				}
@@ -801,8 +844,6 @@ gc_putc_gotpars(unsigned char ch)
 		/* ensure top < bottom, and both within limits */
 		if ((gc_numpars > 0) && (gc_par[0] < vinfo.v_rows)) {
 			gc_scrreg_top = gc_par[0] ? gc_par[0] - 1 : 0;
-			if (gc_scrreg_top < 0)
-				gc_scrreg_top = 0;
 		} else {
 			gc_scrreg_top = 0;
 		}
@@ -909,59 +950,17 @@ gc_putc_square(unsigned char ch)
 
 }
 
-static void 
-gc_refresh_screen(void)
-{
-	spl_t s;
-
-	s = splhigh();
-	simple_lock(&gc_buffer_lock);
-
-	if ( gc_buffer_size )
-	{
-		unsigned char colorcodesave = gc_color_code;
-		unsigned long column, row;
-		unsigned long index;
-
-		for ( index = 0, row = 0 ; row < gc_buffer_rows ; row++ )
-		{
-			for ( column = 0 ; column < gc_buffer_columns ; index++, column++ )
-			{
-				if ( gc_buffer_colorcodes[index] != gc_color_code )
-				{
-					gc_update_color(COLOR_CODE_GET(gc_buffer_colorcodes[index], TRUE ), TRUE );
-					gc_update_color(COLOR_CODE_GET(gc_buffer_colorcodes[index], FALSE), FALSE);
-				}
-
-				gc_ops.paint_char(column, row, gc_buffer_characters[index], gc_buffer_attributes[index], 0, 0);
-			}
-		}
-
-		if ( colorcodesave != gc_color_code )
-		{
-			gc_update_color(COLOR_CODE_GET(colorcodesave, TRUE ), TRUE );
-			gc_update_color(COLOR_CODE_GET(colorcodesave, FALSE), FALSE);
-		}
-	}
-        
-	simple_unlock(&gc_buffer_lock);
-	splx(s);
-}
-
 static void
 gc_reset_screen(void)
 {
-	gc_hide_cursor(gc_x, gc_y);
 	gc_reset_vt100();
 	gc_x = gc_y = 0;
-	gc_clear_screen(gc_x, gc_y, 0, vinfo.v_rows, 2);
-	gc_show_cursor(gc_x, gc_y);
 }
 
 static void
 gc_reset_tabs(void)
 {
-	int i;
+	unsigned int i;
 
 	for (i = 0; i<= vinfo.v_columns; i++) {
 		gc_tab_stops[i] = ((i % 8) == 0);
@@ -985,14 +984,9 @@ gc_reset_vt100(void)
 }
 
 static void 
-gc_scroll_down(int num, int top, int bottom)
+gc_scroll_down(int num, unsigned int top, unsigned int bottom)
 {
-	spl_t s;
-
         if (!gc_buffer_size) return;
-
-	s = splhigh();
-	simple_lock(&gc_buffer_lock);
 
 	if ( bottom <= gc_buffer_rows )
 	{
@@ -1050,31 +1044,58 @@ gc_scroll_down(int num, int top, int bottom)
 			gc_update_color(COLOR_CODE_GET(colorcodesave, FALSE), FALSE);
 		}
 
-		simple_unlock(&gc_buffer_lock);
-		splx(s);
+		/* Now set the freed up lines to the background colour */
+
+		for ( row = top ; row < top + num ; row++ )
+		{
+			index = row * gc_buffer_columns;
+
+			for ( column = 0 ; column < gc_buffer_columns ; index++, column++ )
+			{
+				if ( gc_buffer_attributes[index] != ATTR_NONE     || 
+				     gc_buffer_characters[index] != ' '           || 
+				     gc_buffer_colorcodes[index] != gc_color_code )
+				{
+					if ( gc_buffer_colorcodes[index] != gc_color_code )
+					{
+						gc_ops.paint_char( /* xx             */ column,
+						                   /* yy             */ row,
+						                   /* ch             */ ' ',
+						                   /* attrs          */ ATTR_NONE,
+						                   /* ch_previous    */ 0,
+						                   /* attrs_previous */ 0 );
+					}
+					else
+					{
+						gc_ops.paint_char( /* xx             */ column,
+						                   /* yy             */ row,
+						                   /* ch             */ ' ',
+						                   /* attrs          */ ATTR_NONE,
+						                   /* ch_previous    */ gc_buffer_characters[index],
+						                   /* attrs_previous */ gc_buffer_attributes[index] );
+					}
+
+					gc_buffer_attributes[index] = ATTR_NONE;
+					gc_buffer_characters[index] = ' ';
+					gc_buffer_colorcodes[index] = gc_color_code;
+				}
+			}
+		}
 	}
 	else
 	{
-		simple_unlock(&gc_buffer_lock);
-		splx(s);
-
 		gc_ops.scroll_down(num, top, bottom);
+
+		/* Now set the freed up lines to the background colour */
+
+		gc_clear_screen(vinfo.v_columns - 1, top + num - 1, top, bottom, 1);
 	}
-
-	/* Now set the freed up lines to the background colour */
-
-	gc_clear_screen(vinfo.v_columns - 1, top + num - 1, top, bottom, 1);
 }
 
 static void 
-gc_scroll_up(int num, int top, int bottom)
+gc_scroll_up(int num, unsigned int top, unsigned int bottom)
 {
-	spl_t s;
-
         if (!gc_buffer_size) return;
-
-	s = splhigh();
-	simple_lock(&gc_buffer_lock);
 
 	if ( bottom <= gc_buffer_rows )
 	{
@@ -1122,7 +1143,6 @@ gc_scroll_up(int num, int top, int bottom)
 					gc_buffer_attributes[index] = gc_buffer_attributes[index + jump];
 					gc_buffer_characters[index] = gc_buffer_characters[index + jump];
 					gc_buffer_colorcodes[index] = gc_buffer_colorcodes[index + jump];
-
 				}
 			}
 		}
@@ -1133,30 +1153,57 @@ gc_scroll_up(int num, int top, int bottom)
 			gc_update_color(COLOR_CODE_GET(colorcodesave, FALSE), FALSE);
 		}
 
-		simple_unlock(&gc_buffer_lock);
-		splx(s);
+		/* Now set the freed up lines to the background colour */
+
+		for ( row = bottom - num ; row < bottom ; row++ )
+		{
+			index = row * gc_buffer_columns;
+
+			for ( column = 0 ; column < gc_buffer_columns ; index++, column++ )
+			{
+				if ( gc_buffer_attributes[index] != ATTR_NONE     || 
+				     gc_buffer_characters[index] != ' '           || 
+				     gc_buffer_colorcodes[index] != gc_color_code )
+				{
+					if ( gc_buffer_colorcodes[index] != gc_color_code )
+					{
+						gc_ops.paint_char( /* xx             */ column,
+						                   /* yy             */ row,
+						                   /* ch             */ ' ',
+						                   /* attrs          */ ATTR_NONE,
+						                   /* ch_previous    */ 0,
+						                   /* attrs_previous */ 0 );
+					}
+					else
+					{
+						gc_ops.paint_char( /* xx             */ column,
+						                   /* yy             */ row,
+						                   /* ch             */ ' ',
+						                   /* attrs          */ ATTR_NONE,
+						                   /* ch_previous    */ gc_buffer_characters[index],
+						                   /* attrs_previous */ gc_buffer_attributes[index] );
+					}
+
+					gc_buffer_attributes[index] = ATTR_NONE;
+					gc_buffer_characters[index] = ' ';
+					gc_buffer_colorcodes[index] = gc_color_code;
+				}
+			}
+		}
 	}
 	else
 	{
-		simple_unlock(&gc_buffer_lock);
-		splx(s);
-
 		gc_ops.scroll_up(num, top, bottom);
+
+		/* Now set the freed up lines to the background colour */
+
+		gc_clear_screen(0, bottom - num, top, bottom, 0);
 	}
-
-	/* Now set the freed up lines to the background colour */
-
-	gc_clear_screen(0, bottom - num, top, bottom, 0);
 }
 
 static void
-gc_show_cursor(int xx, int yy)
+gc_show_cursor(unsigned int xx, unsigned int yy)
 {
-	spl_t s;
-
-	s = splhigh();
-	simple_lock(&gc_buffer_lock);
-
 	if ( xx < gc_buffer_columns && yy < gc_buffer_rows )
 	{
 		unsigned long index = (yy * gc_buffer_columns) + xx;
@@ -1164,9 +1211,6 @@ gc_show_cursor(int xx, int yy)
 		unsigned char character = gc_buffer_characters[index];
 		unsigned char colorcode = gc_buffer_colorcodes[index];
 		unsigned char colorcodesave = gc_color_code;
-
-		simple_unlock(&gc_buffer_lock);
-		splx(s);
 
 		gc_update_color(COLOR_CODE_GET(colorcode, FALSE), TRUE );
 		gc_update_color(COLOR_CODE_GET(colorcode, TRUE ), FALSE);
@@ -1178,9 +1222,6 @@ gc_show_cursor(int xx, int yy)
 	}
 	else
 	{
-		simple_unlock(&gc_buffer_lock);
-		splx(s);
-
 		gc_ops.show_cursor(xx, yy);
 	}
 }
@@ -1192,17 +1233,23 @@ gc_update_color(int color, boolean_t fore)
 	gc_ops.update_color(color, fore);
 }
 
-int
-vcputc(int l, int u, int c)
+void
+vcputc(__unused int l, __unused int u, int c)
 {
 	if ( gc_enabled || debug_mode )
-        {
+	{
+		spl_t s;
+
+		s = splhigh();
+		VCPUTC_LOCK_LOCK();
+
 		gc_hide_cursor(gc_x, gc_y);
 		gc_putchar(c);
 		gc_show_cursor(gc_x, gc_y);
-	}
 
-	return 0;
+		VCPUTC_LOCK_UNLOCK();
+		splx(s);
+	}
 }
 
 /*
@@ -1248,22 +1295,9 @@ static int vc_rendered_char_size = 0;
 #define REN_MAX_DEPTH	32
 static unsigned char vc_rendered_char[ISO_CHAR_HEIGHT * ((REN_MAX_DEPTH / 8) * ISO_CHAR_WIDTH)];
 
-static void vc_clear_screen(int xx, int yy, int scrreg_top, int scrreg_bottom, int which);
-static void vc_enable(boolean_t enable);
-static void vc_initialize(struct vc_info * vinfo_p);
-static void vc_paint_char(int xx, int yy, unsigned char ch, int attrs, unsigned char ch_previous, int attrs_previous);
-static void vc_paint_char_8(int xx, int yy, unsigned char ch, int attrs, unsigned char ch_previous, int attrs_previous); 
-static void vc_paint_char_16(int xx, int yy, unsigned char ch, int attrs, unsigned char ch_previous, int attrs_previous); 
-static void vc_paint_char_32(int xx, int yy, unsigned char ch, int attrs, unsigned char ch_previous, int attrs_previous);
-static void vc_render_char(unsigned char ch, unsigned char *renderptr, short newdepth);
-static void vc_render_font(short newdepth);
-static void vc_reverse_cursor(int xx, int yy);
-static void vc_scroll_down(int num, int scrreg_top, int scrreg_bottom);
-static void vc_scroll_up(int num, int scrreg_top, int scrreg_bottom);
-static void vc_update_color(int color, boolean_t fore);
-
 static void 
-vc_clear_screen(int xx, int yy, int scrreg_top, int scrreg_bottom, int which)
+vc_clear_screen(unsigned int xx, unsigned int yy, unsigned int scrreg_top,
+		unsigned int scrreg_bottom, int which)
 {
 	unsigned long *p, *endp, *row;
 	int      linelongs, col;
@@ -1311,43 +1345,52 @@ vc_clear_screen(int xx, int yy, int scrreg_top, int scrreg_bottom, int which)
 }
 
 static void
-vc_enable(boolean_t enable)
+vc_initialize(__unused struct vc_info * vinfo_p)
 {
-	if ( enable )
-	{
-		vc_render_font(vinfo.v_depth);
-	}
-}
 
-static void
-vc_initialize(struct vc_info * vinfo_p)
-{
 	vinfo.v_rows = vinfo.v_height / ISO_CHAR_HEIGHT;
 	vinfo.v_columns = vinfo.v_width / ISO_CHAR_WIDTH;
 	vinfo.v_rowscanbytes = (vinfo.v_depth / 8) * vinfo.v_width;
 }
 
 static void
-vc_paint_char(int xx, int yy, unsigned char ch, int attrs, unsigned char ch_previous, int attrs_previous)
+vc_render_char(unsigned char ch, unsigned char *renderptr, short newdepth)
 {
-	if( !vinfo.v_depth)
-		return;
+	union {
+		unsigned char  *charptr;
+		unsigned short *shortptr;
+		unsigned long  *longptr;
+	} current; 	/* current place in rendered font, multiple types. */
+	unsigned char *theChar;	/* current char in iso_font */
+	int line;
 
-	switch( vinfo.v_depth) {
-		case 8:
-			vc_paint_char_8(xx, yy, ch, attrs, ch_previous, attrs_previous);
-			break;
-		case 16:
-			vc_paint_char_16(xx, yy, ch, attrs, ch_previous, attrs_previous);
-			break;
-		case 32:
-			vc_paint_char_32(xx, yy, ch, attrs, ch_previous, attrs_previous);
-			break;
+	current.charptr = renderptr;
+	theChar = iso_font + (ch * ISO_CHAR_HEIGHT);
+
+	for (line = 0; line < ISO_CHAR_HEIGHT; line++) {
+		unsigned char mask = 1;
+		do {
+			switch (newdepth) {
+			case 8: 
+				*current.charptr++ = (*theChar & mask) ? 0xFF : 0;
+				break;
+			case 16:
+				*current.shortptr++ = (*theChar & mask) ? 0xFFFF : 0;
+				break;
+
+			case 32: 
+				*current.longptr++ = (*theChar & mask) ? 0xFFFFFFFF : 0;
+				break;
+			}
+			mask <<= 1;
+		} while (mask);	/* while the single bit drops to the right */
+		theChar++;
 	}
 }
 
 static void
-vc_paint_char_8(int xx, int yy, unsigned char ch, int attrs, unsigned char ch_previous, int attrs_previous) 
+vc_paint_char_8(unsigned int xx, unsigned int yy, unsigned char ch, int attrs,
+		__unused unsigned char ch_previous, __unused int attrs_previous)
 {
 	unsigned long *theChar;
 	unsigned long *where;
@@ -1402,7 +1445,9 @@ vc_paint_char_8(int xx, int yy, unsigned char ch, int attrs, unsigned char ch_pr
 }
 
 static void
-vc_paint_char_16(int xx, int yy, unsigned char ch, int attrs, unsigned char ch_previous, int attrs_previous) 
+vc_paint_char_16(unsigned int xx, unsigned int yy, unsigned char ch, int attrs,
+		 __unused unsigned char ch_previous,
+		 __unused int attrs_previous) 
 {
 	unsigned long *theChar;
 	unsigned long *where;
@@ -1453,7 +1498,8 @@ vc_paint_char_16(int xx, int yy, unsigned char ch, int attrs, unsigned char ch_p
 }
 
 static void
-vc_paint_char_32(int xx, int yy, unsigned char ch, int attrs, unsigned char ch_previous, int attrs_previous) 
+vc_paint_char_32(unsigned int xx, unsigned int yy, unsigned char ch, int attrs,
+		 unsigned char ch_previous, int attrs_previous) 
 {
 	unsigned long *theChar;
 	unsigned long *theCharPrevious;
@@ -1515,39 +1561,24 @@ vc_paint_char_32(int xx, int yy, unsigned char ch, int attrs, unsigned char ch_p
 }
 
 static void
-vc_render_char(unsigned char ch, unsigned char *renderptr, short newdepth)
+vc_paint_char(unsigned int xx, unsigned int yy, unsigned char ch, int attrs,
+	      unsigned char ch_previous, int attrs_previous)
 {
-	union {
-		unsigned char  *charptr;
-		unsigned short *shortptr;
-		unsigned long  *longptr;
-	} current; 	/* current place in rendered font, multiple types. */
+	if(!vinfo.v_depth)
+		return;
 
-	unsigned char *theChar;	/* current char in iso_font */
-
-	int line;
-
-	current.charptr = renderptr;
-	theChar = iso_font + (ch * ISO_CHAR_HEIGHT);
-
-	for (line = 0; line < ISO_CHAR_HEIGHT; line++) {
-		unsigned char mask = 1;
-		do {
-			switch (newdepth) {
-				case 8: 
-					*current.charptr++ = (*theChar & mask) ? 0xFF : 0;
-					break;
-				case 16:
-					*current.shortptr++ = (*theChar & mask) ? 0xFFFF : 0;
-					break;
-
-				case 32: 
-					*current.longptr++ = (*theChar & mask) ? 0xFFFFFFFF : 0;
-					break;
-			}
-			mask <<= 1;
-		} while (mask);	/* while the single bit drops to the right */
-		theChar++;
+	switch(vinfo.v_depth) {
+	case 8:
+		vc_paint_char_8(xx, yy, ch, attrs, ch_previous, attrs_previous);
+		break;
+	case 16:
+		vc_paint_char_16(xx, yy, ch, attrs, ch_previous,
+				 attrs_previous);
+		break;
+	case 32:
+		vc_paint_char_32(xx, yy, ch, attrs, ch_previous,
+				 attrs_previous);
+		break;
 	}
 }
 
@@ -1557,6 +1588,10 @@ vc_render_font(short newdepth)
 	static short olddepth = 0;
 
 	int charindex;	/* index in ISO font */
+	unsigned char *rendered_font;
+	unsigned long rendered_font_size;
+	int rendered_char_size;
+	spl_t s;
 
 	if (vm_initialized == FALSE) {
 		return;	/* nothing to do */
@@ -1564,28 +1599,61 @@ vc_render_font(short newdepth)
 	if (olddepth == newdepth && vc_rendered_font) {
 		return;	/* nothing to do */
 	}
-	if (vc_rendered_font) {
-		kfree(vc_rendered_font, vc_rendered_font_size);
+
+	s = splhigh();
+	VCPUTC_LOCK_LOCK();
+
+	rendered_font      = vc_rendered_font;
+	rendered_font_size = vc_rendered_font_size;
+	rendered_char_size = vc_rendered_char_size;
+
+	vc_rendered_font      = NULL;
+	vc_rendered_font_size = 0;
+	vc_rendered_char_size = 0;
+
+	VCPUTC_LOCK_UNLOCK();
+	splx(s);
+
+	if (rendered_font) {
+		kfree(rendered_font, rendered_font_size);
+		rendered_font = NULL;
 	}
 
-	vc_rendered_char_size = ISO_CHAR_HEIGHT * ((newdepth / 8) * ISO_CHAR_WIDTH);
-	vc_rendered_font_size = (ISO_CHAR_MAX-ISO_CHAR_MIN+1) * vc_rendered_char_size;
-        vc_rendered_font = (unsigned char *) kalloc(vc_rendered_font_size);
+	if (newdepth) {
+		rendered_char_size = ISO_CHAR_HEIGHT * ((newdepth / 8) * ISO_CHAR_WIDTH);
+		rendered_font_size = (ISO_CHAR_MAX-ISO_CHAR_MIN+1) * rendered_char_size;
+		rendered_font = (unsigned char *) kalloc(rendered_font_size);
+	}
 
-	if (vc_rendered_font == NULL) {
-		vc_rendered_font_size = 0;
+	if (rendered_font == NULL) {
 		return;
 	}
 
 	for (charindex = ISO_CHAR_MIN; charindex <= ISO_CHAR_MAX; charindex++) {
-		vc_render_char(charindex, vc_rendered_font + (charindex * vc_rendered_char_size), newdepth);
+		vc_render_char(charindex, rendered_font + (charindex * rendered_char_size), newdepth);
 	}
 
 	olddepth = newdepth;
+
+	s = splhigh();
+	VCPUTC_LOCK_LOCK();
+
+	vc_rendered_font      = rendered_font;
+	vc_rendered_font_size = rendered_font_size;
+	vc_rendered_char_size = rendered_char_size;
+
+	VCPUTC_LOCK_UNLOCK();
+	splx(s);
 }
 
 static void
-vc_reverse_cursor(int xx, int yy)
+vc_enable(boolean_t enable)
+{
+	vc_render_font(enable ? vinfo.v_depth : 0);
+}
+
+static void
+vc_reverse_cursor(unsigned int xx, unsigned int yy)
 {
 	unsigned long *where;
 	int line, col;
@@ -1616,7 +1684,7 @@ vc_reverse_cursor(int xx, int yy)
 }
 
 static void 
-vc_scroll_down(int num, int scrreg_top, int scrreg_bottom)
+vc_scroll_down(int num, unsigned int scrreg_top, unsigned int scrreg_bottom)
 {
 	unsigned long *from, *to,  linelongs, i, line, rowline, rowscanline;
 
@@ -1649,7 +1717,7 @@ vc_scroll_down(int num, int scrreg_top, int scrreg_bottom)
 }
 
 static void 
-vc_scroll_up(int num, int scrreg_top, int scrreg_bottom)
+vc_scroll_up(int num, unsigned int scrreg_top, unsigned int scrreg_bottom)
 {
 	unsigned long *from, *to, linelongs, i, line, rowline, rowscanline;
 
@@ -1742,7 +1810,7 @@ static void vc_blit_rect_32( int x, int y, int width, int height,
                              unsigned int * backBuffer, boolean_t save, boolean_t static_alpha );
 extern void vc_display_icon( vc_progress_element * desc, const unsigned char * data );
 extern void vc_progress_initialize( vc_progress_element * desc, const unsigned char * data, const unsigned char * clut );
-static void vc_progress_set( boolean_t enable, uint32_t delay );
+static void vc_progress_set(boolean_t enable, uint32_t vc_delay);
 static void vc_progress_task( void * arg0, void * arg );
 
 static void vc_blit_rect(	int x, int y,
@@ -1769,12 +1837,11 @@ static void vc_blit_rect(	int x, int y,
     }
 }
 
-static void vc_blit_rect_8(	int x, int y,
-                                int width, int height, 
-                                const unsigned char * dataPtr,
-                                const unsigned char * alphaPtr,
-                                unsigned char * backPtr,
-                                boolean_t save, boolean_t static_alpha )
+static void
+vc_blit_rect_8(int x, int y, int width, int height,
+	       const unsigned char * dataPtr, const unsigned char * alphaPtr,
+	       __unused unsigned char * backPtr, __unused boolean_t save,
+	       __unused boolean_t static_alpha)
 {
     volatile unsigned char * dst;
     int line, col;
@@ -1795,6 +1862,21 @@ static void vc_blit_rect_8(	int x, int y,
     }
 }
 
+/* For ARM, 16-bit is 565 (RGB); it is 1555 (XRGB) on other platforms */
+
+#define CLUT_MASK_R	0xf8
+#define CLUT_MASK_G	0xf8
+#define CLUT_MASK_B	0xf8
+#define CLUT_SHIFT_R	<< 7
+#define CLUT_SHIFT_G	<< 2
+#define CLUT_SHIFT_B	>> 3
+#define MASK_R		0x7c00
+#define MASK_G		0x03e0
+#define MASK_B		0x001f
+#define MASK_R_8	0x3fc00
+#define MASK_G_8	0x01fe0
+#define MASK_B_8	0x000ff
+
 static void vc_blit_rect_16(	int x, int y,
                                 int width, int height,
                                 const unsigned char * dataPtr,
@@ -1804,7 +1886,7 @@ static void vc_blit_rect_16(	int x, int y,
 {
     volatile unsigned short * dst;
     int line, col;
-    unsigned int data, index, alpha, back;
+    unsigned int data = 0, index = 0, alpha, back;
 
     dst = (volatile unsigned short *)(vinfo.v_baseaddr +
                                     (y * vinfo.v_rowbytes) +
@@ -1823,28 +1905,35 @@ static void vc_blit_rect_16(	int x, int y,
                 data = 0;
 		if( dataPtr != 0) {
                     if( vc_clut[index + 0] > alpha)
-                        data |= (((vc_clut[index + 0] - alpha) & 0xf8) << 7);
+                        data |= (((vc_clut[index + 0] - alpha) & CLUT_MASK_R) CLUT_SHIFT_R);
                     if( vc_clut[index + 1] > alpha)
-                        data |= (((vc_clut[index + 1] - alpha) & 0xf8) << 2);
+                        data |= (((vc_clut[index + 1] - alpha) & CLUT_MASK_G) CLUT_SHIFT_G);
                     if( vc_clut[index + 2] > alpha)
-                        data |= (((vc_clut[index + 2] - alpha) & 0xf8) >> 3);
+                        data |= (((vc_clut[index + 2] - alpha) & CLUT_MASK_B) CLUT_SHIFT_B);
 		}
+#ifdef CONFIG_VC_PROGRESS_WHITE
+		else {
+		    data |= (((0xff - alpha) & CLUT_MASK_R) CLUT_SHIFT_R);
+		    data |= (((0xff - alpha) & CLUT_MASK_G) CLUT_SHIFT_G);
+		    data |= (((0xff - alpha) & CLUT_MASK_B) CLUT_SHIFT_B);
+		}
+#endif
 
                 if( save) {
                     back = *(dst + col);
                     if ( !static_alpha)
                         *backPtr++ = back;
-                        back = (((((back & 0x7c00) * alpha) + 0x3fc00) >> 8) & 0x7c00)
-                             | (((((back & 0x03e0) * alpha) + 0x01fe0) >> 8) & 0x03e0)
-                             | (((((back & 0x001f) * alpha) + 0x000ff) >> 8) & 0x001f);
+                        back = (((((back & MASK_R) * alpha) + MASK_R_8) >> 8) & MASK_R)
+                             | (((((back & MASK_G) * alpha) + MASK_G_8) >> 8) & MASK_G)
+                             | (((((back & MASK_B) * alpha) + MASK_B_8) >> 8) & MASK_B);
                     if ( static_alpha)
                         *backPtr++ = back;
                 } else {
                     back = *backPtr++;
                     if ( !static_alpha) {
-                        back = (((((back & 0x7c00) * alpha) + 0x3fc00) >> 8) & 0x7c00)
-                             | (((((back & 0x03e0) * alpha) + 0x01fe0) >> 8) & 0x03e0)
-                             | (((((back & 0x001f) * alpha) + 0x000ff) >> 8) & 0x001f);
+                        back = (((((back & MASK_R) * alpha) + MASK_R_8) >> 8) & MASK_R)
+                             | (((((back & MASK_G) * alpha) + MASK_G_8) >> 8) & MASK_G)
+                             | (((((back & MASK_B) * alpha) + MASK_B_8) >> 8) & MASK_B);
                     }
                 }
 
@@ -1852,9 +1941,9 @@ static void vc_blit_rect_16(	int x, int y,
 
             } else
                 if( dataPtr != 0) {
-            	    data = ( (0xf8 & (vc_clut[index + 0])) << 7)
-                           | ( (0xf8 & (vc_clut[index + 1])) << 2)
-                           | ( (0xf8 & (vc_clut[index + 2])) >> 3);
+            	    data = ( (CLUT_MASK_R & (vc_clut[index + 0])) CLUT_SHIFT_R)
+                           | ( (CLUT_MASK_G & (vc_clut[index + 1])) CLUT_SHIFT_G)
+                           | ( (CLUT_MASK_B & (vc_clut[index + 2])) CLUT_SHIFT_B);
 		}
 
             *(dst + col) = data;
@@ -1872,7 +1961,7 @@ static void vc_blit_rect_32(	int x, int y,
 {
     volatile unsigned int * dst;
     int line, col;
-    unsigned int data, index, alpha, back;
+    unsigned int data = 0, index = 0, alpha, back;
 
     dst = (volatile unsigned int *) (vinfo.v_baseaddr +
                                     (y * vinfo.v_rowbytes) +
@@ -1897,6 +1986,13 @@ static void vc_blit_rect_32(	int x, int y,
                     if( vc_clut[index + 2] > alpha)
                         data |= ((vc_clut[index + 2] - alpha));
 		}
+#ifdef CONFIG_VC_PROGRESS_WHITE
+		else {
+		    data |= (0xff - alpha) << 16;
+		    data |= (0xff - alpha) << 8;
+		    data |= (0xff - alpha);
+		}
+#endif
 
                 if( save) {
                     back = *(dst + col);
@@ -1960,6 +2056,8 @@ vc_progress_initialize( vc_progress_element * desc,
     vc_clut = clut;
     vc_clut8 = clut;
 
+    simple_lock_init(&vc_progress_lock, 0);
+
     vc_progress = desc;
     vc_progress_data = data;
     if( 2 & vc_progress->flags)
@@ -1972,15 +2070,13 @@ vc_progress_initialize( vc_progress_element * desc,
 
     clock_interval_to_absolutetime_interval(vc_progress->time, 1000 * 1000, &abstime);
     vc_progress_interval = abstime;
-
-    simple_lock_init(&vc_progress_lock, 0);
 }
 
 static void
-vc_progress_set( boolean_t enable, uint32_t delay )
+vc_progress_set(boolean_t enable, uint32_t vc_delay)
 {
     spl_t	     s;
-    void             *saveBuf = 0;
+    void             *saveBuf = NULL;
     vm_size_t        saveLen = 0;
     unsigned int     count;
     unsigned int     index;
@@ -2016,9 +2112,9 @@ vc_progress_set( boolean_t enable, uint32_t delay )
 
 	    case 16 :
 		buf16 = (unsigned short *) saveBuf;
-		pdata16 = ((vc_clut[0x01 * 3 + 0] & 0xf8) << 7)
-		       | ((vc_clut[0x01 * 3 + 0] & 0xf8) << 2)
-		       | ((vc_clut[0x01 * 3 + 0] & 0xf8) >> 3);
+		pdata16 = ((vc_clut[0x01 * 3 + 0] & CLUT_MASK_R) CLUT_SHIFT_R)
+		       | ((vc_clut[0x01 * 3 + 0] & CLUT_MASK_G) CLUT_SHIFT_G)
+		       | ((vc_clut[0x01 * 3 + 0] & CLUT_MASK_B) CLUT_SHIFT_B);
 		for( count = 0; count < saveLen / 2; count++)
 		    buf16[count] = pdata16;
 		break;
@@ -2043,17 +2139,19 @@ vc_progress_set( boolean_t enable, uint32_t delay )
             vc_needsave      = TRUE;
             vc_saveunder     = saveBuf;
             vc_saveunder_len = saveLen;
-            saveBuf	     = 0;
+            saveBuf	     = NULL;
             saveLen 	     = 0;
 
-            clock_interval_to_deadline(delay, 1000 * 1000 * 1000 /*second scale*/, &vc_progress_deadline);
+            clock_interval_to_deadline(vc_delay,
+				       1000 * 1000 * 1000 /*second scale*/,
+				       &vc_progress_deadline);
             thread_call_enter_delayed(&vc_progress_call, vc_progress_deadline);
 
         } else {
             if( vc_saveunder) {
                 saveBuf      = vc_saveunder;
                 saveLen      = vc_saveunder_len;
-                vc_saveunder = 0;
+                vc_saveunder = NULL;
                 vc_saveunder_len = 0;
             }
 
@@ -2068,7 +2166,8 @@ vc_progress_set( boolean_t enable, uint32_t delay )
         kfree( saveBuf, saveLen );
 }
 
-static void vc_progress_task( void * arg0, void * arg )
+static void
+vc_progress_task(__unused void *arg0, void *arg)
 {
     spl_t		s;
     int			count = (int) arg;
@@ -2118,6 +2217,7 @@ static void vc_progress_task( void * arg0, void * arg )
 
 static boolean_t gc_acquired      = FALSE;
 static boolean_t gc_graphics_boot = FALSE;
+static boolean_t gc_desire_text   = FALSE;
 
 static unsigned int lastVideoPhys   = 0;
 static unsigned int lastVideoVirt   = 0;
@@ -2125,52 +2225,55 @@ static unsigned int lastVideoSize   = 0;
 static boolean_t    lastVideoMapped = FALSE;
 
 void
-initialize_screen(Boot_Video * boot_vinfo, unsigned int op)
+initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 {
-	unsigned int fbsize;
-	unsigned int newVideoVirt;
+	unsigned int fbsize = 0;
+	unsigned int newVideoVirt = 0;
+	boolean_t graphics_now;
 	ppnum_t fbppage;
 
 	if ( boot_vinfo )
 	{
+		struct vc_info new_vinfo = vinfo;
+
 //        	bcopy((const void *)boot_vinfo, (void *)&boot_video_info, sizeof(boot_video_info));
 
 		/* 
 		 *	First, check if we are changing the size and/or location of the framebuffer
 		 */
-		vinfo.v_name[0]  = 0;
-		vinfo.v_width    = boot_vinfo->v_width;
-		vinfo.v_height   = boot_vinfo->v_height;
-		vinfo.v_depth    = boot_vinfo->v_depth;
-		vinfo.v_rowbytes = boot_vinfo->v_rowBytes;
-		vinfo.v_physaddr = boot_vinfo->v_baseAddr;		/* Get the physical address */
+		new_vinfo.v_name[0]  = 0;
+		new_vinfo.v_width    = boot_vinfo->v_width;
+		new_vinfo.v_height   = boot_vinfo->v_height;
+		new_vinfo.v_depth    = boot_vinfo->v_depth;
+		new_vinfo.v_rowbytes = boot_vinfo->v_rowBytes;
+		new_vinfo.v_physaddr = boot_vinfo->v_baseAddr;		/* Get the physical address */
 #ifdef __i386__
-                vinfo.v_type     = boot_vinfo->v_display;
+                new_vinfo.v_type     = boot_vinfo->v_display;
 #else
-                vinfo.v_type = 0;
+                new_vinfo.v_type = 0;
 #endif
-    
- 
-                kprintf("initialize_screen: b=%08X, w=%08X, h=%08X, r=%08X, d=%08X\n",                  /* (BRINGUP) */
-                        vinfo.v_physaddr, vinfo.v_width,  vinfo.v_height,  vinfo.v_rowbytes, vinfo.v_type);     /* (BRINGUP) */
+     
+		if (!lastVideoMapped)
+		    kprintf("initialize_screen: b=%08lX, w=%08lX, h=%08lX, r=%08lX, d=%08lX\n",                  /* (BRINGUP) */
+			    new_vinfo.v_physaddr, new_vinfo.v_width,  new_vinfo.v_height,  new_vinfo.v_rowbytes, new_vinfo.v_type);     /* (BRINGUP) */
 
 #ifdef __i386__
-                if ( (vinfo.v_type == VGA_TEXT_MODE) )
+                if ( (new_vinfo.v_type == VGA_TEXT_MODE) )
                 {
-                    if (vinfo.v_physaddr == 0) {
-                        vinfo.v_physaddr = 0xb8000;
-                        vinfo.v_width = 80;
-                        vinfo.v_height = 25;
-                        vinfo.v_depth = 8;
-                        vinfo.v_rowbytes = 0x8000;
+                    if (new_vinfo.v_physaddr == 0) {
+                        new_vinfo.v_physaddr = 0xb8000;
+                        new_vinfo.v_width = 80;
+                        new_vinfo.v_height = 25;
+                        new_vinfo.v_depth = 8;
+                        new_vinfo.v_rowbytes = 0x8000;
                     }
                 }
 #endif /* __i386__ */
 
-		if (!vinfo.v_physaddr)							/* Check to see if we have a framebuffer */
+		if (!new_vinfo.v_physaddr)							/* Check to see if we have a framebuffer */
 		{
 			kprintf("initialize_screen: No video - forcing serial mode\n");		/* (BRINGUP) */
-			vinfo.v_depth = 0;						/* vc routines are nop */
+			new_vinfo.v_depth = 0;						/* vc routines are nop */
 			(void)switch_to_serial_console();				/* Switch into serial mode */
 			gc_graphics_boot = FALSE;					/* Say we are not in graphics mode */
 			disableConsoleOutput = FALSE;					/* Allow printfs to happen */
@@ -2187,45 +2290,68 @@ initialize_screen(Boot_Video * boot_vinfo, unsigned int op)
 			    fbppage = pmap_find_phys(kernel_pmap, (addr64_t)boot_vinfo->v_baseAddr);	/* Get the physical address of frame buffer */
 			    if(!fbppage)						/* Did we find it? */
 			    {
-				    panic("initialize_screen: Strange framebuffer - addr = %08X\n", boot_vinfo->v_baseAddr);
+				    panic("initialize_screen: Strange framebuffer - addr = %08X\n", (uint32_t)boot_vinfo->v_baseAddr);
 			    }
-			    vinfo.v_physaddr = (fbppage << 12) | (boot_vinfo->v_baseAddr & PAGE_MASK);			/* Get the physical address */
+			    new_vinfo.v_physaddr = (fbppage << 12) | (boot_vinfo->v_baseAddr & PAGE_MASK);			/* Get the physical address */
 		    }
     
-		    fbsize = round_page_32(vinfo.v_height * vinfo.v_rowbytes);			/* Remember size */
+		    if (boot_vinfo->v_length != 0)
+			    fbsize = round_page_32(boot_vinfo->v_length);
+		    else
+			    fbsize = round_page_32(new_vinfo.v_height * new_vinfo.v_rowbytes);			/* Remember size */
+
     
-		    if ((lastVideoPhys != vinfo.v_physaddr) || (fbsize > lastVideoSize))		/* Did framebuffer change location or get bigger? */
+		    if ((lastVideoPhys != new_vinfo.v_physaddr) || (fbsize > lastVideoSize))		/* Did framebuffer change location or get bigger? */
 		    {
 			    unsigned int
 #if FALSE
-			    flags = (vinfo.v_type == VGA_TEXT_MODE) ? VM_WIMG_IO : VM_WIMG_WCOMB;
+			    flags = (new_vinfo.v_type == VGA_TEXT_MODE) ? VM_WIMG_IO : VM_WIMG_WCOMB;
 #else
 			    flags = VM_WIMG_IO;
 #endif
-			    newVideoVirt = io_map_spec((vm_offset_t)vinfo.v_physaddr, fbsize, flags);	/* Allocate address space for framebuffer */
-    
-			    if (lastVideoVirt)							/* Was the framebuffer mapped before? */
-			    {
-#if FALSE
-                                    if(lastVideoMapped)                            /* Was this not a special pre-VM mapping? */
-#endif
-				    {
-					    pmap_remove(kernel_pmap, trunc_page_64(lastVideoVirt),
-						    round_page_64(lastVideoVirt + lastVideoSize));	/* Toss mappings */
-				    }
-                                    if(lastVideoMapped)                            /* Was this not a special pre-VM mapping? */
-				    {
-					    kmem_free(kernel_map, lastVideoVirt, lastVideoSize);	/* Toss kernel addresses */
-				    }
-			    }
-			    lastVideoPhys = vinfo.v_physaddr;					/* Remember the framebuffer address */
-			    lastVideoSize = fbsize;							/* Remember the size */
-			    lastVideoVirt = newVideoVirt;						/* Remember the virtual framebuffer address */
-			    lastVideoMapped  = (NULL != kernel_map);
-		    }
+			    newVideoVirt = io_map_spec((vm_offset_t)new_vinfo.v_physaddr, fbsize, flags);	/* Allocate address space for framebuffer */
+    		    }
 		}
 
-		vinfo.v_baseaddr = lastVideoVirt;				/* Set the new framebuffer address */
+		if (newVideoVirt != 0)
+		    new_vinfo.v_baseaddr = newVideoVirt + boot_vinfo->v_offset;				/* Set the new framebuffer address */
+		else
+		    new_vinfo.v_baseaddr = lastVideoVirt + boot_vinfo->v_offset;				/* Set the new framebuffer address */
+	
+		/* Update the vinfo structure atomically with respect to the vc_progress task if running */
+		if (vc_progress)
+		{
+		    simple_lock(&vc_progress_lock);
+		    vinfo = new_vinfo;
+		    simple_unlock(&vc_progress_lock);
+		}
+		else
+		{
+		    vinfo = new_vinfo;
+		}
+
+		// If we changed the virtual address, remove the old mapping
+		if (newVideoVirt != 0)
+		{
+			if (lastVideoVirt)							/* Was the framebuffer mapped before? */
+			{
+#if FALSE
+				if(lastVideoMapped)                            /* Was this not a special pre-VM mapping? */
+#endif
+				{
+					pmap_remove(kernel_pmap, trunc_page_64(lastVideoVirt),
+						round_page_64(lastVideoVirt + lastVideoSize));	/* Toss mappings */
+				}
+				if(lastVideoMapped)                            /* Was this not a special pre-VM mapping? */
+				{
+					kmem_free(kernel_map, lastVideoVirt, lastVideoSize);	/* Toss kernel addresses */
+				}
+			}
+			lastVideoPhys = new_vinfo.v_physaddr;					/* Remember the framebuffer address */
+			lastVideoSize = fbsize;							/* Remember the size */
+			lastVideoVirt = newVideoVirt;						/* Remember the virtual framebuffer address */
+			lastVideoMapped  = (NULL != kernel_map);
+		}
 
 #ifdef __i386__
 		if ( (vinfo.v_type == VGA_TEXT_MODE) )
@@ -2270,6 +2396,7 @@ initialize_screen(Boot_Video * boot_vinfo, unsigned int op)
 		case kPEGraphicsMode:
 			panicDialogDesired = TRUE;
 			gc_graphics_boot = TRUE;
+			gc_desire_text = FALSE;
 			break;
 
 		case kPETextMode:
@@ -2279,10 +2406,11 @@ initialize_screen(Boot_Video * boot_vinfo, unsigned int op)
 
 		case kPEAcquireScreen:
 			if ( gc_acquired ) break;
-
-			vc_progress_set( gc_graphics_boot, kProgressAcquireDelay );
-			gc_enable( !gc_graphics_boot );
+			graphics_now = gc_graphics_boot && !gc_desire_text;
+			vc_progress_set( graphics_now, kProgressAcquireDelay );
+			gc_enable( !graphics_now );
 			gc_acquired = TRUE;
+			gc_desire_text = FALSE;
 			break;
 
 		case kPEEnableScreen:
@@ -2290,8 +2418,14 @@ initialize_screen(Boot_Video * boot_vinfo, unsigned int op)
 			break;
 
 		case kPETextScreen:
+			if ( console_is_serial() ) break;
+
 			panicDialogDesired = FALSE;
-			if ( gc_acquired      == FALSE ) break;
+			if ( gc_acquired == FALSE )
+			{
+				gc_desire_text = TRUE;
+				break;
+			}
 			if ( gc_graphics_boot == FALSE ) break;
 
 			vc_progress_set( FALSE, 0 );
@@ -2304,6 +2438,7 @@ initialize_screen(Boot_Video * boot_vinfo, unsigned int op)
 
 		case kPEReleaseScreen:
 			gc_acquired = FALSE;
+			gc_desire_text = FALSE;
 			gc_enable( FALSE );
 			vc_progress_set( FALSE, 0 );
 
@@ -2318,33 +2453,23 @@ initialize_screen(Boot_Video * boot_vinfo, unsigned int op)
 #endif /* GRATEFULDEBUGGER */
 }
 
-void
-refresh_screen(void)
-{
-	if ( gc_enabled )
-	{
-		gc_refresh_screen();
-		gc_show_cursor(gc_x, gc_y);
-	}
-}
+void vcattach(void); /* XXX gcc 4 warning cleanup */
 
 void
 vcattach(void)
 {
-	extern struct { long msg_magic; long msg_bufx; long msg_bufr; char msg_bufc[]; } * msgbufp;
-
 	vm_initialized = TRUE;
 
 	if ( gc_graphics_boot == FALSE )
 	{
-		unsigned int index;
+		long index;
 
 		if ( gc_acquired )
 		{
-			initialize_screen( 0, kPEReleaseScreen );
+			initialize_screen(NULL, kPEReleaseScreen);
 		}
 
-		initialize_screen( 0, kPEAcquireScreen );
+		initialize_screen(NULL, kPEAcquireScreen);
 
 		for ( index = 0 ; index < msgbufp->msg_bufx ; index++ )
 		{

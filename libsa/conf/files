@@ -3,6 +3,7 @@
 # OPTIONS/libkerncpp                                          optional libkerncpp
 # OPTIONS/kdebug                                              optional kdebug
 # OPTIONS/gprof                                               optional gprof
+OPTIONS/config_dtrace										optional config_dtrace
 
 # libsa
 

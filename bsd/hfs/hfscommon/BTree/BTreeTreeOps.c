@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000, 2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
 	File:		BTreeTreeOps.c
@@ -89,6 +95,7 @@
 */
 
 #include "../headers/BTreesPrivate.h"
+#include "../../hfs_btreeio.h"
 
 //
 /////////////////////// Routines Internal To BTree Module ///////////////////////
@@ -108,14 +115,14 @@ static OSStatus   CollapseTree		(BTreeControlBlockPtr		 btreePtr,
 static OSStatus   RotateLeft		(BTreeControlBlockPtr		 btreePtr,
 									 NodeDescPtr				 leftNode,
 									 NodeDescPtr				 rightNode,
-									 UInt16						 rightInsertIndex,
+									 u_int16_t					 rightInsertIndex,
 									 KeyPtr						 keyPtr,
-									 UInt8 *					 recPtr,
-									 UInt16						 recSize,
-									 UInt16						*insertIndex,
-									 UInt32						*insertNodeNum,
+									 u_int8_t *					 recPtr,
+									 u_int16_t					 recSize,
+									 u_int16_t					*insertIndex,
+									 u_int32_t					*insertNodeNum,
 									 Boolean					*recordFit,
-									 UInt16						*recsRotated );
+									 u_int16_t					*recsRotated );
 
 static Boolean	   RotateRecordLeft	(BTreeControlBlockPtr		 btreePtr,
 									 NodeDescPtr				 leftNode,
@@ -124,14 +131,14 @@ static Boolean	   RotateRecordLeft	(BTreeControlBlockPtr		 btreePtr,
 static OSStatus	   SplitLeft		(BTreeControlBlockPtr		 btreePtr,
 									 BlockDescriptor			*leftNode,
 									 BlockDescriptor			*rightNode,
-									 UInt32						 rightNodeNum,
-									 UInt16						 index,
+									 u_int32_t					 rightNodeNum,
+									 u_int16_t					 index,
 									 KeyPtr						 keyPtr,
-									 UInt8 *					 recPtr,
-									 UInt16						 recSize,
-									 UInt16						*insertIndex,
-									 UInt32						*insertNodeNum,
-									 UInt16						*recsRotated );
+									 u_int8_t *					 recPtr,
+									 u_int16_t					 recSize,
+									 u_int16_t					*insertIndex,
+									 u_int32_t					*insertNodeNum,
+									 u_int16_t					*recsRotated );
 								 
 
 
@@ -140,23 +147,23 @@ static	OSStatus	InsertLevel		(BTreeControlBlockPtr		 btreePtr,
 									 InsertKey					*primaryKey,
 									 InsertKey					*secondaryKey,
 									 BlockDescriptor			*targetNode,
-									 UInt16						 index,
-									 UInt16						 level,
-									 UInt32						*insertNode );
+									 u_int16_t					 index,
+									 u_int16_t					 level,
+									 u_int32_t					*insertNode );
 						 
 static OSErr		InsertNode 		(BTreeControlBlockPtr		 btreePtr,
 									 InsertKey					*key,
 									 BlockDescriptor			*rightNode,
-									 UInt32						 node,
-									 UInt16	 					 index,
-									 UInt32						*newNode,	
-									 UInt16						*newIndex,
+									 u_int32_t					 node,
+									 u_int16_t	 				 index,
+									 u_int32_t					*newNode,	
+									 u_int16_t					*newIndex,
 									 BlockDescriptor			*leftNode,
 									 Boolean					*updateParent,
 									 Boolean					*insertParent,
 									 Boolean					*rootSplit );
 									 
-static UInt16		GetKeyLength	(const BTreeControlBlock *btreePtr,
+static u_int16_t		GetKeyLength	(const BTreeControlBlock *btreePtr,
 									 const BTreeKey *key,
 									 Boolean forLeafNode );
 
@@ -189,20 +196,20 @@ Result:		noErr			- key found, index is record index
 OSStatus	SearchTree	(BTreeControlBlockPtr	 btreePtr,
 						 BTreeKeyPtr			 searchKey,
 						 TreePathTable			 treePathTable,
-						 UInt32					*nodeNum,
+						 u_int32_t				*nodeNum,
 						 BlockDescriptor		*nodePtr,
-						 UInt16					*returnIndex )
+						 u_int16_t				*returnIndex )
 {
 	OSStatus	err;
-	SInt16		level;					//	Expected depth of current node
-	UInt32		curNodeNum;				//	Current node we're searching
+	int16_t		level;					//	Expected depth of current node
+	u_int32_t	curNodeNum;				//	Current node we're searching
 	NodeRec		nodeRec;
-	UInt16		index;
+	u_int16_t	index;
 	Boolean		keyFound;
-	SInt8		nodeKind;				//	Kind of current node (index/leaf)
+	int8_t		nodeKind;				//	Kind of current node (index/leaf)
 	KeyPtr		keyPtr;
-	UInt8 *		dataPtr;
-	UInt16		dataSize;
+	u_int8_t *	dataPtr;
+	u_int16_t	dataSize;
 	
 	
 	curNodeNum		= btreePtr->rootNode;
@@ -302,7 +309,7 @@ OSStatus	SearchTree	(BTreeControlBlockPtr	 btreePtr,
         
         //	Get the child pointer out of this index node.  We're now done with the current
         //	node and can continue the search with the child node.
-        curNodeNum = *(UInt32 *)dataPtr;
+        curNodeNum = *(u_int32_t *)dataPtr;
         err = ReleaseNode (btreePtr, &nodeRec);
         if (err != noErr)
         {
@@ -344,13 +351,13 @@ ErrorExit:
 OSStatus	InsertTree ( BTreeControlBlockPtr		 btreePtr,
 						 TreePathTable				 treePathTable,
 						 KeyPtr						 keyPtr,
-						 UInt8 *					 recPtr,
-						 UInt16						 recSize,
+						 u_int8_t *					 recPtr,
+						 u_int16_t					 recSize,
 						 BlockDescriptor			*targetNode,
-						 UInt16						 index,
-						 UInt16						 level,
+						 u_int16_t					 index,
+						 u_int16_t					 level,
 						 Boolean					 replacingKey,
-						 UInt32						*insertNode )
+						 u_int32_t					*insertNode )
 {
 	InsertKey			primaryKey;
 	OSStatus			err;
@@ -377,15 +384,15 @@ OSStatus	InsertLevel (BTreeControlBlockPtr		 btreePtr,
 						 InsertKey					*primaryKey,
 						 InsertKey					*secondaryKey,
 						 BlockDescriptor			*targetNode,
-						 UInt16						 index,
-						 UInt16						 level,
-						 UInt32						*insertNode )
+						 u_int16_t					 index,
+						 u_int16_t					 level,
+						 u_int32_t					*insertNode )
 {
 	OSStatus			 err;
 	BlockDescriptor		 leftNode;
-	UInt32				 targetNodeNum;
-	UInt32				 newNodeNum;
-	UInt16				 newIndex;
+	u_int32_t			 targetNodeNum;
+	u_int32_t			 newNodeNum;
+	u_int16_t			 newIndex;
 	Boolean				 insertParent;
 	Boolean				 updateParent;
 	Boolean				 newRoot;
@@ -445,10 +452,10 @@ OSStatus	InsertLevel (BTreeControlBlockPtr		 btreePtr,
 	if ( insertParent || updateParent )
 	{
 		BlockDescriptor		parentNode;
-		UInt32				parentNodeNum;
+		u_int32_t			parentNodeNum;
 		KeyPtr				keyPtr;
-		UInt8 *				recPtr;
-		UInt16				recSize;
+		u_int8_t *			recPtr;
+		u_int16_t			recSize;
 		
 		parentNode.buffer = nil;
 		parentNode.blockHeader = nil;
@@ -480,7 +487,7 @@ OSStatus	InsertLevel (BTreeControlBlockPtr		 btreePtr,
 
 			//€€ debug: check if ptr == targetNodeNum
 			GetRecordByIndex (btreePtr, parentNode.buffer, index, &keyPtr, &recPtr, &recSize);
-			PanicIf( (*(UInt32 *) recPtr) != targetNodeNum, "\p InsertLevel: parent ptr doesn't match target node!");
+			PanicIf( (*(u_int32_t *) recPtr) != targetNodeNum, "\p InsertLevel: parent ptr doesn't match target node!");
 			
 			// need to delete and re-insert this parent key/ptr
 			// we delete it here and it gets re-inserted in the
@@ -489,7 +496,7 @@ OSStatus	InsertLevel (BTreeControlBlockPtr		 btreePtr,
 	
 			primaryKey->keyPtr		 = (KeyPtr) GetRecordAddress( btreePtr, targetNode->buffer, 0 );
 			primaryKey->keyLength	 = GetKeyLength(btreePtr, primaryKey->keyPtr, false);
-			primaryKey->recPtr		 = (UInt8 *) &targetNodeNum;
+			primaryKey->recPtr		 = (u_int8_t *) &targetNodeNum;
 			primaryKey->recSize		 = sizeof(targetNodeNum);
 			primaryKey->replacingKey = kReplaceRecord;
 			primaryKey->skipRotate   = insertParent;		// don't rotate left if we have two inserts occuring
@@ -513,8 +520,8 @@ OSStatus	InsertLevel (BTreeControlBlockPtr		 btreePtr,
 			
 			insertKeyPtr->keyPtr		= (KeyPtr) GetRecordAddress (btreePtr, leftNode.buffer, 0);
 			insertKeyPtr->keyLength		= GetKeyLength(btreePtr, insertKeyPtr->keyPtr, false);
-			insertKeyPtr->recPtr		= (UInt8 *) &((NodeDescPtr)targetNode->buffer)->bLink;
-			insertKeyPtr->recSize		= sizeof(UInt32);
+			insertKeyPtr->recPtr		= (u_int8_t *) &((NodeDescPtr)targetNode->buffer)->bLink;
+			insertKeyPtr->recSize		= sizeof(u_int32_t);
 			insertKeyPtr->replacingKey	= kInsertRecord;
 			insertKeyPtr->skipRotate	= false;		// a rotate is OK during second insert
 		}	
@@ -551,11 +558,11 @@ static OSErr	InsertNode	(BTreeControlBlockPtr	 btreePtr,
 							 InsertKey				*key,
 
 							 BlockDescriptor		*rightNode,
-							 UInt32					 node,
-							 UInt16	 				 index,
+							 u_int32_t				 node,
+							 u_int16_t	 			 index,
 
-							 UInt32					*newNode,	
-							 UInt16					*newIndex,
+							 u_int32_t				*newNode,	
+							 u_int16_t				*newIndex,
 
 							 BlockDescriptor		*leftNode,
 							 Boolean				*updateParent,
@@ -563,8 +570,8 @@ static OSErr	InsertNode	(BTreeControlBlockPtr	 btreePtr,
 							 Boolean				*rootSplit )
 {
 	BlockDescriptor		*targetNode;
-	UInt32				 leftNodeNum;
-	UInt16				 recsRotated;
+	u_int32_t			 leftNodeNum;
+	u_int16_t			 recsRotated;
 	OSErr				 err;
 	Boolean				 recordFit;
 
@@ -679,13 +686,13 @@ Result:		noErr		- success
 OSStatus	DeleteTree			(BTreeControlBlockPtr		 btreePtr,
 								 TreePathTable				 treePathTable,
 								 BlockDescriptor			*targetNode,
-								 UInt16						 index,
-								 UInt16						 level )
+								 u_int16_t					 index,
+								 u_int16_t					 level )
 {
 	OSStatus			err;
 	BlockDescriptor		parentNode;
 	BTNodeDescriptor	*targetNodePtr;
-	UInt32				targetNodeNum;
+	u_int32_t			targetNodeNum;
 	Boolean				deleteRequired;
 	Boolean				updateRequired;
 
@@ -711,7 +718,7 @@ OSStatus	DeleteTree			(BTreeControlBlockPtr		 btreePtr,
 	if ( targetNodePtr->numRecords == 0 )	// did we delete the last record?
 	{
 		BlockDescriptor		siblingNode;
-		UInt32				siblingNodeNum;
+		u_int32_t			siblingNodeNum;
 
 		deleteRequired = true;
 		
@@ -802,22 +809,22 @@ OSStatus	DeleteTree			(BTreeControlBlockPtr		 btreePtr,
 		if ( updateRequired )
 		{
 			 KeyPtr		keyPtr;
-			 UInt8 *	recPtr;
-			 UInt16		recSize;
-			 UInt32		insertNode;
+			 u_int8_t *	recPtr;
+			 u_int16_t	recSize;
+			 u_int32_t	insertNode;
 			 
 			 // XXXdbg
 			 ModifyBlockStart(btreePtr->fileRefNum, &parentNode);
 
 			//€€ debug: check if ptr == targetNodeNum
 			GetRecordByIndex (btreePtr, parentNode.buffer, index, &keyPtr, &recPtr, &recSize);
-			PanicIf( (*(UInt32 *) recPtr) != targetNodeNum, "\p DeleteTree: parent ptr doesn't match targetNodeNum!!");
+			PanicIf( (*(u_int32_t *) recPtr) != targetNodeNum, "\p DeleteTree: parent ptr doesn't match targetNodeNum!!");
 			
 			// need to delete and re-insert this parent key/ptr
 			DeleteRecord (btreePtr, parentNode.buffer, index);
 	
 			keyPtr = (KeyPtr) GetRecordAddress( btreePtr, targetNode->buffer, 0 );
-			recPtr = (UInt8 *) &targetNodeNum;
+			recPtr = (u_int8_t *) &targetNodeNum;
 			recSize = sizeof(targetNodeNum);
 			
 			err = InsertTree (btreePtr, treePathTable, keyPtr, recPtr, recSize,
@@ -854,8 +861,8 @@ static OSStatus	CollapseTree	(BTreeControlBlockPtr		btreePtr,
 							 	 BlockDescriptor			*blockPtr )
 {
 	OSStatus		err;
-	UInt32			originalRoot;
-	UInt32			nodeNum;
+	u_int32_t		originalRoot;
+	u_int32_t		nodeNum;
 	
 	originalRoot	= btreePtr->rootNode;
 	
@@ -937,23 +944,23 @@ Result:		noErr		- success
 static OSStatus	RotateLeft		(BTreeControlBlockPtr		 btreePtr,
 								 NodeDescPtr				 leftNode,
 								 NodeDescPtr				 rightNode,
-								 UInt16						 rightInsertIndex,
+								 u_int16_t					 rightInsertIndex,
 								 KeyPtr						 keyPtr,
-								 UInt8 *					 recPtr,
-								 UInt16						 recSize,
-								 UInt16						*insertIndex,
-								 UInt32						*insertNodeNum,
+								 u_int8_t *					 recPtr,
+								 u_int16_t					 recSize,
+								 u_int16_t					*insertIndex,
+								 u_int32_t					*insertNodeNum,
 								 Boolean					*recordFit,
-								 UInt16						*recsRotated )
+								 u_int16_t					*recsRotated )
 {
 	OSStatus			err;
-	SInt32				insertSize;
-	SInt32				nodeSize;
-	SInt32				leftSize, rightSize;
-	SInt32				moveSize = 0;
-	UInt16				keyLength;
-	UInt16				lengthFieldSize;
-	UInt16				index, moveIndex;
+	int32_t				insertSize;
+	int32_t				nodeSize;
+	int32_t				leftSize, rightSize;
+	int32_t				moveSize = 0;
+	u_int16_t			keyLength;
+	u_int16_t			lengthFieldSize;
+	u_int16_t			index, moveIndex;
 	Boolean				didItFit;
 
 	///////////////////// Determine If Record Will Fit //////////////////////////
@@ -962,11 +969,11 @@ static OSStatus	RotateLeft		(BTreeControlBlockPtr		 btreePtr,
 
 	// the key's length field is 8-bits in HFS and 16-bits in HFS+
 	if ( btreePtr->attributes & kBTBigKeysMask )
-		lengthFieldSize = sizeof(UInt16);
+		lengthFieldSize = sizeof(u_int16_t);
 	else
-		lengthFieldSize = sizeof(UInt8);
+		lengthFieldSize = sizeof(u_int8_t);
 
-	insertSize = keyLength + lengthFieldSize + recSize + sizeof(UInt16);
+	insertSize = keyLength + lengthFieldSize + recSize + sizeof(u_int16_t);
 
 	if ( M_IsOdd (insertSize) )
 		++insertSize;	// add pad byte;
@@ -1029,7 +1036,7 @@ static OSStatus	RotateLeft		(BTreeControlBlockPtr		 btreePtr,
 	{
 		if ( index == rightInsertIndex )	// insert new record in left node
 		{
-			UInt16	leftInsertIndex;
+			u_int16_t	leftInsertIndex;
 			
 			leftInsertIndex = leftNode->numRecords;
 
@@ -1099,18 +1106,18 @@ ErrorExit:
 static OSStatus	SplitLeft		(BTreeControlBlockPtr		 btreePtr,
 								 BlockDescriptor			*leftNode,
 								 BlockDescriptor			*rightNode,
-								 UInt32						 rightNodeNum,
-								 UInt16						 index,
+								 u_int32_t					 rightNodeNum,
+								 u_int16_t					 index,
 								 KeyPtr						 keyPtr,
-								 UInt8 *					 recPtr,
-								 UInt16						 recSize,
-								 UInt16						*insertIndex,
-								 UInt32						*insertNodeNum,
-								 UInt16						*recsRotated )
+								 u_int8_t *					 recPtr,
+								 u_int16_t					 recSize,
+								 u_int16_t					*insertIndex,
+								 u_int32_t					*insertNodeNum,
+								 u_int16_t					*recsRotated )
 {
 	OSStatus			err;
 	NodeDescPtr			left, right;
-	UInt32				newNodeNum;
+	u_int32_t			newNodeNum;
 	Boolean				recordFit;
 	
 	
@@ -1217,8 +1224,8 @@ static Boolean RotateRecordLeft (BTreeControlBlockPtr		btreePtr,
 								 NodeDescPtr				leftNode,
 							 	 NodeDescPtr				rightNode )
 {
-	UInt16		size;
-	UInt8 *		recPtr;
+	u_int16_t	size;
+	u_int8_t *	recPtr;
 	Boolean		recordFit;
 	
 	size	= GetRecordSize (btreePtr, rightNode, 0);
@@ -1243,10 +1250,10 @@ static OSStatus	AddNewRootNode	(BTreeControlBlockPtr	 btreePtr,
 {
 	OSStatus			err;
 	BlockDescriptor		rootNode;
-	UInt32				rootNum;
+	u_int32_t			rootNum;
 	KeyPtr				keyPtr;
 	Boolean				didItFit;
-	UInt16				keyLength;	
+	u_int16_t			keyLength;	
 	
 	rootNode.buffer = nil;
 	rootNode.blockHeader = nil;
@@ -1276,7 +1283,7 @@ static OSStatus	AddNewRootNode	(BTreeControlBlockPtr	 btreePtr,
 	keyLength = GetKeyLength(btreePtr, keyPtr, false);
 
 	didItFit = InsertKeyRecord ( btreePtr, rootNode.buffer, 0, keyPtr, keyLength,
-								 (UInt8 *) &rightNode->bLink, 4 );
+								 (u_int8_t *) &rightNode->bLink, 4 );
 
 	PanicIf ( !didItFit, "\pAddNewRootNode:InsertKeyRecord failed for left index record");
 
@@ -1287,7 +1294,7 @@ static OSStatus	AddNewRootNode	(BTreeControlBlockPtr	 btreePtr,
 	keyLength = GetKeyLength(btreePtr, keyPtr, false);
 
 	didItFit = InsertKeyRecord ( btreePtr, rootNode.buffer, 1, keyPtr, keyLength,
-								 (UInt8 *) &leftNode->fLink, 4 );
+								 (u_int8_t *) &leftNode->fLink, 4 );
 
 	PanicIf ( !didItFit, "\pAddNewRootNode:InsertKeyRecord failed for right index record");
 
@@ -1313,9 +1320,9 @@ ErrorExit:
 }
 
 
-static UInt16	GetKeyLength ( const BTreeControlBlock *btreePtr, const BTreeKey *key, Boolean forLeafNode )
+static u_int16_t	GetKeyLength ( const BTreeControlBlock *btreePtr, const BTreeKey *key, Boolean forLeafNode )
 {
-	UInt16 length;
+	u_int16_t length;
 
 	if ( forLeafNode || btreePtr->attributes & kBTVariableIndexKeysMask )
 		length = KeyLength (btreePtr, key);		// just use actual key length

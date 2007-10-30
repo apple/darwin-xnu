@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_FREE_COPYRIGHT@
@@ -395,7 +401,11 @@ routine vm_region_64(
  *	THIS INTERFACE IS STILL EVOLVING.
  */
 #if !defined(_MACH_VM_PUBLISH_AS_LOCAL_)
+#if !defined(__LP64__)
 routine _mach_make_memory_entry(
+#else
+routine mach_make_memory_entry(
+#endif
 #else
 routine mach_make_memory_entry_64(
 #endif
@@ -405,6 +415,23 @@ routine mach_make_memory_entry_64(
 		permission	:vm_prot_t;
 	out	object_handle	:mem_entry_name_port_move_send_t;
 		parent_handle	:mem_entry_name_port_t);
+
+/*
+ *	Control behavior and investigate state of a "purgable" object in
+ *	the virtual address space of the target task.  A purgable object is
+ *	created via a call to mach_vm_allocate() with VM_FLAGS_PURGABLE
+ *	specified.  See the routine implementation for a complete
+ *	definition of the routine.
+ */
+#if !defined(_MACH_VM_PUBLISH_AS_LOCAL_)
+routine mach_vm_purgable_control(
+#else
+routine vm_purgable_control(
+#endif
+		target_task	: vm_map_t;
+		address		: mach_vm_address_t;
+		control		: vm_purgable_t;
+	inout	state		: int);
 
 
 /****************************** Legacy section ***************************/
@@ -439,3 +466,5 @@ routine mach_make_memory_entry_64(
  *	mach_make_memory_entry() -
  *		use mach_vm_make_memory_entry() or mach_make_memory_entry_64()
  */
+
+/* vim: set ft=c : */

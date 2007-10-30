@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1988, 1992, 1993
@@ -57,6 +63,9 @@
 #include <sys/param.h>
 #include <sys/mbuf.h>
 #include <sys/kdebug.h>
+#include <kern/debug.h>
+#include <netinet/in.h>
+#include <netinet/ip.h>
 
 #define DBG_FNC_IN_CKSUM	NETDBG_CODE(DBG_NETIP, (3 << 8))
 
@@ -74,14 +83,14 @@ union s_util {
 
 union l_util {
         u_int16_t s[2];
-        u_int32_t l;   
+        u_int32_t l;
 };
 
 union q_util {
         u_int16_t s[4];
         u_int32_t l[2];
         u_int64_t q;
-};    
+};
 
 #define ADDCARRY(x)  (x > 65535 ? x -= 65535 : x)
 
@@ -100,24 +109,34 @@ union q_util {
 
 #define REDUCE {l_util.l = sum; sum = l_util.s[0] + l_util.s[1]; ADDCARRY(sum);}
 
-                
-#if defined(ppc)
+u_int16_t inet_cksum_simple(struct mbuf *, int);
 
-__inline unsigned short
+u_int16_t
+inet_cksum_simple(struct mbuf *m, int len)
+{
+	return (inet_cksum(m, 0, 0, len));
+}
+
+#if defined(__ppc__)
+
+extern u_short xsum_assym(u_short *p, int len, u_short xsum, int odd);
+
+inline u_short
 in_addword(u_short a, u_short b)
 {
-        union l_util l_util;   
+        union l_util l_util;
 	u_int32_t sum = a + b;
+
 	REDUCE;
 	return (sum);
 }
 
-__inline unsigned short
+inline u_short
 in_pseudo(u_int a, u_int b, u_int c)
 {
         u_int64_t sum;
         union q_util q_util;
-        union l_util l_util;   
+        union l_util l_util;
 
         sum = (u_int64_t) a + b + c;
         REDUCE16;
@@ -125,64 +144,47 @@ in_pseudo(u_int a, u_int b, u_int c)
 
 }
 
-int
-in_cksum(m, len)
-	register struct mbuf *m;
-	register int len;
+u_int16_t
+inet_cksum(struct mbuf *m, unsigned int nxt, unsigned int skip,
+    unsigned int len)
 {
-	register u_short *w;
-	register int sum = 0;
-	register int mlen = 0;
+	u_short *w;
+	u_int32_t sum = 0;
+	int mlen = 0;
 	int starting_on_odd  = 0;
-
 
 	KERNEL_DEBUG(DBG_FNC_IN_CKSUM | DBG_FUNC_START, len,0,0,0,0);
 
-	for (;m && len; m = m->m_next) {
-		if (m->m_len == 0)
-			continue;
-		mlen = m->m_len;
-		w = mtod(m, u_short *);
+	/* sanity check */
+	if (m->m_pkthdr.len < skip + len) {
+		panic("inet_cksum: mbuf len (%d) < off+len (%d+%d)\n",
+		    m->m_pkthdr.len, skip, len);
+	}
 
-		if (len < mlen)
-			mlen = len;
+	/* include pseudo header checksum? */
+	if (nxt != 0) {
+		struct ip *iph;
 
-		sum = xsum_assym(w, mlen, sum, starting_on_odd);
-		len -= mlen;
-		if (mlen & 0x1)
-		{
-		    if (starting_on_odd)
-			starting_on_odd = 0;
-		    else
-			starting_on_odd = 1;
+		if (m->m_len < sizeof (struct ip))
+			panic("inet_cksum: bad mbuf chain");
+
+		iph = mtod(m, struct ip *);
+		sum = in_pseudo(iph->ip_src.s_addr, iph->ip_dst.s_addr,
+		    htonl(len + nxt));
+	}
+
+	if (skip != 0) {
+		for (; skip && m; m = m->m_next) {
+			if (m->m_len > skip) {
+				mlen = m->m_len - skip;
+				w = (u_short *)(m->m_data+skip);
+				goto skip_start;
+			} else {
+				skip -= m->m_len;
+			}
 		}
 	}
 
-	KERNEL_DEBUG(DBG_FNC_IN_CKSUM | DBG_FUNC_END, 0,0,0,0,0);
-	return (~sum & 0xffff);
-}
-
-u_short
-in_cksum_skip(m, len, skip)
-        register struct mbuf *m;
-        register int len;
-        register int skip;
-{
-	register u_short *w;
-	register int sum = 0;
-	register int mlen = 0;
-	int starting_on_odd  = 0;
-
-	len -= skip;
-        for (; skip && m; m = m->m_next) {
-                if (m->m_len > skip) {
-                        mlen = m->m_len - skip;
-			w = (u_short *)(m->m_data+skip);
-                        goto skip_start;
-                } else {    
-                        skip -= m->m_len;
-                }
-        }
 	for (;m && len; m = m->m_next) {
 		if (m->m_len == 0)
 			continue;
@@ -203,155 +205,77 @@ skip_start:
 		}
 	}
 
+	KERNEL_DEBUG(DBG_FNC_IN_CKSUM | DBG_FUNC_END, 0,0,0,0,0);
+
 	return (~sum & 0xffff);
 }
+
 #else
 
-u_short 
+inline u_short
 in_addword(u_short a, u_short b)
-{       
-        union l_util l_util;   
+{
+        union l_util l_util;
         u_int32_t sum = a + b;
+
         REDUCE(sum);
         return (sum);
-}       
+}
 
-u_short
+inline u_short
 in_pseudo(u_int a, u_int b, u_int c)
 {
-        u_int64_t sum;  
+        u_int64_t sum;
         union q_util q_util;
-        union l_util l_util;   
+        union l_util l_util;
 
         sum = (u_int64_t) a + b + c;
         REDUCE16;
         return (sum);
 }
 
-
-int
-in_cksum(m, len)
-	register struct mbuf *m;
-	register int len;
+u_int16_t
+inet_cksum(struct mbuf *m, unsigned int nxt, unsigned int skip,
+    unsigned int len)
 {
-	register u_short *w;
-	register int sum = 0;
-	register int mlen = 0;
+	u_short *w;
+	u_int32_t sum = 0;
+	int mlen = 0;
 	int byte_swapped = 0;
 	union s_util s_util;
-	union l_util l_util;   
+	union l_util l_util;
 
 	KERNEL_DEBUG(DBG_FNC_IN_CKSUM | DBG_FUNC_START, len,0,0,0,0);
 
-	for (;m && len; m = m->m_next) {
-		if (m->m_len == 0)
-			continue;
-		w = mtod(m, u_short *);
-		if (mlen == -1) {
-			/*
-			 * The first byte of this mbuf is the continuation
-			 * of a word spanning between this mbuf and the
-			 * last mbuf.
-			 *
-			 * s_util.c[0] is already saved when scanning previous
-			 * mbuf.
-			 */
-			s_util.c[1] = *(char *)w;
-			sum += s_util.s;
-			w = (u_short *)((char *)w + 1);
-			mlen = m->m_len - 1;
-			len--;
-		} else
-			mlen = m->m_len;
-		if (len < mlen)
-			mlen = len;
-		len -= mlen;
-		/*
-		 * Force to even boundary.
-		 */
-		if ((1 & (int) w) && (mlen > 0)) {
-			REDUCE;
-			sum <<= 8;
-			s_util.c[0] = *(u_char *)w;
-			w = (u_short *)((char *)w + 1);
-			mlen--;
-			byte_swapped = 1;
-		}
-		/*
-		 * Unroll the loop to make overhead from
-		 * branches &c small.
-		 */
-		while ((mlen -= 32) >= 0) {
-			sum += w[0]; sum += w[1]; sum += w[2]; sum += w[3];
-			sum += w[4]; sum += w[5]; sum += w[6]; sum += w[7];
-			sum += w[8]; sum += w[9]; sum += w[10]; sum += w[11];
-			sum += w[12]; sum += w[13]; sum += w[14]; sum += w[15];
-			w += 16;
-		}
-		mlen += 32;
-		while ((mlen -= 8) >= 0) {
-			sum += w[0]; sum += w[1]; sum += w[2]; sum += w[3];
-			w += 4;
-		}
-		mlen += 8;
-		if (mlen == 0 && byte_swapped == 0)
-			continue;
-		REDUCE;
-		while ((mlen -= 2) >= 0) {
-			sum += *w++;
-		}
-		if (byte_swapped) {
-			REDUCE;
-			sum <<= 8;
-			byte_swapped = 0;
-			if (mlen == -1) {
-				s_util.c[1] = *(char *)w;
-				sum += s_util.s;
-				mlen = 0;
-			} else
-				mlen = -1;
-		} else if (mlen == -1)
-			s_util.c[0] = *(char *)w;
+	/* sanity check */
+	if (m->m_pkthdr.len < skip + len) {
+		panic("inet_cksum: mbuf len (%d) < off+len (%d+%d)\n",
+		    m->m_pkthdr.len, skip, len);
 	}
-	if (len)
-		printf("cksum: out of data\n");
-	if (mlen == -1) {
-		/* The last mbuf has odd # of bytes. Follow the
-		   standard (the odd byte may be shifted left by 8 bits
-		   or not as determined by endian-ness of the machine) */
-		s_util.c[1] = 0;
-		sum += s_util.s;
+
+	/* include pseudo header checksum? */
+	if (nxt != 0) {
+		struct ip *iph;
+
+		if (m->m_len < sizeof (struct ip))
+			panic("inet_cksum: bad mbuf chain");
+
+		iph = mtod(m, struct ip *);
+		sum = in_pseudo(iph->ip_src.s_addr, iph->ip_dst.s_addr,
+		    htonl(len + nxt));
 	}
-	REDUCE;
-	KERNEL_DEBUG(DBG_FNC_IN_CKSUM | DBG_FUNC_END, 0,0,0,0,0);
-	return (~sum & 0xffff);
-}
 
-int
-in_cksum_skip(m, len, skip)
-	register struct mbuf *m;
-	register u_short len;
-	register u_short skip;
-{
-	register u_short *w;
-	register int sum = 0;
-	register int mlen = 0;
-	int byte_swapped = 0;
-	union s_util s_util;
-	union l_util l_util;   
-
-	KERNEL_DEBUG(DBG_FNC_IN_CKSUM | DBG_FUNC_START, len,0,0,0,0);
-
-	len -= skip;
-        for (; skip && m; m = m->m_next) {
-                if (m->m_len > skip) {
-                        mlen = m->m_len - skip;
-			w = (u_short *)(m->m_data+skip);
-                        goto skip_start;
-                } else {    
-                        skip -= m->m_len;
-                }
-        }
+	if (skip != 0) {
+		for (; skip && m; m = m->m_next) {
+			if (m->m_len > skip) {
+				mlen = m->m_len - skip;
+				w = (u_short *)(m->m_data+skip);
+				goto skip_start;
+			} else {
+				skip -= m->m_len;
+			}
+		}
+	}
 	for (;m && len; m = m->m_next) {
 		if (m->m_len == 0)
 			continue;
@@ -372,11 +296,11 @@ in_cksum_skip(m, len, skip)
 			mlen = m->m_len - 1;
 			len--;
 		} else {
-		  mlen = m->m_len;
+			mlen = m->m_len;
 		}
 skip_start:
 		if (len < mlen)
-		    mlen = len;
+			mlen = len;
 
 		len -= mlen;
 		/*
@@ -427,7 +351,7 @@ skip_start:
 			s_util.c[0] = *(char *)w;
 	}
 	if (len)
-		printf("cksum: out of data\n");
+		printf("cksum: out of data by %d\n", len);
 	if (mlen == -1) {
 		/* The last mbuf has odd # of bytes. Follow the
 		   standard (the odd byte may be shifted left by 8 bits

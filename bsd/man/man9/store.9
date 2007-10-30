@@ -41,10 +41,10 @@
 .Nm store ,
 .Nm subyte ,
 .Nm suibyte ,
-.Nm suword ,
 .Nm suiword ,
 .Nm sulong ,
-.Nm suulong
+.Nm suulong ,
+.Nm suword
 .Nd store data to user-space
 .Sh SYNOPSIS
 .In sys/types.h
@@ -52,17 +52,35 @@
 .In sys/systm.h
 .In sys/resourcevar.h
 .Ft int
-.Fn subyte "user_addr_t addr" "int byte"
+.Fo subyte
+.Fa "user_addr_t addr"
+.Fa "int byte"
+.Fc
 .Ft int
-.Fn suibyte "user_addr_t addr" "int byte"
+.Fo suibyte
+.Fa "user_addr_t addr"
+.Fa "int byte"
+.Fc
 .Ft int
-.Fn suword "user_addr_t addr" "int word"
+.Fo suiword
+.Fa "user_addr_t addr"
+.Fa "int word"
+.Fc
 .Ft int
-.Fn suiword "user_addr_t addr" "int word"
+.Fo sulong
+.Fa "user_addr_t addr"
+.Fa "int64_t longword"
+.Fc
 .Ft int
-.Fn sulong "user_addr_t addr" "int64_t longword"
+.Fo suulong
+.Fa "user_addr_t addr"
+.Fa "uint64_t longword"
+.Fc
 .Ft int
-.Fn suulong "user_addr_t addr" "uint64_t longword"
+.Fo suword
+.Fa "user_addr_t addr"
+.Fa "int word"
+.Fc
 .Sh DESCRIPTION
 The
 .Nm
@@ -72,25 +90,31 @@ The
 .Nm
 routines provide the following functionality:
 .Bl -tag -width "suibyte()"
+.\" ========
 .It Fn subyte
 Stores a byte of data to the user-space address
 .Pa addr .
+.\" ========
 .It Fn suibyte
 Stores a byte of data to the user-space address
 .Pa addr .
 This function is safe to call during an interrupt context.
-.It Fn suword
-Stores a word of data to the user-space address
-.Pa addr .
+.\" ========
 .It Fn suiword
 Stores a word of data to the user-space address
 .Pa addr .
 This function is safe to call during an interrupt context.
+.\" ========
 .It Fn sulong
 Stores a long word of data to the user-space address
 .Pa addr .
+.\" ========
 .It Fn suulong
 Stores a unsigned long word of data to the user-space address
+.Pa addr .
+.\" ========
+.It Fn suword
+Stores a word of data to the user-space address
 .Pa addr .
 .El
 .Sh RETURN VALUES

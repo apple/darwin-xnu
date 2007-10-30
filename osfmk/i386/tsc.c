@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2005-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2005-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -46,16 +52,13 @@
 #include <vm/pmap.h>
 #include <vm/vm_kern.h>		/* for kernel_map */
 #include <i386/ipl.h>
-#include <i386/pit.h>
 #include <architecture/i386/pio.h>
 #include <i386/misc_protos.h>
 #include <i386/proc_reg.h>
 #include <i386/machine_cpu.h>
 #include <i386/mp.h>
-#include <i386/cpuid.h>
 #include <i386/cpu_data.h>
-#include <i386/cpu_threads.h>
-#include <i386/perfmon.h>
+#include <i386/cpuid.h>
 #include <i386/machine_routines.h>
 #include <pexpert/pexpert.h>
 #include <machine/limits.h>
@@ -71,6 +74,11 @@ uint64_t	tscFCvtt2n = 0;
 uint64_t	tscFCvtn2t = 0;
 uint64_t	tscGranularity = 0;
 uint64_t	bus2tsc = 0;
+uint64_t	busFreq = 0;
+
+#define bit(n)		(1ULL << (n))
+#define bitmask(h,l)	((bit(h)|(bit(h)-1)) & ~(bit(l)-1))
+#define bitfield(x,h,l)	(((x) & bitmask(h,l)) >> l)
 
 /* Decimal powers: */
 #define kilo (1000ULL)
@@ -78,6 +86,8 @@ uint64_t	bus2tsc = 0;
 #define Giga (kilo * Mega)
 #define Tera (kilo * Giga)
 #define Peta (kilo * Tera)
+
+#define CPU_FAMILY_PENTIUM_M	(0x6)
 
 static const char	FSB_Frequency_prop[] = "FSBFrequency";
 /*
@@ -90,14 +100,15 @@ EFI_FSB_frequency(void)
 	uint64_t	frequency = 0;
 	DTEntry		entry;
 	void		*value;
-	int		size;
+	unsigned int	size;
 
 	if (DTLookupEntry(0, "/efi/platform", &entry) != kSuccess) {
 		kprintf("EFI_FSB_frequency: didn't find /efi/platform\n");
 		return 0;
 	}
 	if (DTGetProperty(entry,FSB_Frequency_prop,&value,&size) != kSuccess) {
-		kprintf("EFI_FSB_frequency: property %s not found\n");
+		kprintf("EFI_FSB_frequency: property %s not found\n",
+			FSB_Frequency_prop);
 		return 0;
 	}
 	if (size == sizeof(uint64_t)) {
@@ -121,72 +132,78 @@ EFI_FSB_frequency(void)
 void
 tsc_init(void)
 {
-    uint64_t	busFreq;
-    uint64_t	busFCvtInt;
-    uint32_t	cpuFamily  = cpuid_info()->cpuid_family;
+	uint64_t	busFCvtInt = 0;
+	boolean_t	N_by_2_bus_ratio = FALSE;
 
-    /*
-     * Get the FSB frequency and conversion factors.
-     */
-    busFreq = EFI_FSB_frequency();
-    if (busFreq != 0) {
-	busFCvtt2n = ((1 * Giga) << 32) / busFreq;
-	busFCvtn2t = 0xFFFFFFFFFFFFFFFFULL / busFCvtt2n;
-	busFCvtInt = tmrCvt(1 * Peta, 0xFFFFFFFFFFFFFFFFULL / busFreq); 
-    } else {
-	panic("rtclock_init: EFI not supported!\n");
-    }
-	
-    kprintf(" BUS: Frequency = %6d.%04dMHz, "
-	    "cvtt2n = %08X.%08X, cvtn2t = %08X.%08X, "
-	    "cvtInt = %08X.%08X\n",
-	    (uint32_t)(busFreq / Mega),
-	    (uint32_t)(busFreq % Mega), 
-	    (uint32_t)(busFCvtt2n >> 32), (uint32_t)busFCvtt2n,
-	    (uint32_t)(busFCvtn2t >> 32), (uint32_t)busFCvtn2t,
-	    (uint32_t)(busFCvtInt >> 32), (uint32_t)busFCvtInt);
+	/*
+	 * Get the FSB frequency and conversion factors.
+	 */
+	busFreq = EFI_FSB_frequency();
+	if (busFreq != 0) {
+		busFCvtt2n = ((1 * Giga) << 32) / busFreq;
+		busFCvtn2t = 0xFFFFFFFFFFFFFFFFULL / busFCvtt2n;
+		busFCvtInt = tmrCvt(1 * Peta, 0xFFFFFFFFFFFFFFFFULL / busFreq); 
+	} else {
+		panic("rtclock_init: EFI not supported!\n");
+	}
 
-    /*
-     * Get the TSC increment.  The TSC is incremented by this
-     * on every bus tick.  Calculate the TSC conversion factors
-     * to and from nano-seconds.
-     */
-    if (cpuFamily == CPUID_FAMILY_686) {
-	uint64_t	prfsts;
-	
-	prfsts = rdmsr64(IA32_PERF_STS);
-	tscGranularity = (uint32_t)(prfsts >> BusRatioShift) & BusRatioMask;
-    } else {
-	panic("rtclock_init: unknown CPU family: 0x%X\n",
-	      cpuFamily);
-    }
-	
-    tscFCvtt2n = busFCvtt2n / (uint64_t)tscGranularity;
-    tscFreq = ((1 * Giga)  << 32) / tscFCvtt2n;
-    tscFCvtn2t = 0xFFFFFFFFFFFFFFFFULL / tscFCvtt2n;
+	kprintf(" BUS: Frequency = %6d.%04dMHz, "
+			"cvtt2n = %08X.%08X, cvtn2t = %08X.%08X, "
+			"cvtInt = %08X.%08X\n",
+			(uint32_t)(busFreq / Mega),
+			(uint32_t)(busFreq % Mega), 
+			(uint32_t)(busFCvtt2n >> 32), (uint32_t)busFCvtt2n,
+			(uint32_t)(busFCvtn2t >> 32), (uint32_t)busFCvtn2t,
+			(uint32_t)(busFCvtInt >> 32), (uint32_t)busFCvtInt);
 
-    kprintf(" TSC: Frequency = %6d.%04dMHz, "
-	    "cvtt2n = %08X.%08X, cvtn2t = %08X.%08X, gran = %d\n",
-	    (uint32_t)(tscFreq / Mega),
-	    (uint32_t)(tscFreq % Mega), 
-	    (uint32_t)(tscFCvtt2n >> 32), (uint32_t)tscFCvtt2n,
-	    (uint32_t)(tscFCvtn2t >> 32), (uint32_t)tscFCvtn2t,
-	    tscGranularity);
+	/*
+	 * Get the TSC increment.  The TSC is incremented by this
+	 * on every bus tick.  Calculate the TSC conversion factors
+	 * to and from nano-seconds.
+	 */
+	if (cpuid_info()->cpuid_family == CPU_FAMILY_PENTIUM_M) {
+		uint64_t	prfsts;
 
-    /*
-     * Calculate conversion from BUS to TSC
-     */
-    bus2tsc = tmrCvt(busFCvtt2n, tscFCvtn2t);
+		prfsts = rdmsr64(IA32_PERF_STS);
+		tscGranularity = (uint32_t)bitfield(prfsts, 44, 40);
+		N_by_2_bus_ratio = prfsts & bit(46);
+
+	} else {
+		panic("rtclock_init: unknown CPU family: 0x%X\n",
+			cpuid_info()->cpuid_family);
+	}
+
+	if (N_by_2_bus_ratio)
+		tscFCvtt2n = busFCvtt2n * 2 / (uint64_t)tscGranularity;
+	else
+		tscFCvtt2n = busFCvtt2n / (uint64_t)tscGranularity;
+
+	tscFreq = ((1 * Giga)  << 32) / tscFCvtt2n;
+	tscFCvtn2t = 0xFFFFFFFFFFFFFFFFULL / tscFCvtt2n;
+
+	kprintf(" TSC: Frequency = %6d.%04dMHz, "
+			"cvtt2n = %08X.%08X, cvtn2t = %08X.%08X, gran = %lld\n",
+			(uint32_t)(tscFreq / Mega),
+			(uint32_t)(tscFreq % Mega), 
+			(uint32_t)(tscFCvtt2n >> 32), (uint32_t)tscFCvtt2n,
+			(uint32_t)(tscFCvtn2t >> 32), (uint32_t)tscFCvtn2t,
+			tscGranularity);
+
+	/*
+	 * Calculate conversion from BUS to TSC
+	 */
+	bus2tsc = tmrCvt(busFCvtt2n, tscFCvtn2t);
 }
 
 void
 tsc_get_info(tscInfo_t *info)
 {
-    info->busFCvtt2n     = busFCvtt2n;
-    info->busFCvtn2t     = busFCvtn2t;
-    info->tscFreq        = tscFreq;
-    info->tscFCvtt2n     = tscFCvtt2n;
-    info->tscFCvtn2t     = tscFCvtn2t;
-    info->tscGranularity = tscGranularity;
-    info->bus2tsc        = bus2tsc;
+	info->busFCvtt2n     = busFCvtt2n;
+	info->busFCvtn2t     = busFCvtn2t;
+	info->tscFreq        = tscFreq;
+	info->tscFCvtt2n     = tscFCvtt2n;
+	info->tscFCvtn2t     = tscFCvtn2t;
+	info->tscGranularity = tscGranularity;
+	info->bus2tsc        = bus2tsc;
+	info->busFreq        = busFreq;
 }

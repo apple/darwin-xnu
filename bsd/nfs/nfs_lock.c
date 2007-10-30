@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2002-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2007 Apple Inc.  All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
  * Copyright (c) 1997 Berkeley Software Design, Inc. All rights reserved.
@@ -68,6 +74,7 @@
 #include <sys/vnode_internal.h>
 
 #include <kern/thread.h>
+#include <kern/host.h>
 
 #include <machine/limits.h>
 
@@ -76,28 +83,26 @@
 #include <nfs/rpcv2.h>
 #include <nfs/nfsproto.h>
 #include <nfs/nfs.h>
+#include <nfs/nfs_gss.h>
 #include <nfs/nfsmount.h>
 #include <nfs/nfsnode.h>
 #include <nfs/nfs_lock.h>
 
-#define OFF_MAX QUAD_MAX
+#include <mach/host_priv.h>
+#include <mach/mig_errors.h>
+#include <mach/host_special_ports.h>
+#include <lockd/lockd_mach.h>
 
-/*
- * globals for managing the lockd fifo
- */
-vnode_t nfslockdvnode = 0;
-int nfslockdwaiting = 0;
-time_t nfslockdstarttimeout = 0;
-int nfslockdfifolock = 0;
-#define NFSLOCKDFIFOLOCK_LOCKED	1
-#define NFSLOCKDFIFOLOCK_WANT	2
+extern void ipc_port_release_send(ipc_port_t);
+
+#define OFF_MAX QUAD_MAX
 
 /*
  * pending lock request messages are kept in this queue which is
  * kept sorted by transaction ID (xid).
  */
-uint64_t nfs_lockxid = 0;
-LOCKD_MSG_QUEUE nfs_pendlockq;
+static uint64_t nfs_lockxid = 0;
+static LOCKD_MSG_QUEUE nfs_pendlockq;
 
 /*
  * This structure is used to identify processes which have acquired NFS locks.
@@ -117,10 +122,12 @@ struct nfs_lock_pid {
 #define NFS_LOCK_PID_HASH_SIZE		64	// XXX tune me
 #define	NFS_LOCK_PID_HASH(pid)	\
 	(&nfs_lock_pid_hash_tbl[(pid) & nfs_lock_pid_hash])
-LIST_HEAD(, nfs_lock_pid) *nfs_lock_pid_hash_tbl;
-TAILQ_HEAD(, nfs_lock_pid) nfs_lock_pid_lru;
-u_long nfs_lock_pid_hash;
-int nfs_lock_pid_lock;
+static LIST_HEAD(, nfs_lock_pid) *nfs_lock_pid_hash_tbl;
+static TAILQ_HEAD(, nfs_lock_pid) nfs_lock_pid_lru;
+static u_long nfs_lock_pid_hash, nfs_lock_pid_hash_trusted;
+
+static lck_grp_t *nfs_lock_lck_grp;
+static lck_mtx_t *nfs_lock_mutex;
 
 
 /*
@@ -130,14 +137,63 @@ void
 nfs_lockinit(void)
 {
 	TAILQ_INIT(&nfs_pendlockq);
-	nfs_lock_pid_lock = 0;
+	nfs_lock_pid_hash_trusted = 1;
 	nfs_lock_pid_hash_tbl = hashinit(NFS_LOCK_PID_HASH_SIZE,
 					 M_TEMP, &nfs_lock_pid_hash);
 	TAILQ_INIT(&nfs_lock_pid_lru);
+
+	nfs_lock_lck_grp = lck_grp_alloc_init("nfs_lock", LCK_GRP_ATTR_NULL);
+	nfs_lock_mutex = lck_mtx_alloc_init(nfs_lock_lck_grp, LCK_ATTR_NULL);
+}
+
+/*
+ * change the count of NFS mounts that may need to make lockd requests
+ *
+ * If the mount count drops to zero, then send a shutdown request to
+ * lockd if we've sent any requests to it.
+ */
+void
+nfs_lockd_mount_change(int i)
+{
+	mach_port_t lockd_port = IPC_PORT_NULL;
+	kern_return_t kr;
+	int send_shutdown;
+
+	lck_mtx_lock(nfs_lock_mutex);
+
+	nfs_lockd_mounts += i;
+
+	/* send a shutdown request if there are no more lockd mounts */
+	send_shutdown = ((nfs_lockd_mounts == 0) && nfs_lockd_request_sent);
+	if (send_shutdown)
+		nfs_lockd_request_sent = 0;
+
+	lck_mtx_unlock(nfs_lock_mutex);
+
+	if (!send_shutdown)
+		return;
+
+	/*
+	 * Let lockd know that it is no longer need for any NFS mounts
+	 */
+	kr = host_get_lockd_port(host_priv_self(), &lockd_port);
+	if ((kr != KERN_SUCCESS) || !IPC_PORT_VALID(lockd_port)) {
+		printf("nfs_lockd_mount_change: shutdown couldn't get port, kr %d, port %s\n",
+			kr, (lockd_port == IPC_PORT_NULL) ? "NULL" :
+			(lockd_port == IPC_PORT_DEAD) ? "DEAD" : "VALID");
+		return;
+	}
+
+	kr = lockd_shutdown(lockd_port);
+	if (kr != KERN_SUCCESS)
+		printf("nfs_lockd_mount_change: shutdown %d\n", kr);
+
+	ipc_port_release_send(lockd_port);
 }
 
 /*
  * insert a lock request message into the pending queue
+ * (nfs_lock_mutex must be held)
  */
 static inline void
 nfs_lockdmsg_enqueue(LOCKD_MSG_REQUEST *msgreq)
@@ -163,6 +219,7 @@ nfs_lockdmsg_enqueue(LOCKD_MSG_REQUEST *msgreq)
 
 /*
  * remove a lock request message from the pending queue
+ * (nfs_lock_mutex must be held)
  */
 static inline void
 nfs_lockdmsg_dequeue(LOCKD_MSG_REQUEST *msgreq)
@@ -179,6 +236,8 @@ nfs_lockdmsg_dequeue(LOCKD_MSG_REQUEST *msgreq)
  * However, this may not be the case if there are blocked requests.  We may
  * want to move blocked requests to a separate queue (but that'll complicate
  * duplicate xid checking).
+ *
+ * (nfs_lock_mutex must be held)
  */
 static inline LOCKD_MSG_REQUEST *
 nfs_lockdmsg_find_by_xid(uint64_t lockxid)
@@ -236,6 +295,8 @@ nfs_lockdmsg_compare_to_answer(LOCKD_MSG_REQUEST *msgreq, struct lockd_ans *ansp
  * However, this may not be the case if there are blocked requests.  We may
  * want to move blocked requests to a separate queue (but that'll complicate
  * duplicate xid checking).
+ *
+ * (nfs_lock_mutex must be held)
  */
 static inline LOCKD_MSG_REQUEST *
 nfs_lockdmsg_find_by_answer(struct lockd_ans *ansp)
@@ -253,6 +314,7 @@ nfs_lockdmsg_find_by_answer(struct lockd_ans *ansp)
 
 /*
  * return the next unique lock request transaction ID
+ * (nfs_lock_mutex must be held)
  */
 static inline uint64_t
 nfs_lockxid_get(void)
@@ -294,36 +356,30 @@ nfs_lockxid_get(void)
  * add the entry if it is not found.
  *
  * (Also, if adding, try to clean up some stale entries.)
+ * (nfs_lock_mutex must be held)
  */
 static int
-nfs_lock_pid_check(proc_t p, int addflag, vnode_t vp)
+nfs_lock_pid_check(proc_t p, int addflag)
 {
-	struct nfs_lock_pid *lp, *lplru, *lplru_next;
-	proc_t plru;
+	struct nfs_lock_pid *lp, *lplru, *lplru_next, *mlp;
+	TAILQ_HEAD(, nfs_lock_pid) nfs_lock_pid_free;
+	proc_t plru = PROC_NULL;
+	pid_t pid;
 	int error = 0;
 	struct timeval now;
 
-	/* lock hash */
-loop:
-	if (nfs_lock_pid_lock) {
-		struct nfsmount *nmp = VFSTONFS(vnode_mount(vp));
-		while (nfs_lock_pid_lock) {
-			nfs_lock_pid_lock = -1;
-			tsleep(&nfs_lock_pid_lock, PCATCH, "nfslockpid", 0);
-			if ((error = nfs_sigintr(nmp, NULL, p)))
-				return (error);
-		}
-		goto loop;
-	}
-	nfs_lock_pid_lock = 1;
+	TAILQ_INIT(&nfs_lock_pid_free);
+	mlp = NULL;
 
+loop:
 	/* Search hash chain */
+	pid = proc_pid(p);
 	error = ENOENT;
-	lp = NFS_LOCK_PID_HASH(proc_pid(p))->lh_first;
+	lp = NFS_LOCK_PID_HASH(pid)->lh_first;
 	for (; lp != NULL; lp = lp->lp_hash.le_next)
-		if (lp->lp_pid == proc_pid(p)) {
+		if (lp->lp_pid == pid) {
 			/* found pid... */
-			if (timevalcmp(&lp->lp_pid_start, &p->p_stats->p_start, ==)) {
+			if (timevalcmp(&lp->lp_pid_start, &p->p_start, ==)) {
 				/* ...and it's valid */
 				/* move to tail of LRU */
 				TAILQ_REMOVE(&nfs_lock_pid_lru, lp, lp_lru);
@@ -343,8 +399,12 @@ loop:
 			break;
 		}
 
-	/* if we didn't find it (valid) and we've been asked to add it */
-	if ((error == ENOENT) && addflag) {
+	/* if we didn't find it (valid), use any newly allocated one */
+	if (!lp)
+		lp = mlp;
+
+	/* if we don't have an lp and we've been asked to add it */
+	if ((error == ENOENT) && addflag && !lp) {
 		/* scan lru list for invalid, stale entries to reuse/free */
 		int lrucnt = 0;
 		microuptime(&now);
@@ -359,19 +419,27 @@ loop:
 			}
 			/* remove entry from LRU, and check if it's still in use */
 			TAILQ_REMOVE(&nfs_lock_pid_lru, lplru, lp_lru);
-			if (!lplru->lp_valid || !(plru = pfind(lplru->lp_pid)) ||
-			    timevalcmp(&lplru->lp_pid_start, &plru->p_stats->p_start, !=)) {
+			if (!lplru->lp_valid || !(plru = proc_find(lplru->lp_pid)) ||
+			    timevalcmp(&lplru->lp_pid_start, &plru->p_start, !=)) {
+				if (plru != PROC_NULL) {
+					proc_rele(plru);
+					plru = PROC_NULL;
+				}
 				/* no longer in use */
 				LIST_REMOVE(lplru, lp_hash);
 				if (!lp) {
 					/* we'll reuse this one */
 					lp = lplru;
 				} else {
-					/* we can free this one */
-					FREE(lplru, M_TEMP);
+					/* queue it up for freeing */
+					TAILQ_INSERT_HEAD(&nfs_lock_pid_free, lplru, lp_lru);
 				}
 			} else {
 				/* still in use */
+				if (plru != PROC_NULL) {
+					proc_rele(plru);
+					plru = PROC_NULL;
+				}
 				lplru->lp_time = now.tv_sec;
 				TAILQ_INSERT_TAIL(&nfs_lock_pid_lru, lplru, lp_lru);
 			}
@@ -381,80 +449,144 @@ loop:
 		}
 		if (!lp) {
 			/* we need to allocate a new one */
-			MALLOC(lp, struct nfs_lock_pid *, sizeof(struct nfs_lock_pid),
+			lck_mtx_unlock(nfs_lock_mutex);
+			MALLOC(mlp, struct nfs_lock_pid *, sizeof(struct nfs_lock_pid),
 				M_TEMP, M_WAITOK | M_ZERO);
-		}
-		if (!lp) {
+			lck_mtx_lock(nfs_lock_mutex);
+			if (mlp) /* make sure somebody hasn't already added this guy */
+				goto loop;
 			error = ENOMEM;
-		} else {
-			/* (re)initialize nfs_lock_pid info */
-			lp->lp_pid = proc_pid(p);
-			lp->lp_pid_start = p->p_stats->p_start;
-			/* insert pid in hash */
-			LIST_INSERT_HEAD(NFS_LOCK_PID_HASH(lp->lp_pid), lp, lp_hash);
-			lp->lp_valid = 1;
-			lp->lp_time = now.tv_sec;
-			TAILQ_INSERT_TAIL(&nfs_lock_pid_lru, lp, lp_lru);
-			error = 0;
 		}
 	}
+	if ((error == ENOENT) && addflag && lp) {
+		/* (re)initialize nfs_lock_pid info */
+		lp->lp_pid = pid;
+		lp->lp_pid_start = p->p_start;
+		/* insert pid in hash */
+		LIST_INSERT_HEAD(NFS_LOCK_PID_HASH(lp->lp_pid), lp, lp_hash);
+		lp->lp_valid = 1;
+		lp->lp_time = now.tv_sec;
+		TAILQ_INSERT_TAIL(&nfs_lock_pid_lru, lp, lp_lru);
+		error = 0;
+	}
 
-	/* unlock hash */
-	if (nfs_lock_pid_lock < 0) {
-		nfs_lock_pid_lock = 0;
-		wakeup(&nfs_lock_pid_lock);
-	} else
-		nfs_lock_pid_lock = 0;
+	if ((mlp && (lp != mlp)) || TAILQ_FIRST(&nfs_lock_pid_free)) {
+		lck_mtx_unlock(nfs_lock_mutex);
+		if (mlp && (lp != mlp)) {
+			/* we didn't need this one, so we can free it */
+			FREE(mlp, M_TEMP);
+		}
+		/* free up any stale entries */
+		while ((lp = TAILQ_FIRST(&nfs_lock_pid_free))) {
+			TAILQ_REMOVE(&nfs_lock_pid_free, lp, lp_lru);
+			FREE(lp, M_TEMP);
+		}
+		lck_mtx_lock(nfs_lock_mutex);
+	}
 
 	return (error);
 }
 
+#define MACH_MAX_TRIES 3
+
+static int
+send_request(LOCKD_MSG *msg, int interruptable)
+{
+	kern_return_t kr;
+	int retries = 0;
+	mach_port_t lockd_port = IPC_PORT_NULL;
+
+	kr = host_get_lockd_port(host_priv_self(), &lockd_port);
+	if (kr != KERN_SUCCESS || !IPC_PORT_VALID(lockd_port))
+		return (ENOTSUP);
+
+	do {
+		/* In the kernel all mach messaging is interruptable */
+		do {
+			kr = lockd_request(
+				lockd_port,
+				msg->lm_version,
+				msg->lm_flags,
+				msg->lm_xid,
+				msg->lm_fl.l_start,
+				msg->lm_fl.l_len,
+				msg->lm_fl.l_pid,
+				msg->lm_fl.l_type,
+				msg->lm_fl.l_whence,
+				(uint32_t *)&msg->lm_addr,
+				(uint32_t *)&msg->lm_cred,
+				msg->lm_fh_len,
+				msg->lm_fh);
+			if (kr != KERN_SUCCESS)
+				printf("lockd_request received %d!\n", kr);
+		} while (!interruptable && kr == MACH_SEND_INTERRUPTED);
+	} while (kr == MIG_SERVER_DIED && retries++ < MACH_MAX_TRIES);
+
+	ipc_port_release_send(lockd_port);
+	switch (kr) {
+	case MACH_SEND_INTERRUPTED: 
+		return (EINTR);
+	default:
+		/*
+		 * Other MACH or MIG errors we will retry. Eventually
+		 * we will call nfs_down and allow the user to disable 
+		 * locking.
+		 */
+		return (EAGAIN);
+	}
+	return (kr);
+}
+				
 
 /*
- * nfs_advlock --
- *      NFS advisory byte-level locks.
+ * NFS advisory byte-level locks (client)
  */
 int
-nfs_dolock(struct vnop_advlock_args *ap)
-/* struct vnop_advlock_args {
-	struct vnodeop_desc *a_desc;
-	vnode_t a_vp;
-	caddr_t a_id;
-	int a_op;
-	struct flock *a_fl;
-	int a_flags;
-	vfs_context_t a_context;
-}; */
+nfs3_vnop_advlock(
+	struct vnop_advlock_args /* {
+		struct vnodeop_desc *a_desc;
+		vnode_t a_vp;
+		caddr_t a_id;
+		int a_op;
+		struct flock *a_fl;
+		int a_flags;
+		vfs_context_t a_context;
+	} */ *ap)
 {
+	vfs_context_t ctx;
+	proc_t p;
 	LOCKD_MSG_REQUEST msgreq;
 	LOCKD_MSG *msg;
-	vnode_t vp, wvp;
-	struct nfsnode *np;
-	int error, error1;
+	vnode_t vp;
+	nfsnode_t np;
+	int error, error2;
+	int interruptable;
 	struct flock *fl;
-	int fmode, ioflg;
 	struct nfsmount *nmp;
 	struct nfs_vattr nvattr;
 	off_t start, end;
 	struct timeval now;
 	int timeo, endtime, lastmsg, wentdown = 0;
-	int lockpidcheck;
-	kauth_cred_t cred;
-	proc_t p;
+	int lockpidcheck, nfsvers;
 	struct sockaddr *saddr;
+	struct timespec ts;
 
-	p = vfs_context_proc(ap->a_context);
-	cred = vfs_context_ucred(ap->a_context);
-
+	ctx = ap->a_context;
+	p = vfs_context_proc(ctx);
 	vp = ap->a_vp;
 	fl = ap->a_fl;
 	np = VTONFS(vp);
 
-	nmp = VFSTONFS(vnode_mount(vp));
+	nmp = VTONMP(vp);
 	if (!nmp)
 		return (ENXIO);
-	if (nmp->nm_flag & NFSMNT_NOLOCKS)
+	lck_mtx_lock(&nmp->nm_lock);
+	if (nmp->nm_flag & NFSMNT_NOLOCKS) {
+		lck_mtx_unlock(&nmp->nm_lock);
 		return (ENOTSUP);
+	}
+	nfsvers = nmp->nm_vers;
+	lck_mtx_unlock(&nmp->nm_lock);
 
 	/*
 	 * The NLM protocol doesn't allow the server to return an error
@@ -475,75 +607,20 @@ nfs_dolock(struct vnop_advlock_args *ap)
 		    (fl->l_len < 0 && fl->l_start + fl->l_len < 0))
 			return (EINVAL);
 	}
-	/*
-	 * If daemon is running take a ref on its fifo vnode
-	 */
-	if (!(wvp = nfslockdvnode)) {
-		if (!nfslockdwaiting && !nfslockdstarttimeout)
-			return (ENOTSUP);
-		/*
-		 * Don't wake lock daemon if it hasn't been started yet and
-		 * this is an unlock request (since we couldn't possibly
-		 * actually have a lock on the file).  This could be an
-		 * uninformed unlock request due to closef()'s behavior of doing
-		 * unlocks on all files if a process has had a lock on ANY file.
-		 */
-		if (!nfslockdvnode && (fl->l_type == F_UNLCK))
-			return (EINVAL);
-		microuptime(&now);
-		if (nfslockdwaiting) {
-			/* wake up lock daemon */
-			nfslockdstarttimeout = now.tv_sec + 60;
-			(void)wakeup((void *)&nfslockdwaiting);
-		}
-		/* wait on nfslockdvnode for a while to allow daemon to start */
-		while (!nfslockdvnode && (now.tv_sec < nfslockdstarttimeout)) {
-			error = tsleep((void *)&nfslockdvnode, PCATCH | PUSER, "lockdstart", 2*hz);
-			if (error && (error != EWOULDBLOCK))
-				return (error);
-			/* check that we still have our mount... */
-			/* ...and that we still support locks */
-			nmp = VFSTONFS(vnode_mount(vp));
-			if (!nmp)
-				return (ENXIO);
-			if (nmp->nm_flag & NFSMNT_NOLOCKS)
-				return (ENOTSUP);
-			if (!error)
-				break;
-			microuptime(&now);
-		}
-		/*
-		 * check for nfslockdvnode
-		 * If it hasn't started by now, there's a problem.
-		 */
-		if (!(wvp = nfslockdvnode))
-			return (ENOTSUP);
-	}
-	error = vnode_getwithref(wvp);
-	if (error)
-		return (ENOTSUP);
-	error = vnode_ref(wvp);
-	if (error) {
-		vnode_put(wvp);
-		return (ENOTSUP);
-	}
+
+	lck_mtx_lock(nfs_lock_mutex);
 
 	/*
 	 * Need to check if this process has successfully acquired an NFS lock before.
 	 * If not, and this is an unlock request we can simply return success here.
 	 */
-	lockpidcheck = nfs_lock_pid_check(p, 0, vp);
+	lockpidcheck = nfs_lock_pid_check(p, 0);
+	lck_mtx_unlock(nfs_lock_mutex);
 	if (lockpidcheck) {
-		if (lockpidcheck != ENOENT) {
-			vnode_rele(wvp);
-			vnode_put(wvp);
+		if (lockpidcheck != ENOENT)
 			return (lockpidcheck);
-		}
-		if (ap->a_op == F_UNLCK) {
-			vnode_rele(wvp);
-			vnode_put(wvp);
+		if ((ap->a_op == F_UNLCK) && nfs_lock_pid_hash_trusted)
 			return (0);
-		}
 	}
 
 	/*
@@ -565,28 +642,31 @@ nfs_dolock(struct vnop_advlock_args *ap)
 	case SEEK_END:
 		/* need to flush, and refetch attributes to make */
 		/* sure we have the correct end of file offset   */
-		if (np->n_flag & NMODIFIED) {
-			NATTRINVALIDATE(np);
-			error = nfs_vinvalbuf(vp, V_SAVE, cred, p, 1);
-			if (error) {
-				vnode_rele(wvp);
-				vnode_put(wvp);
-				return (error);
-			}
-		}
+		error = nfs_lock(np, NFS_NODE_LOCK_EXCLUSIVE);
+		if (error)
+			return (error);
 		NATTRINVALIDATE(np);
+		if (np->n_flag & NMODIFIED) {
+			nfs_unlock(np);
+			error = nfs_vinvalbuf(vp, V_SAVE, ctx, 1);
+			if (error)
+				return (error);
+		} else
+			nfs_unlock(np);
 
-		error = nfs_getattr(vp, &nvattr, cred, p);
+		error = nfs_getattr(np, &nvattr, ctx, 0);
+		nfs_data_lock(np, NFS_NODE_LOCK_SHARED);
+		if (!error)
+			error = nfs_lock(np, NFS_NODE_LOCK_SHARED);
 		if (error) {
-			vnode_rele(wvp);
-			vnode_put(wvp);
+			nfs_data_unlock(np);
 			return (error);
 		}
 		start = np->n_size + fl->l_start;
+		nfs_unlock(np);
+		nfs_data_unlock(np);
 		break;
 	default:
-		vnode_rele(wvp);
-		vnode_put(wvp);
 		return (EINVAL);
 	}
 	if (fl->l_len == 0)
@@ -597,17 +677,12 @@ nfs_dolock(struct vnop_advlock_args *ap)
 		end = start - 1;
 		start += fl->l_len;
 	}
-	if (start < 0) {
-		vnode_rele(wvp);
-		vnode_put(wvp);
+	if (start < 0)
 		return (EINVAL);
-	}
-	if (!NFS_ISV3(vp) &&
-	    ((start >= 0x80000000) || (end >= 0x80000000))) {
-		vnode_rele(wvp);
-		vnode_put(wvp);
+
+	if ((nfsvers == NFS_VER2) &&
+	    ((start >= 0x80000000) || (end >= 0x80000000)))
 		return (EINVAL);
-	}
 
 	/*
 	 * Fill in the information structure.
@@ -623,73 +698,48 @@ nfs_dolock(struct vnop_advlock_args *ap)
 	msg->lm_fl.l_start = start;
 	if (end != -1)
 		msg->lm_fl.l_len = end - start + 1;
-	msg->lm_fl.l_pid = proc_pid(p);
+	msg->lm_fl.l_pid = vfs_context_pid(ctx);
 
 	if (ap->a_flags & F_WAIT)
 		msg->lm_flags |= LOCKD_MSG_BLOCK;
 	if (ap->a_op == F_GETLK)
 		msg->lm_flags |= LOCKD_MSG_TEST;
 
-	nmp = VFSTONFS(vnode_mount(vp));
-	if (!nmp) {
-		vnode_rele(wvp);
-		vnode_put(wvp);
+	nmp = VTONMP(vp);
+	if (!nmp)
 		return (ENXIO);
-	}
 
+	lck_mtx_lock(&nmp->nm_lock);
 	saddr = mbuf_data(nmp->nm_nam);
 	bcopy(saddr, &msg->lm_addr, min(sizeof msg->lm_addr, saddr->sa_len));
-	msg->lm_fh_len = NFS_ISV3(vp) ? VTONFS(vp)->n_fhsize : NFSX_V2FH;
-	bcopy(VTONFS(vp)->n_fhp, msg->lm_fh, msg->lm_fh_len);
-	if (NFS_ISV3(vp))
+	msg->lm_fh_len = (nfsvers == NFS_VER2) ? NFSX_V2FH : np->n_fhsize;
+	bcopy(np->n_fhp, msg->lm_fh, msg->lm_fh_len);
+	if (nfsvers == NFS_VER3)
 		msg->lm_flags |= LOCKD_MSG_NFSV3;
-	cru2x(cred, &msg->lm_cred);
+	cru2x(vfs_context_ucred(ctx), &msg->lm_cred);
 
 	microuptime(&now);
 	lastmsg = now.tv_sec - ((nmp->nm_tprintf_delay) - (nmp->nm_tprintf_initial_delay));
+	interruptable = nmp->nm_flag & NFSMNT_INT;
+	lck_mtx_unlock(&nmp->nm_lock);
 
-	fmode = FFLAGS(O_WRONLY);
-	if ((error = VNOP_OPEN(wvp, fmode, ap->a_context))) {
-		vnode_rele(wvp);
-		vnode_put(wvp);
-		return (error);
-	}
-	vnode_lock(wvp);
-	++wvp->v_writecount;
-	vnode_unlock(wvp);
+	lck_mtx_lock(nfs_lock_mutex);
 
 	/* allocate unique xid */
 	msg->lm_xid = nfs_lockxid_get();
 	nfs_lockdmsg_enqueue(&msgreq);
 
-	timeo = 2*hz;
-#define IO_NOMACCHECK 0;
-	ioflg = IO_UNIT | IO_NOMACCHECK;
+	timeo = 2;
+
 	for (;;) {
-		error = 0;
-		while (nfslockdfifolock & NFSLOCKDFIFOLOCK_LOCKED) {
-			nfslockdfifolock |= NFSLOCKDFIFOLOCK_WANT;
-			error = tsleep((void *)&nfslockdfifolock,
-					PCATCH | PUSER, "lockdfifo", 20*hz);
-			if (error)
-				break;
-		}
-		if (error)
+		nfs_lockd_request_sent = 1;
+
+		/* need to drop nfs_lock_mutex while calling send_request() */
+		lck_mtx_unlock(nfs_lock_mutex);
+		error = send_request(msg, interruptable);
+		lck_mtx_lock(nfs_lock_mutex);
+		if (error && error != EAGAIN)
 			break;
-		nfslockdfifolock |= NFSLOCKDFIFOLOCK_LOCKED;
-
-		error = vn_rdwr(UIO_WRITE, wvp, (caddr_t)msg, sizeof(*msg), 0,
-		    UIO_SYSSPACE32, ioflg, proc_ucred(kernproc), NULL, p);
-
-		nfslockdfifolock &= ~NFSLOCKDFIFOLOCK_LOCKED;
-		if (nfslockdfifolock & NFSLOCKDFIFOLOCK_WANT) {
-			nfslockdfifolock &= ~NFSLOCKDFIFOLOCK_WANT;
-			wakeup((void *)&nfslockdfifolock);
-		}
-
-		if (error && (((ioflg & IO_NDELAY) == 0) || error != EAGAIN)) {
-			break;
-		}
 
 		/*
 		 * Always wait for an answer.  Not waiting for unlocks could
@@ -703,18 +753,19 @@ nfs_dolock(struct vnop_advlock_args *ap)
 		 * at 2 and double each timeout with a max of 60 seconds.
 		 *
 		 * In order to maintain responsiveness, we pass a small timeout
-		 * to tsleep and calculate the timeouts ourselves.  This allows
+		 * to msleep and calculate the timeouts ourselves.  This allows
 		 * us to pick up on mount changes quicker.
 		 */
 wait_for_granted:
 		error = EWOULDBLOCK;
+		ts.tv_sec = 2;
+		ts.tv_nsec = 0;
 		microuptime(&now);
-		if ((timeo/hz) > 0)
-			endtime = now.tv_sec + timeo/hz;
-		else
-			endtime = now.tv_sec + 1;
+		endtime = now.tv_sec + timeo;
 		while (now.tv_sec < endtime) {
-			error = tsleep((void *)&msgreq, PCATCH | PUSER, "lockd", 2*hz);
+			error = error2 = 0;
+			if (!msgreq.lmr_answered)
+				error = msleep(&msgreq, nfs_lock_mutex, PCATCH | PUSER, "lockd", &ts);
 			if (msgreq.lmr_answered) {
 				/*
 				 * Note: it's possible to have a lock granted at
@@ -723,58 +774,66 @@ wait_for_granted:
 				 * error from this request or we might not unlock the
 				 * lock that's been granted.
 				 */
-				error = 0;
+				nmp = VTONMP(vp);
+				if ((msgreq.lmr_errno == ENOTSUP) && nmp &&
+				    (nmp->nm_state & NFSSTA_LOCKSWORK)) {
+					/*
+					 * We have evidence that locks work, yet lockd
+					 * returned ENOTSUP.  This is probably because
+					 * it was unable to contact the server's lockd
+					 * to send it the request.
+					 *
+					 * Because we know locks work, we'll consider
+					 * this failure to be a timeout.
+					 */
+					error = EWOULDBLOCK;
+				} else {
+					error = 0;
+				}
 				break;
 			}
 			if (error != EWOULDBLOCK)
 				break;
 			/* check that we still have our mount... */
 			/* ...and that we still support locks */
-			nmp = VFSTONFS(vnode_mount(vp));
-			if (!nmp || (nmp->nm_flag & NFSMNT_NOLOCKS))
-				break;
-			/*
-			 * If the mount is hung and we've requested not to hang
-			 * on remote filesystems, then bail now.
-			 */
-			if ((p != NULL) && ((proc_noremotehang(p)) != 0) &&
-			    ((nmp->nm_state & (NFSSTA_TIMEO|NFSSTA_LOCKTIMEO)) != 0)) {
+			nmp = VTONMP(vp);
+			if ((error2 = nfs_sigintr(nmp, NULL, vfs_context_thread(ctx), 0))) {
+				error = error2;
 				if (fl->l_type == F_UNLCK)
-					printf("nfs_dolock: aborting unlock request "
-					    "due to timeout (noremotehang)\n");
-				error = EIO;
+					printf("nfs_vnop_advlock: aborting unlock request, error %d\n", error);
 				break;
 			}
+			lck_mtx_lock(&nmp->nm_lock);
+			if (nmp->nm_flag & NFSMNT_NOLOCKS) {
+				lck_mtx_unlock(&nmp->nm_lock);
+				break;
+			}
+			interruptable = nmp->nm_flag & NFSMNT_INT;
+			lck_mtx_unlock(&nmp->nm_lock);
 			microuptime(&now);
 		}
 		if (error) {
 			/* check that we still have our mount... */
-			nmp = VFSTONFS(vnode_mount(vp));
-			if (!nmp) {
-				if (error == EWOULDBLOCK)
-					error = ENXIO;
-				break;
+			nmp = VTONMP(vp);
+			if ((error2 = nfs_sigintr(nmp, NULL, vfs_context_thread(ctx), 0))) {
+				error = error2;
+				if (error2 != EINTR) {
+					if (fl->l_type == F_UNLCK)
+						printf("nfs_vnop_advlock: aborting unlock request, error %d\n", error);
+					break;
+				}
 			}
 			/* ...and that we still support locks */
+			lck_mtx_lock(&nmp->nm_lock);
 			if (nmp->nm_flag & NFSMNT_NOLOCKS) {
 				if (error == EWOULDBLOCK)
 					error = ENOTSUP;
+				lck_mtx_unlock(&nmp->nm_lock);
 				break;
 			}
-			if ((error == ENOTSUP) &&
-			    (nmp->nm_state & NFSSTA_LOCKSWORK)) {
-				/*
-				 * We have evidence that locks work, yet lockd
-				 * returned ENOTSUP.  This is probably because
-				 * it was unable to contact the server's lockd to
-				 * send it the request.
-				 *
-				 * Because we know locks work, we'll consider
-				 * this failure to be a timeout.
-				 */
-				error = EWOULDBLOCK;
-			}
+			interruptable = nmp->nm_flag & NFSMNT_INT;
 			if (error != EWOULDBLOCK) {
+				lck_mtx_unlock(&nmp->nm_lock);
 				/*
 				 * We're going to bail on this request.
 				 * If we were a blocked lock request, send a cancel.
@@ -790,34 +849,25 @@ wait_for_granted:
 					msgreq.lmr_errno = 0;
 					msgreq.lmr_answered = 0;
 					/* reset timeout */
-					timeo = 2*hz;
+					timeo = 2;
 					/* send cancel request */
 					continue;
 				}
 				break;
 			}
 
-			/*
-			 * If the mount is hung and we've requested not to hang
-			 * on remote filesystems, then bail now.
-			 */
-			if ((p != NULL) && ((proc_noremotehang(p)) != 0) &&
-			    ((nmp->nm_state & (NFSSTA_TIMEO|NFSSTA_LOCKTIMEO)) != 0)) {
-				if (fl->l_type == F_UNLCK)
-					printf("nfs_dolock: aborting unlock request "
-					    "due to timeout (noremotehang)\n");
-				error = EIO;
-				break;
-			}
 			/* warn if we're not getting any response */
 			microuptime(&now);
 			if ((msgreq.lmr_errno != EINPROGRESS) &&
 			    (nmp->nm_tprintf_initial_delay != 0) &&
 			    ((lastmsg + nmp->nm_tprintf_delay) < now.tv_sec)) {
+				lck_mtx_unlock(&nmp->nm_lock);
 				lastmsg = now.tv_sec;
-				nfs_down(nmp, p, 0, NFSSTA_LOCKTIMEO, "lockd not responding");
+				nfs_down(nmp, vfs_context_thread(ctx), 0, NFSSTA_LOCKTIMEO, "lockd not responding");
 				wentdown = 1;
-			}
+			} else
+				lck_mtx_unlock(&nmp->nm_lock);
+
 			if (msgreq.lmr_errno == EINPROGRESS) {
 				/*
 				 * We've got a blocked lock request that we are
@@ -837,31 +887,29 @@ wait_for_granted:
 				msgreq.lmr_saved_errno = msgreq.lmr_errno;
 				msgreq.lmr_errno = 0;
 				msgreq.lmr_answered = 0;
-				timeo = 2*hz;
+				timeo = 2;
 				/* send cancel then resend request */
 				continue;
 			}
 			/*
-			 * We timed out, so we will rewrite the request
-			 * to the fifo, but only if it isn't already full.
+			 * We timed out, so we will resend the request.
 			 */
-			ioflg |= IO_NDELAY;
 			timeo *= 2;
-			if (timeo > 60*hz)
-				timeo = 60*hz;
+			if (timeo > 60)
+				timeo = 60;
 			/* resend request */
 			continue;
 		}
 
 		/* we got a reponse, so the server's lockd is OK */
-		nfs_up(VFSTONFS(vnode_mount(vp)), p, NFSSTA_LOCKTIMEO,
+		nfs_up(VTONMP(vp), vfs_context_thread(ctx), NFSSTA_LOCKTIMEO,
 			wentdown ? "lockd alive again" : NULL);
 		wentdown = 0;
 
 		if (msgreq.lmr_errno == EINPROGRESS) {
 			/* got NLM_BLOCKED response */
 			/* need to wait for NLM_GRANTED */
-			timeo = 60*hz;
+			timeo = 60;
 			msgreq.lmr_answered = 0;
 			goto wait_for_granted;
 		}
@@ -880,7 +928,7 @@ wait_for_granted:
 			msgreq.lmr_saved_errno = 0;
 			msgreq.lmr_errno = 0;
 			msgreq.lmr_answered = 0;
-			timeo = 2*hz;
+			timeo = 2;
 			/* resend request */
 			continue;
 		}
@@ -892,9 +940,8 @@ wait_for_granted:
 				fl->l_start = msg->lm_fl.l_start;
 				fl->l_len = msg->lm_fl.l_len;
 				fl->l_whence = SEEK_SET;
-			} else {
+			} else
 				fl->l_type = F_UNLCK;
-			}
 		}
 
 		/*
@@ -908,31 +955,56 @@ wait_for_granted:
 		} else
 			error = msgreq.lmr_errno;
 
+		nmp = VTONMP(vp);
+		if ((error == ENOTSUP) && nmp && !(nmp->nm_state & NFSSTA_LOCKSWORK)) {
+			/*
+			 * We have NO evidence that locks work and lockd
+			 * returned ENOTSUP.  Let's take this as a hint
+			 * that locks aren't supported and disable them
+			 * for this mount.
+			 */
+			lck_mtx_lock(&nmp->nm_lock);
+			nmp->nm_flag |= NFSMNT_NOLOCKS;
+			nmp->nm_state &= ~NFSSTA_LOCKTIMEO;
+			lck_mtx_unlock(&nmp->nm_lock);
+			printf("lockd returned ENOTSUP, disabling locks for nfs server: %s\n",
+				vfs_statfs(nmp->nm_mountp)->f_mntfromname);
+		}
 		if (!error) {
 			/* record that NFS file locking has worked on this mount */
-			nmp = VFSTONFS(vnode_mount(vp));
-			if (nmp && !(nmp->nm_state & NFSSTA_LOCKSWORK))
-				nmp->nm_state |= NFSSTA_LOCKSWORK;
+			if (nmp) {
+				lck_mtx_lock(&nmp->nm_lock);
+				if (!(nmp->nm_state & NFSSTA_LOCKSWORK))
+					nmp->nm_state |= NFSSTA_LOCKSWORK;
+				lck_mtx_unlock(&nmp->nm_lock);
+			}
 			/*
 			 * If we successfully acquired a lock, make sure this pid
 			 * is in the nfs_lock_pid hash table so we know we can't
 			 * short-circuit unlock requests.
 			 */
 			if ((lockpidcheck == ENOENT) &&
-			    ((ap->a_op == F_SETLK) || (ap->a_op == F_SETLKW)))
-				nfs_lock_pid_check(p, 1, vp);
-	
+			    ((ap->a_op == F_SETLK) || (ap->a_op == F_SETLKW))) {
+				error = nfs_lock_pid_check(p, 1);
+				if (error) {
+					/*
+					 * We couldn't add the pid to the table,
+					 * so we can no longer trust that a pid
+					 * not in the table has no locks.
+					 */
+					nfs_lock_pid_hash_trusted = 0;
+					printf("nfs_vnop_advlock: pid add failed - no longer trusted\n");
+				}
+			}
 		}
 		break;
 	}
 
 	nfs_lockdmsg_dequeue(&msgreq);
 
-	error1 = VNOP_CLOSE(wvp, FWRITE, ap->a_context);
-	vnode_rele(wvp);
-	vnode_put(wvp);
-	/* prefer any previous 'error' to our vn_close 'error1'. */
-	return (error != 0 ? error : error1);
+	lck_mtx_unlock(nfs_lock_mutex);
+
+	return (error);
 }
 
 /*
@@ -954,6 +1026,8 @@ nfslockdans(proc_t p, struct lockd_ans *ansp)
 	if (ansp->la_version != LOCKD_ANS_VERSION)
 		return (EINVAL);
 
+	lck_mtx_lock(nfs_lock_mutex);
+
 	/* try to find the lockd message by transaction id (cookie) */
 	msgreq = nfs_lockdmsg_find_by_xid(ansp->la_xid);
 	if (ansp->la_flags & LOCKD_ANS_GRANTED) {
@@ -972,8 +1046,10 @@ nfslockdans(proc_t p, struct lockd_ans *ansp)
 		if (msgreq && (msgreq->lmr_msg.lm_flags & LOCKD_MSG_CANCEL))
 			msgreq = NULL;
 	}
-	if (!msgreq)
+	if (!msgreq) {
+		lck_mtx_unlock(nfs_lock_mutex);
 		return (EPIPE);
+	}
 
 	msgreq->lmr_errno = ansp->la_errno;
 	if ((msgreq->lmr_msg.lm_flags & LOCKD_MSG_TEST) && msgreq->lmr_errno == 0) {
@@ -991,70 +1067,9 @@ nfslockdans(proc_t p, struct lockd_ans *ansp)
 	}
 
 	msgreq->lmr_answered = 1;
-	(void)wakeup((void *)msgreq);
+	lck_mtx_unlock(nfs_lock_mutex);
+	wakeup(msgreq);
 
 	return (0);
 }
 
-/*
- * nfslockdfd --
- *      NFS advisory byte-level locks: fifo file# from the lock daemon.
- */
-int
-nfslockdfd(proc_t p, int fd)
-{
-	int error;
-	vnode_t vp, oldvp;
-
-	error = proc_suser(p);
-	if (error)
-		return (error);
-	if (fd < 0) {
-		vp = NULL;
-	} else {
-		error = file_vnode(fd, &vp);
-		if (error)
-			return (error);
-		error = vnode_getwithref(vp);
-		if (error)
-			return (error);
-		error = vnode_ref(vp);
-		if (error) {
-			vnode_put(vp);
-			return (error);
-		}
-	}
-	oldvp = nfslockdvnode;
-	nfslockdvnode = vp;
-	if (oldvp) {
-		vnode_rele(oldvp);
-	}
-	(void)wakeup((void *)&nfslockdvnode);
-	if (vp) {
-		vnode_put(vp);
-	}
-	return (0);
-}
-
-/*
- * nfslockdwait --
- *      lock daemon waiting for lock request
- */
-int
-nfslockdwait(proc_t p)
-{
-	int error;
-
-	error = proc_suser(p);
-	if (error)
-		return (error);
-	if (nfslockdwaiting || nfslockdvnode)
-		return (EBUSY);
-
-	nfslockdstarttimeout = 0;
-	nfslockdwaiting = 1;
-	tsleep((void *)&nfslockdwaiting, PCATCH | PUSER, "lockd", 0);
-	nfslockdwaiting = 0;
-
-	return (0);
-}

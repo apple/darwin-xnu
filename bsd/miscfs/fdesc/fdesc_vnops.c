@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -87,6 +93,9 @@
 #include <vfs/vfs_support.h>
 #include <pexpert/pexpert.h>
 
+/* XXX should be prototyped in header for here, kern_descrip.c */
+extern int soo_stat(struct socket *so, void *ub, int isstat64);
+
 #define FDL_WANT	0x01
 #define FDL_LOCKED	0x02
 static int fdcache_lock;
@@ -119,12 +128,8 @@ fdesc_init(__unused struct vfsconf *vfsp)
 }
 
 int
-fdesc_allocvp(ftype, ix, mp, vpp, vtype)
-	fdntype ftype;
-	int ix;
-	struct mount *mp;
-	struct vnode **vpp;
-	enum vtype vtype;
+fdesc_allocvp(fdntype ftype, int ix, struct mount *mp, struct vnode **vpp,
+	      enum vtype vtype)
 {
 	struct fdhashhead *fc;
 	struct fdescnode *fd;
@@ -171,9 +176,9 @@ loop:
 	vfsp.vnfs_mp = mp;
 	vfsp.vnfs_vtype = vtype;
 	vfsp.vnfs_str = "fdesc";
-	vfsp.vnfs_dvp = 0;
+	vfsp.vnfs_dvp = NULL;
 	vfsp.vnfs_fsnode = fd;
-	vfsp.vnfs_cnp = 0;
+	vfsp.vnfs_cnp = NULL;
 	vfsp.vnfs_vops = fdesc_vnodeop_p;
 	vfsp.vnfs_rdev = 0;
 	vfsp.vnfs_filesize = 0;
@@ -193,7 +198,7 @@ loop:
 	fd->fd_vnode = *vpp;
 	fd->fd_type = ftype;
 	fd->fd_fd = -1;
-	fd->fd_link = 0;
+	fd->fd_link = NULL;
 	fd->fd_ix = ix;
 	LIST_INSERT_HEAD(fc, fd, fd_hash);
 
@@ -213,13 +218,7 @@ out:
  * ndp is the name to locate in that directory...
  */
 int
-fdesc_lookup(ap)
-	struct vnop_lookup_args /* {
-		struct vnode * a_dvp;
-		struct vnode ** a_vpp;
-		struct componentname * a_cnp;
-		vfs_context_t a_context;
-	} */ *ap;
+fdesc_lookup(struct vnop_lookup_args *ap)
 {
 	struct vnode **vpp = ap->a_vpp;
 	struct vnode *dvp = ap->a_dvp;
@@ -230,7 +229,7 @@ fdesc_lookup(ap)
 	int fd;
 	int error;
 	struct vnode *fvp;
-	char *ln;
+	const char *ln;
 
 	if (cnp->cn_namelen == 1 && *pname == '.') {
 		*vpp = dvp;
@@ -332,31 +331,33 @@ bad:;
 }
 
 int
-fdesc_open(ap)
-	struct vnop_open_args /* {
-		struct vnode *a_vp;
-		int  a_mode;
-		vfs_context_t a_context;
-	} */ *ap;
+fdesc_open(struct vnop_open_args *ap)
 {
 	struct vnode *vp = ap->a_vp;
-	struct proc *p = vfs_context_proc(ap->a_context);
+	thread_t thr = vfs_context_thread(ap->a_context);
+	uthread_t uu;
 	int error = 0;
+
+	if (thr == NULL)
+		return (EINVAL);
+
+	uu = get_bsdthread_info(thr);
 
 	switch (VTOFDESC(vp)->fd_type) {
 	case Fdesc:
 		/*
-		 * XXX Kludge: set p->p_dupfd to contain the value of the
+		 * XXX Kludge: set uu->uu_dupfd to contain the value of the
 		 * the file descriptor being sought for duplication. The error 
 		 * return ensures that the vnode for this device will be
 		 * released by vn_open. Open will detect this special error and
 		 * take the actions in dupfdopen.  Other callers of vn_open or
 		 * vnop_open will simply report the error.
 		 */
-		p->p_dupfd = VTOFDESC(vp)->fd_fd;	/* XXX */
+		uu->uu_dupfd = VTOFDESC(vp)->fd_fd;	/* XXX */
 		error = ENODEV;
 		break;
-
+	default:	/* Froot / Fdevfd / Flink */
+		break;
 	}
 
 	return (error);
@@ -374,7 +375,7 @@ fdesc_attr(int fd, struct vnode_attr *vap, vfs_context_t a_context)
 		return (error);
 	switch (fp->f_fglob->fg_type) {
 	case DTYPE_VNODE:
-		if(error = vnode_getwithref((struct vnode *) fp->f_fglob->fg_data)) {
+		if((error = vnode_getwithref((struct vnode *) fp->f_fglob->fg_data)) != 0) {
 			break;
 		}
 		if ((error = vnode_authorize((struct vnode *)fp->f_fglob->fg_data,
@@ -396,10 +397,12 @@ fdesc_attr(int fd, struct vnode_attr *vap, vfs_context_t a_context)
 
 	case DTYPE_SOCKET:
 	case DTYPE_PIPE:
-	        if (fp->f_fglob->fg_type == DTYPE_SOCKET)
-		        error = soo_stat((struct socket *)fp->f_fglob->fg_data, &stb);
+#if SOCKETS
+		if (fp->f_fglob->fg_type == DTYPE_SOCKET)
+			error = soo_stat((struct socket *)fp->f_fglob->fg_data, (void *)&stb, 0);
 		else
-		        error = pipe_stat((struct socket *)fp->f_fglob->fg_data, &stb);
+#endif /* SOCKETS */
+		error = pipe_stat((struct pipe *)fp->f_fglob->fg_data, (void *)&stb, 0);
 
 		if (error == 0) {
 			if (fp->f_fglob->fg_type == DTYPE_SOCKET)
@@ -434,12 +437,7 @@ fdesc_attr(int fd, struct vnode_attr *vap, vfs_context_t a_context)
 }
 
 int
-fdesc_getattr(ap)
-	struct vnop_getattr_args /* {
-		struct vnode *a_vp;
-		struct vnode_attr *a_vap;
-		vfs_context_t a_context;
-	} */ *ap;
+fdesc_getattr(struct vnop_getattr_args *ap)
 {
 	struct vnode *vp = ap->a_vp;
 	struct vnode_attr *vap = ap->a_vap;
@@ -501,12 +499,7 @@ fdesc_getattr(ap)
 }
 
 int
-fdesc_setattr(ap)
-	struct vnop_setattr_args /* {
-		struct vnode *a_vp;
-		struct vnode_attr *a_vap;
-		vfs_context_t a_context;
-	} */ *ap;
+fdesc_setattr(struct vnop_setattr_args *ap)
 {
 	struct fileproc *fp;
 	unsigned fd;
@@ -572,15 +565,7 @@ static struct dirtmp {
 };
 
 int
-fdesc_readdir(ap)
-	struct vnop_readdir_args /* {
-		struct vnode *a_vp;
-		struct uio *a_uio;
-		int a_flags;
-		int *a_eofflag;
-		int *a_numdirent;
-		vfs_context_t a_context;
-	} */ *ap;
+fdesc_readdir(struct vnop_readdir_args *ap)
 {
 	struct uio *uio = ap->a_uio;
 	struct proc *p = current_proc();
@@ -657,7 +642,8 @@ fdesc_readdir(ap)
 
 			bzero((caddr_t) dp, UIO_MX);
 
-			dp->d_namlen = sprintf(dp->d_name, "%d", i);
+			dp->d_namlen = snprintf(dp->d_name, sizeof(dp->d_name),
+						"%d", i);
 			dp->d_reclen = UIO_MX;
 			dp->d_type = DT_UNKNOWN;
 			dp->d_fileno = i + FD_STDIN;
@@ -676,12 +662,7 @@ fdesc_readdir(ap)
 }
 
 int
-fdesc_readlink(ap)
-	struct vnop_readlink_args /* {
-		struct vnode *a_vp;
-		struct uio *a_uio;
-		vfs_context_t a_context;
-	} */ *ap;
+fdesc_readlink(struct vnop_readlink_args *ap)
 {
 	struct vnode *vp = ap->a_vp;
 	int error;
@@ -690,7 +671,7 @@ fdesc_readlink(ap)
 		return (EPERM);
 
 	if (VTOFDESC(vp)->fd_type == Flink) {
-		char *ln = VTOFDESC(vp)->fd_link;
+		const char *ln = VTOFDESC(vp)->fd_link;
 		error = uiomove(ln, strlen(ln), ap->a_uio);
 	} else {
 		error = ENOTSUP;
@@ -725,11 +706,7 @@ fdesc_select(__unused struct vnop_select_args *ap)
 }
 
 int
-fdesc_inactive(ap)
-	struct vnop_inactive_args /* {
-		struct vnode *a_vp;
-		vfs_context_t a_context;
-	} */ *ap;
+fdesc_inactive(struct vnop_inactive_args *ap)
 {
 	struct vnode *vp = ap->a_vp;
 
@@ -742,18 +719,14 @@ fdesc_inactive(ap)
 }
 
 int
-fdesc_reclaim(ap)
-	struct vnop_reclaim_args /* {
-		struct vnode *a_vp;
-		vfs_context_t a_context;
-	} */ *ap;
+fdesc_reclaim(struct vnop_reclaim_args *ap)
 {
 	struct vnode *vp = ap->a_vp;
 	struct fdescnode *fd = VTOFDESC(vp);
 
 	LIST_REMOVE(fd, fd_hash);
 	FREE(vp->v_data, M_TEMP);
-	vp->v_data = 0;
+	vp->v_data = NULL;
 
 	return (0);
 }
@@ -762,13 +735,7 @@ fdesc_reclaim(ap)
  * Return POSIX pathconf information applicable to special devices.
  */
 int
-fdesc_pathconf(ap)
-	struct vnop_pathconf_args /* {
-		struct vnode *a_vp;
-		int a_name;
-		int *a_retval;
-		vfs_context_t a_context;
-	} */ *ap;
+fdesc_pathconf(struct vnop_pathconf_args *ap)
 {
 
 	switch (ap->a_name) {
@@ -785,7 +752,7 @@ fdesc_pathconf(ap)
 		*ap->a_retval = PIPE_BUF;
 		return (0);
 	case _PC_CHOWN_RESTRICTED:
-		*ap->a_retval = 1;
+		*ap->a_retval = 200112;		/* _POSIX_CHOWN_RESTRICTED */
 		return (0);
 	case _PC_VDISABLE:
 		*ap->a_retval = _POSIX_VDISABLE;
@@ -794,15 +761,6 @@ fdesc_pathconf(ap)
 		return (EINVAL);
 	}
 	/* NOTREACHED */
-}
-
-
-/*void*/
-int
-fdesc_vfree(__unused struct vnop_vfree_args *ap)
-{
-
-	return (0);
 }
 
 /*

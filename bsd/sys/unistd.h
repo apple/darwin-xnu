@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -58,6 +64,8 @@
 #ifndef _SYS_UNISTD_H_
 #define	_SYS_UNISTD_H_
 
+#include <sys/cdefs.h>
+
 /*
  * Although we have saved user/group IDs, we do not use them in setuid
  * as described in POSIX 1003.1, because the feature does not work for
@@ -85,7 +93,7 @@
 #define	W_OK		(1<<1)	/* test for write permission */
 #define	R_OK		(1<<2)	/* test for read permission */
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /*
  * Extended access functions.
  * Note that we depend on these matching the definitions in sys/kauth.h,
@@ -119,16 +127,16 @@
 #define	SEEK_END	2	/* set file offset to EOF plus offset */
 #endif	/* !SEEK_SET */
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /* whence values for lseek(2); renamed by POSIX 1003.1 */
 #define	L_SET		SEEK_SET
 #define	L_INCR		SEEK_CUR
 #define	L_XTND		SEEK_END
 #endif
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 struct accessx_descriptor {
-	unsigned ad_name_offset;
+	unsigned int ad_name_offset;
 	int ad_flags;
 	int ad_pad[2];
 };
@@ -147,13 +155,25 @@ struct accessx_descriptor {
 #define	_PC_NO_TRUNC		 8
 #define	_PC_VDISABLE		 9
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	_PC_NAME_CHARS_MAX	 10
 #define	_PC_CASE_SENSITIVE		 11
 #define	_PC_CASE_PRESERVING		 12
 #define _PC_EXTENDED_SECURITY_NP        13
 #define _PC_AUTH_OPAQUE_NP      14
 #endif
+
+#define	_PC_2_SYMLINKS		15	/* Symlink supported in directory */
+#define	_PC_ALLOC_SIZE_MIN	16	/* Minimum storage actually allocated */
+#define	_PC_ASYNC_IO		17	/* Async I/O [AIO] supported? */
+#define	_PC_FILESIZEBITS	18	/* # of bits to represent file size */
+#define	_PC_PRIO_IO		19	/* Priority I/O [PIO] supported? */
+#define	_PC_REC_INCR_XFER_SIZE	20	/* Recommended increment for next two */
+#define	_PC_REC_MAX_XFER_SIZE	21	/* Recommended max file transfer size */
+#define	_PC_REC_MIN_XFER_SIZE	22	/* Recommended min file transfer size */
+#define	_PC_REC_XFER_ALIGN	23	/* Recommended buffer alignment */
+#define	_PC_SYMLINK_MAX		24	/* Max # of bytes in symlink name */
+#define	_PC_SYNC_IO		25	/* Sync I/O [SIO] supported? */
 
 /* configurable system strings */
 #define	_CS_PATH		 1

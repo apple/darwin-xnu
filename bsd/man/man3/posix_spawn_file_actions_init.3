@@ -1,0 +1,115 @@
+.\"
+.\" Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+.\"
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+.\" 
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. The rights granted to you under the License
+.\" may not be used to create, or enable the creation or redistribution of,
+.\" unlawful or unlicensed copies of an Apple operating system, or to
+.\" circumvent, violate, or enable the circumvention or violation of, any
+.\" terms of an Apple operating system software license agreement.
+.\" 
+.\" Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this file.
+.\" 
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\" 
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+.\"
+.\"     @(#)posix_spawn_file_actions_init.3
+.
+.Dd August 22, 2007
+.Dt POSIX_SPAWN_FILE_ACTIONS_INIT 3
+.Os "Mac OS X"
+.Sh NAME
+.Nm posix_spawn_file_actions_init
+.Nm posix_spawn_file_actions_destroy
+.Nd initialize or destroy spawn file actions objects
+.Sh SYNOPSIS
+.Fd #include <spawn.h>
+.Ft int
+.Fo posix_spawn_file_actions_init
+.Fa "posix_spawn_file_actions_t *file_actions"
+.Fc
+.Ft int
+.Fo posix_spawn_file_actions_destroy
+.Fa "posix_spawn_file_actions_t *file_actions"
+.Fc
+.Sh DESCRIPTION
+The
+.Fn posix_spawn_file_actions_init
+function initializes the object referenced by
+.Em file_actions ,
+to an empty set of file actions for subsequent use in a call to
+.Xr posix_spawn 2
+or 
+.Xr posix_spawnp 2 .
+A
+.Em posix_spawn_file_actions_t
+object is an opaque type that is used to collect set of file actions
+specified by calls to
+.Xr posix_spawn_file_actions_addclose 3
+and
+.Xr posix_spawn_file_actions_addopen 3
+such that once the spawn operation is complete, the child process will
+have a different set of file descriptors than the parent, in the order
+that the operations were added to the
+.Em posix_spawn_file_actions_t .
+.Pp
+Additionally, any descriptor in the parent not modified by a file action,
+and which has the FD_CLOEXEC flag set, will be closed in the child.
+.Pp
+The
+.Fn posix_spawn_file_actions_destroy
+function destroys the object referenced by
+.Em file_actions
+which was previously intialized by
+.Fn posix_spawn_file_actions_init ,
+returning any resources obtained at the time of initialization to the
+system for subsequent reuse.  A
+.Em posix_spawn_file_actions_t
+may be reinitialized after having been destroyed, but
+.Em must not
+be reused after destruction, unless it has been reinitialized.
+.Sh RETURN VALUES
+On success, these functions return 0; on failure they return an error
+number from
+.In errno.h .
+.Sh ERRORS
+These functions will fail and return an error if:
+.Bl -tag -width Er
+.\" ==========
+.It Bq Er ENOMEM
+Insufficient resources to initialize the
+.Fa posix_spawn_file_actions_t
+object.
+.\" ==========
+.It Bq Er EINVAL
+The
+.Fa posix_spawn_file_actions_t
+being destroyed is invalid.
+.El
+.Sh SEE ALSO
+.Xr posix_spawn 2 ,
+.Xr posix_spawnp 2 ,
+.Xr posix_spawn_file_actions_addclose 3 ,
+.Xr posix_spawn_file_actions_addopen 3 ,
+.Xr posix_spawn_file_actions_adddup2 3
+.Sh STANDARDS
+.St -susv3 [SPN]
+.Sh HISTORY
+The
+.Fn posix_spawn_file_actions_init
+and
+.Fn posix_spawn_file_actions_destroy
+function calls appeared in
+.St -susv3 [SPN] .

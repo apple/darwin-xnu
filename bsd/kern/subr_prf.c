@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*-
@@ -95,6 +101,13 @@
 #include <machine/spl.h>
 #include <libkern/libkern.h>
 
+/* for vaddlog(): the following are implemented in osfmk/kern/printf.c  */
+extern void bsd_log_lock(void);
+extern void bsd_log_unlock(void);
+
+/* Keep this around only because it's exported */
+void _printf(int, struct tty *, const char *, ...);
+
 struct snprintf_arg {
 	char *str;
 	size_t remain;
@@ -108,32 +121,28 @@ struct snprintf_arg {
  */
 extern const char	*panicstr;
 
-extern	cnputc();			/* standard console putc */
-int	(*v_putc)() = cnputc;		/* routine to putc on virtual console */
+extern	void cnputc(char);		/* standard console putc */
+void	(*v_putc)(char) = cnputc;	/* routine to putc on virtual console */
 
 extern	struct tty cons;		/* standard console tty */
 extern struct	tty *constty;		/* pointer to console "window" tty */
 extern int  __doprnt(const char *fmt,
 					 va_list    *argp,
-					 void       (*putc)(int, void *arg),
+					 void       (*)(int, void *),
 					 void       *arg,
 					 int        radix);
 
 /*
  *	Record cpu that panic'd and lock around panic data
  */
-
-static void puts(const char *s, int flags, struct tty *ttyp);
 static void printn(u_long n, int b, int flags, struct tty *ttyp, int zf, int fld_size);
 
 #if	NCPUS > 1
 boolean_t new_printf_cpu_number;  /* do we need to output who we are */
 #endif
 
-extern	void logwakeup();
-extern	void halt_cpu();
-extern	boot();
-
+extern	void logwakeup(void);
+extern	void halt_cpu(void);
 
 static void
 snprintf_func(int ch, void *arg);
@@ -153,37 +162,48 @@ static void putchar(int c, void *arg);
 void
 uprintf(const char *fmt, ...)
 {
-	register struct proc *p = current_proc();
+	struct proc *p = current_proc();
 	struct putchar_args pca;
 	va_list ap;
+	struct session * sessp;
+	boolean_t fstate;
 	
-	pca.flags = TOTTY;
-	pca.tty   = (struct tty *)p->p_session->s_ttyp;
+	sessp = proc_session(p);
 
-	if (p->p_flag & P_CONTROLT && p->p_session->s_ttyvp) {
+	fstate = thread_funnel_set(kernel_flock, TRUE);
+	pca.flags = TOTTY;
+	pca.tty   = (struct tty *)sessp->s_ttyp;
+
+	if (p->p_flag & P_CONTROLT && sessp->s_ttyvp) {
 		va_start(ap, fmt);
 		__doprnt(fmt, &ap, putchar, &pca, 10);
 		va_end(ap);
 	}
+	(void) thread_funnel_set(kernel_flock, fstate);
+	session_rele(sessp);
 }
 
 tpr_t
-tprintf_open(p)
-	register struct proc *p;
+tprintf_open(struct proc *p)
 {
-	if (p->p_flag & P_CONTROLT && p->p_session->s_ttyvp) {
-		SESSHOLD(p->p_session);
-		return ((tpr_t) p->p_session);
+	struct session * sessp;
+
+	sessp = proc_session(p);
+
+	if (p->p_flag & P_CONTROLT && sessp->s_ttyvp) {
+		return ((tpr_t)sessp);
 	}
+	if (sessp != SESSION_NULL)
+		session_rele(sessp);
+
 	return ((tpr_t) NULL);
 }
 
 void
-tprintf_close(sess)
-	tpr_t sess;
+tprintf_close(tpr_t sessp)
 {
-	if (sess)
-		SESSRELE((struct session *) sess);
+	if (sessp)
+		session_rele((struct session *) sessp);
 }
 
 /*
@@ -193,13 +213,17 @@ tprintf_close(sess)
 void
 tprintf(tpr_t tpr, const char *fmt, ...)
 {
-	register struct session *sess = (struct session *)tpr;
+	struct session *sess = (struct session *)tpr;
 	struct tty *tp = NULL;
 	int flags = TOLOG;
 	va_list ap;
 	struct putchar_args pca;
+	boolean_t fstate;
 
 	logpri(LOG_INFO);
+	/* to protect tty */
+	fstate = thread_funnel_set(kernel_flock, TRUE);
+
 	if (sess && sess->s_ttyvp && ttycheckoutq(sess->s_ttyp, 0)) {
 		flags |= TOTTY;
 		tp = sess->s_ttyp;
@@ -210,6 +234,8 @@ tprintf(tpr_t tpr, const char *fmt, ...)
 	va_start(ap, fmt);
 	__doprnt(fmt, &ap, putchar, &pca, 10);
 	va_end(ap);
+
+	(void) thread_funnel_set(kernel_flock, fstate);
 
 	logwakeup();
 }
@@ -223,8 +249,10 @@ void
 ttyprintf(struct tty *tp, const char *fmt, ...)
 {
 	va_list ap;
+	boolean_t fstate;
 
 	if (tp != NULL) {
+		fstate = thread_funnel_set(kernel_flock, TRUE);
 		struct putchar_args pca;
 		pca.flags = TOTTY;
 		pca.tty   = tp;
@@ -232,6 +260,7 @@ ttyprintf(struct tty *tp, const char *fmt, ...)
 		va_start(ap, fmt);
 		__doprnt(fmt, &ap, putchar, &pca, 10);
 		va_end(ap);
+		(void) thread_funnel_set(kernel_flock, fstate);
 	}
 }
 
@@ -239,8 +268,7 @@ extern	int log_open;
 
 
 void
-logpri(level)
-	int level;
+logpri(int level)
 {
 	struct putchar_args pca;
 	pca.flags = TOLOG;
@@ -251,38 +279,56 @@ logpri(level)
 	putchar('>', &pca);
 }
 
-void
-addlog(const char *fmt, ...)
+static void
+_logtime(const char *fmt, ...)
 {
-	register s = splhigh();
 	va_list ap;
+	va_start(ap, fmt);
+	vaddlog(fmt, ap);
+	va_end(ap);
+}
+
+void
+logtime(time_t secs)
+{
+	_logtime("         0 [Time %ld] [Message ", secs);
+}
+
+int
+vaddlog(const char *fmt, va_list ap)
+{
 	struct putchar_args pca;
 
-	pca.flags = TOLOG;
+	pca.flags = TOLOGLOCKED;
 	pca.tty   = NULL;
 
-	va_start(ap, fmt);
-	__doprnt(fmt, &ap, putchar, &pca, 10);
-	
-	splx(s);
 	if (!log_open) {
-		pca.flags = TOCONS;
-		__doprnt(fmt, &ap, putchar, &pca, 10);
+		pca.flags |= TOCONS;
 	}
-	va_end(ap);
+
+	bsd_log_lock();
+	__doprnt(fmt, &ap, putchar, &pca, 10);
+	bsd_log_unlock();
+	
 	logwakeup();
+	return 0;
 }
-void _printf(int flags, struct tty *ttyp, const char *format, ...)
+
+void
+_printf(int flags, struct tty *ttyp, const char *format, ...)
 {
 	va_list ap;
 	struct putchar_args pca;
+	boolean_t fstate;
 
 	pca.flags = flags;
 	pca.tty   = ttyp;
+	fstate = thread_funnel_set(kernel_flock, TRUE);
 	
 	va_start(ap, format);
 	__doprnt(format, &ap, putchar, &pca, 10);
 	va_end(ap);
+	(void) thread_funnel_set(kernel_flock, fstate);
 }
 
 int prf(const char *fmt, va_list ap, int flags, struct tty *ttyp)
@@ -320,18 +366,6 @@ int prf(const char *fmt, va_list ap, int flags, struct tty *ttyp)
 	return 0;
 }
 
-static void puts(const char *s, int flags, struct tty *ttyp)
-{
-	register char c;
-	struct putchar_args pca;
-
-	pca.flags = flags;
-	pca.tty   = ttyp;
-
-	while ((c = *s++))
-		putchar(c, &pca);
-}
-
 /*
  * Printn prints a number n in base b.
  * We don't use recursion to avoid deep kernel stacks.
@@ -339,7 +373,7 @@ static void puts(const char *s, int flags, struct tty *ttyp)
 static void printn(u_long n, int b, int flags, struct tty *ttyp, int zf, int fld_size)
 {
 	char prbuf[11];
-	register char *cp;
+	char *cp;
 	struct putchar_args pca;
 
 	pca.flags = flags;
@@ -386,7 +420,6 @@ void
 putchar(int c, void *arg)
 {
 	struct putchar_args *pca = arg;
-	register struct msgbuf *mbp;
 	char **sp = (char**) pca->tty;
 
 	if (panicstr)
@@ -400,6 +433,8 @@ putchar(int c, void *arg)
 		constty = 0;
 	if ((pca->flags & TOLOG) && c != '\0' && c != '\r' && c != 0177)
 		log_putc(c);
+	if ((pca->flags & TOLOGLOCKED) && c != '\0' && c != '\r' && c != 0177)
+		log_putc_locked(c);
 	if ((pca->flags & TOCONS) && constty == 0 && c != '\0')
 		(*v_putc)(c);
 	if (pca->flags & TOSTR) {
@@ -408,10 +443,22 @@ putchar(int c, void *arg)
 	}
 }
 
+int
+vprintf(const char *fmt, va_list ap)
+{
+	struct putchar_args pca;
 
+	pca.flags = TOLOG | TOCONS;
+	pca.tty   = NULL;
+	__doprnt(fmt, &ap, putchar, &pca, 10);
+	return 0;
+}
 
 /*
  * Scaled down version of vsprintf(3).
+ *
+ * Deprecation Warning:
+ *	vsprintf() is being deprecated. Please use vsnprintf() instead. 
  */
 int
 vsprintf(char *buf, const char *cfmt, va_list ap)

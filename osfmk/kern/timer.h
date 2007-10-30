@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -63,12 +69,12 @@
  */
 
 struct timer {
+#if	!STAT_TIME
+	uint64_t	tstamp;
+#endif	/* STAT_TIME */
 	uint32_t	low_bits;
 	uint32_t	high_bits;
 	uint32_t	high_bits_check;
-#if	!STAT_TIME
-	uint32_t	tstamp;
-#endif	/* STAT_TIME */
 };
 
 typedef struct timer	timer_data_t, *timer_t;
@@ -81,7 +87,7 @@ typedef struct timer	timer_data_t, *timer_t;
 
 #include <kern/macro_help.h>
 
-/* Advance a timer by the specified amount */
+/* Advance a timer by a 32 bit value */
 #define TIMER_BUMP(timer, ticks)								\
 MACRO_BEGIN														\
 	uint32_t	old_low, low;									\
@@ -94,17 +100,35 @@ MACRO_BEGIN														\
 		(timer)->low_bits = low;								\
 MACRO_END
 
-#define timer_switch(tstamp, new_timer)
-#define timer_event(tstamp, new_timer)
+#define timer_start(timer, tstamp)
+#define timer_stop(timer, tstamp)
+#define timer_switch(timer, tstamp, new_timer)
+#define thread_timer_event(tstamp, new_timer)
 
 #else	/* STAT_TIME */
 
-/* Update the current timer and start a new one */
+#define	TIMER_BUMP(timer, ticks)
+
+/* Start a timer by setting the timestamp */
+extern void		timer_start(
+					timer_t		timer,
+					uint64_t	tstamp);
+
+/* Stop a timer by updating from the timestamp */
+extern void		timer_stop(
+					timer_t		timer,
+					uint64_t	tstamp);
+
+/* Update the timer and start a new one */
 extern void		timer_switch(
-					uint32_t	tstamp,
+					timer_t		timer,
+					uint64_t	tstamp,
 					timer_t		new_timer);
 
-#define	TIMER_BUMP(timer, ticks)
+/* Update the thread timer at an event */
+extern void		thread_timer_event(
+					uint64_t	tstamp,
+					timer_t		new_timer);
 
 #endif	/* STAT_TIME */
 
@@ -116,6 +140,11 @@ extern void		timer_init(
 extern uint64_t	timer_delta(
 					timer_t		timer,
 					uint64_t	*save);
+
+/* Advance a timer by a 64 bit value */
+extern void		timer_advance(
+					timer_t		timer,
+					uint64_t	delta);
 
 /*
  *	Exported hardware interface to timers
@@ -130,14 +159,5 @@ extern void		timer_update(
 					timer_t		timer,
 					uint32_t	new_high,
 					uint32_t	new_low);
-
-#if	!STAT_TIME
-
-/* Update the current timer at an event */
-extern void		timer_event(
-					uint32_t	tstamp,
-					timer_t		new_timer);
-
-#endif	/* STAT_TIME */
 
 #endif	/* _KERN_TIMER_H_ */

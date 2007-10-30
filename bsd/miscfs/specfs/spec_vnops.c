@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -73,10 +79,16 @@
 #include <sys/malloc.h>
 #include <sys/disk.h>
 #include <sys/uio_internal.h>
+#include <sys/resource.h>
 #include <miscfs/specfs/specdev.h>
 #include <vfs/vfs_support.h>
 
 #include <sys/kdebug.h>
+
+/* XXX following three prototypes should be in a header file somewhere */
+extern int	isdisk(dev_t dev, int type);
+extern dev_t	chrtoblk(dev_t dev);
+extern int	iskmemdev(dev_t dev);
 
 struct vnode *speclisth[SPECHSZ];
 
@@ -142,13 +154,7 @@ static void set_blocksize(vnode_t, dev_t);
  * Trivial lookup routine that always fails.
  */
 int
-spec_lookup(ap)
-	struct vnop_lookup_args /* {
-		struct vnode *a_dvp;
-		struct vnode **a_vpp;
-		struct componentname *a_cnp;
-		vfs_context_t a_context;
-	} */ *ap;
+spec_lookup(struct vnop_lookup_args *ap)
 {
 
 	*ap->a_vpp = NULL;
@@ -195,12 +201,7 @@ set_fsblocksize(struct vnode *vp)
  * Open a special file.
  */
 int
-spec_open(ap)
-	struct vnop_open_args /* {
-		struct vnode *a_vp;
-		int  a_mode;
-		vfs_context_t a_context;
-	} */ *ap;
+spec_open(struct vnop_open_args *ap)
 {
 	struct proc *p = vfs_context_proc(ap->a_context);
 	kauth_cred_t cred = vfs_context_ucred(ap->a_context);
@@ -313,16 +314,10 @@ spec_open(ap)
  * Vnode op for read
  */
 int
-spec_read(ap)
-	struct vnop_read_args /* {
-		struct vnode *a_vp;
-		struct uio *a_uio;
-		int  a_ioflag;
-		vfs_context_t a_context;
-	} */ *ap;
+spec_read(struct vnop_read_args *ap)
 {
-	register struct vnode *vp = ap->a_vp;
-	register struct uio *uio = ap->a_uio;
+	struct vnode *vp = ap->a_vp;
+	struct uio *uio = ap->a_uio;
 	struct buf *bp;
 	daddr64_t bn, nextbn;
 	long bsize, bscale;
@@ -387,7 +382,7 @@ spec_read(ap)
 			// LP64todo - fix this!
 			n = min((unsigned)(n  - on), uio_resid(uio));
 
-			error = uiomove((char *)buf_dataptr(bp) + on, n, uio);
+			error = uiomove((char *)0 + buf_dataptr(bp) + on, n, uio);
 			if (n + on == bsize)
 				buf_markaged(bp);
 			buf_brelse(bp);
@@ -406,23 +401,17 @@ spec_read(ap)
  * Vnode op for write
  */
 int
-spec_write(ap)
-	struct vnop_write_args /* {
-		struct vnode *a_vp;
-		struct uio *a_uio;
-		int  a_ioflag;
-		vfs_context_t a_context;
-	} */ *ap;
+spec_write(struct vnop_write_args *ap)
 {
-	register struct vnode *vp = ap->a_vp;
-	register struct uio *uio = ap->a_uio;
+	struct vnode *vp = ap->a_vp;
+	struct uio *uio = ap->a_uio;
 	struct buf *bp;
 	daddr64_t bn;
 	int bsize, blkmask, bscale;
-	register int io_sync;
-	register int io_size;
+	int io_sync;
+	int io_size;
 	int devBlockSize=0;
-	register int n, on;
+	int n, on;
 	int error = 0;
 	dev_t dev;
 
@@ -499,7 +488,7 @@ spec_write(ap)
 			}
 			n = min(n, bsize - buf_resid(bp));
 
-			error = uiomove((char *)buf_dataptr(bp) + on, n, uio);
+			error = uiomove((char *)0 + buf_dataptr(bp) + on, n, uio);
 			if (error) {
 				buf_brelse(bp);
 				return (error);
@@ -529,14 +518,7 @@ spec_write(ap)
  * Device ioctl operation.
  */
 int
-spec_ioctl(ap)
-	struct vnop_ioctl_args /* {
-		struct vnode *a_vp;
-		int  a_command;
-		caddr_t  a_data;
-		int  a_fflag;
-		vfs_context_t a_context;
-	} */ *ap;
+spec_ioctl(struct vnop_ioctl_args *ap)
 {
 	proc_t p = vfs_context_proc(ap->a_context);
 	dev_t dev = ap->a_vp->v_rdev;
@@ -548,7 +530,7 @@ spec_ioctl(ap)
 		    ap->a_fflag, p));
 
 	case VBLK:
-	        if (ap->a_command == 0 && (int)ap->a_data == B_TAPE) {
+	        if (ap->a_command == 0 && (unsigned int)ap->a_data == B_TAPE) {
 			if (bdevsw[major(dev)].d_type == D_TAPE)
 				return (0);
 			else
@@ -565,17 +547,10 @@ spec_ioctl(ap)
 }
 
 int
-spec_select(ap)
-	struct vnop_select_args /* {
-		struct vnode *a_vp;
-		int  a_which;
-		int  a_fflags;
-		void * a_wql;
-		vfs_context_t a_context;
-	} */ *ap;
+spec_select(struct vnop_select_args *ap)
 {
 	proc_t p = vfs_context_proc(ap->a_context);
-	register dev_t dev;
+	dev_t dev;
 
 	switch (ap->a_vp->v_type) {
 
@@ -599,18 +574,13 @@ spec_fsync_internal(vnode_t vp, int waitfor, __unused vfs_context_t context)
 	/*
 	 * Flush all dirty buffers associated with a block device.
 	 */
-	buf_flushdirtyblks(vp, waitfor == MNT_WAIT, 0, (char *)"spec_fsync");
+	buf_flushdirtyblks(vp, waitfor == MNT_WAIT, 0, "spec_fsync");
 
 	return (0);
 }
 
 int
-spec_fsync(ap)
-	struct vnop_fsync_args /* {
-		struct vnode *a_vp;
-		int  a_waitfor;
-		vfs_context_t a_context;
-	} */ *ap;
+spec_fsync(struct vnop_fsync_args *ap)
 {
 	return spec_fsync_internal(ap->a_vp, ap->a_waitfor, ap->a_context);
 }
@@ -619,29 +589,68 @@ spec_fsync(ap)
  * Just call the device strategy routine
  */
 extern int hard_throttle_on_root;
+void IOSleep(int);
+extern void throttle_lowpri_io(int *lowpri_window,mount_t v_mount);
 
+// the low priority process may wait for at most LOWPRI_MAX_DELAY millisecond
+#define LOWPRI_INITIAL_WINDOW_MSECS 100
+#define LOWPRI_WINDOW_MSECS_INC	50
+#define LOWPRI_MAX_WINDOW_MSECS 200
+#define LOWPRI_MAX_WAITING_MSECS 200
+#define LOWPRI_SLEEP_INTERVAL 5
 
-#define LOWPRI_DELAY_MSECS	200
-#define LOWPRI_WINDOW_MSECS	200
+int 	lowpri_IO_initial_window_msecs  = LOWPRI_INITIAL_WINDOW_MSECS;
+int 	lowpri_IO_window_msecs_inc  = LOWPRI_WINDOW_MSECS_INC;
+int 	lowpri_max_window_msecs  = LOWPRI_MAX_WINDOW_MSECS;
+int     lowpri_max_waiting_msecs = LOWPRI_MAX_WAITING_MSECS;
 
-int 	lowpri_IO_window_msecs = LOWPRI_WINDOW_MSECS;
-int 	lowpri_IO_delay_msecs  = LOWPRI_DELAY_MSECS;
+SYSCTL_INT(_debug, OID_AUTO, lowpri_IO_initial_window_msecs, CTLFLAG_RW, &lowpri_IO_initial_window_msecs, LOWPRI_INITIAL_WINDOW_MSECS, "");
+SYSCTL_INT(_debug, OID_AUTO, lowpri_IO_window_inc, CTLFLAG_RW, &lowpri_IO_window_msecs_inc, LOWPRI_INITIAL_WINDOW_MSECS, "");
+SYSCTL_INT(_debug, OID_AUTO, lowpri_max_window_msecs, CTLFLAG_RW, &lowpri_max_window_msecs, LOWPRI_INITIAL_WINDOW_MSECS, "");
+SYSCTL_INT(_debug, OID_AUTO, lowpri_max_waiting_msecs, CTLFLAG_RW, &lowpri_max_waiting_msecs, LOWPRI_INITIAL_WINDOW_MSECS, "");
 
-struct timeval last_normal_IO_timestamp;
-struct timeval last_lowpri_IO_timestamp;
-struct timeval lowpri_IO_window = { 0, LOWPRI_WINDOW_MSECS * 1000 };
+void throttle_lowpri_io(int *lowpri_window,mount_t v_mount)
+{
+	int i;
+	struct timeval last_lowpri_IO_timestamp,last_normal_IO_timestamp;
+	struct timeval elapsed;
+	int lowpri_IO_window_msecs;
+	struct timeval lowpri_IO_window;
+	int max_try_num = lowpri_max_waiting_msecs / LOWPRI_SLEEP_INTERVAL;
+
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 97)) | DBG_FUNC_START,
+		     *lowpri_window, 0, 0, 0, 0);
+
+        last_normal_IO_timestamp = v_mount->last_normal_IO_timestamp;
+                        
+	for (i=0; i<max_try_num; i++) {
+		microuptime(&last_lowpri_IO_timestamp);
+
+		elapsed = last_lowpri_IO_timestamp;
+		timevalsub(&elapsed, &last_normal_IO_timestamp);
+
+		lowpri_IO_window_msecs = *lowpri_window;
+		lowpri_IO_window.tv_sec  = lowpri_IO_window_msecs / 1000;
+		lowpri_IO_window.tv_usec = (lowpri_IO_window_msecs % 1000) * 1000;
+
+		if (timevalcmp(&elapsed, &lowpri_IO_window, <)) {
+			IOSleep(LOWPRI_SLEEP_INTERVAL);
+		} else {
+			break;
+		}
+	}
+
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 97)) | DBG_FUNC_END,
+		     *lowpri_window, i*5, 0, 0, 0);
+	*lowpri_window = 0;
+}
 
 int
-spec_strategy(ap)
-	struct vnop_strategy_args /* {
-		struct buf *a_bp;
-	} */ *ap;
+spec_strategy(struct vnop_strategy_args *ap)
 {
         buf_t	bp;
 	int	bflags;
 	dev_t	bdev;
-	proc_t	p;
-        struct timeval elapsed;
 
         bp = ap->a_bp;
 	bdev = buf_device(bp);
@@ -667,36 +676,66 @@ spec_strategy(ap)
 	    (buf_vnode(bp)->v_mount->mnt_kern_flag & MNTK_ROOTDEV))
 	        hard_throttle_on_root = 1;
 
-	if ( lowpri_IO_delay_msecs && lowpri_IO_window_msecs ) {
-	        p = current_proc();
+	if (lowpri_IO_initial_window_msecs) {
+		proc_t	p;
+		struct uthread	*ut;
+		int policy = IOPOL_DEFAULT;
+		int is_throttleable_io = 0;
+		int is_passive_io = 0;
+		p = current_proc();
+		ut = get_bsdthread_info(current_thread());
+		
+		if (p != NULL)
+			policy = p->p_iopol_disk;
 
-	        if ( (p == NULL) || !(p->p_lflag & P_LLOW_PRI_IO)) {
-		        if (!(p->p_lflag & P_LBACKGROUND_IO))
-			        microuptime(&last_normal_IO_timestamp);
+		if (ut != NULL) {
+			// the I/O policy of the thread overrides that of the process
+			// unless the I/O policy of the thread is default
+			if (ut->uu_iopol_disk != IOPOL_DEFAULT)
+				policy = ut->uu_iopol_disk;
+		}
+
+		switch (policy) {
+		case IOPOL_DEFAULT:
+		case IOPOL_NORMAL:
+			break;
+		case IOPOL_THROTTLE:
+			is_throttleable_io = 1;
+			break;
+		case IOPOL_PASSIVE:
+			is_passive_io = 1;
+			break;
+		default:
+			printf("unknown I/O policy %d", policy);
+			break;
+		}
+
+		if (!is_throttleable_io && ISSET(bflags, B_PASSIVE))
+		    is_passive_io |= 1;
+
+		if (!is_throttleable_io) {
+			if (!is_passive_io && buf_vnode(bp)->v_mount != NULL){
+				microuptime(&(buf_vnode(bp)->v_mount->last_normal_IO_timestamp));
+			}
 		} else {
-		        microuptime(&last_lowpri_IO_timestamp);
-
-			elapsed = last_lowpri_IO_timestamp;
-			timevalsub(&elapsed, &last_normal_IO_timestamp);
-
-			lowpri_IO_window.tv_sec  = lowpri_IO_window_msecs / 1000;
-			lowpri_IO_window.tv_usec = (lowpri_IO_window_msecs % 1000) * 1000;
-
-			if (timevalcmp(&elapsed, &lowpri_IO_window, <)) {
-			        struct uthread	*ut;
-
-				/*
-				 * I'd really like to do the IOSleep here, but
-				 * we may be holding all kinds of filesystem related locks
-				 * and the pages for this I/O marked 'busy'...
-				 * we don't want to cause a normal task to block on
-				 * one of these locks while we're throttling a task marked
-				 * for low priority I/O... we'll mark the uthread and
-				 * do the delay just before we return from the system
-				 * call that triggered this I/O or from vnode_pagein
-				 */
-				ut = get_bsdthread_info(current_thread());
-				ut->uu_lowpri_delay = lowpri_IO_delay_msecs;
+			/*
+			 * I'd really like to do the IOSleep here, but
+			 * we may be holding all kinds of filesystem related locks
+			 * and the pages for this I/O marked 'busy'...
+			 * we don't want to cause a normal task to block on
+			 * one of these locks while we're throttling a task marked
+			 * for low priority I/O... we'll mark the uthread and
+			 * do the delay just before we return from the system
+			 * call that triggered this I/O or from vnode_pagein
+			 */
+			if(buf_vnode(bp)->v_mount != NULL)
+                                ut->v_mount = buf_vnode(bp)->v_mount;
+			if (ut->uu_lowpri_window == 0) {
+				ut->uu_lowpri_window = lowpri_IO_initial_window_msecs;
+			} else {
+				ut->uu_lowpri_window += lowpri_IO_window_msecs_inc;
+				if (ut->uu_lowpri_window > lowpri_max_window_msecs)
+					ut->uu_lowpri_window = lowpri_max_window_msecs;
 			}
 		}
 	}
@@ -720,18 +759,15 @@ spec_blockmap(__unused struct vnop_blockmap_args *ap)
  * Device close routine
  */
 int
-spec_close(ap)
-	struct vnop_close_args /* {
-		struct vnode *a_vp;
-		int  a_fflag;
-		vfs_context_t a_context;
-	} */ *ap;
+spec_close(struct vnop_close_args *ap)
 {
-	register struct vnode *vp = ap->a_vp;
+	struct vnode *vp = ap->a_vp;
 	dev_t dev = vp->v_rdev;
 	int (*devclose)(dev_t, int, int, struct proc *);
 	int mode, error;
+	int flags = ap->a_fflag;
 	struct proc *p = vfs_context_proc(ap->a_context);
+	struct session *sessp;
 
 	switch (vp->v_type) {
 
@@ -745,18 +781,30 @@ spec_close(ap)
 		 * if the reference count is 2 (this last descriptor
 		 * plus the session), release the reference from the session.
 		 */
-		if (vcount(vp) == 2 && p &&
-		    vp == p->p_session->s_ttyvp) {
-			p->p_session->s_ttyvp = NULL;
-			vnode_rele(vp);
+		sessp = proc_session(p);
+		if (sessp != SESSION_NULL) {
+			if ((vcount(vp) == 2) && 
+		    		(vp == sessp->s_ttyvp)) {
+				session_lock(sessp);
+				sessp->s_ttyvp = NULL;
+				sessp->s_ttyvid = 0;
+				sessp->s_ttyp = NULL;
+				sessp->s_ttypgrpid = NO_PID;
+				session_unlock(sessp);
+				vnode_rele(vp);
+			}
+			session_rele(sessp);
 		}
-		/*
-		 * close on last reference.
-		 */
-		if (vcount(vp) > 1)
-			return (0);
+
 		devclose = cdevsw[major(dev)].d_close;
 		mode = S_IFCHR;
+		/*
+		 * close on last reference or on vnode revoke call
+		 */
+		if ((flags & IO_REVOKE) != 0)
+			break;
+		if (vcount(vp) > 1)
+			return (0);
 		break;
 
 	case VBLK:
@@ -810,22 +858,17 @@ spec_close(ap)
 
 	default:
 		panic("spec_close: not special");
+		return(EBADF);
 	}
 
-	return ((*devclose)(dev, ap->a_fflag, mode, p));
+	return ((*devclose)(dev, flags, mode, p));
 }
 
 /*
  * Return POSIX pathconf information applicable to special devices.
  */
 int
-spec_pathconf(ap)
-	struct vnop_pathconf_args /* {
-		struct vnode *a_vp;
-		int a_name;
-		int *a_retval;
-		vfs_context_t a_context;
-	} */ *ap;
+spec_pathconf(struct vnop_pathconf_args *ap)
 {
 
 	switch (ap->a_name) {
@@ -842,7 +885,7 @@ spec_pathconf(ap)
 		*ap->a_retval = PIPE_BUF;
 		return (0);
 	case _PC_CHOWN_RESTRICTED:
-		*ap->a_retval = 1;
+		*ap->a_retval = 200112;		/* _POSIX_CHOWN_RESTRICTED */
 		return (0);
 	case _PC_VDISABLE:
 		*ap->a_retval = _POSIX_VDISABLE;
@@ -863,27 +906,11 @@ spec_ebadf(__unused void *dummy)
 	return (EBADF);
 }
 
-/*
- * Special device bad operation
- */
-int
-spec_badop()
-{
-
-	panic("spec_badop called");
-	/* NOTREACHED */
-}
-
 /* Blktooff derives file offset from logical block number */
 int
-spec_blktooff(ap)
-	struct vnop_blktooff_args /* {
-		struct vnode *a_vp;
-		daddr64_t a_lblkno;
-		off_t *a_offset;    
-	} */ *ap;
+spec_blktooff(struct vnop_blktooff_args *ap)
 {
-	register struct vnode *vp = ap->a_vp;
+	struct vnode *vp = ap->a_vp;
 
 	switch (vp->v_type) {
 	case VCHR:
@@ -905,14 +932,9 @@ spec_blktooff(ap)
 
 /* Offtoblk derives logical block number from file offset */
 int
-spec_offtoblk(ap)
-	struct vnop_offtoblk_args /* {
-		struct vnode *a_vp;
-		off_t a_offset;    
-		daddr64_t *a_lblkno;
-	} */ *ap;
+spec_offtoblk(struct vnop_offtoblk_args *ap)
 {
-	register struct vnode *vp = ap->a_vp;
+	struct vnode *vp = ap->a_vp;
 
 	switch (vp->v_type) {
 	case VCHR:

@@ -1,23 +1,35 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
  */
 
 #ifndef _SYS_KAUTH_H
@@ -25,6 +37,7 @@
 
 #include <sys/appleapiopts.h>
 #include <sys/cdefs.h>
+#include <mach/boolean.h>
 
 #ifdef __APPLE_API_EVOLVING
 
@@ -62,7 +75,11 @@ typedef struct {
 #define KAUTH_NTSID_SIZE(_s)	(KAUTH_NTSID_HDRSIZE + ((_s)->sid_authcount * sizeof(u_int32_t)))
 
 /*
- * External lookup message payload
+ * External lookup message payload; this structure is shared between the
+ * kernel group membership resolver, and the user space group membership
+ * resolver daemon, and is use to communicate resolution requests from the
+ * kernel to user space, and the result of that request from user space to
+ * the kernel.
  */
 struct kauth_identity_extlookup {
 	u_int32_t	el_seqno;	/* request sequence number */
@@ -176,17 +193,32 @@ extern kauth_cred_t kauth_cred_proc_ref(proc_t procp);
 extern kauth_cred_t kauth_cred_alloc(void);
 extern kauth_cred_t kauth_cred_create(kauth_cred_t cred);
 extern void	kauth_cred_ref(kauth_cred_t _cred);
-extern void	kauth_cred_rele(kauth_cred_t _cred);
+/* Use kauth_cred_unref(), not kauth_cred_rele() */
+extern void	kauth_cred_rele(kauth_cred_t _cred) __deprecated;
 extern kauth_cred_t kauth_cred_dup(kauth_cred_t cred);
 extern kauth_cred_t kauth_cred_copy_real(kauth_cred_t cred);
 extern void	kauth_cred_unref(kauth_cred_t *_cred);
-extern kauth_cred_t	kauth_cred_setuid(kauth_cred_t cred, uid_t uid);
-extern kauth_cred_t	kauth_cred_seteuid(kauth_cred_t cred, uid_t euid);
-extern kauth_cred_t	kauth_cred_setgid(kauth_cred_t cred, gid_t gid);
-extern kauth_cred_t	kauth_cred_setegid(kauth_cred_t cred, gid_t egid);
+extern kauth_cred_t	kauth_cred_setresuid(kauth_cred_t cred, uid_t ruid, uid_t euid, uid_t svuid, uid_t gmuid);
+extern kauth_cred_t	kauth_cred_setresgid(kauth_cred_t cred, gid_t rgid, gid_t egid, gid_t svgid);
 extern kauth_cred_t kauth_cred_setuidgid(kauth_cred_t cred, uid_t uid, gid_t gid);
 extern kauth_cred_t kauth_cred_setsvuidgid(kauth_cred_t cred, uid_t uid, gid_t gid);
 extern kauth_cred_t	kauth_cred_setgroups(kauth_cred_t cred, gid_t *groups, int groupcount, uid_t gmuid);
+struct uthread;
+extern void	kauth_cred_uthread_update(struct uthread *, proc_t);
+#if CONFIG_MACF
+struct label;
+extern kauth_cred_t	kauth_cred_label_update(kauth_cred_t cred, struct label *label);
+extern int kauth_proc_label_update(struct proc *p, struct label *label);
+extern int kauth_proc_label_update_execve(struct proc *p, struct vfs_context *ctx, struct vnode *vp, struct label *scriptlabel, struct label *execlabel);
+#else
+/* this is a temp hack to cover us when MAC is not built in a kernel configuration. 
+ * Since we cannot build our export list based on the kernel configuration we need
+ * to define a stub. 
+ */
+extern kauth_cred_t	kauth_cred_label_update(kauth_cred_t cred, void *label);
+extern int kauth_proc_label_update(struct proc *p, void *label);
+#endif
+
 extern kauth_cred_t kauth_cred_find(kauth_cred_t cred);
 extern int	kauth_cred_getgroups(gid_t *_groups, int *_groupcount);
 extern int	kauth_cred_assume(uid_t _uid);
@@ -206,12 +238,16 @@ extern int      kauth_cred_gid2ntsid(gid_t _gid, ntsid_t *_sidp);
 extern int      kauth_cred_guid2ntsid(guid_t *_guid, ntsid_t *_sidp);
 extern int	kauth_cred_ismember_gid(kauth_cred_t _cred, gid_t _gid, int *_resultp);
 extern int	kauth_cred_ismember_guid(kauth_cred_t _cred, guid_t *_guidp, int *_resultp);
+extern int	kauth_cred_gid_subset(kauth_cred_t _cred1, kauth_cred_t _cred2, int *_resultp);
+
+struct auditinfo;
+extern kauth_cred_t kauth_cred_setauditinfo(kauth_cred_t, struct auditinfo *);
 
 extern int	kauth_cred_supplementary_register(const char *name, int *ident);
 extern int	kauth_cred_supplementary_add(kauth_cred_t cred, int ident, const void *data, size_t datasize);
 extern int	kauth_cred_supplementary_remove(kauth_cred_t cred, int ident);
 
-/* NOT KPI - fast path for in-kernel code only */
+/* currently only exported in unsupported for use by seatbelt */
 extern int	kauth_cred_issuser(kauth_cred_t _cred);
 
 
@@ -256,6 +292,12 @@ struct kauth_ace {
 #define KAUTH_ACE_ONLY_INHERIT		(1<<8)
 #define KAUTH_ACE_SUCCESS		(1<<9)	/* not implemented (AUDIT/ALARM) */
 #define KAUTH_ACE_FAILURE		(1<<10)	/* not implemented (AUDIT/ALARM) */
+/* All flag bits controlling ACE inheritance */
+#define KAUTH_ACE_INHERIT_CONTROL_FLAGS		\
+		(KAUTH_ACE_FILE_INHERIT |	\
+		 KAUTH_ACE_DIRECTORY_INHERIT |	\
+		 KAUTH_ACE_LIMIT_INHERIT |	\
+		 KAUTH_ACE_ONLY_INHERIT)
 	kauth_ace_rights_t ace_rights;		/* scope specific */
 	/* These rights are never tested, but may be present in an ACL */
 #define KAUTH_ACE_GENERIC_ALL		(1<<21) 
@@ -368,6 +410,12 @@ typedef struct kauth_filesec *kauth_filesec_t;
 #define	KAUTH_ENDIAN_HOST	0x00000001	/* set host endianness */
 #define	KAUTH_ENDIAN_DISK	0x00000002	/* set disk endianness */
 
+#endif /* KERNEL || <sys/acl.h> */
+
+
+#ifdef KERNEL
+
+/* KPI */
 __BEGIN_DECLS
 kauth_filesec_t	kauth_filesec_alloc(int size);
 void		kauth_filesec_free(kauth_filesec_t fsp);
@@ -375,10 +423,6 @@ int		kauth_copyinfilesec(user_addr_t xsecurity, kauth_filesec_t *xsecdestpp);
  void		kauth_filesec_acl_setendian(int, kauth_filesec_t, kauth_acl_t);
 __END_DECLS	
 
-#endif /* KERNEL || <sys/acl.h> */
-
-
-#ifdef KERNEL
 /*
  * Scope management.
  */
@@ -409,6 +453,7 @@ struct kauth_acl_eval {
 	kauth_ace_rights_t	ae_requested;
 	kauth_ace_rights_t	ae_residual;
 	int			ae_result;
+        boolean_t		ae_found_deny;
 	int			ae_options;
 #define KAUTH_AEVAL_IS_OWNER	(1<<0)		/* authorizing operation for owner */
 #define KAUTH_AEVAL_IN_GROUP	(1<<1)		/* authorizing operation for groupmember */
@@ -479,9 +524,10 @@ __END_DECLS
 #define KAUTH_FILEOP_OPEN			1
 #define KAUTH_FILEOP_CLOSE			2
 #define KAUTH_FILEOP_RENAME			3
-#define KAUTH_FILEOP_EXCHANGE		4
+#define KAUTH_FILEOP_EXCHANGE			4
 #define KAUTH_FILEOP_LINK			5
 #define KAUTH_FILEOP_EXEC			6
+#define KAUTH_FILEOP_DELETE			7
 
 /*
  * arguments passed to KAUTH_FILEOP_OPEN listeners
@@ -503,6 +549,9 @@ __END_DECLS
  * arguments passed to KAUTH_FILEOP_EXEC listeners
  *		arg0 is pointer to vnode (vnode *) for executable.
  *		arg1 is pointer to path (char *) to executable.
+ * arguments passed to KAUTH_FILEOP_DELETE listeners
+ *		arg0 is pointer to vnode (vnode *) of file/dir that was deleted.
+ *		arg1 is pointer to path (char *) of file/dir that was deleted.
  */
  
 /* Flag values returned to close listeners. */
@@ -578,6 +627,27 @@ __END_DECLS
  */
 #define KAUTH_VNODE_NOIMMUTABLE			(1<<30)
 
+
+/*
+ * fake right that is composed by the following...
+ * vnode must have search for owner, group and world allowed
+ * plus there must be no deny modes present for SEARCH... this fake
+ * right is used by the fast lookup path to avoid checking
+ * for an exact match on the last credential to lookup
+ * the component being acted on
+ */
+#define KAUTH_VNODE_SEARCHBYANYONE		(1<<29)
+
+
+/*
+ * when passed as an 'action' to "vnode_uncache_authorized_actions"
+ * it indicates that all of the cached authorizations for that
+ * vnode should be invalidated 
+ */
+#define	KAUTH_INVALIDATE_CACHED_RIGHTS		((kauth_action_t)~0)
+
+
+
 /* The expansions of the GENERIC bits at evaluation time */
 #define KAUTH_VNODE_GENERIC_READ_BITS	(KAUTH_VNODE_READ_DATA |		\
 					KAUTH_VNODE_READ_ATTRIBUTES |		\
@@ -629,7 +699,7 @@ __END_DECLS
 # ifndef _FN_KPRINTF
 #  define	_FN_KPRINTF
 void kprintf(const char *fmt, ...);
-# endif
+# endif	/* !_FN_KPRINTF */
 # define KAUTH_DEBUG_ENABLE
 # define K_UUID_FMT "%08x:%08x:%08x:%08x"
 # define K_UUID_ARG(_u) *(int *)&_u.g_guid[0],*(int *)&_u.g_guid[4],*(int *)&_u.g_guid[8],*(int *)&_u.g_guid[12]
@@ -643,24 +713,23 @@ void kprintf(const char *fmt, ...);
 		    __PRETTY_FUNCTION__, __LINE__ ,					\
 		    ##args);								\
 	} while(0)
-#else
+#else	/* !0 */
 # define KAUTH_DEBUG(fmt, args...)		do { } while (0)
 # define VFS_DEBUG(ctx, vp, fmt, args...)	do { } while(0)
-#endif
+#endif	/* !0 */
 
 /*
  * Initialisation.
  */
 extern lck_grp_t *kauth_lck_grp;
 __BEGIN_DECLS
-extern void	kauth_init(void);
-extern void	kauth_identity_init(void);
-extern void	kauth_groups_init(void);
-extern void	kauth_cred_init(void);
-extern void	kauth_resolver_init(void);
+extern void	kauth_init(void) __attribute__((section("__TEXT, initcode")));
+extern void	kauth_identity_init(void) __attribute__((section("__TEXT, initcode")));
+extern void	kauth_groups_init(void) __attribute__((section("__TEXT, initcode")));
+extern void	kauth_cred_init(void) __attribute__((section("__TEXT, initcode")));
+extern void	kauth_resolver_init(void) __attribute__((section("__TEXT, initcode")));
 __END_DECLS
-#endif
+#endif	/* KERNEL */
 
 #endif /* __APPLE_API_EVOLVING */
 #endif /* _SYS_KAUTH_H */
-

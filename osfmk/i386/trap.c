@@ -1,56 +1,63 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
- * @OSF_COPYRIGHT@
- */
+* @OSF_COPYRIGHT@
+*/
 /* 
- * Mach Operating System
- * Copyright (c) 1991,1990,1989,1988 Carnegie Mellon University
- * All Rights Reserved.
- * 
- * Permission to use, copy, modify and distribute this software and its
- * documentation is hereby granted, provided that both the copyright
- * notice and this permission notice appear in all copies of the
- * software, derivative works or modified versions, and any portions
- * thereof, and that both notices appear in supporting documentation.
- * 
- * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
- * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
- * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
- * Carnegie Mellon requests users of this software to return to
- * 
- *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
- *  School of Computer Science
- *  Carnegie Mellon University
- *  Pittsburgh PA 15213-3890
- * 
- * any improvements or extensions that they make and grant Carnegie Mellon
- * the rights to redistribute these changes.
- */
+* Mach Operating System
+* Copyright (c) 1991,1990,1989,1988 Carnegie Mellon University
+* All Rights Reserved.
+* 
+* Permission to use, copy, modify and distribute this software and its
+* documentation is hereby granted, provided that both the copyright
+* notice and this permission notice appear in all copies of the
+* software, derivative works or modified versions, and any portions
+* thereof, and that both notices appear in supporting documentation.
+* 
+* CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
+* CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
+* ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
+* 
+* Carnegie Mellon requests users of this software to return to
+* 
+*  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
+*  School of Computer Science
+*  Carnegie Mellon University
+*  Pittsburgh PA 15213-3890
+* 
+* any improvements or extensions that they make and grant Carnegie Mellon
+* the rights to redistribute these changes.
+*/
 /*
- */
+*/
+
 /*
- * Hardware trap/fault handler.
+* Hardware trap/fault handler.
  */
 
 #include <mach_kdb.h>
@@ -99,7 +106,6 @@
 
 #include <string.h>
 
-#include <i386/io_emulate.h>
 #include <i386/postcode.h>
 #include <i386/mp_desc.h>
 #include <i386/proc_reg.h>
@@ -115,6 +121,13 @@ static void set_recovery_ip(x86_saved_state32_t *saved_state, vm_offset_t ip);
 
 perfCallback perfTrapHook = NULL; /* Pointer to CHUD trap hook routine */
 perfCallback perfASTHook  = NULL; /* Pointer to CHUD AST hook routine */
+
+#if CONFIG_DTRACE
+/* See <rdar://problem/4613924> */
+perfCallback tempDTraceTrapHook = NULL; /* Pointer to DTrace fbt trap hook routine */
+
+extern boolean_t dtrace_tally_fault(user_addr_t);
+#endif
 
 void
 thread_syscall_return(
@@ -196,17 +209,17 @@ user_page_fault_continue(
 			 kern_return_t	kr)
 {
 	thread_t	thread = current_thread();
-	x86_saved_state_t *regs = USER_STATE(thread);
 	ast_t		*myast;
 	boolean_t	intr;
 	user_addr_t	vaddr;
 #if	MACH_KDB
+	x86_saved_state_t *regs = USER_STATE(thread);
 	int		err;
 	int		trapno;
-#endif
 
 	assert((is_saved_state32(regs) && !thread_is_64bit(thread)) ||
 	       (is_saved_state64(regs) &&  thread_is_64bit(thread)));
+#endif
 
         if (thread_is_64bit(thread)) {
 	        x86_saved_state64_t	*uregs;
@@ -240,8 +253,8 @@ user_page_fault_continue(
 		    (err & T_PF_WRITE) &&
 		    db_find_watchpoint(thread->map,
 				       (vm_offset_t)vaddr,
-				       regs))
-			kdb_trap(T_WATCHPOINT, 0, regs);
+				       saved_state32(regs)))
+			kdb_trap(T_WATCHPOINT, 0, saved_state32(regs));
 #endif	/* MACH_KDB */
 		intr = ml_set_interrupts_enabled(FALSE);
 		myast = ast_pending();
@@ -258,7 +271,7 @@ user_page_fault_continue(
 
 #if	MACH_KDB
 	if (debug_all_traps_with_kdb &&
-	    kdb_trap(trapno, err, regs)) {
+	    kdb_trap(trapno, err, saved_state32(regs))) {
 		thread_exception_return();
 		/*NOTREACHED*/
 	}
@@ -282,6 +295,7 @@ extern struct recovery	recover_table_end[];
 const char *	trap_type[] = {TRAP_NAMES};
 unsigned 	TRAP_TYPES = sizeof(trap_type)/sizeof(trap_type[0]);
 
+
 static inline void
 reset_dr7(void)
 {
@@ -304,7 +318,7 @@ kernel_trap(
 	int			code;
 	user_addr_t		vaddr;
 	int			type;
-	vm_map_t		map;
+	vm_map_t		map = 0;	/* protected by T_PAGE_FAULT */
 	kern_return_t		result = KERN_FAILURE;
 	thread_t		thread;
 	ast_t			*myast;
@@ -350,17 +364,28 @@ kernel_trap(
 			return;
 		}
 	}
+
+#if CONFIG_DTRACE
+	if (tempDTraceTrapHook) {
+		if (tempDTraceTrapHook(type, state, 0, 0) == KERN_SUCCESS) {
+			/*
+			 * If it succeeds, we are done...
+			 */
+			return;
+		}
+	}
+#endif /* CONFIG_DTRACE */
+
 	/*
 	 * we come here with interrupts off as we don't want to recurse
 	 * on preemption below.  but we do want to re-enable interrupts
 	 * as soon we possibly can to hold latency down
 	 */
 	if (T_PREEMPT == type) {
-
-	        KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_EXCP_KTRAP_x86, type)) | DBG_FUNC_NONE,
-				      0, 0, 0, kern_ip, 0);
-
 	        ast_taken(AST_PREEMPTION, FALSE);
+
+		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_EXCP_KTRAP_x86, type)) | DBG_FUNC_NONE,
+				      0, 0, 0, kern_ip, 0);
 		return;
 	}
 	
@@ -425,8 +450,13 @@ kernel_trap(
 	        fpSSEexterrflt();
 		return;
  	    case T_DEBUG:
+#if MACH_KDP
 		    if ((saved_state->efl & EFL_TF) == 0
-		    && !kdp_has_active_watchpoints) {
+		    && !kdp_has_active_watchpoints)
+#else
+		    if ((saved_state->efl & EFL_TF) == 0)
+#endif
+		    {
 			    /* We've somehow encountered a debug
 			     * register match that does not belong
 			     * to the kernel debugger.
@@ -434,7 +464,7 @@ kernel_trap(
 			     */
 			    reset_dr7();
 			    return;
-			    }
+		    }
 		    goto debugger_entry;
 	    case T_PAGE_FAULT:
 		/*
@@ -471,6 +501,19 @@ kernel_trap(
 			goto look_for_watchpoints;
 		}
 #endif	/* MACH_KDB */
+
+#if CONFIG_DTRACE
+		if (thread->options & TH_OPT_DTRACE) {	/* Executing under dtrace_probe? */
+			if (dtrace_tally_fault(vaddr)) { /* Should a fault under dtrace be ignored? */
+				/*
+				 * DTrace has "anticipated" the possibility of this fault, and has
+				 * established the suitable recovery state. Drop down now into the
+				 * recovery handling code in "case T_GENERAL_PROTECTION:". 
+				 */
+				goto FALL_THROUGH;
+			}
+		}
+#endif /* CONFIG_DTRACE */
 
 		result = vm_fault(map,
 				  vm_map_trunc_page(vaddr),
@@ -527,6 +570,9 @@ look_for_watchpoints:
 		/*
 		 * fall through
 		 */
+#if CONFIG_DTRACE
+FALL_THROUGH:
+#endif /* CONFIG_DTRACE */
 
 	    case T_GENERAL_PROTECTION:
 		/*
@@ -578,10 +624,9 @@ restart_debugger:
                 if (current_debugger != KDB_CUR_DB) {
 			if (kdp_i386_trap(type, saved_state, result, vaddr))
 				return;
-		}
+		} else {
 #endif /* MACH_KDP */
 #if MACH_KDB
-		else
 			if (kdb_trap(type, code, saved_state)) {
 				if (switch_debugger) {
 					current_debugger = KDP_CUR_DB;
@@ -591,6 +636,9 @@ restart_debugger:
 				return;
 			}
 #endif /* MACH_KDB */
+#if MACH_KDP
+		}
+#endif
 	}
 
 	panic_trap(saved_state);
@@ -616,6 +664,10 @@ panic_trap(x86_saved_state32_t *regs)
 	uint32_t	cr3 = get_cr3();
 	uint32_t	cr4 = get_cr4();
 
+	/*
+	 * Issue an I/O port read if one has been requested - this is an
+	 * event logic analyzers can use as a trigger point.
+	 */
 	panic_io_port_read();
 
 	kprintf("panic trap number 0x%x, eip 0x%x\n", regs->trapno, regs->eip);
@@ -624,16 +676,17 @@ panic_trap(x86_saved_state32_t *regs)
 
 	if (regs->trapno < TRAP_TYPES)
 	        trapname = trap_type[regs->trapno];
-
-	panic("Unresolved kernel trap (CPU %d, Type %d=%s), registers:\n"
+#undef panic
+	panic("Kernel trap at 0x%08x, type %d=%s, registers:\n"
 	      "CR0: 0x%08x, CR2: 0x%08x, CR3: 0x%08x, CR4: 0x%08x\n"
 	      "EAX: 0x%08x, EBX: 0x%08x, ECX: 0x%08x, EDX: 0x%08x\n"
 	      "CR2: 0x%08x, EBP: 0x%08x, ESI: 0x%08x, EDI: 0x%08x\n"
-	      "EFL: 0x%08x, EIP: 0x%08x, CS:  0x%08x, DS:  0x%08x\n",
-	      cpu_number(), regs->trapno, trapname, cr0, cr2, cr3, cr4,
+	      "EFL: 0x%08x, EIP: 0x%08x, CS:  0x%08x, DS:  0x%08x\n"
+	      "Error code: 0x%08x\n",
+	      regs->eip, regs->trapno, trapname, cr0, cr2, cr3, cr4,
 	      regs->eax,regs->ebx,regs->ecx,regs->edx,
 	      regs->cr2,regs->ebp,regs->esi,regs->edi,
-	      regs->efl,regs->eip,regs->cs, regs->ds);
+	      regs->efl,regs->eip,regs->cs, regs->ds, regs->err);
 	/*
 	 * This next statement is not executed,
 	 * but it's needed to stop the compiler using tail call optimization
@@ -651,16 +704,25 @@ extern void     kprintf_break_lock(void);
  * Kernel stack overflow is one route here.
  */
 void
-panic_double_fault(int code)
+panic_double_fault(
+#if CONFIG_NO_PANIC_STRINGS
+		__unused int code
+#else
+		int code
+#endif
+		)
 {
+#if MACH_KDP || !CONFIG_NO_PANIC_STRINGS
 	struct i386_tss *my_ktss = current_ktss();
+#endif
 
 	/* Set postcode (DEBUG only) */
 	postcode(PANIC_DOUBLE_FAULT);
 
-/* Issue an I/O port read if one has been requested - this is an event logic
- * analyzers can use as a trigger point.
- */
+	/*
+	 * Issue an I/O port read if one has been requested - this is an
+	 * event logic analyzers can use as a trigger point.
+	 */
 	panic_io_port_read();
 
 	/*
@@ -676,13 +738,13 @@ panic_double_fault(int code)
 	panic_i386_backtrace((void *) my_ktss->ebp, 10);
 #endif
 
-	panic("Double fault (CPU:%d, thread:%p, code:0x%x),"
+	panic("Double fault at 0x%08x, thread:%p, code:0x%x, "
 	      "registers:\n"
 	      "CR0: 0x%08x, CR2: 0x%08x, CR3: 0x%08x, CR4: 0x%08x\n"
 	      "EAX: 0x%08x, EBX: 0x%08x, ECX: 0x%08x, EDX: 0x%08x\n"
 	      "ESP: 0x%08x, EBP: 0x%08x, ESI: 0x%08x, EDI: 0x%08x\n"
 	      "EFL: 0x%08x, EIP: 0x%08x\n",
-	      cpu_number(), current_thread(), code,
+	      my_ktss->eip, current_thread(), code,
 	      get_cr0(), get_cr2(), get_cr3(), get_cr4(),
 	      my_ktss->eax, my_ktss->ebx, my_ktss->ecx, my_ktss->edx,
 	      my_ktss->esp, my_ktss->ebp, my_ktss->esi, my_ktss->edi,
@@ -694,12 +756,26 @@ panic_double_fault(int code)
  * Called from locore on a special reserved stack after a machine-check
  */
 void
-panic_machine_check(int code)
+panic_machine_check(
+#if CONFIG_NO_PANIC_STRINGS
+		__unused int code
+#else
+		int code
+#endif
+		)
 {
+#if !CONFIG_NO_PANIC_STRINGS
 	struct i386_tss *my_ktss = current_ktss();
+#endif
 
 	/* Set postcode (DEBUG only) */
 	postcode(PANIC_MACHINE_CHECK);
+
+	/*
+	 * Issue an I/O port read if one has been requested - this is an
+	 * event logic analyzers can use as a trigger point.
+	 */
+	panic_io_port_read();
 
 	/*
 	 * Break kprintf lock in case of recursion,
@@ -715,13 +791,13 @@ panic_machine_check(int code)
 	/*
 	 * And that's all folks, we don't attempt recovery...
 	 */
-	panic("Machine-check (CPU:%d, thread:%p, code:0x%x),"
+	panic("Machine-check at 0x%08x, thread:%p, code:0x%x, "
 	      "registers:\n"
 	      "CR0: 0x%08x, CR2: 0x%08x, CR3: 0x%08x, CR4: 0x%08x\n"
 	      "EAX: 0x%08x, EBX: 0x%08x, ECX: 0x%08x, EDX: 0x%08x\n"
 	      "ESP: 0x%08x, EBP: 0x%08x, ESI: 0x%08x, EDI: 0x%08x\n"
 	      "EFL: 0x%08x, EIP: 0x%08x\n",
-	      cpu_number(), current_thread(), code,
+	      my_ktss->eip, current_thread(), code,
 	      get_cr0(), get_cr2(), get_cr3(), get_cr4(),
 	      my_ktss->eax, my_ktss->ebx, my_ktss->ecx, my_ktss->edx,
 	      my_ktss->esp, my_ktss->ebp, my_ktss->esi, my_ktss->edi,
@@ -735,6 +811,12 @@ panic_double_fault64(x86_saved_state_t *esp)
 	postcode(PANIC_DOUBLE_FAULT);
 
 	/*
+	 * Issue an I/O port read if one has been requested - this is an
+	 * event logic analyzers can use as a trigger point.
+	 */
+	panic_io_port_read();
+
+	/*
 	 * Break kprintf lock in case of recursion,
 	 * and record originally faulted instruction address.
 	 */
@@ -744,8 +826,10 @@ panic_double_fault64(x86_saved_state_t *esp)
 	 * Dump the interrupt stack frame at last kernel entry.
 	 */
 	if (is_saved_state64(esp)) {
+#if !CONFIG_NO_PANIC_STRINGS
 		x86_saved_state64_t	*ss64p = saved_state64(esp);
-		panic("Double fault (CPU:%d, thread:%p, trapno:0x%x, err:0x%qx),"
+#endif
+		panic("Double fault thread:%p, trapno:0x%x, err:0x%qx, "
 		      "registers:\n"
 		      "CR0: 0x%08x, CR2: 0x%08x, CR3: 0x%08x, CR4: 0x%08x\n"
 		      "RAX: 0x%016qx, RBX: 0x%016qx, RCX: 0x%016qx, RDX: 0x%016qx\n"
@@ -753,7 +837,7 @@ panic_double_fault64(x86_saved_state_t *esp)
 		      "R8:  0x%016qx, R9:  0x%016qx, R10: 0x%016qx, R11: 0x%016qx\n"
 		      "R12: 0x%016qx, R13: 0x%016qx, R14: 0x%016qx, R15: 0x%016qx\n"
 		      "RFL: 0x%016qx, RIP: 0x%016qx, CR2: 0x%016qx\n",
-		      cpu_number(), current_thread(), ss64p->isf.trapno, ss64p->isf.err,
+		      current_thread(), ss64p->isf.trapno, ss64p->isf.err,
 		      get_cr0(), get_cr2(), get_cr3(), get_cr4(),
 		      ss64p->rax, ss64p->rbx, ss64p->rcx, ss64p->rdx,
 		      ss64p->isf.rsp, ss64p->rbp, ss64p->rsi, ss64p->rdi,
@@ -761,14 +845,16 @@ panic_double_fault64(x86_saved_state_t *esp)
 		      ss64p->r12, ss64p->r13, ss64p->r14, ss64p->r15,
 		      ss64p->isf.rflags, ss64p->isf.rip, ss64p->cr2);
 	} else {
+#if !CONFIG_NO_PANIC_STRINGS
 		x86_saved_state32_t	*ss32p = saved_state32(esp);
-		panic("Double fault (CPU:%d, thread:%p, trapno:0x%x, err:0x%x),"
+#endif
+		panic("Double fault at 0x%08x, thread:%p, trapno:0x%x, err:0x%x),"
 		      "registers:\n"
 		      "CR0: 0x%08x, CR2: 0x%08x, CR3: 0x%08x, CR4: 0x%08x\n"
 		      "EAX: 0x%08x, EBX: 0x%08x, ECX: 0x%08x, EDX: 0x%08x\n"
 		      "ESP: 0x%08x, EBP: 0x%08x, ESI: 0x%08x, EDI: 0x%08x\n"
 		      "EFL: 0x%08x, EIP: 0x%08x\n",
-		      cpu_number(), current_thread(), ss32p->trapno, ss32p->err,
+		      ss32p->eip, current_thread(), ss32p->trapno, ss32p->err,
 		      get_cr0(), get_cr2(), get_cr3(), get_cr4(),
 		      ss32p->eax, ss32p->ebx, ss32p->ecx, ss32p->edx,
 		      ss32p->uesp, ss32p->ebp, ss32p->esi, ss32p->edi,
@@ -786,6 +872,12 @@ panic_machine_check64(x86_saved_state_t *esp)
 	postcode(PANIC_MACHINE_CHECK);
 
 	/*
+	 * Issue an I/O port read if one has been requested - this is an
+	 * event logic analyzers can use as a trigger point.
+	 */
+	panic_io_port_read();
+
+	/*
 	 * Break kprintf lock in case of recursion,
 	 * and record originally faulted instruction address.
 	 */
@@ -800,8 +892,10 @@ panic_machine_check64(x86_saved_state_t *esp)
 	 * And that's all folks, we don't attempt recovery...
 	 */
 	if (is_saved_state64(esp)) {
+#if !CONFIG_NO_PANIC_STRINGS
 		x86_saved_state64_t	*ss64p = saved_state64(esp);
-		panic("Machine Check (CPU:%d, thread:%p, trapno:0x%x, err:0x%qx),"
+#endif
+		panic("Machine Check thread:%p, trapno:0x%x, err:0x%qx, "
 		      "registers:\n"
 		      "CR0: 0x%08x, CR2: 0x%08x, CR3: 0x%08x, CR4: 0x%08x\n"
 		      "RAX: 0x%016qx, RBX: 0x%016qx, RCX: 0x%016qx, RDX: 0x%016qx\n"
@@ -809,7 +903,7 @@ panic_machine_check64(x86_saved_state_t *esp)
 		      "R8:  0x%016qx, R9:  0x%016qx, R10: 0x%016qx, R11: 0x%016qx\n"
 		      "R12: 0x%016qx, R13: 0x%016qx, R14: 0x%016qx, R15: 0x%016qx\n"
 		      "RFL: 0x%016qx, RIP: 0x%016qx\n",
-		      cpu_number(), current_thread(), ss64p->isf.trapno, ss64p->isf.err,
+		      current_thread(), ss64p->isf.trapno, ss64p->isf.err,
 		      get_cr0(), get_cr2(), get_cr3(), get_cr4(),
 		      ss64p->rax, ss64p->rbx, ss64p->rcx, ss64p->rdx,
 		      ss64p->isf.rsp, ss64p->rbp, ss64p->rsi, ss64p->rdi,
@@ -817,20 +911,26 @@ panic_machine_check64(x86_saved_state_t *esp)
 		      ss64p->r12, ss64p->r13, ss64p->r14, ss64p->r15,
 		      ss64p->isf.rflags, ss64p->isf.rip);
 	} else {
+#if !CONFIG_NO_PANIC_STRINGS
 		x86_saved_state32_t	*ss32p = saved_state32(esp);
-		panic("Machine Check (CPU:%d, thread:%p, trapno:0x%x, err:0x%x),"
+#endif
+		panic("Machine Check at 0x%08x, thread:%p, trapno:0x%x, err:0x%x, "
 		      "registers:\n"
 		      "CR0: 0x%08x, CR2: 0x%08x, CR3: 0x%08x, CR4: 0x%08x\n"
 		      "EAX: 0x%08x, EBX: 0x%08x, ECX: 0x%08x, EDX: 0x%08x\n"
 		      "ESP: 0x%08x, EBP: 0x%08x, ESI: 0x%08x, EDI: 0x%08x\n"
 		      "EFL: 0x%08x, EIP: 0x%08x\n",
-		      cpu_number(), current_thread(), ss32p->trapno, ss32p->err,
+		      ss32p->eip, current_thread(), ss32p->trapno, ss32p->err,
 		      get_cr0(), get_cr2(), get_cr3(), get_cr4(),
 		      ss32p->eax, ss32p->ebx, ss32p->ecx, ss32p->edx,
 		      ss32p->uesp, ss32p->ebp, ss32p->esi, ss32p->edi,
 		      ss32p->efl, ss32p->eip);
 	}
 }
+
+#if CONFIG_DTRACE
+extern kern_return_t dtrace_user_probe(x86_saved_state_t *);
+#endif
 
 /*
  *	Trap from user mode.
@@ -839,18 +939,17 @@ void
 user_trap(
 	x86_saved_state_t *saved_state)
 {
-	int		exc;
-	int		code;
-	int		err;
-	unsigned int	subcode;
-	int		type;
-	user_addr_t	vaddr;
-	vm_prot_t	prot;
-	thread_t	thread = current_thread();
-	ast_t		*myast;
-	boolean_t       intr;
-	kern_return_t	kret;
-	user_addr_t	rip;
+	int			exc;
+	int			err;
+	mach_exception_code_t 	code;
+	mach_exception_subcode_t subcode;
+	int			type;
+	user_addr_t		vaddr;
+	vm_prot_t		prot;
+	thread_t		thread = current_thread();
+	ast_t			*myast;
+	kern_return_t		kret;
+	user_addr_t		rip;
 
 	assert((is_saved_state32(saved_state) && !thread_is_64bit(thread)) ||
 	       (is_saved_state64(saved_state) &&  thread_is_64bit(thread)));
@@ -865,7 +964,7 @@ user_trap(
 		vaddr = (user_addr_t)regs->cr2;
 		rip   = (user_addr_t)regs->isf.rip;
 	} else {
-	        x86_saved_state32_t	*regs;
+		x86_saved_state32_t	*regs;
 
 		regs = saved_state32(saved_state);
 
@@ -900,6 +999,12 @@ user_trap(
 		if (perfTrapHook(type, saved_state, 0, 0) == KERN_SUCCESS)
 			return;	/* If it succeeds, we are done... */
 	}
+
+	/*
+	 * DTrace does not consume all user traps, only INT_3's for now.
+	 * Avoid needlessly calling tempDTraceTrapHook here, and let the
+	 * INT_3 case handle them.
+	 */
 
 	switch (type) {
 
@@ -941,6 +1046,10 @@ user_trap(
 			break;
 		}
 	    case T_INT3:
+#if CONFIG_DTRACE
+		if (dtrace_user_probe(saved_state) == KERN_SUCCESS)
+			return; /* If it succeeds, we are done... */
+#endif
 		exc = EXC_BREAKPOINT;
 		code = EXC_I386_BPT;
 		break;
@@ -961,15 +1070,14 @@ user_trap(
 		break;
 
 	    case T_NO_FPU:
-	    case 32:		/* XXX */
 		fpnoextflt();
 		return;
 
 	    case T_FPU_FAULT:
-		fpextovrflt();
+		fpextovrflt(); /* Propagates exception directly, doesn't return */
 		return;
 
-	    case 10:		/* invalid TSS == iret with NT flag set */
+	    case T_INVALID_TSS:	/* invalid TSS == iret with NT flag set */
 		exc = EXC_BAD_INSTRUCTION;
 		code = EXC_I386_INVTSSFLT;
 		subcode = err;
@@ -988,7 +1096,21 @@ user_trap(
 		break;
 
 	    case T_GENERAL_PROTECTION:
-		exc = EXC_BAD_INSTRUCTION;
+		/*
+		 * There's a wide range of circumstances which generate this
+		 * class of exception. From user-space, many involve bad
+		 * addresses (such as a non-canonical 64-bit address).
+		 * So we map this to EXC_BAD_ACCESS (and thereby SIGSEGV).
+		 * The trouble is cr2 doesn't contain the faulting address;
+		 * we'd need to decode the faulting instruction to really
+		 * determine this. We'll leave that to debuggers.
+		 * However, attempted execution of privileged instructions
+		 * (e.g. cli) also generate GP faults and so we map these to
+		 * to EXC_BAD_ACCESS (and thence SIGSEGV) also - rather than
+		 * EXC_BAD_INSTRUCTION which is more accurate. We just can't
+		 * win!
+		 */ 
+		exc = EXC_BAD_ACCESS;
 		code = EXC_I386_GPFLT;
 		subcode = err;
 		break;
@@ -1012,13 +1134,26 @@ user_trap(
 		break;
 
 	    case T_SSE_FLOAT_ERROR:
-	        fpSSEexterrflt();
+		fpSSEexterrflt(); /* Propagates exception directly, doesn't return */
 		return;
 
 
 	    case T_FLOATING_POINT_ERROR:
-		fpexterrflt();
+		fpexterrflt(); /* Propagates exception directly, doesn't return */
 		return;
+
+	    case T_DTRACE_RET:
+#if CONFIG_DTRACE
+		if (dtrace_user_probe(saved_state) == KERN_SUCCESS)
+			return; /* If it succeeds, we are done... */
+#endif
+		/*
+		 * If we get an INT 0x7f when we do not expect to,
+		 * treat it as an illegal instruction
+		 */
+		exc = EXC_BAD_INSTRUCTION;
+		code = EXC_I386_INVOP;
+		break;
 
 	    default:
 #if     MACH_KGDB
@@ -1026,23 +1161,17 @@ user_trap(
 		return;
 #endif  /* MACH_KGDB */
 #if	MACH_KDB
-		if (kdb_trap(type, err, saved_state))
+		if (kdb_trap(type, err, saved_state32(saved_state)))
 		    return;
 #endif	/* MACH_KDB */
-		panic("user trap");
+		panic("Unexpected user trap, type %d", type);
 		return;
 	}
-	intr = ml_set_interrupts_enabled(FALSE);
-	myast = ast_pending();
-	while (*myast & AST_ALL) {
-	        ast_taken(AST_ALL, intr);
-		ml_set_interrupts_enabled(FALSE);
-		myast = ast_pending();
-	}
-	ml_set_interrupts_enabled(intr);
-
+	/* Note: Codepaths that directly return from user_trap() have pending
+	 * ASTs processed in locore
+	 */
 	i386_exception(exc, code, subcode);
-	/*NOTREACHED*/
+	/* NOTREACHED */
 }
 
 
@@ -1083,10 +1212,10 @@ i386_astintr(int preemption)
 void
 i386_exception(
 	int	exc,
-	int	code,
-	int	subcode)
+	mach_exception_code_t code,
+	mach_exception_subcode_t subcode)
 {
-	exception_data_type_t   codes[EXCEPTION_CODE_MAX];
+	mach_exception_data_type_t   codes[EXCEPTION_CODE_MAX];
 
 	codes[0] = code;		/* new exception interface */
 	codes[1] = subcode;
@@ -1111,24 +1240,24 @@ kernel_preempt_check(void)
 	myast = ast_pending();
 
 	if ((*myast & AST_URGENT) && intr == TRUE && get_interrupt_level() == 0) {
-	        /*
+		/*
 		 * can handle interrupts and preemptions 
 		 * at this point
 		 */
-	        ml_set_interrupts_enabled(intr);
+		ml_set_interrupts_enabled(intr);
 
 		/*
 		 * now cause the PRE-EMPTION trap
 		 */
 		__asm__ volatile ("     int     $0xff");
 	} else {
-	        /*
+		/*
 		 * if interrupts were already disabled or
 		 * we're in an interrupt context, we can't
 		 * preempt...  of course if AST_URGENT
 		 * isn't set we also don't want to
 		 */
-	        ml_set_interrupts_enabled(intr);
+		ml_set_interrupts_enabled(intr);
 	}
 }
 
@@ -1223,16 +1352,14 @@ sync_iss_to_iks(x86_saved_state32_t *saved_state)
  * or user space.
  */
 void
-sync_iss_to_iks_unconditionally(__unused x86_saved_state32_t *saved_state) {
+sync_iss_to_iks_unconditionally(__unused x86_saved_state_t *saved_state) {
 	struct x86_kernel_state32 *iks;
 	vm_offset_t kstack;
-	boolean_t record_active_regs = FALSE;
 
 	if ((kstack = current_thread()->kernel_stack) != 0) {
-
 		iks = STACK_IKS(kstack);
-				/*
-		 * Show the trap handler path
+		/*
+		 * Display the trap handler path.
 		 */
 		__asm__ volatile("movl %%ebx, %0" : "=m" (iks->k_ebx));
 		__asm__ volatile("movl %%esp, %0" : "=m" (iks->k_esp));
@@ -1240,9 +1367,8 @@ sync_iss_to_iks_unconditionally(__unused x86_saved_state32_t *saved_state) {
 		__asm__ volatile("movl %%edi, %0" : "=m" (iks->k_edi));
 		__asm__ volatile("movl %%esi, %0" : "=m" (iks->k_esi));
 		/*
-		 * "Current" instruction pointer
+		 * "Current" instruction pointer.
 		 */
 		__asm__ volatile("movl $1f, %0\n1:" : "=m" (iks->k_eip));
-
 	}
 }

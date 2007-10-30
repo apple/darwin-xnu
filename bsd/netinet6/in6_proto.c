@@ -140,9 +140,8 @@ lck_mtx_t *inet6_domain_mutex;
 #define PR_LISTEN	0
 #define PR_ABRTACPTDIS	0
 
-extern struct domain inet6domain;
 extern int in6_inithead(void **, int);
-void in6_dinit(void);
+void in6_dinit(void) __attribute__((section("__TEXT, initcode")));
 
 static int rip6_pr_output(struct mbuf *m, struct socket *so, struct sockaddr_in6 *, struct mbuf *);
 
@@ -153,8 +152,8 @@ struct ip6protosw inet6sw[] = {
   ip6_init,	0,		frag6_slowtimo,	frag6_drain,
   0,
   &nousrreqs,
-  0,		0,		0
-
+  0,		0,		0,
+  { 0, 0 }, NULL, { 0 }
 },
 { SOCK_DGRAM,	&inet6domain,	IPPROTO_UDP,	PR_ATOMIC|PR_ADDR|PR_PROTOLOCK|PR_PCBLOCK,
   udp6_input,	0,		udp6_ctlinput,	ip6_ctloutput,
@@ -162,8 +161,8 @@ struct ip6protosw inet6sw[] = {
   0,		0,		0,		0,
   0, 
   &udp6_usrreqs,
-  udp_lock,	udp_unlock,	udp_getlock
-
+  udp_lock,	udp_unlock,	udp_getlock,
+  { 0, 0 }, NULL, { 0 }
 },
 { SOCK_STREAM,	&inet6domain,	IPPROTO_TCP,	PR_CONNREQUIRED|PR_WANTRCVD|PR_LISTEN|PR_PROTOLOCK|PR_PCBLOCK|PR_DISPOSE,
   tcp6_input,	0,		tcp6_ctlinput,	tcp_ctloutput,
@@ -171,12 +170,12 @@ struct ip6protosw inet6sw[] = {
 #if INET	/* don't call initialization and timeout routines twice */
   0,		0,		0,		tcp_drain,
 #else
-  tcp_init,	tcp_fasttimo,	tcp_slowtimo,	tcp_drain,
+  tcp_init,	0,	tcp_slowtimo,	tcp_drain,
 #endif
   0,
   &tcp6_usrreqs,
-  tcp_lock,	tcp_unlock,	tcp_getlock
-
+  tcp_lock,	tcp_unlock,	tcp_getlock,
+  { 0, 0 }, NULL, { 0 }
 },
 { SOCK_RAW,	&inet6domain,	IPPROTO_RAW,	PR_ATOMIC|PR_ADDR,
   rip6_input,	rip6_pr_output,	rip6_ctlinput,	rip6_ctloutput,
@@ -184,7 +183,8 @@ struct ip6protosw inet6sw[] = {
   0,		0,		0,		0,
   0,
   &rip6_usrreqs,
-  0,		rip_unlock,	0
+  0,		rip_unlock,	0,
+  { 0, 0 }, NULL, { 0 }
 },
 { SOCK_RAW,	&inet6domain,	IPPROTO_ICMPV6,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
   icmp6_input,	rip6_pr_output,	rip6_ctlinput,	rip6_ctloutput,
@@ -192,7 +192,17 @@ struct ip6protosw inet6sw[] = {
   icmp6_init,	icmp6_fasttimo,	0,		0,
   0,
   &rip6_usrreqs,
-  0,		rip_unlock,		0
+  0,		rip_unlock,		0,
+  { 0, 0 }, NULL, { 0 }
+},
+{ SOCK_DGRAM,     &inet6domain,   IPPROTO_ICMPV6, PR_ATOMIC|PR_ADDR|PR_LASTHDR,
+  icmp6_input,  rip6_pr_output, rip6_ctlinput,  icmp6_dgram_ctloutput,
+  0,
+  icmp6_init,   icmp6_fasttimo, 0,              0,
+  0,
+  &icmp6_dgram_usrreqs,
+  0,            rip_unlock,             0,
+  { 0, 0 }, NULL, { 0 }
 },
 { SOCK_RAW,	&inet6domain,	IPPROTO_DSTOPTS,PR_ATOMIC|PR_ADDR,
   dest6_input,	0,	 	0,		0,
@@ -200,7 +210,8 @@ struct ip6protosw inet6sw[] = {
   0,		0,		0,		0,
   0,
   &nousrreqs,
-  0,		0,		0
+  0,		0,		0,
+  { 0, 0 }, NULL, { 0 }
 },
 { SOCK_RAW,	&inet6domain,	IPPROTO_ROUTING,PR_ATOMIC|PR_ADDR,
   route6_input,	0,	 	0,		0,
@@ -208,7 +219,8 @@ struct ip6protosw inet6sw[] = {
   0,		0,		0,		0,
   0,
   &nousrreqs,
-  0,		0,		0
+  0,		0,		0,
+  { 0, 0 }, NULL, { 0 }
 },
 { SOCK_RAW,	&inet6domain,	IPPROTO_FRAGMENT,PR_ATOMIC|PR_ADDR,
   frag6_input,	0,	 	0,		0,
@@ -216,7 +228,8 @@ struct ip6protosw inet6sw[] = {
   0,		0,		0,		0,
   0,
   &nousrreqs,
-  0,		0,		0
+  0,		0,		0,
+  { 0, 0 }, NULL, { 0 }
 },
 #if IPSEC
 { SOCK_RAW,	&inet6domain,	IPPROTO_AH,	PR_ATOMIC|PR_ADDR|PR_PROTOLOCK,
@@ -225,7 +238,8 @@ struct ip6protosw inet6sw[] = {
   0,		0,		0,		0,
   0,
   &nousrreqs,
-  0,		0,		0
+  0,		0,		0,
+  { 0, 0 }, NULL, { 0 }
 },
 #if IPSEC_ESP
 { SOCK_RAW,	&inet6domain,	IPPROTO_ESP,	PR_ATOMIC|PR_ADDR|PR_PROTOLOCK,
@@ -236,7 +250,8 @@ struct ip6protosw inet6sw[] = {
   0,		0,		0,		0,
   0,
   &nousrreqs,
-  0,		0,		0
+  0,		0,		0,
+  { 0, 0 }, NULL, { 0 }
 },
 #endif
 { SOCK_RAW,	&inet6domain,	IPPROTO_IPCOMP,	PR_ATOMIC|PR_ADDR|PR_PROTOLOCK,
@@ -245,7 +260,8 @@ struct ip6protosw inet6sw[] = {
   0,		0,		0,		0,
   0,
   &nousrreqs,
-  0,		0,		0
+  0,		0,		0,
+  { 0, 0 }, NULL, { 0 }
 },
 #endif /* IPSEC */
 #if INET
@@ -255,7 +271,8 @@ struct ip6protosw inet6sw[] = {
   encap_init,	0,		0,		0,
   0,
   &rip6_usrreqs,
-  0,		rip_unlock,	0
+  0,		rip_unlock,	0,
+  { 0, 0 }, NULL, { 0 }
 },
 #endif /*INET*/
 { SOCK_RAW,	&inet6domain,	IPPROTO_IPV6,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
@@ -264,7 +281,8 @@ struct ip6protosw inet6sw[] = {
   encap_init,	0,		0,		0,
   0,
   &rip6_usrreqs,
-  0,		rip_unlock,	0
+  0,		rip_unlock,	0,
+  { 0, 0 }, NULL, { 0 }
 },
 { SOCK_RAW,     &inet6domain,	IPPROTO_PIM,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
   pim6_input,	rip6_pr_output,	0,              rip6_ctloutput,
@@ -272,7 +290,8 @@ struct ip6protosw inet6sw[] = {
   0,		0,		0,		0,
   0,	
   &rip6_usrreqs,
-  0,		rip_unlock,	0
+  0,		rip_unlock,	0,
+  { 0, 0 }, NULL, { 0 }
 },
 /* raw wildcard */
 { SOCK_RAW,	&inet6domain,	0,		PR_ATOMIC|PR_ADDR|PR_LASTHDR,
@@ -281,7 +300,8 @@ struct ip6protosw inet6sw[] = {
   0,		0,		0,		0,
   0,
   &rip6_usrreqs,
-  0,		rip_unlock,	0
+  0,		rip_unlock,	0,
+  { 0, 0 }, NULL, { 0 }
 },
 };
 
@@ -292,19 +312,20 @@ struct domain inet6domain =
     { AF_INET6, "internet6", in6_dinit, 0, 0, 
       (struct protosw *)inet6sw, 0,
       in6_inithead, offsetof(struct sockaddr_in6, sin6_addr) << 3, sizeof(struct sockaddr_in6) ,
-      sizeof(struct sockaddr_in6), 0
+      sizeof(struct sockaddr_in6), 0, 
+      NULL, 0, {0,0}
     };
 
 DOMAIN_SET(inet6);
 
 /* Initialize the PF_INET6 domain, and add in the pre-defined protos */
 void
-in6_dinit()
+in6_dinit(void)
 {
 	register int i; 
 	register struct ip6protosw *pr;
 	register struct domain *dp;
-	static inet6domain_initted = 0;
+	static int inet6domain_initted = 0;
 
 	if (!inet6domain_initted) {
 		dp = &inet6domain; 
@@ -317,7 +338,8 @@ in6_dinit()
 	}
 }
 
-int rip6_pr_output(struct mbuf *m, struct socket *so, struct sockaddr_in6 *sin6, struct mbuf *m1)
+int rip6_pr_output(__unused struct mbuf *m, __unused struct socket *so, 
+					__unused struct sockaddr_in6 *sin6, __unused struct mbuf *m1)
 {
 	panic("rip6_pr_output\n");
 	return 0;
@@ -397,12 +419,12 @@ SYSCTL_NODE(_net,	PF_INET6,	inet6,	CTLFLAG_RW,	0,
 	"Internet6 Family");
 
 /* net.inet6 */
-SYSCTL_NODE(_net_inet6,	IPPROTO_IPV6,	ip6,	CTLFLAG_RW, 0,	"IP6");
-SYSCTL_NODE(_net_inet6,	IPPROTO_ICMPV6,	icmp6,	CTLFLAG_RW, 0,	"ICMP6");
-SYSCTL_NODE(_net_inet6,	IPPROTO_UDP,	udp6,	CTLFLAG_RW, 0,	"UDP6");
-SYSCTL_NODE(_net_inet6,	IPPROTO_TCP,	tcp6,	CTLFLAG_RW, 0,	"TCP6");
+SYSCTL_NODE(_net_inet6,	IPPROTO_IPV6,	ip6,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"IP6");
+SYSCTL_NODE(_net_inet6,	IPPROTO_ICMPV6,	icmp6,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"ICMP6");
+SYSCTL_NODE(_net_inet6,	IPPROTO_UDP,	udp6,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"UDP6");
+SYSCTL_NODE(_net_inet6,	IPPROTO_TCP,	tcp6,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"TCP6");
 #if IPSEC
-SYSCTL_NODE(_net_inet6,	IPPROTO_ESP,	ipsec6,	CTLFLAG_RW, 0,	"IPSEC6");
+SYSCTL_NODE(_net_inet6,	IPPROTO_ESP,	ipsec6,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"IPSEC6");
 #endif /* IPSEC */
 
 /* net.inet6.ip6 */

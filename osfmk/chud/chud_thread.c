@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
- *
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- *
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- *
- * @APPLE_LICENSE_HEADER_END@
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <mach/mach_types.h>
@@ -31,35 +37,66 @@
 
 #include <chud/chud_xnu.h>
 #include <chud/chud_xnu_private.h>
+#include <chud/chud_thread.h>
 
 #include <machine/machine_routines.h>
+
+#include <libkern/OSAtomic.h>
 
 // include the correct file to find real_ncpus
 #if defined(__i386__) || defined(__x86_64__)
 #	include <i386/mp.h>	
-#endif // i386 or x86_64
-
-#if defined(__ppc__) || defined(__ppc64__)
+#elif defined(__ppc__) || defined(__ppc64__)
 #	include <ppc/cpu_internal.h>
-#endif // ppc or ppc64
+#elif defined(__arm__)
+#	include <arm/cpu_internal.h>
+#else
+// fall back on declaring it extern.  The linker will sort us out.
+extern unsigned int real_ncpus;
+#endif
+
+// Mask for supported options
+#define T_CHUD_BIND_OPT_MASK (-1UL)
 
 #pragma mark **** thread binding ****
 
+/*
+ * This method will bind a given thread to the requested CPU starting at the
+ * next time quantum.  If the thread is the current thread, this method will
+ * force a thread_block().  The result is that if you call this method on the
+ * current thread, you will be on the requested CPU when this method returns.
+ */
 __private_extern__ kern_return_t
-chudxnu_bind_thread(thread_t thread, int cpu)
+chudxnu_bind_thread(thread_t thread, int cpu, __unused int options)
 {
     processor_t proc = NULL;
-	
-	if(cpu >= real_ncpus) // sanity check
+
+	if(cpu < 0 || (unsigned int)cpu >= real_ncpus) // sanity check
 		return KERN_FAILURE;
+
+	// temporary restriction until after phase 2 of the scheduler
+	if(thread != current_thread())
+		return KERN_FAILURE; 
 	
 	proc = cpu_to_processor(cpu);
 
+	/* 
+	 * Potentially racey, but mainly to prevent bind to shutdown
+	 * processor.
+	 */
 	if(proc && !(proc->state == PROCESSOR_OFF_LINE) &&
-			   !(proc->state == PROCESSOR_SHUTDOWN)) {
-		/* disallow bind to shutdown processor */
-		thread_bind(thread, proc);
-		if(thread==current_thread()) {
+			!(proc->state == PROCESSOR_SHUTDOWN)) {
+		
+		thread_bind(proc);
+
+		/*
+		 * If we're trying to bind the current thread, and
+		 * we're not on the target cpu, and not at interrupt
+		 * context, block the current thread to force a
+		 * reschedule on the target CPU.
+		 */
+		if(thread == current_thread() && 
+			!(ml_at_interrupt_context() && cpu_number() == cpu)) {
 			(void)thread_block(THREAD_CONTINUE_NULL);
 		}
 		return KERN_SUCCESS;
@@ -68,16 +105,29 @@ chudxnu_bind_thread(thread_t thread, int cpu)
 }
 
 __private_extern__ kern_return_t
-chudxnu_unbind_thread(thread_t thread)
+chudxnu_unbind_thread(thread_t thread, __unused int options)
 {
-    thread_bind(thread, PROCESSOR_NULL);
+	if(thread == current_thread())
+		thread_bind(PROCESSOR_NULL);
     return KERN_SUCCESS;
+}
+
+__private_extern__ boolean_t
+chudxnu_thread_get_idle(thread_t thread) {
+	/* 
+	 * Instantaneous snapshot of the idle state of
+	 * a given thread.
+	 *
+	 * Should be called only on an interrupted or 
+	 * suspended thread to avoid a race.
+	 */
+	return ((thread->state & TH_IDLE) == TH_IDLE);
 }
 
 #pragma mark **** task and thread info ****
 
-__private_extern__
-boolean_t chudxnu_is_64bit_task(task_t task)
+__private_extern__ boolean_t
+chudxnu_is_64bit_task(task_t task)
 {
 	return (task_has_64BitAddr(task));
 }
@@ -100,23 +150,18 @@ chudxnu_private_processor_set_things(
 	vm_size_t size, size_needed;
 	void  *addr;
 
-	if (pset == PROCESSOR_SET_NULL)
+	if (pset == PROCESSOR_SET_NULL || pset != &pset0)
 		return (KERN_INVALID_ARGUMENT);
 
-	size = 0; addr = 0;
+	size = 0; addr = NULL;
 
 	for (;;) {
-		pset_lock(pset);
-		if (!pset->active) {
-			pset_unlock(pset);
-
-			return (KERN_FAILURE);
-		}
+		mutex_lock(&tasks_threads_lock);
 
 		if (type == THING_TASK)
-			maxthings = pset->task_count;
+			maxthings = tasks_count;
 		else
-			maxthings = pset->thread_count;
+			maxthings = threads_count;
 
 		/* do we have the memory we need? */
 
@@ -124,8 +169,7 @@ chudxnu_private_processor_set_things(
 		if (size_needed <= size)
 			break;
 
-		/* unlock the pset and allocate more memory */
-		pset_unlock(pset);
+		mutex_unlock(&tasks_threads_lock);
 
 		if (size != 0)
 			kfree(addr, size);
@@ -145,13 +189,13 @@ chudxnu_private_processor_set_things(
 
 	case THING_TASK:
 	{
-		task_t		task, *tasks = (task_t *)addr;
+		task_t		task, *task_list = (task_t *)addr;
 
-		for (task = (task_t)queue_first(&pset->tasks);
-				!queue_end(&pset->tasks, (queue_entry_t)task);
-					task = (task_t)queue_next(&task->pset_tasks)) {
+		for (task = (task_t)queue_first(&tasks);
+				!queue_end(&tasks, (queue_entry_t)task);
+					task = (task_t)queue_next(&task->tasks)) {
 			task_reference_internal(task);
-			tasks[actual++] = task;
+			task_list[actual++] = task;
 		}
 
 		break;
@@ -159,27 +203,27 @@ chudxnu_private_processor_set_things(
 
 	case THING_THREAD:
 	{
-		thread_t	thread, *threads = (thread_t *)addr;
+		thread_t	thread, *thread_list = (thread_t *)addr;
 
-		for (i = 0, thread = (thread_t)queue_first(&pset->threads);
-				!queue_end(&pset->threads, (queue_entry_t)thread);
-					thread = (thread_t)queue_next(&thread->pset_threads)) {
+		for (i = 0, thread = (thread_t)queue_first(&threads);
+				!queue_end(&threads, (queue_entry_t)thread);
+					thread = (thread_t)queue_next(&thread->threads)) {
 			thread_reference_internal(thread);
-			threads[actual++] = thread;
+			thread_list[actual++] = thread;
 		}
 
 		break;
 	}
 	}
 		
-	pset_unlock(pset);
+	mutex_unlock(&tasks_threads_lock);
 
 	if (actual < maxthings)
 		size_needed = actual * sizeof (mach_port_t);
 
 	if (actual == 0) {
 		/* no things, so return null pointer and deallocate memory */
-		*thing_list = 0;
+		*thing_list = NULL;
 		*count = 0;
 
 		if (size != 0)
@@ -197,19 +241,19 @@ chudxnu_private_processor_set_things(
 
 				case THING_TASK:
 				{
-					task_t		*tasks = (task_t *)addr;
+					task_t		*task_list = (task_t *)addr;
 
 					for (i = 0; i < actual; i++)
-						task_deallocate(tasks[i]);
+						task_deallocate(task_list[i]);
 					break;
 				}
 
 				case THING_THREAD:
 				{
-					thread_t	*threads = (thread_t *)addr;
+					thread_t	*thread_list = (thread_t *)addr;
 
 					for (i = 0; i < actual; i++)
-						thread_deallocate(threads[i]);
+						thread_deallocate(thread_list[i]);
 					break;
 				}
 				}
@@ -238,7 +282,7 @@ chudxnu_private_task_threads(
     	mach_msg_type_number_t  *count)
 {
 	mach_msg_type_number_t	actual;
-	thread_t				*threads;
+	thread_t				*thread_list;
 	thread_t				thread;
 	vm_size_t				size, size_needed;
 	void					*addr;
@@ -247,7 +291,7 @@ chudxnu_private_task_threads(
 	if (task == TASK_NULL)
 		return (KERN_INVALID_ARGUMENT);
 
-	size = 0; addr = 0;
+	size = 0; addr = NULL;
 
 	for (;;) {
 		task_lock(task);
@@ -282,14 +326,14 @@ chudxnu_private_task_threads(
 	}
 
 	/* OK, have memory and the task is locked & active */
-	threads = (thread_t *)addr;
+	thread_list = (thread_t *)addr;
 
 	i = j = 0;
 
 	for (thread = (thread_t)queue_first(&task->threads); i < actual;
 				++i, thread = (thread_t)queue_next(&thread->task_threads)) {
 		thread_reference_internal(thread);
-		threads[j++] = thread;
+		thread_list[j++] = thread;
 	}
 
 	assert(queue_end(&task->threads, (queue_entry_t)thread));
@@ -303,7 +347,7 @@ chudxnu_private_task_threads(
 	if (actual == 0) {
 		/* no threads, so return null pointer and deallocate memory */
 
-		*threads_out = 0;
+		*threads_out = NULL;
 		*count = 0;
 
 		if (size != 0)
@@ -318,17 +362,17 @@ chudxnu_private_task_threads(
 			newaddr = kalloc(size_needed);
 			if (newaddr == 0) {
 				for (i = 0; i < actual; ++i)
-					thread_deallocate(threads[i]);
+					thread_deallocate(thread_list[i]);
 				kfree(addr, size);
 				return (KERN_RESOURCE_SHORTAGE);
 			}
 
 			bcopy(addr, newaddr, size_needed);
 			kfree(addr, size);
-			threads = (thread_t *)newaddr;
+			thread_list = (thread_t *)newaddr;
 		}
 
-		*threads_out = threads;
+		*threads_out = thread_list;
 		*count = actual;
 	}
 
@@ -341,7 +385,7 @@ chudxnu_all_tasks(
 	task_array_t		*task_list,
 	mach_msg_type_number_t	*count)
 {
-	return chudxnu_private_processor_set_things(&default_pset, (mach_port_t **)task_list, count, THING_TASK);	
+	return chudxnu_private_processor_set_things(&pset0, (mach_port_t **)task_list, count, THING_TASK);	
 }
 
 __private_extern__ kern_return_t
@@ -365,13 +409,12 @@ chudxnu_free_task_list(
 		return KERN_FAILURE;
 	}
 }
-
 __private_extern__ kern_return_t
 chudxnu_all_threads(
 	thread_array_t		*thread_list,
 	mach_msg_type_number_t	*count)
 {
-	return chudxnu_private_processor_set_things(&default_pset, (mach_port_t **)thread_list, count, THING_THREAD);
+	return chudxnu_private_processor_set_things(&pset0, (mach_port_t **)thread_list, count, THING_THREAD);
 }
 
 __private_extern__ kern_return_t
@@ -433,10 +476,39 @@ chudxnu_thread_info(
 	return thread_info(thread, flavor, thread_info_out, thread_info_count);
 }
 
+
 __private_extern__ kern_return_t
 chudxnu_thread_last_context_switch(thread_t thread, uint64_t *timestamp)
 {
     *timestamp = thread->last_switch;
     return KERN_SUCCESS;
+}
+
+/* thread marking stuff */
+
+__private_extern__ boolean_t 
+chudxnu_thread_get_marked(thread_t thread) 
+{
+	if(thread)
+		return ((thread->t_chud & T_CHUD_MARKED) != 0);
+	return FALSE;
+}
+
+__private_extern__ boolean_t
+chudxnu_thread_set_marked(thread_t thread, boolean_t new_value)
+{
+	boolean_t old_val;
+
+	if(thread) {
+		if(new_value) {
+			// set the marked bit
+			old_val = OSBitOrAtomic(T_CHUD_MARKED, (UInt32 *) &(thread->t_chud));
+		} else {
+			// clear the marked bit
+			old_val = OSBitAndAtomic(~T_CHUD_MARKED, (UInt32 *) &(thread->t_chud));
+		}
+		return (old_val & T_CHUD_MARKED) == T_CHUD_MARKED;
+	}
+	return FALSE;
 }
 

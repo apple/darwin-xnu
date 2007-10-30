@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_FREE_COPYRIGHT@
@@ -33,9 +39,6 @@
 #include <kern/kalloc.h>
 
 #include <sys/types.h>
-#ifdef i386
-#include <i386/fakePPCStructs.h>
-#endif
 
 #ifndef NULL
 #define       NULL    ((void *) 0)
@@ -73,8 +76,6 @@ typedef struct OpaqueDTPropertyIterator {
 static int DTInitialized;
 static RealDTEntry DTRootNode;
 
-void DTInit(void *base);
-
 /*
  * Support Routines
  */
@@ -82,7 +83,7 @@ static RealDTEntry
 skipProperties(RealDTEntry entry)
 {
 	DeviceTreeNodeProperty *prop;
-	int k;
+	unsigned int k;
 
 	if (entry == NULL || entry->nProperties == 0) {
 		return NULL;
@@ -99,7 +100,7 @@ static RealDTEntry
 skipTree(RealDTEntry root)
 {
 	RealDTEntry entry;
-	int k;
+	unsigned int k;
 
 	entry = skipProperties(root);
 	if (entry == NULL) {
@@ -142,8 +143,8 @@ FindChild(RealDTEntry cur, char *buf)
 {
 	RealDTEntry	child;
 	unsigned long	index;
-	char *		str;
-	int		dummy;
+	char *			str;
+	unsigned int	dummy;
 
 	if (cur->nChildren == 0) {
 		return NULL;
@@ -200,7 +201,7 @@ int DTFindEntry(const char *propName, const char *propValue, DTEntry *entryH)
 int find_entry(const char *propName, const char *propValue, DTEntry *entryH)
 {
 	DeviceTreeNode *nodeP = (DeviceTreeNode *) startingP;
-	int k;
+	unsigned int k;
 
 	if (nodeP->nProperties == 0) return(kError);	// End of the list of nodes
 	startingP = (char *) (nodeP + 1);
@@ -212,7 +213,7 @@ int find_entry(const char *propName, const char *propValue, DTEntry *entryH)
 		startingP += sizeof (*propP) + ((propP->length + 3) & -4);
 
 		if (strcmp (propP->name, propName) == 0) {
-			if (strcmp( (char *)(propP + 1), propValue) == 0)
+			if (propValue == NULL || strcmp( (char *)(propP + 1), propValue) == 0)
 			{
 				*entryH = (DTEntry)nodeP;
 				return(kSuccess);
@@ -398,10 +399,10 @@ DTRestartEntryIteration(DTEntryIterator iterator)
 }
 
 int
-DTGetProperty(const DTEntry entry, const char *propertyName, void **propertyValue, int *propertySize)
+DTGetProperty(const DTEntry entry, const char *propertyName, void **propertyValue, unsigned int *propertySize)
 {
 	DeviceTreeNodeProperty *prop;
-	int k;
+	unsigned int k;
 
 	if (entry == NULL || entry->nProperties == 0) {
 		return kError;

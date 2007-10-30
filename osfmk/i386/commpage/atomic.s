@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2004-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <sys/appleapiopts.h>
@@ -147,6 +153,86 @@ Latomic_add32_up:
 	ret
 
     COMMPAGE_DESCRIPTOR(atomic_add32_up,_COMM_PAGE_ATOMIC_ADD32,kUP,0)
+    
+    
+// OSMemoryBarrier()
+// These are used both in 32 and 64-bit mode.  We use a fence even on UP
+// machines, so this function can be used with nontemporal stores.
+
+Lmemory_barrier:
+	lock
+	addl	$0,(%esp)
+	ret
+	
+    COMMPAGE_DESCRIPTOR(memory_barrier,_COMM_PAGE_MEMORY_BARRIER,0,kHasSSE2);
+
+Lmemory_barrier_sse2:
+	mfence
+	ret
+	
+    COMMPAGE_DESCRIPTOR(memory_barrier_sse2,_COMM_PAGE_MEMORY_BARRIER,kHasSSE2,0);
+    
+
+/*
+ *	typedef	volatile struct {
+ *		void	*opaque1;  <-- ptr to 1st queue element or null
+ *		long	 opaque2;  <-- generation count
+ *	} OSQueueHead;
+ *
+ * void  OSAtomicEnqueue( OSQueueHead *list, void *new, size_t offset);
+ */
+
+LAtomicEnqueue:
+	pushl	%edi
+	pushl	%esi
+	pushl	%ebx
+	movl	16(%esp),%edi	// %edi == ptr to list head
+	movl	20(%esp),%ebx	// %ebx == new
+	movl	24(%esp),%esi	// %esi == offset
+	movl	(%edi),%eax	// %eax == ptr to 1st element in Q
+	movl	4(%edi),%edx	// %edx == current generation count
+1:
+	movl	%eax,(%ebx,%esi)// link to old list head from new element
+	movl	%edx,%ecx
+	incl	%ecx		// increment generation count
+	lock			// always lock for now...
+	cmpxchg8b (%edi)	// ...push on new element
+	jnz	1b
+	popl	%ebx
+	popl	%esi
+	popl	%edi
+	ret
+	
+    COMMPAGE_DESCRIPTOR(AtomicEnqueue,_COMM_PAGE_ENQUEUE,0,0)
+	
+	
+/* void* OSAtomicDequeue( OSQueueHead *list, size_t offset); */
+
+LAtomicDequeue:
+	pushl	%edi
+	pushl	%esi
+	pushl	%ebx
+	movl	16(%esp),%edi	// %edi == ptr to list head
+	movl	20(%esp),%esi	// %esi == offset
+	movl	(%edi),%eax	// %eax == ptr to 1st element in Q
+	movl	4(%edi),%edx	// %edx == current generation count
+1:
+	testl	%eax,%eax	// list empty?
+	jz	2f		// yes
+	movl	(%eax,%esi),%ebx // point to 2nd in Q
+	movl	%edx,%ecx
+	incl	%ecx		// increment generation count
+	lock			// always lock for now...
+	cmpxchg8b (%edi)	// ...pop off 1st element
+	jnz	1b
+2:
+	popl	%ebx
+	popl	%esi
+	popl	%edi
+	ret			// ptr to 1st element in Q still in %eax
+	
+    COMMPAGE_DESCRIPTOR(AtomicDequeue,_COMM_PAGE_DEQUEUE,0,0)
+
 
 
 /************************* x86_64 versions follow **************************/
@@ -297,3 +383,55 @@ Latomic_add64_up_64:
 	ret
 
     COMMPAGE_DESCRIPTOR(atomic_add64_up_64,_COMM_PAGE_ATOMIC_ADD64,kUP,0)
+
+
+/*
+ *	typedef	volatile struct {
+ *		void	*opaque1;  <-- ptr to 1st queue element or null
+ *		long	 opaque2;  <-- generation count
+ *	} OSQueueHead;
+ *
+ * void  OSAtomicEnqueue( OSQueueHead *list, void *new, size_t offset);
+ */
+
+	.code64
+LAtomicEnqueue_64:		// %rdi == list head, %rsi == new, %rdx == offset
+	pushq	%rbx
+	movq	%rsi,%rbx	// %rbx == new
+	movq	%rdx,%rsi	// %rsi == offset
+	movq	(%rdi),%rax	// %rax == ptr to 1st element in Q
+	movq	8(%rdi),%rdx	// %rdx == current generation count
+1:
+	movq	%rax,(%rbx,%rsi)// link to old list head from new element
+	movq	%rdx,%rcx
+	incq	%rcx		// increment generation count
+	lock			// always lock for now...
+	cmpxchg16b (%rdi)	// ...push on new element
+	jnz	1b
+	popq	%rbx
+	ret
+	
+    COMMPAGE_DESCRIPTOR(AtomicEnqueue_64,_COMM_PAGE_ENQUEUE,0,0)
+	
+	
+/* void* OSAtomicDequeue( OSQueueHead *list, size_t offset); */
+
+	.code64
+LAtomicDequeue_64:		// %rdi == list head, %rsi == offset
+	pushq	%rbx
+	movq	(%rdi),%rax	// %rax == ptr to 1st element in Q
+	movq	8(%rdi),%rdx	// %rdx == current generation count
+1:
+	testq	%rax,%rax	// list empty?
+	jz	2f		// yes
+	movq	(%rax,%rsi),%rbx // point to 2nd in Q
+	movq	%rdx,%rcx
+	incq	%rcx		// increment generation count
+	lock			// always lock for now...
+	cmpxchg16b (%rdi)	// ...pop off 1st element
+	jnz	1b
+2:
+	popq	%rbx
+	ret			// ptr to 1st element in Q still in %rax
+	
+    COMMPAGE_DESCRIPTOR(AtomicDequeue_64,_COMM_PAGE_DEQUEUE,0,0)

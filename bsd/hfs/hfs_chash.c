@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2002-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 /*
@@ -85,7 +91,6 @@ u_long	cnodehash;		/* size of hash table - 1 */
 
 lck_mtx_t  hfs_chash_mutex;
 
-
 /*
  * Initialize cnode hash table.
  */
@@ -93,13 +98,31 @@ __private_extern__
 void
 hfs_chashinit()
 {
-	cnodehashtbl = hashinit(desiredvnodes, M_HFSMNT, &cnodehash);
-
 	chash_lck_grp_attr= lck_grp_attr_alloc_init();
 	chash_lck_grp  = lck_grp_alloc_init("cnode_hash", chash_lck_grp_attr);
 	chash_lck_attr = lck_attr_alloc_init();
 
 	lck_mtx_init(&hfs_chash_mutex, chash_lck_grp, chash_lck_attr);
+}
+
+static void hfs_chash_lock(void) 
+{
+	lck_mtx_lock(&hfs_chash_mutex);
+}
+
+static void hfs_chash_unlock(void) 
+{
+	lck_mtx_unlock(&hfs_chash_mutex);
+}
+
+__private_extern__
+void
+hfs_chashinit_finish()
+{
+	hfs_chash_lock();
+	if (!cnodehashtbl)
+		cnodehashtbl = hashinit(desiredvnodes, M_HFSMNT, &cnodehash);
+	hfs_chash_unlock();
 }
 
 
@@ -115,7 +138,7 @@ hfs_chash_getvnode(dev_t dev, ino_t inum, int wantrsrc, int skiplock)
 	struct cnode *cp;
 	struct vnode *vp;
 	int error;
-	uint32_t vid;
+	u_int32_t vid;
 
 	/* 
 	 * Go through the hash list
@@ -123,7 +146,7 @@ hfs_chash_getvnode(dev_t dev, ino_t inum, int wantrsrc, int skiplock)
 	 * allocated, wait for it to be finished and then try again.
 	 */
 loop:
-	lck_mtx_lock(&hfs_chash_mutex);
+	hfs_chash_lock();
 	for (cp = CNODEHASH(dev, inum)->lh_first; cp; cp = cp->c_hash.le_next) {
 		if ((cp->c_fileid != inum) || (cp->c_dev != dev))
 			continue;
@@ -135,22 +158,13 @@ loop:
 			              "hfs_chash_getvnode", 0);
 			goto loop;
 		}
-		/*
-		 * Skip cnodes that are not in the name space anymore
-		 * note that this check is done outside of the proper
-		 * lock to catch nodes already in this state... this
-		 * state must be rechecked after we acquire the cnode lock
-		 */
-		if (cp->c_flag & (C_NOEXISTS | C_DELETED)) {
-			continue;
-		}
 		/* Obtain the desired vnode. */
 		vp = wantrsrc ? cp->c_rsrc_vp : cp->c_vp;
 		if (vp == NULLVP)
 			goto exit;
 
 		vid = vnode_vid(vp);
-		lck_mtx_unlock(&hfs_chash_mutex);
+		hfs_chash_unlock();
 
 		if ((error = vnode_getwithvid(vp, vid))) {
 		        /*
@@ -166,10 +180,10 @@ loop:
 
 		/*
 		 * Skip cnodes that are not in the name space anymore
-		 * we need to check again with the cnode lock held
-		 * because we may have blocked acquiring the vnode ref
-		 * or the lock on the cnode which would allow the node
-		 * to be unlinked
+		 * we need to check with the cnode lock held because
+		 * we may have blocked acquiring the vnode ref or the
+		 * lock on the cnode which would allow the node to be
+		 * unlinked
 		 */
 		if (cp->c_flag & (C_NOEXISTS | C_DELETED)) {
 			if (!skiplock)
@@ -181,16 +195,13 @@ loop:
 		return (vp);
 	}
 exit:
-	lck_mtx_unlock(&hfs_chash_mutex);
+	hfs_chash_unlock();
 	return (NULL);
 }
 
 
 /*
- * Use the device, fileid pair to find the incore cnode.
- * If no cnode if found one is created
- *
- * If it is in core, but locked, wait for it.
+ * Use the device, fileid pair to snoop an incore cnode.
  */
 __private_extern__
 int
@@ -205,7 +216,7 @@ hfs_chash_snoop(dev_t dev, ino_t inum, int (*callout)(const struct cat_desc *,
 	 * If a cnode is in the process of being cleaned out or being
 	 * allocated, wait for it to be finished and then try again.
 	 */
-	lck_mtx_lock(&hfs_chash_mutex);
+	hfs_chash_lock();
 	for (cp = CNODEHASH(dev, inum)->lh_first; cp; cp = cp->c_hash.le_next) {
 		if ((cp->c_fileid != inum) || (cp->c_dev != dev))
 			continue;
@@ -215,7 +226,7 @@ hfs_chash_snoop(dev_t dev, ino_t inum, int (*callout)(const struct cat_desc *,
 		}
 		break;
 	}
-	lck_mtx_unlock(&hfs_chash_mutex);
+	hfs_chash_unlock();
 	return (result);
 }
 
@@ -225,6 +236,9 @@ hfs_chash_snoop(dev_t dev, ino_t inum, int (*callout)(const struct cat_desc *,
  * If no cnode if found one is created
  *
  * If it is in core, but locked, wait for it.
+ *
+ * If the cnode is C_DELETED, then return NULL since that 
+ * inum is no longer valid for lookups (open-unlinked file).
  */
 __private_extern__
 struct cnode *
@@ -233,7 +247,7 @@ hfs_chash_getcnode(dev_t dev, ino_t inum, struct vnode **vpp, int wantrsrc, int 
 	struct cnode	*cp;
 	struct cnode	*ncp = NULL;
 	vnode_t		vp;
-	uint32_t	vid;
+	u_int32_t	vid;
 
 	/* 
 	 * Go through the hash list
@@ -241,7 +255,7 @@ hfs_chash_getcnode(dev_t dev, ino_t inum, struct vnode **vpp, int wantrsrc, int 
 	 * allocated, wait for it to be finished and then try again.
 	 */
 loop:
-	lck_mtx_lock(&hfs_chash_mutex);
+	hfs_chash_lock();
 
 loop_with_lock:
 	for (cp = CNODEHASH(dev, inum)->lh_first; cp; cp = cp->c_hash.le_next) {
@@ -257,15 +271,6 @@ loop_with_lock:
 			              "hfs_chash_getcnode", 0);
 			goto loop_with_lock;
 		}
-		/*
-		 * Skip cnodes that are not in the name space anymore
-		 * note that this check is done outside of the proper
-		 * lock to catch nodes already in this state... this
-		 * state must be rechecked after we acquire the cnode lock
-		 */
-		if (cp->c_flag & (C_NOEXISTS | C_DELETED)) {
-			continue;
-		}
 		vp = wantrsrc ? cp->c_rsrc_vp : cp->c_vp;
 		if (vp == NULL) {
 			/*
@@ -273,11 +278,11 @@ loop_with_lock:
 			 */
 			SET(cp->c_hflag, H_ATTACH);
 
-			lck_mtx_unlock(&hfs_chash_mutex);
+			hfs_chash_unlock();
 		} else {
 			vid = vnode_vid(vp);
 
-			lck_mtx_unlock(&hfs_chash_mutex);
+			hfs_chash_unlock();
 
 			if (vnode_getwithvid(vp, vid))
 		        	goto loop;
@@ -291,32 +296,37 @@ loop_with_lock:
 		        FREE_ZONE(ncp, sizeof(struct cnode), M_HFSNODE);
 			ncp = NULL;
 		}
-		if (!skiplock && hfs_lock(cp, HFS_EXCLUSIVE_LOCK) != 0) {
-			if (vp != NULLVP)
-				vnode_put(vp);
-			lck_mtx_lock(&hfs_chash_mutex);
 
-			if (vp == NULLVP)
-			        CLR(cp->c_hflag, H_ATTACH);
-			goto loop_with_lock;
+		if (!skiplock) {
+			hfs_lock(cp, HFS_FORCE_LOCK);
 		}
+
 		/*
 		 * Skip cnodes that are not in the name space anymore
-		 * we need to check again with the cnode lock held
-		 * because we may have blocked acquiring the vnode ref
-		 * or the lock on the cnode which would allow the node
-		 * to be unlinked
+		 * we need to check with the cnode lock held because
+		 * we may have blocked acquiring the vnode ref or the
+		 * lock on the cnode which would allow the node to be
+		 * unlinked.
+		 *
+		 * Don't return a cnode in this case since the inum
+		 * is no longer valid for lookups.
 		 */
-		if (cp->c_flag & (C_NOEXISTS | C_DELETED)) {
+		if ((cp->c_flag & (C_NOEXISTS | C_DELETED)) && !wantrsrc) {
 			if (!skiplock)
 				hfs_unlock(cp);
-			if (vp != NULLVP)
+			if (vp != NULLVP) {
 				vnode_put(vp);
-			lck_mtx_lock(&hfs_chash_mutex);
-
-			if (vp == NULLVP)
-			        CLR(cp->c_hflag, H_ATTACH);
-			goto loop_with_lock;
+			} else {
+				hfs_chash_lock();
+		        	CLR(cp->c_hflag, H_ATTACH);
+				if (ISSET(cp->c_hflag, H_WAITING)) {
+					CLR(cp->c_hflag, H_WAITING);
+					wakeup((caddr_t)cp);
+				}
+				hfs_chash_unlock();
+			}
+			vp = NULL;
+			cp = NULL;
 		}
 		*vpp = vp;
 		return (cp);
@@ -325,11 +335,11 @@ loop_with_lock:
 	/* 
 	 * Allocate a new cnode
 	 */
-	if (skiplock)
+	if (skiplock && !wantrsrc)
 		panic("%s - should never get here when skiplock is set \n", __FUNCTION__);
 
 	if (ncp == NULL) {
-		lck_mtx_unlock(&hfs_chash_mutex);
+		hfs_chash_unlock();
 
 	        MALLOC_ZONE(ncp, struct cnode *, sizeof(struct cnode), M_HFSNODE, M_WAITOK);
 		/*
@@ -345,6 +355,7 @@ loop_with_lock:
 	ncp->c_fileid = inum;
 	ncp->c_dev = dev;
 	TAILQ_INIT(&ncp->c_hintlist); /* make the list empty */
+	TAILQ_INIT(&ncp->c_originlist);
 
 	lck_rw_init(&ncp->c_rwlock, hfs_rwlock_group, hfs_lock_attr);
 	if (!skiplock)
@@ -352,7 +363,7 @@ loop_with_lock:
 
 	/* Insert the new cnode with it's H_ALLOC flag set */
 	LIST_INSERT_HEAD(CNODEHASH(dev, inum), ncp, c_hash);
-	lck_mtx_unlock(&hfs_chash_mutex);
+	hfs_chash_unlock();
 
 	*vpp = NULL;
 	return (ncp);
@@ -363,7 +374,7 @@ __private_extern__
 void
 hfs_chashwakeup(struct cnode *cp, int hflags)
 {
-	lck_mtx_lock(&hfs_chash_mutex);
+	hfs_chash_lock();
 
 	CLR(cp->c_hflag, hflags);
 
@@ -371,7 +382,7 @@ hfs_chashwakeup(struct cnode *cp, int hflags)
 	        CLR(cp->c_hflag, H_WAITING);
 		wakeup((caddr_t)cp);
 	}
-	lck_mtx_unlock(&hfs_chash_mutex);
+	hfs_chash_unlock();
 }
 
 
@@ -382,14 +393,14 @@ __private_extern__
 void
 hfs_chash_rehash(struct cnode *cp1, struct cnode *cp2)
 {
-	lck_mtx_lock(&hfs_chash_mutex);
+	hfs_chash_lock();
 
 	LIST_REMOVE(cp1, c_hash);
 	LIST_REMOVE(cp2, c_hash);
 	LIST_INSERT_HEAD(CNODEHASH(cp1->c_dev, cp1->c_fileid), cp1, c_hash);
 	LIST_INSERT_HEAD(CNODEHASH(cp2->c_dev, cp2->c_fileid), cp2, c_hash);
 
-	lck_mtx_unlock(&hfs_chash_mutex);
+	hfs_chash_unlock();
 }
 
 
@@ -400,18 +411,19 @@ __private_extern__
 int
 hfs_chashremove(struct cnode *cp)
 {
-	lck_mtx_lock(&hfs_chash_mutex);
+	hfs_chash_lock();
 
 	/* Check if a vnode is getting attached */
 	if (ISSET(cp->c_hflag, H_ATTACH)) {
-		lck_mtx_unlock(&hfs_chash_mutex);
+		hfs_chash_unlock();
 		return (EBUSY);
 	}
-	LIST_REMOVE(cp, c_hash);
-	cp->c_hash.le_next = NULL;
-	cp->c_hash.le_prev = NULL;
-	
-	lck_mtx_unlock(&hfs_chash_mutex);
+	if (cp->c_hash.le_next || cp->c_hash.le_prev) {
+	    LIST_REMOVE(cp, c_hash);
+	    cp->c_hash.le_next = NULL;
+	    cp->c_hash.le_prev = NULL;
+	}
+	hfs_chash_unlock();
 	return (0);
 }
 
@@ -422,7 +434,7 @@ __private_extern__
 void
 hfs_chash_abort(struct cnode *cp)
 {
-	lck_mtx_lock(&hfs_chash_mutex);
+	hfs_chash_lock();
 
 	LIST_REMOVE(cp, c_hash);
 	cp->c_hash.le_next = NULL;
@@ -433,20 +445,77 @@ hfs_chash_abort(struct cnode *cp)
 	        CLR(cp->c_hflag, H_WAITING);
 		wakeup((caddr_t)cp);
 	}
-	lck_mtx_unlock(&hfs_chash_mutex);
+	hfs_chash_unlock();
 }
 
 
 /*
- * mark a cnode as in transistion
+ * mark a cnode as in transition
  */
 __private_extern__
 void
 hfs_chash_mark_in_transit(struct cnode *cp)
 {
-	lck_mtx_lock(&hfs_chash_mutex);
+	hfs_chash_lock();
 
         SET(cp->c_hflag, H_TRANSIT);
 
-	lck_mtx_unlock(&hfs_chash_mutex);
+	hfs_chash_unlock();
+}
+
+/* Search a cnode in the hash.  This function does not return cnode which 
+ * are getting created, destroyed or in transition.  Note that this function
+ * does not acquire the cnode hash mutex, and expects the caller to acquire it.
+ * On success, returns pointer to the cnode found.  On failure, returns NULL.
+ */
+static 
+struct cnode *
+hfs_chash_search_cnid(dev_t dev, cnid_t cnid) 
+{
+	struct cnode *cp;
+
+	for (cp = CNODEHASH(dev, cnid)->lh_first; cp; cp = cp->c_hash.le_next) {
+		if ((cp->c_fileid == cnid) && (cp->c_dev == dev)) {
+			break;
+		}
+	}
+
+	/* If cnode is being created or reclaimed, return error. */
+	if (cp && ISSET(cp->c_hflag, H_ALLOC | H_TRANSIT | H_ATTACH)) {
+		cp = NULL;
+	}
+
+	return cp;
+}
+
+/* Search a cnode corresponding to given device and ID in the hash.  If the 
+ * found cnode has kHFSHasChildLinkBit cleared, set it.  If the cnode is not 
+ * found, no new cnode is created and error is returned.
+ * 
+ * Return values - 
+ *	-1 : The cnode was not found.
+ * 	 0 : The cnode was found, and the kHFSHasChildLinkBit was already set.
+ *	 1 : The cnode was found, the kHFSHasChildLinkBit was not set, and the 
+ *	     function had to set that bit.
+ */
+__private_extern__ 
+int
+hfs_chash_set_childlinkbit(dev_t dev, cnid_t cnid)
+{
+	int retval = -1;
+	struct cnode *cp;
+
+	hfs_chash_lock();
+	cp = hfs_chash_search_cnid(dev, cnid);
+	if (cp) {
+		if (cp->c_attr.ca_recflags & kHFSHasChildLinkMask) {
+			retval = 0;
+		} else {
+			cp->c_attr.ca_recflags |= kHFSHasChildLinkMask;
+			retval = 1;
+		}
+	}
+	hfs_chash_unlock();
+
+	return retval;
 }

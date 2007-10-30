@@ -1,0 +1,125 @@
+.\"
+.\" Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+.\"
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+.\" 
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. The rights granted to you under the License
+.\" may not be used to create, or enable the creation or redistribution of,
+.\" unlawful or unlicensed copies of an Apple operating system, or to
+.\" circumvent, violate, or enable the circumvention or violation of, any
+.\" terms of an Apple operating system software license agreement.
+.\" 
+.\" Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this file.
+.\" 
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\" 
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+.\"
+.\"     @(#)posix_spawnattr_setspecialport_np.3
+.
+.Dd August 22, 2007
+.Dt POSIX_SPAWNATTR_SETSPECIALPORT_NP 3
+.Os "Mac OS X"
+.Sh NAME
+.Nm posix_spawnattr_setspecialport_np
+.Nm posix_spawnattr_setexceptionports_np
+.Nd set or get the
+.Em spawn-binpref
+attribute on a
+.Em posix_spawnattr_t
+.Sh SYNOPSIS
+.Fd #include <spawn.h>
+.Ft int
+.Fo posix_spawnattr_setspecialport_np
+.Fa "posix_spawnattr_t *attr"
+.Fa "mach_port_t new_port"
+.Fa "int which"
+.Fc
+.Ft int
+.Fo posix_spawnattr_setexceptionports_np
+.Fa "posix_spawnattr_t *attr"
+.Fa "exception_mask_t mask"
+.Fa "mach_port_t new_port"
+.Fa "exception_behavior_t behavior"
+.Fa "thread_state_flavor_t flavor"
+.Fc
+.Sh IMPORTANT
+These functions represent an Apple extension to
+.Xr posix_spawn 2
+and
+.Xr posix_spawnp 2 ,
+and as such should not be used by programs intending their code to be
+portable to other platforms.
+.Sh DESCRIPTION
+The
+.Fn posix_spawnattr_setspecialport_np
+function sets a new value for a
+.Em Mach
+special port into the value referenced by
+.Fa attr
+to the port referenced by
+.Fa new_port
+for a port value of
+.Fa which ,
+as if the new process had called
+.Fn task_set_special_port .
+.Pp
+The
+.Fn posix_spawnattr_setexceptionports_np
+function sets the
+.Em Mach
+port to
+.Fa new_port
+for a number of exception ports represented by the bitfield
+.Fa mask ,
+and sets the new default
+.Fa behavior
+and default
+.Fa flavor ,
+as if the new process had called
+.Fn task_set_exception_ports .
+.Pp
+.Sh RETURN VALUES
+On success, these functions return 0; on failure they return an error
+number from
+.In errno.h .
+.Sh ERRORS
+These functions may fail if:
+.Bl -tag -width Er
+.\" ==========
+.It Bq Er EINVAL
+The value specified by
+.Fa attr
+is invalid.
+.\" ==========
+.It Bq Er EINVAL
+The value of
+.Fa attr
+is invalid.
+.\" ==========
+.It Bq Er ENOMEM
+Insufficient resources exist to set the ports.
+.El
+.Sh SEE ALSO
+.Xr posix_spawn 2 ,
+.Xr posix_spawnp 2 ,
+.Xr posix_spawnattr_init 3 ,
+.Xr posix_spawnattr_destroy 3
+.Sh STANDARDS
+Nonstandard
+.Sh HISTORY
+The
+.Fn posix_spawnattr_setspecialport_np
+and
+.Fn posix_spawnattr_setexceptionports_np
+function calls appeared in Mac OS X.

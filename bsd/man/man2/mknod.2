@@ -40,18 +40,22 @@
 .Nm mknod
 .Nd make a special file node
 .Sh SYNOPSIS
-.Fd #include <unistd.h>
+.Fd #include <sys/stat.h>
 .Ft int
-.Fn mknod "const char *path" "mode_t mode" "dev_t dev"
+.Fo mknod
+.Fa "const char *path"
+.Fa "mode_t mode"
+.Fa "dev_t dev"
+.Fc
 .Sh DESCRIPTION
 The device special file
 .Fa path
 is created with the major and minor
 device numbers extracted from
-.Fa mode.
+.Fa mode .
 The access permissions of
 .Fa path
-are descendant from the
+are constrained by the
 .Xr umask 2
 of the parent process.
 .Pp
@@ -59,7 +63,7 @@ If
 .Fa mode
 indicates a block or character special file,
 .Fa dev
-is a configuration dependent specification of a character or block
+is a configuration-dependent specification of a character or block
 I/O device and the superblock of the device.  If
 .Fa mode
 does not indicate a block special or character special device,
@@ -69,7 +73,7 @@ is ignored.
 .Fn Mknod
 requires super-user privileges.
 .Sh RETURN VALUES
-Upon successful completion a value of 0 is returned.
+Upon successful completion, a value of 0 is returned.
 Otherwise, a value of -1 is returned and
 .Va errno
 is set to indicate the error.
@@ -77,51 +81,79 @@ is set to indicate the error.
 .Fn Mknod
 will fail and the file will be not created if:
 .Bl -tag -width Er
-.It Bq Er ENOTDIR
-A component of the path prefix is not a directory.
-.It Bq Er ENAMETOOLONG
-A component of a pathname exceeded 
-.Dv {NAME_MAX}
-characters, or an entire path name exceeded 
-.Dv {PATH_MAX}
-characters.
-.It Bq Er ENOENT
-A component of the path prefix does not exist.
+.\" ==========
 .It Bq Er EACCES
 Search permission is denied for a component of the path prefix.
-.It Bq Er ELOOP
-Too many symbolic links were encountered in translating the pathname.
-.It Bq Er EPERM
-The process's effective user ID is not super-user.
-.It Bq Er EIO
-An I/O error occurred while making the directory entry or allocating the inode.
-.It Bq Er ENOSPC
-The directory in which the entry for the new node is being placed
-cannot be extended because there is no space left on the file
-system containing the directory.
-.It Bq Er ENOSPC
-There are no free inodes on the file system on which the
-node is being created.
+.\" ==========
+.It Bq Er EACCES
+Write permission is denied for the parent directory.
+.\" ==========
 .It Bq Er EDQUOT
 The directory in which the entry for the new node
-is being placed cannot be extended because the
-user's quota of disk blocks on the file system
+is being placed cannot be extended;
+the user's quota of disk blocks on the file system
 containing the directory has been exhausted.
+.\" ==========
 .It Bq Er EDQUOT
-The user's quota of inodes on the file system on
-which the node is being created has been exhausted.
-.It Bq Er EROFS
-The named file resides on a read-only file system.
+The user's quota of inodes for the file system
+on which the node is being created has been exhausted.
+.\" ==========
 .It Bq Er EEXIST
 The named file exists.
+.\" ==========
 .It Bq Er EFAULT
 .Fa Path
 points outside the process's allocated address space.
+.\" ==========
+.It Bq Er EINVAL
+One or more of the arguments is invalid.
+.\" ==========
+.It Bq Er EIO
+An I/O error occurs while making the directory entry
+or allocating the inode.
+.\" ==========
+.It Bq Er ELOOP
+Too many symbolic links were encountered in translating the pathname.
+This is taken to be indicative of a looping symbolic link.
+.\" ==========
+.It Bq Er ENAMETOOLONG
+A component of a pathname exceeds 
+.Dv {NAME_MAX}
+characters or an entire path name exceeds 
+.Dv {PATH_MAX}
+characters.
+.\" ==========
+.It Bq Er ENOENT
+A component of the path prefix does not exist
+or path is an empty string.
+.\" ==========
+.It Bq Er ENOSPC
+The directory in which the entry for the new node is being placed
+cannot be extended,
+because there is no space left on the file system containing the directory.
+.\" ==========
+.It Bq Er ENOSPC
+There are no free inodes on the file system
+on which the node is being created.
+.\" ==========
+.It Bq Er ENOTDIR
+A component of the path prefix is not a directory.
+.\" ==========
+.It Bq Er EPERM
+The process's effective user ID is not super-user.
+.\" ==========
+.It Bq Er EROFS
+The created node would reside on a read-only file system.
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <unistd.h>
+.Pp
+The include file has changed.
 .Sh SEE ALSO
 .Xr chmod 2 ,
 .Xr stat 2 ,
-.Xr umask 2
+.Xr umask 2 ,
+.Xr compat 5
 .Sh HISTORY
 A
 .Fn mknod

@@ -43,21 +43,27 @@
 .Sh SYNOPSIS
 .Fd #include <unistd.h>
 .Ft int
-.Fn dup "int oldd"
+.Fo dup
+.Fa "int fildes"
+.Fc
 .Ft int
-.Fn dup2 "int oldd" "int newd"
+.Fo dup2
+.Fa "int fildes"
+.Fa "int fildes2"
+.Fc
 .Sh DESCRIPTION
 .Fn Dup
-duplicates an existing object descriptor and returns its value to
-the calling process
-.Fa ( newd
+duplicates an existing object descriptor
+and returns its value to the calling process
+.Fa ( fildes2
 =
-.Fn dup oldd ) .
+.Fn dup fildes ) .
 The argument
-.Fa oldd
-is a small non-negative integer index in
-the per-process descriptor table.  The value must be less
-than the size of the table, which is returned by
+.Fa fildes
+is a small non-negative integer index
+in the per-process descriptor table.
+The value must be less than the size of the table,
+which is returned by
 .Xr getdtablesize 2 .
 The new descriptor returned by the call
 is the lowest numbered descriptor
@@ -65,14 +71,14 @@ currently not in use by the process.
 .Pp
 The object referenced by the descriptor does not distinguish
 between
-.Fa oldd
+.Fa fildes
 and
-.Fa newd
+.Fa fildes2
 in any way.
 Thus if
-.Fa newd
+.Fa fildes2
 and
-.Fa oldd
+.Fa fildes
 are duplicate references to an open
 file,
 .Xr read 2 ,
@@ -82,9 +88,9 @@ and
 calls all move a single pointer into the file,
 and append mode, non-blocking I/O and asynchronous I/O options
 are shared between the references.
-If a separate pointer into the file is desired, a different
-object reference to the file must be obtained by issuing an
-additional
+If a separate pointer into the file is desired,
+a different object reference to the file must be obtained
+by issuing an additional
 .Xr open 2
 call.
 The close-on-exec flag on the new file descriptor is unset.
@@ -92,39 +98,46 @@ The close-on-exec flag on the new file descriptor is unset.
 In 
 .Fn dup2 ,
 the value of the new descriptor
-.Fa newd
-is specified.  If this descriptor is already
-in use, the descriptor is first deallocated as if a
+.Fa fildes2
+is specified.
+If this descriptor is already in use,
+the descriptor is first deallocated as if a
 .Xr close 2
 call had been done first.
 .Sh RETURN VALUES
-The value -1 is returned if an error occurs in either call.
-The external variable
+Upon successful completion, a value of 0 is returned.
+Otherwise, a value of -1 is returned and the global integer variable
 .Va errno
-indicates the cause of the error.
+is set to indicate the error.
 .Sh ERRORS
-.Fn Dup
+The
+.Fn dup
 and
 .Fn dup2
-fail if:
+system calls will fail if:
 .Bl -tag -width Er
+.\" ==========
 .It Bq Er EBADF
-.Fa Oldd
+.Fa fildes
 or
-.Fa newd
-is not a valid active descriptor
+.Fa fildes2
+is not an active, valid file descriptor.
+.\" ==========
+.It Bq Er EINTR
+Execution is interrupted by a signal.
+.\" ==========
 .It Bq Er EMFILE
-Too many descriptors are active.
+Too many file descriptors are active.
 .El
 .Sh SEE ALSO
 .Xr accept 2 ,
-.Xr open 2 ,
 .Xr close 2 ,
 .Xr fcntl 2 ,
+.Xr getdtablesize 2 ,
+.Xr open 2 ,
 .Xr pipe 2 ,
 .Xr socket 2 ,
-.Xr socketpair 2 ,
-.Xr getdtablesize 2
+.Xr socketpair 2
 .Sh STANDARDS
 .Fn Dup
 and

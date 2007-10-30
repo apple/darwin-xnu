@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1998, 1999 Apple Computer, Inc. All Rights Reserved */
 /* Copyright (c) 1995, 1997 Apple Computer, Inc. All Rights Reserved */
@@ -55,6 +61,12 @@
  *
  *	@(#)malloc.h	8.5 (Berkeley) 5/3/95
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 #ifndef _SYS_MALLOC_H_
 #define	_SYS_MALLOC_H_
@@ -73,7 +85,7 @@
 
 #ifdef BSD_KERNEL_PRIVATE
 
-#define KMEMSTATS
+#define KMEMSTATS 0
 
 /*
  * Types of memory to be allocated (not all are used by us)
@@ -108,8 +120,8 @@
 #define	M_DQUOT		27	/* UFS quota entries */
 #define	M_UFSMNT	28	/* UFS mount structure */
 #define	M_SHM		29	/* SVID compatible shared memory segments */
-#define	M_VMMAP		30	/* VM map structures */
-#define	M_VMMAPENT	31	/* VM map entry structures */
+#define	M_PLIMIT	30	/* plimit  structures */
+#define	M_SIGACTS	31	/* sigacts structures */
 #define	M_VMOBJ		32	/* VM object structure */
 #define	M_VMOBJHASH	33	/* VM object hash structure */
 #define	M_VMPMAP	34	/* VM pmap */
@@ -120,7 +132,7 @@
 #define	M_FILEDESC	39	/* Open file descriptor table */
 #define	M_LOCKF		40	/* Byte-range locking structures */
 #define	M_PROC		41	/* Proc structures */
-#define	M_SUBPROC	42	/* Proc sub-structures */
+#define	M_PSTATS	42	/* pstats  proc sub-structures */
 #define	M_SEGMENT	43	/* Segment for LFS */
 #define	M_LFSNODE	44	/* LFS vnode private part */
 #define	M_FFSNODE	45	/* FFS vnode private part */
@@ -128,9 +140,9 @@
 #define	M_NQLEASE	47	/* XXX: Nqnfs lease */
 #define	M_NQMHOST	48	/* XXX: Nqnfs host address table */
 #define	M_NETADDR	49	/* Export host address structure */
-#define	M_NFSSVC	50	/* Nfs server structure */
-#define	M_NFSUID	51	/* Nfs uid mapping structure */
-#define	M_NFSD		52	/* Nfs server daemon structure */
+#define	M_NFSSVC	50	/* NFS server structure */
+#define	M_NFSUID	51	/* XXX: NFS uid mapping structure */
+#define	M_NFSD		52	/* NFS server daemon structure */
 #define	M_IPMOPTS	53	/* internet multicast options */
 #define	M_IPMADDR	54	/* internet multicast address */
 #define	M_IFMADDR	55	/* link-level multicast address */
@@ -156,10 +168,9 @@
 #define	M_HFSMNT	75	/* HFS mount structure */
 #define	M_HFSNODE	76	/* HFS catalog node */
 #define	M_HFSFORK	77	/* HFS file fork */
-#define M_VOLFSMNT	78  /* VOLFS mount structure */
-#define	M_VOLFSNODE	79	/* VOLFS private node part */
+#define M_ZFSMNT	78	/* ZFS mount data */
+#define	M_ZFSNODE	79	/* ZFS inode */
 #define	M_TEMP		80	/* misc temporary data buffers */
-#define	M_KTRACE	M_TEMP	/* ktrace buffers */
 #define	M_SECA		81	/* security associations, key management */
 #define M_DEVFS		82
 #define M_IPFW		83	/* IP Forwarding/NAT */
@@ -182,6 +193,13 @@
 #define M_KAUTH		100	/* kauth subsystem */
 #define M_DUMMYNET	101	/* dummynet */
 #define M_UNSAFEFS	102	/* storage for vnode lock state for unsafe FS */
+#define M_MACPIPELABEL	103	/* MAC pipe labels */
+#define M_MACTEMP	104	/* MAC framework */
+#define M_SBUF		105	/* string buffers */
+#define M_EXTATTR	106	/* extended attribute */
+#define M_LCTX		107	/* process login context */
+
+#define	M_LAST		109	/* Must be last type + 1 */
 
 #else /* BSD_KERNEL_PRIVATE */
 
@@ -200,117 +218,7 @@
 
 #ifdef BSD_KERNEL_PRIVATE
 
-
-#define	M_LAST		103	/* Must be last type + 1 */
-
-/* Strings corresponding to types of memory */
-/* Must be in synch with the #defines above */
-#define	INITKMEMNAMES { \
-	"free",		/* 0 M_FREE */ \
-	"mbuf",		/* 1 M_MBUF */ \
-	"devbuf",	/* 2 M_DEVBUF */ \
-	"socket",	/* 3 M_SOCKET */ \
-	"pcb",		/* 4 M_PCB */ \
-	"routetbl",	/* 5 M_RTABLE */ \
-	"hosttbl",	/* 6 M_HTABLE */ \
-	"fragtbl",	/* 7 M_FTABLE */ \
-	"zombie",	/* 8 M_ZOMBIE */ \
-	"ifaddr",	/* 9 M_IFADDR */ \
-	"soopts",	/* 10 M_SOOPTS */ \
-	"soname",	/* 11 M_SONAME */ \
-	"namei",	/* 12 M_NAMEI */ \
-	"gprof",	/* 13 M_GPROF */ \
-	"ioctlops",	/* 14 M_IOCTLOPS */ \
-	"mapmem",	/* 15 M_MAPMEM */ \
-	"cred",		/* 16 M_CRED */ \
-	"pgrp",		/* 17 M_PGRP */ \
-	"session",	/* 18 M_SESSION */ \
-	"iov32",	/* 19 M_IOV32 */ \
-	"mount",	/* 20 M_MOUNT */ \
-	"fhandle",	/* 21 M_FHANDLE */ \
-	"NFS req",	/* 22 M_NFSREQ */ \
-	"NFS mount",	/* 23 M_NFSMNT */ \
-	"NFS node",	/* 24 M_NFSNODE */ \
-	"vnodes",	/* 25 M_VNODE */ \
-	"namecache",	/* 26 M_CACHE */ \
-	"UFS quota",	/* 27 M_DQUOT */ \
-	"UFS mount",	/* 28 M_UFSMNT */ \
-	"shm",		/* 29 M_SHM */ \
-	"VM map",	/* 30 M_VMMAP */ \
-	"VM mapent",	/* 31 M_VMMAPENT */ \
-	"VM object",	/* 32 M_VMOBJ */ \
-	"VM objhash",	/* 33 M_VMOBJHASH */ \
-	"VM pmap",	/* 34 M_VMPMAP */ \
-	"VM pvmap",	/* 35 M_VMPVENT */ \
-	"VM pager",	/* 36 M_VMPAGER */ \
-	"VM pgdata",	/* 37 M_VMPGDATA */ \
-	"fileproc",	/* 38 M_FILEPROC */ \
-	"file desc",	/* 39 M_FILEDESC */ \
-	"lockf",	/* 40 M_LOCKF */ \
-	"proc",		/* 41 M_PROC */ \
-	"subproc",	/* 42 M_SUBPROC */ \
-	"LFS segment",	/* 43 M_SEGMENT */ \
-	"LFS node",	/* 44 M_LFSNODE */ \
-	"FFS node",	/* 45 M_FFSNODE */ \
-	"MFS node",	/* 46 M_MFSNODE */ \
-	"NQNFS Lease",	/* 47 M_NQLEASE */ \
-	"NQNFS Host",	/* 48 M_NQMHOST */ \
-	"Export Host",	/* 49 M_NETADDR */ \
-	"NFS srvsock",	/* 50 M_NFSSVC */ \
-	"NFS uid",	/* 51 M_NFSUID */ \
-	"NFS daemon",	/* 52 M_NFSD */ \
-	"ip_moptions",	/* 53 M_IPMOPTS */ \
-	"in_multi",	/* 54 M_IPMADDR */ \
-	"ether_multi",	/* 55 M_IFMADDR */ \
-	"mrt",		/* 56 M_MRTABLE */ \
-	"ISOFS mount",	/* 57 M_ISOFSMNT */ \
-	"ISOFS node",	/* 58 M_ISOFSNODE */ \
-	"NFSV3 srvdesc",/* 59 M_NFSRVDESC */ \
-	"NFSV3 diroff",	/* 60 M_NFSDIROFF */ \
-	"NFSV3 bigfh",	/* 61 M_NFSBIGFH */ \
-	"MSDOSFS mount",/* 62 M_MSDOSFSMNT */ \
-	"MSDOSFS fat",	/* 63 M_MSDOSFSFAT */ \
-	"MSDOSFS node",	/* 64 M_MSDOSFSNODE */ \
-	"ttys",		/* 65 M_TTYS */ \
-	"exec",		/* 66 M_EXEC */ \
-	"miscfs mount",	/* 67 M_MISCFSMNT */ \
-	"miscfs node",	/* 68 M_MISCFSNODE */ \
-	"adosfs mount",	/* 69 M_ADOSFSMNT */ \
-	"adosfs node",	/* 70 M_ADOSFSNODE */ \
-	"adosfs anode",	/* 71 M_ANODE */ \
-	"buf hdrs",	/* 72 M_BUFHDR */ \
-	"ofile tabl",	/* 73 M_OFILETABL */ \
-	"mbuf clust",	/* 74 M_MCLUST */ \
-	"HFS mount",	/* 75 M_HFSMNT */ \
-	"HFS node",	/* 76 M_HFSNODE */ \
-	"HFS fork",	/* 77 M_HFSFORK */ \
-	"VOLFS mount", 	/* 78 M_VOLFSMNT */ \
-	"VOLFS node", 	/* 79 M_VOLFSNODE */ \
-	"temp",		/* 80 M_TEMP */ \
-	"key mgmt",	/* 81 M_SECA */ \
-	"DEVFS",	/* 82 M_DEVFS */ \
-	"IpFw/IpAcct",	/* 83 M_IPFW */ \
-	"UDF node",	/* 84 M_UDFNODE */ \
-	"UDF mount",	/* 85 M_UDFMNT */ \
-	"IPv6 NDP",	/* 86 M_IP6NDP */ \
-	"IPv6 options",	/* 87 M_IP6OPT */ \
-	"IPv6 Misc",	/* 88 M_IP6MISC */\
-	"TCP Segment Q",/* 89 M_TSEGQ */\
-	"IGMP state",	/* 90 M_IGMP */\
-	"Journal",    /* 91 M_JNL_JNL */\
-	"Transaction",    /* 92 M_JNL_TR */\
-	"specinfo",		/* 93 M_SPECINFO */\
-	"kqueue",	/* 94 M_KQUEUE */\
-	"HFS dirhint",	/* 95 M_HFSDIRHINT */ \
-        "cluster_read",	/* 96 M_CLRDAHEAD */ \
-        "cluster_write",/* 97 M_CLWRBEHIND */ \
-	"iov64",	/* 98 M_IOV64 */ \
-	"fileglob",	/* 99 M_FILEGLOB */ \
-	"kauth",		/* 100 M_KAUTH */ \
-	"dummynet",		/* 101 M_DUMMYNET */ \
-        "unsafe_fsnode"	/* 102 M_UNSAFEFS */ \
-}
-
+#if KMEMSTATS
 struct kmemstats {
 	long	ks_inuse;	/* # of packets of this type currently
 				 * in use */
@@ -325,6 +233,7 @@ struct kmemstats {
 };
 
 extern struct kmemstats kmemstats[];
+#endif /* KMEMSTATS */
 
 #endif /* BSD_KERNEL_PRIVATE */
 

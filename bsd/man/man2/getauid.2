@@ -1,0 +1,55 @@
+.\"
+.\" Copyright (c) 2007 Apple Inc. All rights reserved.
+.\"
+.\" @APPLE_LICENSE_HEADER_START@
+.\" 
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this
+.\" file.
+.\" 
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\" 
+.\" @APPLE_LICENSE_HEADER_END@
+.\"
+.Dd July 30, 2007
+.Dt GETAUID 2
+.Os Darwin
+.Sh NAME
+.Nm getauid
+.Nd get the audit user ID of the current process  
+.Sh SYNOPSIS
+.Fd #include <bsm/audit.h>
+.Ft int
+.Fn getauid "au_id_t * auid"
+.Sh DESCRIPTION
+The
+.Fn getauid
+function returns the audit user ID for the calling process. The variable pointed
+at by 
+.Fa auid
+holds the ID returned by the system.
+.Sh RETURN VALUES
+Upon successful completion a value of 0 is returned.
+Otherwise, a value of -1 is returned and
+.Va errno
+is set to indicate the error.
+.Sh SEE ALSO
+.Xr audit 2 ,
+.Xr auditon 2 ,
+.Xr auditctl 2 ,
+.Xr setauid 2 ,
+.Xr getaudit 2 ,
+.Xr setaudit 2
+.Sh HISTORY
+The
+.Fn getauid
+function call first appeared in Mac OS X 10.3 (Panther).

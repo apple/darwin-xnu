@@ -49,6 +49,7 @@ UUID_DEFINE(UUID_NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 static void
 read_node(uint8_t *node)
 {
+#if NETWORKING
 	struct ifnet *ifp;
 	struct ifaddr *ifa;
 	struct sockaddr_dl *sdl;
@@ -65,6 +66,7 @@ read_node(uint8_t *node)
 		}
 	}
 	ifnet_head_done();
+#endif /* NETWORKING */
 
 	read_random(node, 6);
 	node[0] |= 0x01;

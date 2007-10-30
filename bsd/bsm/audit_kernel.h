@@ -1,14 +1,19 @@
 /*
- * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2004 Apple Computer, Inc.  All Rights Reserved.
+ * Copyright (c) 1999-2007 Apple Inc.  All Rights Reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
  * 
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
@@ -18,11 +23,22 @@
  * Please see the License for the specific language governing rights and
  * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
  */
 
 #ifndef _BSM_AUDIT_KERNEL_H
 #define	_BSM_AUDIT_KERNEL_H
+
+#if CONFIG_MACF
+#include <sys/queue.h>
+#include <security/mac_framework.h>
+#endif
 
 #ifdef KERNEL
 
@@ -95,6 +111,7 @@ extern int	audit_suspended;
 #define ARG_PROCESS		0x0000080000000000ULL
 #define ARG_MACHPORT1		0x0000100000000000ULL
 #define ARG_MACHPORT2		0x0000200000000000ULL
+#define ARG_MAC_STRING		0x0000400000000000ULL
 #define ARG_NONE		0x0000000000000000ULL
 #define ARG_ALL			0xFFFFFFFFFFFFFFFFULL
 
@@ -147,6 +164,21 @@ struct posix_ipc_perm {
 	gid_t			pipc_gid;
 	mode_t			pipc_mode;
 };
+
+#if CONFIG_MACF
+
+#define MAC_AUDIT_LABEL_LEN 1024
+#define MAC_AUDIT_DATA_TYPE 0
+#define MAC_AUDIT_TEXT_TYPE 1
+
+struct mac_audit_record {
+	int type;		// one of the types defined above
+	int length;		// byte length of the data field
+	u_char *data;	// the payload
+	LIST_ENTRY(mac_audit_record) records;
+};
+
+#endif
 
 struct audit_record {
 	/* Audit record header. */
@@ -201,6 +233,12 @@ struct audit_record {
 	char				*ar_arg_upath2;
 	char				*ar_arg_kpath1;
 	char				*ar_arg_kpath2;
+#if CONFIG_MACF
+	char				*ar_vnode1_mac_labels;
+	char				*ar_vnode2_mac_labels;
+	char				*ar_cred_mac_labels;
+	char				*ar_arg_mac_string;
+#endif
 	char				*ar_arg_text;
 	struct au_mask			ar_arg_amask;
 	struct vnode_au_info		ar_arg_vnode1;
@@ -209,11 +247,21 @@ struct audit_record {
 	int				ar_arg_svipc_cmd;
 	struct ipc_perm			ar_arg_svipc_perm;
 	int				ar_arg_svipc_id;
-	void *				ar_arg_svipc_addr;
+	user_addr_t			ar_arg_svipc_addr;
 	struct posix_ipc_perm		ar_arg_pipc_perm;
 	mach_port_name_t		ar_arg_mach_port1;
 	mach_port_name_t		ar_arg_mach_port2;
 	union auditon_udata		ar_arg_auditon;
+
+#if CONFIG_MACF
+	/* MAC security related fields added by MAC policies
+	 * ar_forced_by_mac is 1 if mac_audit_check_preselect() forced this
+	 * call to be audited, 0 otherwise.
+	 */
+	LIST_HEAD(mac_audit_record_list_t, mac_audit_record)   *ar_mac_records;
+	int                             ar_forced_by_mac;
+#endif
+
 };
 
 /*
@@ -234,6 +282,8 @@ struct proc;
 struct vnode;
 struct componentname;
 
+int			 kau_will_audit(void);
+
 void			 audit_abort(struct kaudit_record *ar);
 void			 audit_commit(struct kaudit_record *ar, int error, 
 					int retval);
@@ -245,8 +295,17 @@ struct kaudit_record	*audit_new(int event, struct proc *p,
 
 void			 audit_syscall_enter(unsigned short code,
 				struct proc *proc, struct uthread *uthread);
+#if CONFIG_MACF
+/*
+ * The parameter list of audit_syscall_exit() was modified to also take the
+ * Darwin syscall number, which is required by mac_audit_check_postselect().
+ */
+void			 audit_syscall_exit(unsigned short code, int error,
+				struct proc *proc, struct uthread *uthread);
+#else
 void			 audit_syscall_exit(int error, struct proc *proc,
 				struct uthread *uthread);
+#endif
 void			 audit_mach_syscall_enter(unsigned short audit_event);
 void			 audit_mach_syscall_exit(int retval,
 				struct uthread *uthread);
@@ -277,7 +336,7 @@ token_t			*kau_to_header64(const struct timespec *ctime, int rec_size,
  * are wrapped by a macro, and the macro should be the only place in 
  * the source tree where these functions are referenced.
  */
-#ifdef AUDIT
+#if AUDIT
 void			 audit_arg_addr(user_addr_t addr);
 void			 audit_arg_len(user_size_t len);
 void			 audit_arg_fd(int fd);
@@ -299,11 +358,11 @@ void			 audit_arg_process(struct proc *p);
 void			 audit_arg_signum(u_int signum);
 void			 audit_arg_socket(int sodomain, int sotype, 
 						int soprotocol);
-void			 audit_arg_sockaddr(struct proc *p, 
+void			 audit_arg_sockaddr(struct vnode *cwd_vp,
 						struct sockaddr *so);
 void			 audit_arg_auid(uid_t auid);
 void			 audit_arg_auditinfo(const struct auditinfo *au_info);
-void			 audit_arg_upath(struct proc *p, char *upath, 
+void			 audit_arg_upath(struct vnode *cwd_vp, char *upath, 
 					 u_int64_t flags);
 void			 audit_arg_vnpath(struct vnode *vp, u_int64_t flags);
 void			 audit_arg_vnpath_withref(struct vnode *vp, u_int64_t flags);
@@ -312,7 +371,7 @@ void			 audit_arg_cmd(int cmd);
 void			 audit_arg_svipc_cmd(int cmd);
 void			 audit_arg_svipc_perm(const struct ipc_perm *perm);
 void			 audit_arg_svipc_id(int id);
-void			 audit_arg_svipc_addr(void *addr);
+void			 audit_arg_svipc_addr(user_addr_t addr);
 void			 audit_arg_posix_ipc_perm(uid_t uid, gid_t gid, 
 						 mode_t mode);
 void			 audit_arg_auditon(const union auditon_udata *udata);
@@ -326,6 +385,16 @@ void			 audit_proc_init(struct proc *p);
 void			 audit_proc_fork(struct proc *parent, 
 					 struct proc *child);
 void			 audit_proc_free(struct proc *p);
+
+#if CONFIG_MACF
+/* 
+ * audit_mac_data() is the MAC Framework's entry point to the audit subsystem.
+ * It currently creates only text and data audit tokens.
+ */
+int			 audit_mac_data(int type, int len, u_char *data);
+void			 audit_arg_mac_string(const char *string);
+
+#endif
 
 /*
  * Define a macro to wrap the audit_arg_* calls by checking the global
@@ -347,9 +416,9 @@ void			 audit_proc_free(struct proc *p);
  * auditing is enabled, or we have a audit record on the thread. It is 
  * possible that an audit record was begun before auditing was turned off.
  */
-#define AUDIT_SYSCALL_EXIT(error, proc, uthread)	do {		\
-	if (audit_enabled || (uthread->uu_ar != NULL)) {			\
-		audit_syscall_exit(error, proc, uthread);		\
+#define AUDIT_SYSCALL_EXIT(code, proc, uthread, error)	do {		\
+	if (audit_enabled || (uthread->uu_ar != NULL)) {		\
+		audit_syscall_exit(code, error, proc, uthread);		\
 	}								\
 	} while (0)
 
@@ -379,10 +448,14 @@ void			 audit_proc_free(struct proc *p);
 	} while (0)
 
 #else /* !AUDIT */
+
+#define	AUDIT_ARG(op, args...)	do {					\
+	} while (0)
+
 #define AUDIT_SYSCALL_ENTER(args...)	do {				\
 	} while (0)
 
-#define AUDIT_SYSCALL_EXIT(error, proc, uthread)	do {		\
+#define AUDIT_SYSCALL_EXIT(code, proc, uthread, error)	do {	\
 	} while (0)
 
 #define AUDIT_MACH_SYSCALL_ENTER(args...)       do {			\

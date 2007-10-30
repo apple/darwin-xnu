@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003, 2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #ifndef __HFS_HOTFILES__
 #define __HFS_HOTFILES__
@@ -36,7 +42,7 @@
  */
 #define HFC_DEFAULT_FILE_COUNT	 1000
 #define HFC_DEFAULT_DURATION   	 (3600 * 60)
-#define HFC_CUMULATIVE_CYCLES	 4
+#define HFC_CUMULATIVE_CYCLES	 3
 #define HFC_MAXIMUM_FILE_COUNT	 5000
 #define HFC_MAXIMUM_FILESIZE	 (10 * 1024 * 1024)
 #define HFC_MINIMUM_TEMPERATURE  24
@@ -84,9 +90,9 @@ typedef struct HotFileKey HotFileKey;
 struct HotFilesInfo {
 	u_int32_t	magic;
 	u_int32_t	version;
-	u_int32_t	duration;    /* duration of sample period */
-	u_int32_t	timebase;   /* recording period start time */
-	u_int32_t	timeleft;    /* recording period stop time */
+	u_int32_t	duration;    /* duration of sample period (secs) */
+	u_int32_t	timebase;    /* start of recording period (GMT time in secs) */
+	u_int32_t	timeleft;    /* time remaining in recording period (secs) */
 	u_int32_t	threshold;
 	u_int32_t	maxfileblks;
 	u_int32_t	maxfilecnt;
@@ -105,16 +111,13 @@ struct vnode;
 /*
  * Hot File interface functions.
  */
-int  hfs_hotfilesync (struct hfsmount *, struct proc *);
+int  hfs_hotfilesync (struct hfsmount *, vfs_context_t ctx);
 
 int  hfs_recording_init(struct hfsmount *);
 int  hfs_recording_suspend (struct hfsmount *);
 
 int  hfs_addhotfile (struct vnode *);
 int  hfs_removehotfile (struct vnode *);
-
-int  hfs_relocate(struct  vnode *, u_int32_t, kauth_cred_t, struct  proc *);
-
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */

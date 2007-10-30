@@ -35,20 +35,23 @@
 .Sh SYNOPSIS
 .In aio.h
 .Ft int
-.Fn aio_error "const struct aiocb *iocb"
+.Fo aio_error
+.Fa "const struct aiocb *aiocbp"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn aio_error
 system call returns the error status of the asynchronous I/O request
 associated with the structure pointed to by
-.Fa iocb .
+.Fa aiocbp .
 .Sh RETURN VALUES
 If the asynchronous I/O request has completed successfully,
 .Fn aio_error
 returns 0.  If the request has not yet completed,
 .Er EINPROGRESS
-is returned.  If the request has completed unsuccessfully the error
-status is returned as described in
+is returned.
+If the request has completed unsuccessfully,
+the error status is returned as described in
 .Xr read 2 ,
 .Xr write 2 ,
 or
@@ -66,9 +69,10 @@ The
 .Fn aio_error
 system call will fail if:
 .Bl -tag -width Er
+.\" ==========
 .It Bq Er EINVAL
 The
-.Fa iocb
+.Fa aiocbp
 argument
 does not reference an outstanding asynchronous I/O request.
 .El

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*    Modified for MP, 1996 by Tuyen Nguyen */
 /*
@@ -52,7 +58,8 @@
 
 gbuf_t *atp_resource_m = 0;
 extern caddr_t atp_free_cluster_list;
-extern void atp_delete_free_clusters();
+extern struct atp_rcb_qhead atp_need_rel;
+
 
 struct atp_trans *atp_trans_alloc(atp)
 struct  atp_state *atp;
@@ -62,7 +69,8 @@ struct  atp_state *atp;
 	register struct atp_trans *trp, *trp_array;
 
 	if (atp_trans_free_list == 0) {
-		if ((m = gbuf_alloc(TRPS_PER_BLK*sizeof(struct atp_trans),PRI_HI)) == 0)
+		if ((m = gbuf_alloc_wait(TRPS_PER_BLK*sizeof(struct atp_trans),
+		    atp == NULL)) == 0)
 			return (struct atp_trans *)0;
 		bzero(gbuf_rptr(m), TRPS_PER_BLK*sizeof(struct atp_trans));
 		trp_array = (struct atp_trans *)gbuf_rptr(m);
@@ -150,8 +158,6 @@ register struct atp_rcb *rcbp;
 	rcbp->rc_queue = 0;
 
 	if (rcbp->rc_timestamp) {
-	        extern struct atp_rcb_qhead atp_need_rel;
-
 		rcbp->rc_timestamp = 0;
 		ATP_Q_REMOVE(atp_need_rel, rcbp, rc_tlist);
 		rcbp->rc_tlist.prev = NULL;
@@ -165,7 +171,7 @@ register struct atp_rcb *rcbp;
 			rcbp->rc_snd[i] = 0;
 	}
 	if (atp_free_cluster_list)
-		atp_delete_free_clusters();
+		atp_delete_free_clusters(NULL);
 	if (rc_state != RCB_UNQUEUED) {
 		if (rc_state == RCB_PENDING) {
 			ATP_Q_REMOVE(atp->atp_attached, rcbp, rc_list);

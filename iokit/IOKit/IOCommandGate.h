@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*[
     1999-8-10	Godfrey van der Linden(gvdl)
@@ -110,11 +116,9 @@ compiler warning.  Defaults to zero, see $link IOEventSource::setAction.
     @result True if inherited classes initialise successfully. */
     virtual bool init(OSObject *owner, Action action = 0);
 
-#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
     // Superclass overrides
     virtual void free();
     virtual void setWorkLoop(IOWorkLoop *inWorkLoop);
-#endif
 
 /*! @function runCommand
     @abstract Single thread a command with the target work-loop.
@@ -198,7 +202,6 @@ client's thread attemptCommand will fail if the work-loop's gate is closed.
     @param onlyOneThread true to only wake up at most one thread, false otherwise. */
     virtual void commandWakeup(void *event, bool oneThread = false);
 
-#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
 /*! @function disable
     @abstract Disable the command gate
     @discussion When a command gate is disabled all future calls to runAction and runCommand will stall until the gate is enable()d later.  This can be used to block client threads when a system sleep is requested.  The IOWorkLoop thread itself will never stall, even when making runAction/runCommand calls.  This call must be made from a gated context, to clear potential race conditions.  */
@@ -208,7 +211,6 @@ client's thread attemptCommand will fail if the work-loop's gate is closed.
     @abstract Enable command gate, this will unblock any blocked Commands and Actions.
     @discussion  Enable the command gate.  The attemptAction/attemptCommand calls will now be enabled and can succeeed.  Stalled runCommand/runAction calls will be woken up. */
     virtual void enable();
-#endif
 
 private:
     OSMetaClassDeclareReservedUnused(IOCommandGate, 0);

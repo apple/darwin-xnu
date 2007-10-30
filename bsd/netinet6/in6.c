@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ *
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ *
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ *
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/netinet6/in6.c,v 1.7.2.7 2001/08/06 20:26:22 ume Exp $	*/
 /*	$KAME: in6.c,v 1.187 2001/05/24 07:43:59 itojun Exp $	*/
 
@@ -78,12 +106,14 @@
 #include <sys/kernel.h>
 #include <sys/syslog.h>
 #include <sys/kern_event.h>
-#include <kern/lock.h>
+#include <kern/locks.h>
 
 #include <net/if.h>
 #include <net/if_types.h>
+#include <net/if_var.h>
 #include <net/route.h>
 #include <net/if_dl.h>
+#include <net/kpi_protocol.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -138,7 +168,8 @@ static int in6_ifinit(struct ifnet *, struct in6_ifaddr *,
 static void in6_unlink_ifa(struct in6_ifaddr *, struct ifnet *, int);
 
 struct in6_multihead in6_multihead;	/* XXX BSS initialization */
-extern struct lck_mtx_t *nd6_mutex;
+extern lck_mtx_t *nd6_mutex;
+extern int in6_init2done;
 
 /*
  * Subroutine for in6_ifaddloop() and in6_ifremloop().
@@ -195,11 +226,7 @@ in6_ifloop_request(int cmd, struct ifaddr *ifa)
 	if (nrt) {
 		rt_newaddrmsg(cmd, ifa, e, nrt);
 		if (cmd == RTM_DELETE) {
-			if (nrt->rt_refcnt <= 0) {
-				/* XXX: we should free the entry ourselves. */
-				rtref(nrt);
-				rtfree_locked(nrt);
-			}
+			rtfree_locked(nrt);
 		} else {
 			/* the cmd must be RTM_ADD here */
 			rtunref(nrt);
@@ -221,12 +248,12 @@ in6_ifaddloop(struct ifaddr *ifa)
 
 	lck_mtx_lock(rt_mtx);
 	/* If there is no loopback entry, allocate one. */
-	rt = rtalloc1_locked(ifa->ifa_addr, 0, 0);
+	rt = rtalloc1_locked(ifa->ifa_addr, 0, 0UL);
 	if (rt == NULL || (rt->rt_flags & RTF_HOST) == 0 ||
 	    (rt->rt_ifp->if_flags & IFF_LOOPBACK) == 0)
 		in6_ifloop_request(RTM_ADD, ifa);
 	if (rt)
-		rt->rt_refcnt--;
+		rtunref(rt);
 	lck_mtx_unlock(rt_mtx);
 }
 
@@ -279,10 +306,10 @@ in6_ifremloop(struct ifaddr *ifa, int locked)
 		 * to a shared medium.
 		 */
 		lck_mtx_lock(rt_mtx);
-		rt = rtalloc1_locked(ifa->ifa_addr, 0, 0);
+		rt = rtalloc1_locked(ifa->ifa_addr, 0, 0UL);
 		if (rt != NULL && (rt->rt_flags & RTF_HOST) != 0 &&
 		    (rt->rt_ifp->if_flags & IFF_LOOPBACK) != 0) {
-			rt->rt_refcnt--;
+			rtunref(rt);
 			in6_ifloop_request(RTM_DELETE, ifa);
 		}
 		lck_mtx_unlock(rt_mtx);
@@ -485,7 +512,7 @@ in6_control(so, cmd, data, ifp, p)
 
 	case SIOCAUTOCONF_STOP: 
 		{
-			struct in6_ifaddr *ia, *nia = NULL;
+			struct in6_ifaddr *nia = NULL;
 			
 			ifnet_lock_exclusive(ifp);
 			ifp->if_eflags &= ~IFEF_ACCEPT_RTADVD;
@@ -524,7 +551,7 @@ in6_control(so, cmd, data, ifp, p)
 
 	case SIOCLL_STOP:
 		{
-			struct in6_ifaddr *ia, *nia = NULL;
+			struct in6_ifaddr *nia = NULL;
 			
 			/* removed link local addresses from interface */
 
@@ -551,7 +578,7 @@ in6_control(so, cmd, data, ifp, p)
 #endif
 			default:
 
-				if (error = dlil_plumb_protocol(PF_INET6, ifp))
+				if ((error = proto_plumb(PF_INET6, ifp)))
 					printf("SIOCPROTOATTACH_IN6: %s error=%d\n", 
 						if_name(ifp), error);
 				break;
@@ -564,7 +591,7 @@ in6_control(so, cmd, data, ifp, p)
 
 		in6_purgeif(ifp);	/* Cleanup interface routes and addresses */
 
-		if (error = dlil_unplumb_protocol(PF_INET6, ifp))
+		if ((error = proto_unplumb(PF_INET6, ifp)))
 			 printf("SIOCPROTODETACH_IN6: %s error=%d\n",
 			 	if_name(ifp), error);
 		return(error);
@@ -764,7 +791,7 @@ in6_control(so, cmd, data, ifp, p)
 		struct nd_prefix pr0, *pr;
 		
 		/* Attempt to attache the protocol, in case it isn't attached */
-		error = dlil_plumb_protocol(PF_INET6, ifp);
+		error = proto_plumb(PF_INET6, ifp);
 		if (error) {
 			if (error != EEXIST) {
 				printf("SIOCAIFADDR_IN6: %s can't plumb protocol error=%d\n", 
@@ -847,8 +874,10 @@ in6_control(so, cmd, data, ifp, p)
 		} else {
 			if ((ia->ia6_flags & IN6_IFF_AUTOCONF) != 0 &&
 			    ia->ia6_ndpr == NULL) { /* new autoconfed addr */
-				ia->ia6_ndpr = pr;
+				lck_mtx_lock(nd6_mutex);
 				pr->ndpr_refcnt++;
+				lck_mtx_unlock(nd6_mutex);
+				ia->ia6_ndpr = pr;
 
 				/*
 				 * If this is the first autoconf address from
@@ -875,6 +904,9 @@ in6_control(so, cmd, data, ifp, p)
 			 */
 			pfxlist_onlink_check(0);
 		}
+
+		/* Drop use count held above during lookup/add */
+		ndpr_rele(pr, FALSE);
 
 		break;
 	}
@@ -921,20 +953,18 @@ in6_control(so, cmd, data, ifp, p)
 			pr->ndpr_expire = 1; /* XXX: just for expiration */
 		}
 
+		/* Drop use count held above during lookup */
+		if (pr != NULL)
+			ndpr_rele(pr, FALSE);
+
 	  purgeaddr:
 		in6_purgeaddr(&ia->ia_ifa, 0);
 		break;
 	}
 
 	default:
-#ifdef __APPLE__
-		error = dlil_ioctl(PF_INET6, ifp, cmd, (caddr_t)data);
+		error = ifnet_ioctl(ifp, PF_INET6, cmd, data);
 		goto ioctl_cleanup;
-#else
-		if (ifp == NULL || ifp->if_ioctl == 0)
-			return(EOPNOTSUPP);
-		return((*ifp->if_ioctl)(ifp, cmd, data));
-#endif
 	}
 ioctl_cleanup:
 	return error;
@@ -1089,10 +1119,12 @@ in6_update_ifa(ifp, ifra, ia)
 		/*
 		 * When in6_update_ifa() is called in a process of a received
 		 * RA, it is called under splnet().  So, we should call malloc
-		 * with M_NOWAIT.
+		 * with M_NOWAIT.  The exception to this is during init time
+		 * when we know it's okay to do M_WAITOK, hence the check
+		 * against in6_init2done flag to see if it's not yet set.
 		 */
-		ia = (struct in6_ifaddr *)
-			_MALLOC(sizeof(*ia), M_IFADDR, M_NOWAIT);
+		ia = (struct in6_ifaddr *) _MALLOC(sizeof(*ia), M_IFADDR,
+		    in6_init2done ? M_NOWAIT : M_WAITOK);
 		if (ia == NULL)
 			return ENOBUFS;
 		bzero((caddr_t)ia, sizeof(*ia));
@@ -1514,7 +1546,7 @@ in6_purgeif(ifp)
  *		get first address that matches the specified prefix.
  *	SIOCALIFADDR: add the specified address.
  *	SIOCALIFADDR with IFLR_PREFIX:
- *		add the specified prefix, filling hostid part from
+ *		add the specified prefix, filling hostaddr part from
  *		the first link-local address.  prefixlen must be <= 64.
  *	SIOCDLIFADDR: delete the specified address.
  *	SIOCDLIFADDR with IFLR_PREFIX:
@@ -1584,7 +1616,7 @@ in6_lifaddr_ioctl(so, cmd, data, ifp, p)
 	case SIOCALIFADDR:
 	    {
 		struct in6_aliasreq ifra;
-		struct in6_addr hostid;
+		struct in6_addr hostaddr;
 		int prefixlen;
 		int hostid_found = 0;
 
@@ -1592,14 +1624,14 @@ in6_lifaddr_ioctl(so, cmd, data, ifp, p)
 			struct sockaddr_in6 *sin6;
 
 			/*
-			 * hostid is to fill in the hostid part of the
-			 * address.  hostid points to the first link-local
+			 * hostaddr is to fill in the hostaddr part of the
+			 * address.  hostaddr points to the first link-local
 			 * address attached to the interface.
 			 */
 			ifa = (struct ifaddr *)in6ifa_ifpforlinklocal(ifp, 0);
 			if (!ifa)
 				return EADDRNOTAVAIL;
-			hostid = *IFA_IN6(ifa);
+			hostaddr = *IFA_IN6(ifa);
 			hostid_found = 1;
 
 		 	/* prefixlen must be <= 64. */
@@ -1607,7 +1639,7 @@ in6_lifaddr_ioctl(so, cmd, data, ifp, p)
 				return EINVAL;
 			prefixlen = iflr->prefixlen;
 
-			/* hostid part must be zero. */
+			/* hostaddr part must be zero. */
 			sin6 = (struct sockaddr_in6 *)&iflr->addr;
 			if (sin6->sin6_addr.s6_addr32[2] != 0
 			 || sin6->sin6_addr.s6_addr32[3] != 0) {
@@ -1624,11 +1656,11 @@ in6_lifaddr_ioctl(so, cmd, data, ifp, p)
 		bcopy(&iflr->addr, &ifra.ifra_addr,
 			((struct sockaddr *)&iflr->addr)->sa_len);
 		if (hostid_found) {
-			/* fill in hostid part */
+			/* fill in hostaddr part */
 			ifra.ifra_addr.sin6_addr.s6_addr32[2] =
-				hostid.s6_addr32[2];
+				hostaddr.s6_addr32[2];
 			ifra.ifra_addr.sin6_addr.s6_addr32[3] =
-				hostid.s6_addr32[3];
+				hostaddr.s6_addr32[3];
 		}
 
 		if (((struct sockaddr *)&iflr->dstaddr)->sa_family) {	/*XXX*/
@@ -1636,9 +1668,9 @@ in6_lifaddr_ioctl(so, cmd, data, ifp, p)
 				((struct sockaddr *)&iflr->dstaddr)->sa_len);
 			if (hostid_found) {
 				ifra.ifra_dstaddr.sin6_addr.s6_addr32[2] =
-					hostid.s6_addr32[2];
+					hostaddr.s6_addr32[2];
 				ifra.ifra_dstaddr.sin6_addr.s6_addr32[3] =
-					hostid.s6_addr32[3];
+					hostaddr.s6_addr32[3];
 			}
 		}
 
@@ -1818,7 +1850,7 @@ in6_ifinit(ifp, ia, sin6, newhost)
 
 
 	if (ifacount <= 1 && 
-	    (error = dlil_ioctl(PF_INET6, ifp, SIOCSIFADDR, (caddr_t)ia))) {
+	    (error = ifnet_ioctl(ifp, PF_INET6, SIOCSIFADDR, ia))) {
 		if (error) {
 			return(error);
 		}
@@ -2058,6 +2090,31 @@ ip6_sprintf(addr)
 	}
 	*--cp = 0;
 	return(ip6buf[ip6round]);
+}
+
+int
+in6addr_local(struct in6_addr *in6)
+{
+	struct rtentry *rt;
+	struct sockaddr_in6 sin6;
+	int local = 0;
+
+	if (IN6_IS_ADDR_LOOPBACK(in6) || IN6_IS_ADDR_LINKLOCAL(in6))
+		return (1);
+
+	sin6.sin6_family = AF_INET6;
+	sin6.sin6_len = sizeof (sin6);
+	bcopy(in6, &sin6.sin6_addr, sizeof (*in6));
+	rt = rtalloc1((struct sockaddr *)&sin6, 0, 0UL);
+
+	if (rt != NULL) {
+		if (rt->rt_gateway->sa_family == AF_LINK)
+			local = 1;
+		rtfree(rt);
+	} else {
+		local = in6_localaddr(in6);
+	}
+	return (local);
 }
 
 int
@@ -2557,8 +2614,6 @@ in6_ifawithifp(
 	return NULL;
 }
 
-extern int in6_init2done;
-
 /*
  * perform DAD when interface becomes IFF_UP.
  */
@@ -2642,8 +2697,8 @@ in6_setmaxmtu()
 	ifnet_head_lock_shared();
 	TAILQ_FOREACH(ifp, &ifnet_head, if_list) {
 		if ((ifp->if_flags & IFF_LOOPBACK) == 0 &&
-		    nd_ifinfo[ifp->if_index].linkmtu > maxmtu)
-			maxmtu =  nd_ifinfo[ifp->if_index].linkmtu;
+		    IN6_LINKMTU(ifp) > maxmtu)
+			maxmtu = IN6_LINKMTU(ifp);
 	}
 	ifnet_head_done();
 	if (maxmtu)	/* update only when maxmtu is positive */

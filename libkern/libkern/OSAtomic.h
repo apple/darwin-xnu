@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1999 Apple Computer, Inc.  All rights reserved.
@@ -35,6 +41,41 @@
 extern "C" {
 #endif
 
+#if defined(__i386__)
+
+/*! @function OSCompareAndSwap64
+    @abstract 64-bit compare and swap operation.
+    @discussion See OSCompareAndSwap.
+*/
+extern Boolean OSCompareAndSwap64(UInt64 oldValue, UInt64 newValue,
+				   volatile UInt64 *address);
+
+/*! @function OSAddAtomic64
+    @abstract 64-bit atomic add operation.
+    @discussion See OSAddAtomic.
+*/
+extern SInt64 OSAddAtomic64(SInt64 theAmount, volatile SInt64 *address);
+
+/*! @function OSIncrementAtomic64
+    @abstract 64-bit increment.
+    @discussion See OSIncrementAtomic.
+*/
+inline static SInt64 OSIncrementAtomic64(volatile SInt64 *address)
+{
+	return OSAddAtomic64(1, address);
+}
+
+/*! @function OSDecrementAtomic64
+    @abstract 64-bit decrement.
+    @discussion See OSDecrementAtomic.
+*/
+inline static SInt64 OSDecrementAtomic64(volatile SInt64 *address)
+{
+	return OSAddAtomic64(-1, address);
+}
+
+#endif  /* defined(__i386__) */
+
 /*! @function OSCompareAndSwap
     @abstract Compare and swap operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
     @discussion The OSCompareAndSwap function compares the value at the specified address with oldVal. The value of newValue is written to the address only if oldValue and the value at the address are equal. OSCompareAndSwap returns true if newValue is written to the address; otherwise, it returns false.
@@ -45,7 +86,8 @@ extern "C" {
     @param address The 4-byte aligned address of the data to update atomically.
     @result true if newValue was written to the address. */
 
-extern Boolean OSCompareAndSwap( UInt32 oldValue, UInt32 newValue, UInt32 * address );
+extern Boolean OSCompareAndSwap(UInt32 oldValue, UInt32 newValue,
+				volatile UInt32 *address);
 
 /*! @function OSAddAtomic
     @abstract 32-bit add operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
@@ -56,7 +98,7 @@ extern Boolean OSCompareAndSwap( UInt32 oldValue, UInt32 newValue, UInt32 * addr
     @param address The 4-byte aligned address of the value to update atomically.
     @result The value before the addition */
 
-extern SInt32	OSAddAtomic(SInt32 amount, SInt32 * address);
+extern SInt32	OSAddAtomic(SInt32 amount, volatile SInt32 * address);
 
 /*! @function OSAddAtomic16
     @abstract 16-bit add operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
@@ -67,7 +109,7 @@ extern SInt32	OSAddAtomic(SInt32 amount, SInt32 * address);
     @param address The 2-byte aligned address of the value to update atomically.
     @result The value before the addition */
 
-extern SInt16	OSAddAtomic16(SInt32 amount, SInt16 * address);
+extern SInt16	OSAddAtomic16(SInt32 amount, volatile SInt16 * address);
 
 /*! @function OSAddAtomic8
     @abstract 8-bit add operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
@@ -78,7 +120,7 @@ extern SInt16	OSAddAtomic16(SInt32 amount, SInt16 * address);
     @param address The address of the value to update atomically.
     @result The value before the addition */
 
-extern SInt8	OSAddAtomic8(SInt32 amount, SInt8 * address);
+extern SInt8	OSAddAtomic8(SInt32 amount, volatile SInt8 * address);
 
 /*! @function OSIncrementAtomic
     @abstract 32-bit increment operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
@@ -88,7 +130,7 @@ extern SInt8	OSAddAtomic8(SInt32 amount, SInt8 * address);
     @param address The 4-byte aligned address of the value to update atomically.
     @result The value before the increment. */
 
-extern SInt32	OSIncrementAtomic(SInt32 * address);
+extern SInt32	OSIncrementAtomic(volatile SInt32 * address);
 
 /*! @function OSIncrementAtomic16
     @abstract 16-bit increment operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
@@ -98,7 +140,7 @@ extern SInt32	OSIncrementAtomic(SInt32 * address);
     @param address The 2-byte aligned address of the value to update atomically.
     @result The value before the increment. */
 
-extern SInt16	OSIncrementAtomic16(SInt16 * address);
+extern SInt16	OSIncrementAtomic16(volatile SInt16 * address);
 
 /*! @function OSIncrementAtomic8
     @abstract 8-bit increment operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
@@ -108,7 +150,7 @@ extern SInt16	OSIncrementAtomic16(SInt16 * address);
     @param address The address of the value to update atomically.
     @result The value before the increment. */
 
-extern SInt8	OSIncrementAtomic8(SInt8 * address);
+extern SInt8	OSIncrementAtomic8(volatile SInt8 * address);
 
 /*! @function OSDecrementAtomic
     @abstract 32-bit decrement operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
@@ -118,7 +160,7 @@ extern SInt8	OSIncrementAtomic8(SInt8 * address);
     @param address The 4-byte aligned address of the value to update atomically.
     @result The value before the decrement. */
 
-extern SInt32	OSDecrementAtomic(SInt32 * address);
+extern SInt32	OSDecrementAtomic(volatile SInt32 * address);
 
 /*! @function OSDecrementAtomic16
     @abstract 16-bit decrement operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
@@ -128,7 +170,7 @@ extern SInt32	OSDecrementAtomic(SInt32 * address);
     @param address The 2-byte aligned address of the value to update atomically.
     @result The value before the decrement. */
 
-extern SInt16	OSDecrementAtomic16(SInt16 * address);
+extern SInt16	OSDecrementAtomic16(volatile SInt16 * address);
 
 /*! @function OSDecrementAtomic8
     @abstract 8-bit decrement operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
@@ -138,7 +180,7 @@ extern SInt16	OSDecrementAtomic16(SInt16 * address);
     @param address The address of the value to update atomically.
     @result The value before the decrement. */
 
-extern SInt8	OSDecrementAtomic8(SInt8 * address);
+extern SInt8	OSDecrementAtomic8(volatile SInt8 * address);
 
 /*! @function OSBitAndAtomic
     @abstract 32-bit logical and operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
@@ -149,7 +191,7 @@ extern SInt8	OSDecrementAtomic8(SInt8 * address);
     @param address The 4-byte aligned address of the value to update atomically.
     @result The value before the bitwise operation */
 
-extern UInt32	OSBitAndAtomic(UInt32 mask, UInt32 * address);
+extern UInt32	OSBitAndAtomic(UInt32 mask, volatile UInt32 * address);
 
 /*! @function OSBitAndAtomic16
     @abstract 16-bit logical and operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
@@ -160,7 +202,7 @@ extern UInt32	OSBitAndAtomic(UInt32 mask, UInt32 * address);
     @param address The 2-byte aligned address of the value to update atomically.
     @result The value before the bitwise operation. */
 
-extern UInt16	OSBitAndAtomic16(UInt32 mask, UInt16 * address);
+extern UInt16	OSBitAndAtomic16(UInt32 mask, volatile UInt16 * address);
 
 /*! @function OSBitAndAtomic8
     @abstract 8-bit logical and operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
@@ -171,7 +213,7 @@ extern UInt16	OSBitAndAtomic16(UInt32 mask, UInt16 * address);
     @param address The address of the value to update atomically.
     @result The value before the bitwise operation. */
 
-extern UInt8	OSBitAndAtomic8(UInt32 mask, UInt8 * address);
+extern UInt8	OSBitAndAtomic8(UInt32 mask, volatile UInt8 * address);
 
 /*! @function OSBitOrAtomic
     @abstract 32-bit logical or operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
@@ -182,7 +224,7 @@ extern UInt8	OSBitAndAtomic8(UInt32 mask, UInt8 * address);
     @param address The 4-byte aligned address of the value to update atomically.
     @result The value before the bitwise operation. */
 
-extern UInt32	OSBitOrAtomic(UInt32 mask, UInt32 * address);
+extern UInt32	OSBitOrAtomic(UInt32 mask, volatile UInt32 * address);
 
 /*! @function OSBitOrAtomic16
     @abstract 16-bit logical or operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
@@ -193,7 +235,7 @@ extern UInt32	OSBitOrAtomic(UInt32 mask, UInt32 * address);
     @param address The 2-byte aligned address of the value to update atomically.
     @result The value before the bitwise operation. */
 
-extern UInt16	OSBitOrAtomic16(UInt32 mask, UInt16 * address);
+extern UInt16	OSBitOrAtomic16(UInt32 mask, volatile UInt16 * address);
 
 /*! @function OSBitOrAtomic8
     @abstract 8-bit logical or operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
@@ -204,7 +246,7 @@ extern UInt16	OSBitOrAtomic16(UInt32 mask, UInt16 * address);
     @param address The address of the value to update atomically.
     @result The value before the bitwise operation. */
 
-extern UInt8	OSBitOrAtomic8(UInt32 mask, UInt8 * address);
+extern UInt8	OSBitOrAtomic8(UInt32 mask, volatile UInt8 * address);
 
 /*! @function OSBitXorAtomic
     @abstract 32-bit logical xor operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
@@ -215,7 +257,7 @@ extern UInt8	OSBitOrAtomic8(UInt32 mask, UInt8 * address);
     @param address The 4-byte aligned address of the value to update atomically.
     @result The value before the bitwise operation. */
 
-extern UInt32	OSBitXorAtomic(UInt32 mask, UInt32 * address);
+extern UInt32	OSBitXorAtomic(UInt32 mask, volatile UInt32 * address);
 
 /*! @function OSBitXorAtomic16
     @abstract 16-bit logical xor operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
@@ -226,7 +268,7 @@ extern UInt32	OSBitXorAtomic(UInt32 mask, UInt32 * address);
     @param address The 2-byte aligned address of the value to update atomically.
     @result The value before the bitwise operation. */
 
-extern UInt16	OSBitXorAtomic16(UInt32 mask, UInt16 * address);
+extern UInt16	OSBitXorAtomic16(UInt32 mask, volatile UInt16 * address);
 
 /*! @function OSBitXorAtomic8
     @abstract 8-bit logical xor operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
@@ -237,7 +279,7 @@ extern UInt16	OSBitXorAtomic16(UInt32 mask, UInt16 * address);
     @param address The address of the value to update atomically.
     @result The value before the bitwise operation. */
 
-extern UInt8	OSBitXorAtomic8(UInt32 mask, UInt8 * address);
+extern UInt8	OSBitXorAtomic8(UInt32 mask, volatile UInt8 * address);
 
 /*! @function OSTestAndSet
     @abstract Bit test and set operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
@@ -248,7 +290,7 @@ extern UInt8	OSBitXorAtomic8(UInt32 mask, UInt8 * address);
     @param address The address of the byte to update atomically.
     @result true if the bit was already set, false otherwise. */
 
-extern Boolean	OSTestAndSet(UInt32 bit, UInt8 * startAddress);
+extern Boolean	OSTestAndSet(UInt32 bit, volatile UInt8 * startAddress);
 
 /*! @function OSTestAndClear
     @abstract Bit test and clear operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
@@ -259,7 +301,7 @@ extern Boolean	OSTestAndSet(UInt32 bit, UInt8 * startAddress);
     @param address The address of the byte to update atomically.
     @result true if the bit was already clear, false otherwise. */
 
-extern Boolean	OSTestAndClear(UInt32 bit, UInt8 * startAddress);
+extern Boolean	OSTestAndClear(UInt32 bit, volatile UInt8 * startAddress);
 
 #ifdef __ppc__
 /*! @function OSEnqueueAtomic
@@ -271,7 +313,7 @@ extern Boolean	OSTestAndClear(UInt32 bit, UInt8 * startAddress);
     @param element The list element to insert at the head of the list.
     @param elementNextFieldOffset The byte offset into the element where a pointer to the next element in the list is stored. */
 
-extern void	OSEnqueueAtomic(void ** listHead, void * element,
+extern void	OSEnqueueAtomic(void * volatile * listHead, void * element,
 				SInt32 elementNextFieldOffset);
 
 /*! @function OSDequeueAtomic
@@ -283,7 +325,7 @@ extern void	OSEnqueueAtomic(void ** listHead, void * element,
     @param elementNextFieldOffset The byte offset into the element where a pointer to the next element in the list is stored.
     @result A removed element, or zero if the list is empty. */
 
-extern void *	OSDequeueAtomic(void ** listHead,
+extern void *	OSDequeueAtomic(void * volatile * listHead,
 				SInt32 elementNextFieldOffset);
 #endif /* __ppc__ */
 
@@ -291,12 +333,20 @@ extern void *	OSDequeueAtomic(void ** listHead,
     @abstract The OSSynchronizeIO routine ensures orderly load and store operations to noncached memory mapped I/O devices.
     @discussion The OSSynchronizeIO routine ensures orderly load and store operations to noncached memory mapped I/O devices. It executes the eieio instruction on PowerPC processors. */
 
+#if defined(__arm__) && defined(__thumb__)
+extern void	OSSynchronizeIO(void);
+#else
 static __inline__ void OSSynchronizeIO(void)
 {
 #if defined(__ppc__)
         __asm__ ("eieio");
 #endif
+#if defined(__arm__)
+	UInt32 temp = 0;
+	__asm__ volatile("mcr p15, 0, %0, c7, c10, 4" : : "r" (temp));
+#endif
 }
+#endif
 
 #if defined(__cplusplus)
 }

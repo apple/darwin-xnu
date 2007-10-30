@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -54,7 +60,13 @@
  *
  *	@(#)vnode.h	8.17 (Berkeley) 5/20/95
  */
- 
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
+
 #ifndef _SYS_VNODE_INTERNAL_H_
 #define _SYS_VNODE_INTERNAL_H_
 
@@ -75,9 +87,11 @@
 #include <sys/vnode.h>
 #include <sys/namei.h>
 #include <sys/vfs_context.h>
+#include <sys/sysctl.h>
 
 
 struct lockf;
+struct label;
 
 LIST_HEAD(buflists, buf);
 
@@ -103,6 +117,7 @@ struct vnode {
         LIST_HEAD(, namecache) v_nclinks;	/* name cache entries that name this vnode */
         LIST_HEAD(, namecache) v_ncchildren;	/* name cache entries that regard us as there parent */
         vnode_t	 v_defer_reclaimlist;		/* in case we have to defer the reclaim to avoid recursion */
+        u_long	 v_listflag;			/* flags protected by the vnode_list_lock (see below) */
 	u_long	 v_flag;			/* vnode flags (see below) */
 	u_short	 v_lflag;			/* vnode local and named ref flags */
 	u_char	 v_iterblkflags;		/* buf iterator flags */
@@ -111,8 +126,9 @@ struct vnode {
 	int32_t	 v_usecount;			/* reference count of users */
 	int32_t	 v_iocount;			/* iocounters */
 	void *   v_owner;			/* act that owns the vnode */
-	enum vtype v_type;			/* vnode type */
-	u_long	 v_id;				/* identity of vnode contents */
+	u_short	 v_type;			/* vnode type */
+	u_short	 v_tag;				/* type of underlying data */
+	int	 v_id;				/* identity of vnode contents */
 	union {
 		struct mount	*vu_mountedhere;/* ptr to mounted vfs (VDIR) */
 		struct socket	*vu_socket;	/* unix ipc (VSOCK) */
@@ -122,20 +138,32 @@ struct vnode {
 	} v_un;
 	struct	buflists v_cleanblkhd;		/* clean blocklist head */
 	struct	buflists v_dirtyblkhd;		/* dirty blocklist head */
-        kauth_cred_t v_cred;
-        int	v_cred_timestamp;
+        /*
+	 * the following 4 fields are protected
+	 * by the name_cache_lock held in 
+	 * excluive mode
+	 */
+        kauth_cred_t	v_cred;			/* last authorized credential */
+        kauth_action_t	v_authorized_actions;	/* current authorized actions for v_cred */
+        int		v_cred_timestamp;	/* determine if entry is stale for MNTK_AUTH_OPAQUE */
+        int		v_nc_generation;	/* changes when nodes are removed from the name cache */
+        /*
+	 * back to the vnode lock for protection
+	 */
 	long	v_numoutput;			/* num of writes in progress */
 	long	v_writecount;			/* reference count of writers */
-	char *	v_name;				/* name component of the vnode */
+	const char *v_name;			/* name component of the vnode */
 	vnode_t v_parent;			/* pointer to parent vnode */
 #ifdef INTERIM_FSNODE_LOCK
 	struct lockf	*v_lockf;		/* advisory lock list head */
         struct unsafe_fsnode *v_unsafefs;	/* pointer to struct used to lock */
 #endif						/* vnodes on unsafe filesystems */
 	int 	(**v_op)(void *);		/* vnode operations vector */
-	enum vtagtype v_tag;			/* type of underlying data */
 	mount_t v_mount;			/* ptr to vfs we are in */
 	void *	v_data;				/* private data for fs */
+#if CONFIG_MACF
+	struct label *v_label;			/* MAC security label */
+#endif
 };
 
 #define	v_mountedhere	v_un.vu_mountedhere
@@ -154,6 +182,11 @@ struct vnode {
 #define VBI_DIRTY		0x8
 #define VBI_NEWBUF		0x10
 
+/*
+ * v_listflag
+ */
+#define VLIST_RAGE    0x01            /* vnode is currently in the rapid age list */
+#define VLIST_DEAD    0x02            /* vnode is currently in the dead list */
 
 /*
  * v_lflags
@@ -167,10 +200,14 @@ struct vnode {
 #define	VL_MOUNTDEAD	0x0040		/* v_moutnedhere is dead   */
 #define VL_NEEDINACTIVE	0x0080		/* delay VNOP_INACTIVE until iocount goes to 0 */
 
+#define	VL_LABEL	0x0100		/* vnode is marked for labeling */
+#define	VL_LABELWAIT	0x0200		/* vnode is marked for labeling */
+#define	VL_LABELED	0x0400		/* vnode is labeled */
+#define	VL_LWARNED	0x0800
+
 #define	VNAMED_UBC	0x2000		/* ubc named reference */
 #define VNAMED_MOUNT	0x4000		/* mount point named reference */
 #define	VNAMED_FSHASH	0x8000		/* FS hash named reference */
-
 
 /*
  * v_flags
@@ -179,9 +216,9 @@ struct vnode {
 #define	VTEXT		0x000002	/* vnode is a pure text prototype */
 #define	VSYSTEM		0x000004	/* vnode being used by kernel */
 #define	VISTTY		0x000008	/* vnode represents a tty */
-#define	VWASMAPPED	0x000010	/* vnode was mapped before */
-#define	VTERMINATE	0x000020	/* terminating memory object */
-#define	VTERMWANT	0x000040	/* wating for memory object death */
+#define	VRAGE		0x000010	/* vnode is in rapid age state */
+#define VBDEVVP		0x000020        /* vnode created by bdevvp */
+#define VDEVFLUSH	0x000040        /* device vnode after vflush */
 #define	VMOUNT		0x000080	/* mount operation in progress */
 #define	VBWAIT		0x000100	/* waiting for output to complete */
 #define	VALIASED	0x000200	/* vnode has an alias */
@@ -197,9 +234,11 @@ struct vnode {
 #define	VNOFLUSH	0x040000	/* don't vflush() if SKIPSYSTEM */
 #define	VLOCKLOCAL	0x080000	/* this vnode does adv locking in vfs */
 #define	VISHARDLINK	0x100000	/* hard link needs special processing on lookup and in volfs */
-
-#define VCRED_EXPIRED	2		/* number of seconds to keep cached credential valid */
-
+#define	VISUNION	0x200000	/* union special processing */
+#if NAMEDSTREAMS
+#define	VISNAMEDSTREAM	0x400000	/* vnode is a named stream (eg HFS resource fork) */
+#endif
+#define VOPENEVT        0x800000        /* if process is P_CHECKOPENEVT, then or in the O_EVTONLY flag on open */
 
 /*
  * Global vnode data.
@@ -234,7 +273,7 @@ extern	struct vnode *rootvnode;	/* root (i.e. "/") vnode */
  */
 struct vnodeop_desc {
 	int	vdesc_offset;		/* offset in vector--first for speed */
-	char    *vdesc_name;		/* a readable name for debugging */
+	const char *vdesc_name;		/* a readable name for debugging */
 	int	vdesc_flags;		/* VDESC_* flags */
 
 	/*
@@ -262,10 +301,6 @@ struct vnodeop_desc {
  */
 extern struct vnodeop_desc *vnodeop_descs[];
 
-/*
- * Interlock for scanning list of vnodes attached to a mountpoint
- */
-extern void * mntvnode_slock;
 
 /*
  * This macro is very helpful in defining those offsets in the vdesc struct.
@@ -299,30 +334,38 @@ extern void * mntvnode_slock;
 
 struct ostat;
 
-int	build_path(vnode_t first_vp, char *buff, int buflen, int *outlen);
+#define BUILDPATH_NO_FS_ENTER 0x1 /* Use cache values, do not enter file system */
+int	build_path(vnode_t first_vp, char *buff, int buflen, int *outlen, int flags, vfs_context_t ctx);
+
 int 	bdevvp(dev_t dev, struct vnode **vpp);
 void	cvtstat(struct stat *st, struct ostat *ost);
 void	vprint(const char *label, struct vnode *vp);
 
 
-__private_extern__ int is_package_name(char *name, int len);
+__private_extern__ int is_package_name(const char *name, int len);
 __private_extern__ int set_package_extensions_table(void *data, int nentries, int maxwidth);
 int 	vn_rdwr(enum uio_rw rw, struct vnode *vp, caddr_t base,
 	    		int len, off_t offset, enum uio_seg segflg, int ioflg,
-	    		struct ucred *cred, int *aresid, struct proc *p);
+	    		kauth_cred_t cred, int *aresid, struct proc *p);
 int 	vn_rdwr_64(enum uio_rw rw, struct vnode *vp, uint64_t base,
 	    		int64_t len, off_t offset, enum uio_seg segflg,
-			int ioflg, struct ucred *cred, int *aresid,
+			int ioflg, kauth_cred_t cred, int *aresid,
 			struct proc *p);
+#if CONFIG_MACF
+int	vn_setlabel (struct vnode *vp, struct label *intlabel,
+	    vfs_context_t context);
+#endif
 void	fifo_printinfo(struct vnode *vp);
 int	vn_lock(struct vnode *vp, int flags, struct proc *p);
 int 	vn_open(struct nameidata *ndp, int fmode, int cmode);
 int	vn_open_modflags(struct nameidata *ndp, int *fmode, int cmode);
 int	vn_open_auth(struct nameidata *ndp, int *fmode, struct vnode_attr *);
-int 	vn_close(vnode_t, int flags, struct ucred *cred, struct proc *p);
+int 	vn_close(vnode_t, int flags, vfs_context_t ctx);
 
 #define VN_CREATE_NOAUTH		(1<<0)
 #define VN_CREATE_NOINHERIT		(1<<1)
+#define VN_CREATE_UNION			(1<<2)
+#define	VN_CREATE_NOLABEL		(1<<3)
 errno_t vn_create(vnode_t, vnode_t *, struct componentname *, struct vnode_attr *, int flags, vfs_context_t);
 
 
@@ -331,16 +374,38 @@ int	vn_setxattr(vnode_t, const char *, uio_t, int, vfs_context_t);
 int	vn_removexattr(vnode_t, const char *, int, vfs_context_t);
 int	vn_listxattr(vnode_t, uio_t, size_t *, int, vfs_context_t);
 
+int	default_getxattr(vnode_t, const char *, uio_t, size_t *, int, vfs_context_t);
+int	default_setxattr(vnode_t, const char *, uio_t, int, vfs_context_t);
+int	default_removexattr(vnode_t, const char *, int, vfs_context_t);
+
+#if NAMEDSTREAMS
+errno_t  vnode_getnamedstream(vnode_t, vnode_t *, const char *, enum nsoperation, int, vfs_context_t);
+errno_t  vnode_makenamedstream(vnode_t, vnode_t *, const char *, int, vfs_context_t);
+errno_t  vnode_removenamedstream(vnode_t, vnode_t, const char *, int, vfs_context_t);
+errno_t  vnode_flushnamedstream(vnode_t vp, vnode_t svp, vfs_context_t context);
+errno_t  vnode_relenamedstream(vnode_t vp, vnode_t svp, vfs_context_t context);
+#endif
+
+int vn_path_package_check(vnode_t vp, char *path, int pathlen, int *component);
+
+void	nchinit(void) __attribute__((section("__TEXT, initcode")));
+int	resize_namecache(u_int newsize);
 void	name_cache_lock_shared(void);
 void	name_cache_lock(void);
 void	name_cache_unlock(void);
+void	cache_enter_with_gen(vnode_t dvp, vnode_t vp, struct componentname *cnp, int gen);
 
-char *	vnode_getname(vnode_t vp);
-void	vnode_putname(char *name);
+const char	*vnode_getname(vnode_t vp);
+void	vnode_putname(const char *name);
 
 vnode_t	vnode_getparent(vnode_t vp);
 
 int vn_pathconf(vnode_t, int, register_t *, vfs_context_t);
+
+#define	vnode_lock_convert(v)	lck_mtx_convert_spin(&(v)->v_lock)
+
+void	vnode_lock_spin(vnode_t);
+
 
 void	vnode_list_lock(void);
 void	vnode_list_unlock(void);
@@ -348,6 +413,7 @@ int	vnode_ref_ext(vnode_t, int);
 void	vnode_rele_ext(vnode_t, int, int);
 void	vnode_rele_internal(vnode_t, int, int, int);
 int	vnode_getwithref(vnode_t);
+int	vnode_get_locked(vnode_t);
 int	vnode_put_locked(vnode_t);
 
 int	vnode_issock(vnode_t);
@@ -356,16 +422,33 @@ void	unlock_fsnode(vnode_t, int *);
 int	lock_fsnode(vnode_t, int *);
 
 errno_t	vnode_resume(vnode_t);
+errno_t	vnode_suspend(vnode_t);
+
 
 errno_t	vnode_size(vnode_t, off_t *, vfs_context_t);
 errno_t	vnode_setsize(vnode_t, off_t, int ioflag, vfs_context_t);
 int	vnode_setattr_fallback(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx);
+
+void vn_setunionwait(vnode_t);
+void vn_checkunionwait(vnode_t);
+void vn_clearunionwait(vnode_t, int);
 
 void SPECHASH_LOCK(void);
 void SPECHASH_UNLOCK(void);
 
 int check_cdevmounted(dev_t, enum vtype, int *);
 
-void	vnode_authorize_init(void);
+void	vnode_authorize_init(void) __attribute__((section("__TEXT, initcode")));
+
+void	vfsinit(void);
+
+/*
+ * XXX exported symbols; should be static
+ */
+void	vfs_op_init(void) __attribute__((section("__TEXT, initcode")));
+void	vfs_opv_init(void) __attribute__((section("__TEXT, initcode")));
+int	vfs_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
+		user_addr_t newp, size_t newlen, struct proc *p);
+int	sysctl_vnode(struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req);
 
 #endif /* !_SYS_VNODE_INTERNAL_H_ */

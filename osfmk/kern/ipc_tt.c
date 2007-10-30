@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -46,6 +52,12 @@
  * 
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
+ */
+/*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
  */
 /*
  */
@@ -82,8 +94,9 @@
 
 #include <vm/vm_map.h>
 #include <vm/vm_pageout.h>
-#include <vm/vm_shared_memory_server.h>
 #include <vm/vm_protos.h>
+
+#include <security/mac_mach_internal.h>
 
 /* forward declarations */
 task_t convert_port_to_locked_task(ipc_port_t port);
@@ -116,6 +129,7 @@ ipc_task_init(
 	if (kr != KERN_SUCCESS)
 		panic("ipc_task_init");
 
+	space->is_task = task;
 
 	kport = ipc_port_alloc_kernel();
 	if (kport == IP_NULL)
@@ -132,6 +146,14 @@ ipc_task_init(
 	task->itk_space = space;
 	space->is_fast = FALSE;
 
+#if CONFIG_MACF_MACH
+	if (parent)
+		mac_task_label_associate(parent, task, &parent->maclabel,
+		    &task->maclabel, &kport->ip_label);
+	else
+		mac_task_label_associate_kernel(task, &task->maclabel, &kport->ip_label);
+#endif
+
 	if (parent == TASK_NULL) {
 		ipc_port_t port;
 
@@ -144,6 +166,10 @@ ipc_task_init(
 		task->itk_host = port;
 
 		task->itk_bootstrap = IP_NULL;
+		task->itk_seatbelt = IP_NULL;
+		task->itk_gssd = IP_NULL;
+		task->itk_automountd = IP_NULL;
+		task->itk_task_access = IP_NULL;
 
 		for (i = 0; i < TASK_PORT_REGISTER_MAX; i++)
 			task->itk_registered[i] = IP_NULL;
@@ -174,6 +200,18 @@ ipc_task_init(
 
 		task->itk_bootstrap =
 			ipc_port_copy_send(parent->itk_bootstrap);
+
+		task->itk_seatbelt =
+			ipc_port_copy_send(parent->itk_seatbelt);
+
+		task->itk_gssd =
+			ipc_port_copy_send(parent->itk_gssd);
+
+		task->itk_automountd =
+			ipc_port_copy_send(parent->itk_automountd);
+
+		task->itk_task_access =
+			ipc_port_copy_send(parent->itk_task_access);
 
 		itk_unlock(parent);
 	}
@@ -278,6 +316,18 @@ ipc_task_terminate(
 
 	if (IP_VALID(task->itk_bootstrap))
 		ipc_port_release_send(task->itk_bootstrap);
+
+	if (IP_VALID(task->itk_seatbelt))
+		ipc_port_release_send(task->itk_seatbelt);
+	
+	if (IP_VALID(task->itk_gssd))
+		ipc_port_release_send(task->itk_gssd);
+
+	if (IP_VALID(task->itk_automountd))
+		ipc_port_release_send(task->itk_automountd);
+
+	if (IP_VALID(task->itk_task_access))
+		ipc_port_release_send(task->itk_task_access);
 
 	for (i = 0; i < TASK_PORT_REGISTER_MAX; i++)
 		if (IP_VALID(task->itk_registered[i]))
@@ -813,15 +863,32 @@ task_get_special_port(
 		port = ipc_port_copy_send(task->itk_bootstrap);
 		break;
 
-            case TASK_WIRED_LEDGER_PORT:
+	    case TASK_WIRED_LEDGER_PORT:
 		port = ipc_port_copy_send(task->wired_ledger_port);
-                break;
+		break;
 
-            case TASK_PAGED_LEDGER_PORT:
+	    case TASK_PAGED_LEDGER_PORT:
 		port = ipc_port_copy_send(task->paged_ledger_port);
-                break;
+		break;
                     
+	    case TASK_SEATBELT_PORT:
+		port = ipc_port_copy_send(task->itk_seatbelt);
+		break;
+
+	    case TASK_GSSD_PORT:
+		port = ipc_port_copy_send(task->itk_gssd);
+		break;
+			
+	    case TASK_ACCESS_PORT:
+		port = ipc_port_copy_send(task->itk_task_access);
+		break;
+			
+	    case TASK_AUTOMOUNTD_PORT:
+		port = ipc_port_copy_send(task->itk_automountd);
+		break;
+
 	    default:
+               itk_unlock(task);
 		return KERN_INVALID_ARGUMENT;
 	}
 	itk_unlock(task);
@@ -843,6 +910,7 @@ task_get_special_port(
  *		KERN_INVALID_ARGUMENT	The task is null.
  *		KERN_FAILURE		The task/space is dead.
  *		KERN_INVALID_ARGUMENT	Invalid special port.
+ * 		KERN_NO_ACCESS		Attempted overwrite of seatbelt port.
  */
 
 kern_return_t
@@ -870,14 +938,30 @@ task_set_special_port(
 		whichp = &task->itk_bootstrap;
 		break;
 
-            case TASK_WIRED_LEDGER_PORT:
-                whichp = &task->wired_ledger_port;
-                break;
+	    case TASK_WIRED_LEDGER_PORT:
+		whichp = &task->wired_ledger_port;
+		break;
 
-            case TASK_PAGED_LEDGER_PORT:
-                whichp = &task->paged_ledger_port;
-                break;
+	    case TASK_PAGED_LEDGER_PORT:
+		whichp = &task->paged_ledger_port;
+		break;
                     
+	    case TASK_SEATBELT_PORT:
+		whichp = &task->itk_seatbelt;
+		break;
+
+	    case TASK_GSSD_PORT:
+		whichp = &task->itk_gssd;
+		break;
+		
+	    case TASK_ACCESS_PORT:
+		whichp = &task->itk_task_access;
+		break;
+		
+	    case TASK_AUTOMOUNTD_PORT:
+		whichp = &task->itk_automountd;
+		break;
+		
 	    default:
 		return KERN_INVALID_ARGUMENT;
 	}/* switch */
@@ -887,6 +971,20 @@ task_set_special_port(
 		itk_unlock(task);
 		return KERN_FAILURE;
 	}
+
+	/* do not allow overwrite of seatbelt or task access ports */
+	if ((TASK_SEATBELT_PORT == which  || TASK_ACCESS_PORT == which) 
+		&& IP_VALID(*whichp)) {
+			itk_unlock(task);
+			return KERN_NO_ACCESS;
+	}
+
+#if CONFIG_MACF_MACH
+       if (mac_task_check_service(current_task(), task, "set_special_port")) {
+               itk_unlock(task);
+               return KERN_NO_ACCESS;
+       }
+#endif
 
 	old = *whichp;
 	*whichp = port;
@@ -1047,6 +1145,8 @@ mach_ports_lookup(
 task_t
 convert_port_to_locked_task(ipc_port_t port)
 {
+        int try_failed_count = 0;
+
 	while (IP_VALID(port)) {
 		task_t task;
 
@@ -1066,9 +1166,10 @@ convert_port_to_locked_task(ipc_port_t port)
 			ip_unlock(port);
 			return(task);
 		}
+		try_failed_count++;
 
 		ip_unlock(port);
-		mutex_pause();
+		mutex_pause(try_failed_count);
 	}
 	return TASK_NULL;
 }
@@ -1427,7 +1528,7 @@ thread_set_exception_ports(
 		return (KERN_INVALID_ARGUMENT);
 
 	if (IP_VALID(new_port)) {
-		switch (new_behavior) {
+		switch (new_behavior & ~MACH_EXCEPTION_CODES) {
 
 		case EXCEPTION_DEFAULT:
 		case EXCEPTION_STATE:
@@ -1498,7 +1599,7 @@ task_set_exception_ports(
 		return (KERN_INVALID_ARGUMENT);
 
 	if (IP_VALID(new_port)) {
-		switch (new_behavior) {
+		switch (new_behavior & ~MACH_EXCEPTION_CODES) {
 
 		case EXCEPTION_DEFAULT:
 		case EXCEPTION_STATE:
@@ -1594,7 +1695,7 @@ thread_swap_exception_ports(
 		return (KERN_INVALID_ARGUMENT);
 
 	if (IP_VALID(new_port)) {
-		switch (new_behavior) {
+		switch (new_behavior & ~MACH_EXCEPTION_CODES) {
 
 		case EXCEPTION_DEFAULT:
 		case EXCEPTION_STATE:
@@ -1690,7 +1791,7 @@ task_swap_exception_ports(
 		return (KERN_INVALID_ARGUMENT);
 
 	if (IP_VALID(new_port)) {
-		switch (new_behavior) {
+		switch (new_behavior & ~MACH_EXCEPTION_CODES) {
 
 		case EXCEPTION_DEFAULT:
 		case EXCEPTION_STATE:

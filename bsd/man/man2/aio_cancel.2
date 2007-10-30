@@ -35,7 +35,10 @@
 .Sh SYNOPSIS
 .In aio.h
 .Ft int
-.Fn aio_cancel "int fildes" "struct aiocb * iocb"
+.Fo aio_cancel
+.Fa "int fildes"
+.Fa "struct aiocb *aiocbp"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn aio_cancel
@@ -43,7 +46,7 @@ system call cancels the outstanding asynchronous
 I/O request for the file descriptor specified in
 .Fa fildes .
 If
-.Fa iocb
+.Fa aiocbp
 is specified, only that specific asynchronous I/O request is cancelled.
 .Pp
 Normal asynchronous notification occurs for cancelled requests.
@@ -63,25 +66,26 @@ The
 .Fn aio_cancel
 system call returns -1 to indicate an error, or one of the following:
 .Bl -tag -width Dv
+.It Bq Dv AIO_ALLDONE
+All of the requests meeting the criteria have finished.
 .It Bq Dv AIO_CANCELED
 All outstanding requests meeting the criteria specified were cancelled.
 .It Bq Dv AIO_NOTCANCELED
 Some requests were not cancelled, status for the requests should be
 checked with
 .Xr aio_error 2 .
-.It Bq Dv AIO_ALLDONE
-All of the requests meeting the criteria have finished.
 .El
 .Sh ERRORS
 An error return from
 .Fn aio_cancel
 indicates:
 .Bl -tag -width Er
+.\" ==========
 .It Bq Er EBADF
 The
 .Fa fildes
 argument
-is an invalid file descriptor.
+is not a valid file descriptor.
 .El
 .Sh SEE ALSO
 .Xr aio_error 2 ,

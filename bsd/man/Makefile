@@ -9,8 +9,10 @@ include $(MakeInc_def)
 
 INSTMAN_SUBDIRS = \
 	man2 \
+	man3 \
 	man4 \
 	man5 \
+	man8 \
 	man9
 
 include $(MakeInc_rule)

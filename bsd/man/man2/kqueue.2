@@ -189,6 +189,12 @@ will not return it.  The filter itself is not disabled.
 Removes the event from the kqueue.  Events which are attached to
 file descriptors are automatically deleted on the last close of
 the descriptor.
+.It EV_RECEIPT
+This flag is useful for making bulk changes to a kqueue without draining any
+pending events. When passed as input, it forces EV_ERROR to always be returned.
+When a filter is successfully added. The
+.Va data
+field will be zero.
 .It EV_ONESHOT
 Causes the event to return only the first occurrence of the filter
 being triggered.  After the user retrieves the event from the kqueue,
@@ -343,28 +349,25 @@ in
 and returns when the process performs one or more of the requested events.
 If a process can normally see another process, it can attach an event to it.
 The events to monitor are:
-.Bl -tag -width XXNOTE_TRACKERR
+.Bl -tag -width 
 .It NOTE_EXIT
 The process has exited.
 .It NOTE_FORK
-The process has called
-.Fn fork .
+The process created a child process via
+.Xr fork 2
+or similar call.
 .It NOTE_EXEC
-The process has executed a new process via
+The process executed a new process via
 .Xr execve 2
 or similar call.
-.It NOTE_TRACK
-Follow a process across
-.Fn fork
-calls.  The parent process will return with NOTE_TRACK set in the
-.Va fflags
-field, while the child process will return with NOTE_CHILD set in
-.Va fflags
-and the parent PID in
-.Va data .
-.It NOTE_TRACKERR
-This flag is returned if the system was unable to attach an event to
-the child process, usually due to resource limitations.
+.It NOTE_SIGNAL
+The process was sent a signal. Status can be checked via
+.Xr waitpid 2
+or similar call.
+.It NOTE_REAP
+The process was reaped by the parent via
+.Xr wait 2
+or similar call.
 .El
 .Pp
 On return,

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -47,10 +53,7 @@ extern void		bzero_nc(
 					int					size);
 
 /* uncached-safe */
-extern void		bcopy_nc(
-					char				*from,
-					char				*to,
-					int					size);
+void bcopy_nc(const char *, char *, int);
 
 /* Physical to physical copy (ints must be disabled) */
 extern void		bcopy_phys(
@@ -72,8 +75,7 @@ extern void		phys_copy(
 extern void		machine_conf(
 					void);
 
-extern void		machine_startup(
-					boot_args			*args);
+extern void		machine_startup(void);
 
 extern void		ppc_vm_init(
 					uint64_t			ppc_mem_size,
@@ -97,13 +99,7 @@ extern void		hid5set64(
 extern void		Load_context(
 					thread_t			th);
 
-extern thread_t	Switch_context(
-					thread_t			old,
-					void				(*cont)(void),
-					thread_t			new);
-
-extern void		fpu_save(
-					struct facility_context *fpu_fc);
+thread_t Switch_context(thread_t, thread_continue_t, thread_t);
 
 extern void		vec_save(
 					struct facility_context *vec_fc);
@@ -114,14 +110,14 @@ extern void		toss_live_fpu(
 extern void		toss_live_vec(
 					struct facility_context *vec_fc);
 
-extern struct	savearea *enterDebugger(
-					unsigned int		trap,
-					struct savearea		*state,
-					unsigned int		dsisr);
+extern struct savearea *enterDebugger(unsigned int, struct savearea *,
+		unsigned int);
 
 extern void		draw_panic_dialog(
 					void);
 
+extern void		commit_paniclog(
+					void);
 #ifdef	DEBUG
 #define DPRINTF(x) { printf("%s : ",__FUNCTION__);printf x; }
 #endif	/* DEBUG */
@@ -129,6 +125,14 @@ extern void		draw_panic_dialog(
 #if MACH_ASSERT
 extern void		dump_thread(
 					thread_t			th);
-#endif 
+#endif /* MACH_ASSERT */
+
+/* XXX move to osfmk/ppc/debug.h or some other debug header */
+void print_backtrace(struct savearea *);
+int Call_Debugger(int, struct savearea *);
+int kdp_dump_trap(int, struct savearea *);
+void SysChoked(unsigned int, struct savearea *);
+int Call_DebuggerC(unsigned int, struct savearea *);
+void kdp_trap(unsigned int, struct savearea *);
 
 #endif /* _PPC_MISC_PROTOS_H_ */

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* 
  * Mach Operating System
@@ -87,12 +93,11 @@ struct machine_info {
 	integer_t	major_version;		/* kernel major version id */
 	integer_t	minor_version;		/* kernel minor version id */
 	integer_t	max_cpus;			/* max number of CPUs possible */
-	integer_t	avail_cpus;			/* number of CPUs now available */
 	uint32_t	memory_size;		/* size of memory in bytes, capped at 2 GB */
 	uint64_t	max_mem;			/* actual size of physical memory */
-	integer_t	physical_cpu;		/* number of physical CPUs now available */
+	uint32_t	physical_cpu;		/* number of physical CPUs now available */
 	integer_t	physical_cpu_max;	/* max number of physical CPUs possible */
-	integer_t	logical_cpu;		/* number of logical cpu now available */
+	uint32_t	logical_cpu;		/* number of logical cpu now available */
 	integer_t	logical_cpu_max;	/* max number of physical CPUs possible */
 };
 
@@ -142,7 +147,7 @@ __END_DECLS
 /* skip 			((cpu_type_t) 9)	*/
 #define CPU_TYPE_MC98000	((cpu_type_t) 10)
 #define CPU_TYPE_HPPA           ((cpu_type_t) 11)
-/* skip CPU_TYPE_ARM		((cpu_type_t) 12)	*/
+#define CPU_TYPE_ARM		((cpu_type_t) 12)
 #define CPU_TYPE_MC88000	((cpu_type_t) 13)
 #define CPU_TYPE_SPARC		((cpu_type_t) 14)
 #define CPU_TYPE_I860		((cpu_type_t) 15)
@@ -156,6 +161,13 @@ __END_DECLS
  *	dependent directory, so that any program can get all definitions
  *	regardless of where is it compiled).
  */
+
+/*
+ * Capability bits used in the definition of cpu_subtype.
+ */
+#define CPU_SUBTYPE_MASK	0xff000000	/* mask for feature flags */
+#define CPU_SUBTYPE_LIB64	0x80000000	/* 64 bit libraries */
+
 
 /*
  *	Object files that are hand-crafted to run on any
@@ -328,8 +340,17 @@ __END_DECLS
 #define CPU_SUBTYPE_POWERPC_970		((cpu_subtype_t) 100)
 
 /*
- *      CPU families (sysctl hw.cpufamily)
+ *	ARM subtypes
+ */
+#define CPU_SUBTYPE_ARM_ALL             ((cpu_subtype_t) 0)
+#define CPU_SUBTYPE_ARM_V4T             ((cpu_subtype_t) 5)
+#define CPU_SUBTYPE_ARM_V6              ((cpu_subtype_t) 6)
+
+/*
+ *	CPU families (sysctl hw.cpufamily)
  *
+ * These are meant to identify the CPU's marketing name - an
+ * application can map these to (possibly) localized strings.
  * NB: the encodings of the CPU families are intentionally arbitrary.
  * There is no ordering, and you should never try to deduce whether
  * or not some feature is available based on the family.
@@ -340,7 +361,20 @@ __END_DECLS
 #define CPUFAMILY_POWERPC_G3 0xcee41549
 #define CPUFAMILY_POWERPC_G4 0x77c184ae
 #define CPUFAMILY_POWERPC_G5 0xed76d8aa
-#define CPUFAMILY_INTEL_6_14 0x73d67300  /* Intel Core Solo and Intel Core Duo (32-bit Pentium-M with SSE3) */
-#define CPUFAMILY_INTEL_6_15 0x426f69ef  /* Intel Core 2 */
+#define CPUFAMILY_INTEL_6_13 0xaa33392b
+#define CPUFAMILY_INTEL_6_14 0x73d67300  /* "Intel Core Solo" and "Intel Core Duo" (32-bit Pentium-M with SSE3) */
+#define CPUFAMILY_INTEL_6_15 0x426f69ef  /* "Intel Core 2 Duo" */
+#define CPUFAMILY_INTEL_6_23 0x78ea4fbc  /* Penryn */
+#define CPUFAMILY_INTEL_6_26 0x6b5a4cd2  /* Nehalem */
+#define CPUFAMILY_ARM_9      0xe73283ae
+#define CPUFAMILY_ARM_11     0x8ff620d8
+
+#define CPUFAMILY_INTEL_YONAH	CPUFAMILY_INTEL_6_14
+#define CPUFAMILY_INTEL_MEROM	CPUFAMILY_INTEL_6_15
+#define CPUFAMILY_INTEL_PENRYN	CPUFAMILY_INTEL_6_23
+#define CPUFAMILY_INTEL_NEHALEM	CPUFAMILY_INTEL_6_26
+
+#define CPUFAMILY_INTEL_CORE	CPUFAMILY_INTEL_6_14
+#define CPUFAMILY_INTEL_CORE2	CPUFAMILY_INTEL_6_15
 
 #endif	/* _MACH_MACHINE_H_ */

@@ -1,23 +1,35 @@
 /*
- * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
  */
 #include <sys/types.h>
 #include <sys/vnode_internal.h>
@@ -43,6 +55,10 @@
 #include <kern/lock.h>
 #include <kern/kalloc.h>
 
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
+
 /* The number of BSM records allocated. */
 static int bsm_rec_count = 0; 
 
@@ -57,7 +73,10 @@ LIST_HEAD(, au_record) bsm_free_q;
 /*
  * Lock for serializing access to the list of audit records.
  */
-static mutex_t	*bsm_audit_mutex;
+static lck_grp_t	*bsm_audit_grp;
+static lck_attr_t	*bsm_audit_attr;
+static lck_grp_attr_t	*bsm_audit_grp_attr;
+static lck_mtx_t	*bsm_audit_mutex;
 
 static void audit_sys_auditon(struct audit_record *ar, struct au_record *rec);
 
@@ -69,7 +88,10 @@ kau_init(void)
 {
 	printf("BSM auditing present\n");
 	LIST_INIT(&bsm_free_q);
-	bsm_audit_mutex = mutex_alloc(0);
+	bsm_audit_grp_attr = lck_grp_attr_alloc_init();
+	bsm_audit_grp = lck_grp_alloc_init("BSM Audit", bsm_audit_grp_attr);
+	bsm_audit_attr = lck_attr_alloc_init();
+	bsm_audit_mutex = lck_mtx_alloc_init(bsm_audit_grp, bsm_audit_attr);
 	au_evclassmap_init();
 }
 
@@ -89,21 +111,21 @@ kau_open(void)
 	/* 
 	 * Find an unused record, remove it from the free list, mark as used
 	 */  
-	mutex_lock(bsm_audit_mutex);
+	lck_mtx_lock(bsm_audit_mutex);
 	if (!LIST_EMPTY(&bsm_free_q)) {
 		rec = LIST_FIRST(&bsm_free_q);
 		LIST_REMOVE(rec, au_rec_q);
 	}
-	mutex_unlock(bsm_audit_mutex);
+	lck_mtx_unlock(bsm_audit_mutex);
 
 	if (rec == NULL) {
-		mutex_lock(bsm_audit_mutex);
+		lck_mtx_lock(bsm_audit_mutex);
 		if (bsm_rec_count >= MAX_AUDIT_RECORDS) {
 			/* XXX We need to increase size of MAX_AUDIT_RECORDS */
-			mutex_unlock(bsm_audit_mutex);
+			lck_mtx_unlock(bsm_audit_mutex);
 			return NULL;
 		}
-		mutex_unlock(bsm_audit_mutex);
+		lck_mtx_unlock(bsm_audit_mutex);
 			
 		/*
 		 * Create a new BSM kernel record.
@@ -117,9 +139,9 @@ kau_open(void)
 			kfree(rec, sizeof(*rec));
 			return NULL;
 		}
-		mutex_lock(bsm_audit_mutex);
+		lck_mtx_lock(bsm_audit_mutex);
 		bsm_rec_count++;
-		mutex_unlock(bsm_audit_mutex);
+		lck_mtx_unlock(bsm_audit_mutex);
 	}
 	memset(rec->data, 0, MAX_AUDIT_RECORD_SIZE);
 
@@ -208,19 +230,39 @@ void kau_free(struct au_record *rec)
 	rec->used = 0;
 	rec->len = 0;	
 
-	mutex_lock(bsm_audit_mutex);
+	lck_mtx_lock(bsm_audit_mutex);
 
 	/* Add the record to the freelist */
 	LIST_INSERT_HEAD(&bsm_free_q, rec, au_rec_q);
 	
-	mutex_unlock(bsm_audit_mutex);
+	lck_mtx_unlock(bsm_audit_mutex);
 
 }
 
 /*
  * XXX May want turn some (or all) of these macros into functions in order
- * to reduce the generated code sized.
+ * to reduce the generated code size.
  */
+#if CONFIG_MACF
+#define MAC_VNODE1_LABEL_TOKEN						\
+	do {								\
+		if (ar->ar_vnode1_mac_labels != NULL) {			\
+			tok = au_to_text(ar->ar_vnode1_mac_labels);	\
+			kau_write(rec, tok);				\
+		}							\
+	} while (0)
+
+#define MAC_VNODE2_LABEL_TOKEN						\
+	do {								\
+		if (ar->ar_vnode2_mac_labels != NULL) {			\
+			tok = au_to_text(ar->ar_vnode2_mac_labels);	\
+			kau_write(rec, tok);				\
+		}							\
+	} while (0)
+#else
+#define MAC_VNODE1_LABEL_TOKEN
+#define MAC_VNODE2_LABEL_TOKEN
+#endif
 #define UPATH1_TOKENS	\
 	do { \
 		if (ar->ar_valid_arg & ARG_UPATH1) {  		\
@@ -250,6 +292,7 @@ void kau_free(struct au_record *rec)
 		if (ar->ar_valid_arg & ARG_VNODE1) {  		\
 			tok = kau_to_attr32(&ar->ar_arg_vnode1);\
 			kau_write(rec, tok);			\
+			MAC_VNODE1_LABEL_TOKEN;			\
 		}						\
 	} while (0)
 
@@ -262,6 +305,7 @@ void kau_free(struct au_record *rec)
 		if (ar->ar_valid_arg & ARG_VNODE1) {  		\
 			tok = kau_to_attr32(&ar->ar_arg_vnode1);\
 			kau_write(rec, tok);			\
+			MAC_VNODE1_LABEL_TOKEN;			\
 		}						\
 	} while (0)
 
@@ -272,8 +316,9 @@ void kau_free(struct au_record *rec)
 			kau_write(rec, tok);			\
 		}						\
 		if (ar->ar_valid_arg & ARG_VNODE2) {  		\
-			tok = kau_to_attr32(&ar->ar_arg_vnode1);\
+			tok = kau_to_attr32(&ar->ar_arg_vnode2);\
 			kau_write(rec, tok);			\
+			MAC_VNODE2_LABEL_TOKEN;			\
 		}						\
 	} while (0)
 
@@ -285,6 +330,7 @@ void kau_free(struct au_record *rec)
 			if (ar->ar_valid_arg & ARG_VNODE1) {  	\
 				tok = kau_to_attr32(&ar->ar_arg_vnode1);\
 				kau_write(rec, tok);		\
+				MAC_VNODE1_LABEL_TOKEN;		\
 			}					\
 		} else {					\
 			tok = au_to_arg32(1, "no path: fd", ar->ar_arg_fd); \
@@ -303,6 +349,14 @@ void kau_free(struct au_record *rec)
 			kau_write(rec, tok);				\
 		} else {						\
 			tok = au_to_arg32(argn, "process", ar->ar_arg_pid);\
+			kau_write(rec, tok);				\
+		}							\
+	} while (0)							\
+
+#define PROCESS_MAC_TOKENS						\
+	do {								\
+		if (ar->ar_valid_arg & ARG_MAC_STRING) {		\
+			tok = au_to_text(ar->ar_arg_mac_string);	\
 			kau_write(rec, tok);				\
 		}							\
 	} while (0)							\
@@ -416,11 +470,10 @@ audit_sys_auditon(struct audit_record *ar, struct au_record *rec)
 int
 kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 {
-	struct au_token *tok, *subj_tok;
+	struct au_token *tok = NULL, *subj_tok;
 	struct au_record *rec;
 	au_tid_t tid;
 	struct audit_record *ar;
-	int ctr;
 
 	*pau = NULL;
 	if (kar == NULL)
@@ -569,12 +622,12 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 	case AUE_GETAUDIT_ADDR:
 	case AUE_GETAUID:
 	case AUE_GETFSSTAT:
+	case AUE_MAC_GETFSSTAT:
 	case AUE_PIPE:
 	case AUE_SETPGRP:
 	case AUE_SETRLIMIT:
 	case AUE_SETSID:
 	case AUE_SETTIMEOFDAY:
-	case AUE_NEWSYSTEMSHREG:
 		/* Header, subject, and return tokens added at end */
 		break;
 
@@ -655,6 +708,10 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 	case AUE_FUTIMES:
 	case AUE_GETDIRENTRIES:
 	case AUE_GETDIRENTRIESATTR:
+	case AUE_EXTATTR_GET_FD:
+	case AUE_EXTATTR_LIST_FD:
+	case AUE_EXTATTR_SET_FD:
+	case AUE_EXTATTR_DELETE_FD:
 		FD_KPATH1_VNODE1_TOKENS;
 		break;
 	
@@ -692,6 +749,18 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		kau_write(rec, tok);
 		break;
 	
+	case AUE_GETLCID:
+		tok = au_to_arg32(1, "pid", (u_int32_t)ar->ar_arg_pid);
+		kau_write(rec, tok);
+		break;
+
+	case AUE_SETLCID:
+		tok = au_to_arg32(1, "pid", (u_int32_t)ar->ar_arg_pid);
+		kau_write(rec, tok);
+		tok = au_to_arg32(2, "lcid", (u_int32_t)ar->ar_arg_value);
+		kau_write(rec, tok);
+		break;
+
 	case AUE_IOCTL:
 		tok = au_to_arg32(2, "cmd", ar->ar_arg_cmd);
 		kau_write(rec, tok);
@@ -716,25 +785,10 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		PROCESS_PID_TOKENS(1);
 		break;
 
-	case AUE_KTRACE:
-		tok = au_to_arg32(2, "ops", ar->ar_arg_cmd);
-		kau_write(rec, tok);
-		tok = au_to_arg32(3, "trpoints", ar->ar_arg_value);
-		kau_write(rec, tok);
-		PROCESS_PID_TOKENS(4);
-		UPATH1_KPATH1_VNODE1_TOKENS;
-		break;
-
 	case AUE_LINK:
 	case AUE_RENAME:
 		UPATH1_KPATH1_VNODE1_TOKENS;
 		UPATH2_TOKENS;
-		break;
-
-	case AUE_LOADSHFILE:
-		tok = au_to_arg32(4, "base addr", (u_int32_t)ar->ar_arg_addr);
-		kau_write(rec, tok);
-		UPATH1_KPATH1_VNODE1_TOKENS;
 		break;
 
 	case AUE_MKDIR:
@@ -773,6 +827,11 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		}
 		break;
 
+#if CONFIG_MACF
+	case AUE_MAC_MOUNT:
+		PROCESS_MAC_TOKENS;
+		/* fall through */
+#endif
 	case AUE_MOUNT:
 		/* XXX Need to handle NFS mounts */
 		tok = au_to_arg32(3, "flags", ar->ar_arg_fflags);
@@ -806,11 +865,6 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		}
 		break;
 
-	case AUE_RESETSHFILE:
-		tok = au_to_arg32(1, "base addr", (u_int32_t)ar->ar_arg_addr);
-		kau_write(rec, tok);
-		break;
-	
 	case AUE_OPEN_RC:
 	case AUE_OPEN_RTC:
 	case AUE_OPEN_RWC:
@@ -891,6 +945,8 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		break;
 	case AUE_SETGROUPS:
 		if (ar->ar_valid_arg & ARG_GROUPSET) {
+			u_int ctr;
+
 			for(ctr = 0; ctr < ar->ar_arg_groups.gidset_size; ctr++)
 			{
 				tok = au_to_arg32(1, "setgroups", ar->ar_arg_groups.gidset[ctr]);
@@ -924,7 +980,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 	case AUE_SHMAT:
 		tok = au_to_arg32(1, "shmid", ar->ar_arg_svipc_id);
 		kau_write(rec, tok);
-		tok = au_to_arg32(2, "shmaddr", (int)ar->ar_arg_svipc_addr);
+		tok = au_to_arg64(2, "shmaddr", ar->ar_arg_svipc_addr);
 		kau_write(rec, tok);
 		if (ar->ar_valid_arg & ARG_SVIPC_PERM) {
 			tok = au_to_ipc(AT_IPC_SHM, ar->ar_arg_svipc_id);
@@ -970,7 +1026,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		break;
 
 	case AUE_SHMDT:
-		tok = au_to_arg32(1, "shmaddr", (int)ar->ar_arg_svipc_addr);
+		tok = au_to_arg64(1, "shmaddr", ar->ar_arg_svipc_addr);
 		kau_write(rec, tok);
 		break;
 
@@ -1006,8 +1062,8 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			perm.cuid = ar->ar_arg_pipc_perm.pipc_uid;
 			perm.cgid = ar->ar_arg_pipc_perm.pipc_gid;
 			perm.mode = ar->ar_arg_pipc_perm.pipc_mode;
-			perm.seq = 0;
-			perm.key = 0;
+			perm._seq = 0;
+			perm._key = 0;
 			tok = au_to_ipc_perm(&perm);
 			kau_write(rec, tok);
 		}
@@ -1034,8 +1090,8 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			perm.cuid = ar->ar_arg_pipc_perm.pipc_uid;
 			perm.cgid = ar->ar_arg_pipc_perm.pipc_gid;
 			perm.mode = ar->ar_arg_pipc_perm.pipc_mode;
-			perm.seq = 0;
-			perm.key = 0;
+			perm._seq = 0;
+			perm._key = 0;
 			tok = au_to_ipc_perm(&perm);
 			kau_write(rec, tok);
 		}
@@ -1057,6 +1113,8 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 	case AUE_SYSCTL:
 	case AUE_SYSCTL_NONADMIN:
 		if (ar->ar_valid_arg & (ARG_CTLNAME | ARG_LEN)) {
+			int ctr;
+
 			for (ctr = 0; ctr < ar->ar_arg_len; ctr++) {
 			  tok = au_to_arg32(1, "name", ar->ar_arg_ctlname[ctr]);
 			  kau_write(rec, tok);
@@ -1123,6 +1181,64 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		FD_KPATH1_VNODE1_TOKENS;
 		break;
 
+	case AUE_EXTATTR_GET_FILE:
+	case AUE_EXTATTR_SET_FILE:
+	case AUE_EXTATTR_LIST_FILE:
+	case AUE_EXTATTR_DELETE_FILE:
+	case AUE_EXTATTR_GET_LINK:
+	case AUE_EXTATTR_SET_LINK:
+	case AUE_EXTATTR_LIST_LINK:
+	case AUE_EXTATTR_DELETE_LINK:
+		UPATH1_KPATH1_VNODE1_TOKENS;
+		break;
+
+#if CONFIG_MACF
+	case AUE_MAC_GET_FILE:
+	case AUE_MAC_SET_FILE:
+	case AUE_MAC_GET_LINK:
+	case AUE_MAC_SET_LINK:
+	case AUE_MAC_GET_MOUNT:
+		UPATH1_KPATH1_VNODE1_TOKENS;
+		PROCESS_MAC_TOKENS;
+		break;
+
+	case AUE_MAC_GET_FD:
+	case AUE_MAC_SET_FD:
+		FD_KPATH1_VNODE1_TOKENS;
+		PROCESS_MAC_TOKENS;
+		break;
+
+	case AUE_MAC_SYSCALL:
+		PROCESS_MAC_TOKENS;
+		tok = au_to_arg32(3, "call", ar->ar_arg_value);
+		kau_write(rec, tok);
+		break;
+
+	case AUE_MAC_EXECVE:
+		UPATH1_KPATH1_VNODE1_TOKENS;
+		PROCESS_MAC_TOKENS;
+		break;
+
+	case AUE_MAC_GET_PID:
+		tok = au_to_arg32(1, "pid", (u_int32_t)ar->ar_arg_pid);
+		kau_write(rec, tok);
+		PROCESS_MAC_TOKENS;
+		break;
+
+	case AUE_MAC_GET_LCID:
+		tok = au_to_arg32(1, "lcid", (u_int32_t)ar->ar_arg_value);
+		kau_write(rec, tok);
+		PROCESS_MAC_TOKENS;
+		break;
+
+	case AUE_MAC_GET_PROC:
+	case AUE_MAC_SET_PROC:
+	case AUE_MAC_GET_LCTX:
+	case AUE_MAC_SET_LCTX:
+		PROCESS_MAC_TOKENS;
+		break;
+#endif
+
 	default: /* We shouldn't fall through to here. */
 		printf("BSM conversion requested for unknown event %d\n",
 			ar->ar_event);
@@ -1130,7 +1246,45 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		return BSM_NOAUDIT;
 	}
 
+#if CONFIG_MACF
+	do {
+		/* Convert the audit data from the MAC policies */
+		struct mac_audit_record *mar;
+		
+		LIST_FOREACH(mar, ar->ar_mac_records, records) {
+			switch (mar->type) {
+				case MAC_AUDIT_DATA_TYPE:
+					tok = au_to_data(AUP_BINARY, AUR_BYTE,
+					    mar->length, mar->data);
+					break;
+				case MAC_AUDIT_TEXT_TYPE:
+					tok = au_to_text((char*) mar->data);
+					break;
+				default:
+					/*
+					 * XXX: we can either continue,
+					 * skipping this particular entry,
+					 * or we can pre-verify the list and
+					 * abort before writing any records
+					 */
+					printf("kaudit_to_bsm(): BSM conversion requested for unknown mac_audit data type %d\n",
+					    mar->type);
+			}
+
+			kau_write(rec, tok);
+		}
+	} while (0);
+#endif
+
 	kau_write(rec, subj_tok); 
+
+#if CONFIG_MACF
+	if (ar->ar_cred_mac_labels != NULL) {
+		tok = au_to_text(ar->ar_cred_mac_labels);
+		kau_write(rec, tok);
+	}
+#endif
+
 	tok = au_to_return32((char)ar->ar_errno, ar->ar_retval);
 	kau_write(rec, tok);  /* Every record gets a return token */
 

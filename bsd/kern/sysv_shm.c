@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*	$NetBSD: sysv_shm.c,v 1.23 1994/07/04 23:25:12 glass Exp $	*/
 
@@ -50,6 +56,13 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ * Copyright (c) 2005-2006 SPARTA, Inc.
+*/
 
 
 #include <sys/appleapiopts.h>
@@ -66,6 +79,9 @@
 #include <sys/ipcs.h>
 #include <sys/sysent.h>
 #include <sys/sysproto.h>
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
 
 #include <bsm/audit_kernel.h>
 
@@ -76,11 +92,19 @@
 #include <mach/mach_vm.h>
 
 #include <vm/vm_map.h>
-#include <vm/vm_shared_memory_server.h>
 #include <vm/vm_protos.h>
 
 #include <kern/locks.h>
 
+/* Uncomment this line to see MAC debugging output. */
+/* #define MAC_DEBUG */
+#if CONFIG_MACF_DEBUG
+#define	MPRINTF(a)	printf a
+#else
+#define	MPRINTF(a)     
+#endif
+
+#if SYSV_SHM
 static void shminit(void *);
 #if 0
 SYSINIT(sysv_shm, SI_SUB_SYSV_SHM, SI_ORDER_FIRST, shminit, NULL)
@@ -113,7 +137,7 @@ static sy_call_t *shmcalls[] = {
 #define	SHMSEG_WANTED		0x1000
 
 static int shm_last_free, shm_nused, shm_committed;
-struct user_shmid_ds	*shmsegs;	/* 64 bit version */
+struct shmid_kernel	*shmsegs;	/* 64 bit version */
 static int shm_inited = 0;
 
 struct shm_handle {
@@ -125,18 +149,23 @@ struct shmmap_state {
 	int shmid;			/* segment id */
 };
 
-static void shm_deallocate_segment(struct user_shmid_ds *);
+static void shm_deallocate_segment(struct shmid_kernel *);
 static int shm_find_segment_by_key(key_t);
-static struct user_shmid_ds *shm_find_segment_by_shmid(int);
+static struct shmid_kernel *shm_find_segment_by_shmid(int);
 static int shm_delete_mapping(struct proc *, struct shmmap_state *, int);
 
 #ifdef __APPLE_API_PRIVATE
+#define DEFAULT_SHMMAX	(4 * 1024 * 1024)
+#define DEFAULT_SHMMIN	1
+#define DEFAULT_SHMMNI	32
+#define DEFAULT_SHMSEG	8
+#define DEFAULT_SHMALL	1024
 struct  shminfo shminfo = {
-        -1,	/* SHMMAX 4096 *1024 */
-        -1,	/* SHMMIN = 1 */
-        -1,	/* SHMMNI = 1 */
-        -1,	/* SHMSEG = 8 */
-        -1	/* SHMALL = 1024 */
+        DEFAULT_SHMMAX,
+        DEFAULT_SHMMIN,
+        DEFAULT_SHMMNI,
+	DEFAULT_SHMSEG,
+	DEFAULT_SHMALL
 };
 #endif /* __APPLE_API_PRIVATE */
 
@@ -196,66 +225,70 @@ shm_find_segment_by_key(key_t key)
 	int i;
 
 	for (i = 0; i < shminfo.shmmni; i++)
-		if ((shmsegs[i].shm_perm.mode & SHMSEG_ALLOCATED) &&
-		    shmsegs[i].shm_perm.key == key)
+		if ((shmsegs[i].u.shm_perm.mode & SHMSEG_ALLOCATED) &&
+		    shmsegs[i].u.shm_perm._key == key)
 			return i;
 	return -1;
 }
 
-static struct user_shmid_ds *
+static struct shmid_kernel *
 shm_find_segment_by_shmid(int shmid)
 {
 	int segnum;
-	struct user_shmid_ds *shmseg;
+	struct shmid_kernel *shmseg;
 
 	segnum = IPCID_TO_IX(shmid);
 	if (segnum < 0 || segnum >= shminfo.shmmni)
 		return NULL;
 	shmseg = &shmsegs[segnum];
-	if ((shmseg->shm_perm.mode & (SHMSEG_ALLOCATED | SHMSEG_REMOVED))
+	if ((shmseg->u.shm_perm.mode & (SHMSEG_ALLOCATED | SHMSEG_REMOVED))
 	    != SHMSEG_ALLOCATED ||
-	    shmseg->shm_perm.seq != IPCID_TO_SEQ(shmid))
+	    shmseg->u.shm_perm._seq != IPCID_TO_SEQ(shmid))
 		return NULL;
 	return shmseg;
 }
 
 static void
-shm_deallocate_segment(struct user_shmid_ds *shmseg)
+shm_deallocate_segment(struct shmid_kernel *shmseg)
 {
 	struct shm_handle *shm_handle;
 	mach_vm_size_t size;
 
-	shm_handle = CAST_DOWN(void *,shmseg->shm_internal);	/* tunnel */
-	size = mach_vm_round_page(shmseg->shm_segsz);
+	shm_handle = CAST_DOWN(void *,shmseg->u.shm_internal);	/* tunnel */
+	size = mach_vm_round_page(shmseg->u.shm_segsz);
 	mach_memory_entry_port_release(shm_handle->shm_object);
 	shm_handle->shm_object = NULL;
 	FREE((caddr_t)shm_handle, M_SHM);
-	shmseg->shm_internal = USER_ADDR_NULL;		/* tunnel */
+	shmseg->u.shm_internal = USER_ADDR_NULL;		/* tunnel */
 	shm_committed -= btoc(size);
 	shm_nused--;
-	shmseg->shm_perm.mode = SHMSEG_FREE;
+	shmseg->u.shm_perm.mode = SHMSEG_FREE;
+#if CONFIG_MACF
+	/* Reset the MAC label */
+	mac_sysvshm_label_recycle(shmseg);
+#endif
 }
 
 static int
 shm_delete_mapping(__unused struct proc *p, struct shmmap_state *shmmap_s,
 	int deallocate)
 {
-	struct user_shmid_ds *shmseg;
+	struct shmid_kernel *shmseg;
 	int segnum, result;
 	mach_vm_size_t size;
 
 	segnum = IPCID_TO_IX(shmmap_s->shmid);
 	shmseg = &shmsegs[segnum];
-	size = mach_vm_round_page(shmseg->shm_segsz);	/* XXX done for us? */
+	size = mach_vm_round_page(shmseg->u.shm_segsz);	/* XXX done for us? */
 	if (deallocate) {
 	result = mach_vm_deallocate(current_map(), shmmap_s->va, size);
 	if (result != KERN_SUCCESS)
 		return EINVAL;
 	}
 	shmmap_s->shmid = -1;
-	shmseg->shm_dtime = sysv_shmtime();
-	if ((--shmseg->shm_nattch <= 0) &&
-	    (shmseg->shm_perm.mode & SHMSEG_REMOVED)) {
+	shmseg->u.shm_dtime = sysv_shmtime();
+	if ((--shmseg->u.shm_nattch <= 0) &&
+	    (shmseg->u.shm_perm.mode & SHMSEG_REMOVED)) {
 		shm_deallocate_segment(shmseg);
 		shm_last_free = segnum;
 	}
@@ -265,18 +298,19 @@ shm_delete_mapping(__unused struct proc *p, struct shmmap_state *shmmap_s,
 int
 shmdt(struct proc *p, struct shmdt_args *uap, register_t *retval)
 {
+#if CONFIG_MACF
+	struct shmid_kernel *shmsegptr;
+#endif
 	struct shmmap_state *shmmap_s;
 	int i;
 	int shmdtret = 0;
 
-	// LP64todo - fix this
-	AUDIT_ARG(svipc_addr, CAST_DOWN(void *,uap->shmaddr));
+	AUDIT_ARG(svipc_addr, uap->shmaddr);
 
 	SYSV_SHM_SUBSYS_LOCK();
 
 	if (!shm_inited) {
-		shmdtret = EINVAL;
-		goto shmdt_out;
+		shminit(NULL);
 	}
 	shmmap_s = (struct shmmap_state *)p->vm_shm;
  	if (shmmap_s == NULL) {
@@ -292,6 +326,16 @@ shmdt(struct proc *p, struct shmdt_args *uap, register_t *retval)
 		shmdtret = EINVAL;
 		goto shmdt_out;
 	}
+#if CONFIG_MACF
+	/*
+	 * XXX: It might be useful to move this into the shm_delete_mapping
+	 * function
+	 */
+	shmsegptr = &shmsegs[IPCID_TO_IX(shmmap_s->shmid)];
+	shmdtret = mac_sysvshm_check_shmdt(kauth_cred_get(), shmsegptr);
+	if (shmdtret)
+		goto shmdt_out;
+#endif
 	i = shm_delete_mapping(p, shmmap_s, 1);
 
 	if (i == 0)
@@ -303,10 +347,10 @@ shmdt_out:
 }
 
 int
-shmat(struct proc *p, struct shmat_args *uap, register_t *retval)
+shmat(struct proc *p, struct shmat_args *uap, user_addr_t *retval)
 {
 	int error, i, flags;
-	struct user_shmid_ds	*shmseg;
+	struct shmid_kernel	*shmseg;
 	struct shmmap_state	*shmmap_s = NULL;
 	struct shm_handle	*shm_handle;
 	mach_vm_address_t	attach_va;	/* attach address in/out */
@@ -317,14 +361,12 @@ shmat(struct proc *p, struct shmat_args *uap, register_t *retval)
 	int shmat_ret = 0;
 
 	AUDIT_ARG(svipc_id, uap->shmid);
-	// LP64todo - fix this
-	AUDIT_ARG(svipc_addr, CAST_DOWN(void *,uap->shmaddr));
+	AUDIT_ARG(svipc_addr, uap->shmaddr);
 
 	SYSV_SHM_SUBSYS_LOCK();
 
 	if (!shm_inited) {
-		shmat_ret = EINVAL;
-		goto shmat_out;
+		shminit(NULL);
 	}
 
 	shmmap_s = (struct shmmap_state *)p->vm_shm;
@@ -346,14 +388,21 @@ shmat(struct proc *p, struct shmat_args *uap, register_t *retval)
 		goto shmat_out;
 	}
 
-	AUDIT_ARG(svipc_perm, &shmseg->shm_perm);
-	error = ipcperm(kauth_cred_get(), &shmseg->shm_perm,
+	AUDIT_ARG(svipc_perm, &shmseg->u.shm_perm);
+	error = ipcperm(kauth_cred_get(), &shmseg->u.shm_perm,
 	    (uap->shmflg & SHM_RDONLY) ? IPC_R : IPC_R|IPC_W);
 	if (error) {
 		shmat_ret = error;
 		goto shmat_out;
 	}
 
+#if CONFIG_MACF
+	error = mac_sysvshm_check_shmat(kauth_cred_get(), shmseg, uap->shmflg);
+	if (error) {
+		shmat_ret = error;
+		goto shmat_out;
+	}
+#endif
 	for (i = 0; i < shminfo.shmseg; i++) {
 		if (shmmap_s->shmid == -1)
 			break;
@@ -364,7 +413,7 @@ shmat(struct proc *p, struct shmat_args *uap, register_t *retval)
 		goto shmat_out;
 	}
 
-	map_size = mach_vm_round_page(shmseg->shm_segsz);
+	map_size = mach_vm_round_page(shmseg->u.shm_segsz);
 	prot = VM_PROT_READ;
 	if ((uap->shmflg & SHM_RDONLY) == 0)
 		prot |= VM_PROT_WRITE;
@@ -380,13 +429,13 @@ shmat(struct proc *p, struct shmat_args *uap, register_t *retval)
 		goto shmat_out;
 	}
 
-	shm_handle = CAST_DOWN(void *, shmseg->shm_internal);	/* tunnel */
+	shm_handle = CAST_DOWN(void *, shmseg->u.shm_internal);	/* tunnel */
 
 	rv = mach_vm_map(current_map(),			/* process map */
 			&attach_va,			/* attach address */
 			map_size,			/* segment size */
 			(mach_vm_offset_t)0,		/* alignment mask */
-		(flags & MAP_FIXED)? VM_FLAGS_FIXED: VM_FLAGS_ANYWHERE,
+			(flags & MAP_FIXED)? VM_FLAGS_FIXED: VM_FLAGS_ANYWHERE,
 			shm_handle->shm_object,
 			(mach_vm_offset_t)0,
 			FALSE,
@@ -404,9 +453,9 @@ shmat(struct proc *p, struct shmat_args *uap, register_t *retval)
 
 	shmmap_s->va = attach_va;
 	shmmap_s->shmid = uap->shmid;
-	shmseg->shm_lpid = p->p_pid;
-	shmseg->shm_atime = sysv_shmtime();
-	shmseg->shm_nattch++;
+	shmseg->u.shm_lpid = p->p_pid;
+	shmseg->u.shm_atime = sysv_shmtime();
+	shmseg->u.shm_nattch++;
 	*retval = attach_va;	/* XXX return -1 on error */
 	shmat_ret = 0;
 	goto shmat_out;
@@ -431,13 +480,21 @@ oshmctl(__unused void *p, __unused void *uap, __unused void *retval)
 	return EINVAL;
 }
 
+/*
+ * Returns:	0			Success
+ *		EINVAL
+ *	copyout:EFAULT
+ *	copyin:EFAULT
+ *	ipcperm:EPERM
+ *	ipcperm:EACCES
+ */
 int
 shmctl(__unused struct proc *p, struct shmctl_args *uap, register_t *retval)
 {
 	int error;
 	kauth_cred_t cred = kauth_cred_get();
 	struct user_shmid_ds inbuf;
-	struct user_shmid_ds *shmseg;
+	struct shmid_kernel *shmseg;
 	size_t shmid_ds_sz = sizeof(struct user_shmid_ds);
 
 	int shmctl_ret = 0;
@@ -448,8 +505,7 @@ shmctl(__unused struct proc *p, struct shmctl_args *uap, register_t *retval)
 	SYSV_SHM_SUBSYS_LOCK();
 
 	if (!shm_inited) {
-		shmctl_ret = EINVAL;
-		goto shmctl_out;
+		shminit(NULL);
 	}
 
 	if (!IS_64BIT_PROCESS(p))
@@ -464,21 +520,28 @@ shmctl(__unused struct proc *p, struct shmctl_args *uap, register_t *retval)
 	/* XXAUDIT: This is the perms BEFORE any change by this call. This 
 	 * may not be what is desired.
 	 */
-	AUDIT_ARG(svipc_perm, &shmseg->shm_perm);
+	AUDIT_ARG(svipc_perm, &shmseg->u.shm_perm);
 
+#if CONFIG_MACF
+	error = mac_sysvshm_check_shmctl(cred, shmseg, uap->cmd);
+	if (error) {
+		shmctl_ret = error;
+		goto shmctl_out;
+	}
+#endif
 	switch (uap->cmd) {
 	case IPC_STAT:
-		error = ipcperm(cred, &shmseg->shm_perm, IPC_R);
+		error = ipcperm(cred, &shmseg->u.shm_perm, IPC_R);
 		if (error) {
 			shmctl_ret = error;
 			goto shmctl_out;
 		}
 
 		if (IS_64BIT_PROCESS(p)) {
-			error = copyout(shmseg, uap->buf, sizeof(struct user_shmid_ds));
+			error = copyout((caddr_t)&shmseg->u, uap->buf, sizeof(struct user_shmid_ds));
 		} else {
 			struct shmid_ds shmid_ds32;
-			shmid_ds_64to32(shmseg, &shmid_ds32);
+			shmid_ds_64to32(&shmseg->u, &shmid_ds32);
 			error = copyout(&shmid_ds32, uap->buf, sizeof(struct shmid_ds));
 		}
 		if (error) {
@@ -487,7 +550,7 @@ shmctl(__unused struct proc *p, struct shmctl_args *uap, register_t *retval)
 		}
 		break;
 	case IPC_SET:
-		error = ipcperm(cred, &shmseg->shm_perm, IPC_M);
+		error = ipcperm(cred, &shmseg->u.shm_perm, IPC_M);
 		if (error) {
 			shmctl_ret = error;
 			goto shmctl_out;
@@ -503,22 +566,22 @@ shmctl(__unused struct proc *p, struct shmctl_args *uap, register_t *retval)
 			shmctl_ret = error;
 			goto shmctl_out;
 		}
-		shmseg->shm_perm.uid = inbuf.shm_perm.uid;
-		shmseg->shm_perm.gid = inbuf.shm_perm.gid;
-		shmseg->shm_perm.mode =
-		    (shmseg->shm_perm.mode & ~ACCESSPERMS) |
+		shmseg->u.shm_perm.uid = inbuf.shm_perm.uid;
+		shmseg->u.shm_perm.gid = inbuf.shm_perm.gid;
+		shmseg->u.shm_perm.mode =
+		    (shmseg->u.shm_perm.mode & ~ACCESSPERMS) |
 		    (inbuf.shm_perm.mode & ACCESSPERMS);
-		shmseg->shm_ctime = sysv_shmtime();
+		shmseg->u.shm_ctime = sysv_shmtime();
 		break;
 	case IPC_RMID:
-		error = ipcperm(cred, &shmseg->shm_perm, IPC_M);
+		error = ipcperm(cred, &shmseg->u.shm_perm, IPC_M);
 		if (error) {
 			shmctl_ret = error;
 			goto shmctl_out;
 		}
-		shmseg->shm_perm.key = IPC_PRIVATE;
-		shmseg->shm_perm.mode |= SHMSEG_REMOVED;
-		if (shmseg->shm_nattch <= 0) {
+		shmseg->u.shm_perm._key = IPC_PRIVATE;
+		shmseg->u.shm_perm.mode |= SHMSEG_REMOVED;
+		if (shmseg->u.shm_nattch <= 0) {
 			shm_deallocate_segment(shmseg);
 			shm_last_free = IPCID_TO_IX(uap->shmid);
 		}
@@ -541,30 +604,47 @@ shmctl_out:
 static int
 shmget_existing(struct shmget_args *uap, int mode, int segnum, int *retval)
 {
-	struct user_shmid_ds *shmseg;
-	int error;
+	struct shmid_kernel *shmseg;
+	int error = 0;
 
 	shmseg = &shmsegs[segnum];
-	if (shmseg->shm_perm.mode & SHMSEG_REMOVED) {
+	if (shmseg->u.shm_perm.mode & SHMSEG_REMOVED) {
 		/*
 		 * This segment is in the process of being allocated.  Wait
 		 * until it's done, and look the key up again (in case the
 		 * allocation failed or it was freed).
 		 */
-		shmseg->shm_perm.mode |= SHMSEG_WANTED;
+		shmseg->u.shm_perm.mode |= SHMSEG_WANTED;
 		error = tsleep((caddr_t)shmseg, PLOCK | PCATCH, "shmget", 0);
 		if (error)
 			return error;
 		return EAGAIN;
 	}
-	error = ipcperm(kauth_cred_get(), &shmseg->shm_perm, mode);
-	if (error)
-		return error;
-	if (uap->size && uap->size > shmseg->shm_segsz)
+
+	/*
+	 * The low 9 bits of shmflag are the mode bits being requested, which
+	 * are the actual mode bits desired on the segment, and not in IPC_R
+	 * form; therefore it would be incorrect to call ipcperm() to validate
+	 * them; instead, we AND the existing mode with the requested mode, and
+	 * verify that it matches the requested mode; otherwise, we fail with
+	 * EACCES (access denied).
+	 */
+	if ((shmseg->u.shm_perm.mode & mode) != mode)
+		return EACCES;
+
+#if CONFIG_MACF
+	error = mac_sysvshm_check_shmget(kauth_cred_get(), shmseg, uap->shmflg);
+	if (error) 
+		return (error);
+#endif
+
+	if (uap->size && uap->size > shmseg->u.shm_segsz)
 		return EINVAL;
+
        if ((uap->shmflg & (IPC_CREAT | IPC_EXCL)) == (IPC_CREAT | IPC_EXCL))
 		return EEXIST;
-	*retval = IXSEQ_TO_IPCID(segnum, shmseg->shm_perm);
+
+	*retval = IXSEQ_TO_IPCID(segnum, shmseg->u.shm_perm);
 	return 0;
 }
 
@@ -572,12 +652,13 @@ static int
 shmget_allocate_segment(struct proc *p, struct shmget_args *uap, int mode,
 	int *retval)
 {
-	int i, segnum, shmid, size;
+	int i, segnum, shmid;
 	kauth_cred_t cred = kauth_cred_get();
-	struct user_shmid_ds *shmseg;
+	struct shmid_kernel *shmseg;
 	struct shm_handle *shm_handle;
 	kern_return_t kret;
-	vm_offset_t user_addr;
+	mach_vm_offset_t user_addr;
+	mach_vm_size_t size;
 	void * mem_object;
 
 	if (uap->size < (user_size_t)shminfo.shmmin ||
@@ -586,11 +667,11 @@ shmget_allocate_segment(struct proc *p, struct shmget_args *uap, int mode,
 	if (shm_nused >= shminfo.shmmni) /* any shmids left? */
 		return ENOSPC;
 	size = mach_vm_round_page(uap->size);
-	if (shm_committed + btoc(size) > shminfo.shmall)
+	if ((user_ssize_t)(shm_committed + btoc(size)) > shminfo.shmall)
 		return ENOMEM;
 	if (shm_last_free < 0) {
 		for (i = 0; i < shminfo.shmmni; i++)
-			if (shmsegs[i].shm_perm.mode & SHMSEG_FREE)
+			if (shmsegs[i].u.shm_perm.mode & SHMSEG_FREE)
 				break;
 		if (i == shminfo.shmmni)
 			panic("shmseg free count inconsistent");
@@ -604,21 +685,24 @@ shmget_allocate_segment(struct proc *p, struct shmget_args *uap, int mode,
 	 * In case we sleep in malloc(), mark the segment present but deleted
 	 * so that noone else tries to create the same key.
 	 */
-	kret = vm_allocate(current_map(), &user_addr, size, VM_FLAGS_ANYWHERE);
+	kret = mach_vm_allocate(current_map(), &user_addr, size, VM_FLAGS_ANYWHERE);
 	if (kret != KERN_SUCCESS) 
 		goto out;
 
-	kret = mach_make_memory_entry (current_map(), &size, user_addr, 
-		VM_PROT_DEFAULT, (mem_entry_name_port_t *)&mem_object, 0);
+	kret = mach_make_memory_entry_64(current_map(),
+					(memory_object_size_t *)&size,
+					(memory_object_offset_t)user_addr, 
+					VM_PROT_DEFAULT,
+					(ipc_port_t *)&mem_object, 0);
 
 	if (kret != KERN_SUCCESS) 
 		goto out;
 
-	vm_deallocate(current_map(), user_addr, size);
+	mach_vm_deallocate(current_map(), user_addr, size);
 
-	shmseg->shm_perm.mode = SHMSEG_ALLOCATED | SHMSEG_REMOVED;
-	shmseg->shm_perm.key = uap->key;
-	shmseg->shm_perm.seq = (shmseg->shm_perm.seq + 1) & 0x7fff;
+	shmseg->u.shm_perm.mode = SHMSEG_ALLOCATED | SHMSEG_REMOVED;
+	shmseg->u.shm_perm._key = uap->key;
+	shmseg->u.shm_perm._seq = (shmseg->u.shm_perm._seq + 1) & 0x7fff;
 	MALLOC(shm_handle, struct shm_handle *, sizeof(struct shm_handle), M_SHM, M_WAITOK);
 	if (shm_handle == NULL) {
 		kret = KERN_NO_SPACE;
@@ -627,27 +711,30 @@ shmget_allocate_segment(struct proc *p, struct shmget_args *uap, int mode,
 		goto out;
 	}
 	shm_handle->shm_object = mem_object;
-	shmid = IXSEQ_TO_IPCID(segnum, shmseg->shm_perm);
+	shmid = IXSEQ_TO_IPCID(segnum, shmseg->u.shm_perm);
 
-	shmseg->shm_internal = CAST_USER_ADDR_T(shm_handle);	/* tunnel */
-	shmseg->shm_perm.cuid = shmseg->shm_perm.uid = kauth_cred_getuid(cred);
-	shmseg->shm_perm.cgid = shmseg->shm_perm.gid = cred->cr_gid;
-	shmseg->shm_perm.mode = (shmseg->shm_perm.mode & SHMSEG_WANTED) |
+	shmseg->u.shm_internal = CAST_USER_ADDR_T(shm_handle);	/* tunnel */
+	shmseg->u.shm_perm.cuid = shmseg->u.shm_perm.uid = kauth_cred_getuid(cred);
+	shmseg->u.shm_perm.cgid = shmseg->u.shm_perm.gid = cred->cr_gid;
+	shmseg->u.shm_perm.mode = (shmseg->u.shm_perm.mode & SHMSEG_WANTED) |
 	    (mode & ACCESSPERMS) | SHMSEG_ALLOCATED;
-	shmseg->shm_segsz = uap->size;
-	shmseg->shm_cpid = p->p_pid;
-	shmseg->shm_lpid = shmseg->shm_nattch = 0;
-	shmseg->shm_atime = shmseg->shm_dtime = 0;
-	shmseg->shm_ctime = sysv_shmtime();
+	shmseg->u.shm_segsz = uap->size;
+	shmseg->u.shm_cpid = p->p_pid;
+	shmseg->u.shm_lpid = shmseg->u.shm_nattch = 0;
+	shmseg->u.shm_atime = shmseg->u.shm_dtime = 0;
+#if CONFIG_MACF
+	mac_sysvshm_label_associate(cred, shmseg);
+#endif
+	shmseg->u.shm_ctime = sysv_shmtime();
 	shm_committed += btoc(size);
 	shm_nused++;
-	AUDIT_ARG(svipc_perm, &shmseg->shm_perm);
-	if (shmseg->shm_perm.mode & SHMSEG_WANTED) {
+	AUDIT_ARG(svipc_perm, &shmseg->u.shm_perm);
+	if (shmseg->u.shm_perm.mode & SHMSEG_WANTED) {
 		/*
 		 * Somebody else wanted this key while we were asleep.  Wake
 		 * them up now.
 		 */
-		shmseg->shm_perm.mode &= ~SHMSEG_WANTED;
+		shmseg->u.shm_perm.mode &= ~SHMSEG_WANTED;
 		wakeup((caddr_t)shmseg);
 	}
 	*retval = shmid;
@@ -677,8 +764,7 @@ shmget(struct proc *p, struct shmget_args *uap, register_t *retval)
 	SYSV_SHM_SUBSYS_LOCK();
 
 	if (!shm_inited) {
-		shmget_ret = EINVAL;
-		goto shmget_out;
+		shminit(NULL);
 	}
 
 	mode = uap->shmflg & ACCESSPERMS;
@@ -731,8 +817,7 @@ shmfork(struct proc *p1, struct proc *p2)
 	SYSV_SHM_SUBSYS_LOCK();
 
 	if (!shm_inited) {
-		shmfork_ret = 0;
-		goto shmfork_out;
+		shminit(NULL);
 	}
 		
 	size = shminfo.shmseg * sizeof(struct shmmap_state);
@@ -742,7 +827,7 @@ shmfork(struct proc *p1, struct proc *p2)
 		p2->vm_shm = (caddr_t)shmmap_s;
 		for (i = 0; i < shminfo.shmseg; i++, shmmap_s++)
 			if (shmmap_s->shmid != -1)
-				shmsegs[IPCID_TO_IX(shmmap_s->shmid)].shm_nattch++;
+				shmsegs[IPCID_TO_IX(shmmap_s->shmid)].u.shm_nattch++;
 		shmfork_ret = 0;
 		goto shmfork_out;
 	}
@@ -764,6 +849,10 @@ shmexit(struct proc *p)
 	SYSV_SHM_SUBSYS_LOCK();
 	for (i = 0; i < shminfo.shmseg; i++, shmmap_s++)
 		if (shmmap_s->shmid != -1)
+			/*
+			 * XXX: Should the MAC framework enforce
+			 * check here as well.
+			 */
 			shm_delete_mapping(p, shmmap_s, 1);
 	FREE((caddr_t)p->vm_shm, M_SHM);
 	p->vm_shm = NULL;
@@ -806,16 +895,19 @@ shminit(__unused void *dummy)
 		 * dictates this filed be a size_t, which is 64 bits when
 		 * running 64 bit binaries.
 		 */
-		s = sizeof(struct user_shmid_ds) * shminfo.shmmni;
+		s = sizeof(struct shmid_kernel) * shminfo.shmmni;
 
-		MALLOC(shmsegs, struct user_shmid_ds *, s, M_SHM, M_WAITOK);
+		MALLOC(shmsegs, struct shmid_kernel *, s, M_SHM, M_WAITOK);
 		if (shmsegs == NULL) {
 			/* XXX fail safely: leave shared memory uninited */
 			return;
 		}
 		for (i = 0; i < shminfo.shmmni; i++) {
-			shmsegs[i].shm_perm.mode = SHMSEG_FREE;
-			shmsegs[i].shm_perm.seq = 0;
+			shmsegs[i].u.shm_perm.mode = SHMSEG_FREE;
+			shmsegs[i].u.shm_perm._seq = 0;
+#if CONFIG_MACF
+			mac_sysvshm_label_init(&shmsegs[i]);
+#endif
 		}
 		shm_last_free = 0;
 		shm_nused = 0;
@@ -844,35 +936,32 @@ sysctl_shminfo(__unused struct sysctl_oid *oidp, void *arg1,
 {
 	int error = 0;
 	int sysctl_shminfo_ret = 0;
+	uint64_t	saved_shmmax;
 
 	error = SYSCTL_OUT(req, arg1, sizeof(int64_t));
 	if (error || req->newptr == USER_ADDR_NULL)
 		return(error);
 
 	SYSV_SHM_SUBSYS_LOCK();
-	/* Set the values only if shared memory is not initialised */
-	if (!shm_inited) {
-		if ((error = SYSCTL_IN(req, arg1, sizeof(int64_t))) 
-		    != 0) {
-			sysctl_shminfo_ret = error;
+
+	/* shmmni can not be changed after SysV SHM has been initialized */
+	if (shm_inited && arg1 == &shminfo.shmmni) {
+		sysctl_shminfo_ret = EPERM;
+		goto sysctl_shminfo_out;
+	}
+	saved_shmmax = shminfo.shmmax;
+
+	if ((error = SYSCTL_IN(req, arg1, sizeof(int64_t))) != 0) {
+		sysctl_shminfo_ret = error;
+		goto sysctl_shminfo_out;
+	}
+
+	if (arg1 == &shminfo.shmmax) {
+		/* shmmax needs to be page-aligned */
+		if (shminfo.shmmax & PAGE_MASK_64) {
+			shminfo.shmmax = saved_shmmax;
+			sysctl_shminfo_ret = EINVAL;
 			goto sysctl_shminfo_out;
-		}
-
-		if (arg1 == &shminfo.shmmax) {
-			if (shminfo.shmmax & PAGE_MASK_64) {
-				shminfo.shmmax = (int64_t)-1;
-				sysctl_shminfo_ret = EINVAL;
-				goto sysctl_shminfo_out;
-			}
-		}
-
-		/* Initialize only when all values are set */
-		if ((shminfo.shmmax != (int64_t)-1) &&
-			(shminfo.shmmin != (int64_t)-1) &&	
-			(shminfo.shmmni != (int64_t)-1) &&
-			(shminfo.shmseg != (int64_t)-1) &&
-			(shminfo.shmall != (int64_t)-1)) {
-				shminit(NULL);
 		}
 	}
 	sysctl_shminfo_ret = 0;
@@ -897,13 +986,10 @@ IPCS_shm_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
 	size_t shmid_ds_sz = sizeof(struct user_shmid_ds);
 	struct proc *p = current_proc();
 
-	int ipcs__shminfo_ret = 0;
-
 	SYSV_SHM_SUBSYS_LOCK();
 
 	if (!shm_inited) {
-		error = EINVAL;
-		goto ipcs_shm_sysctl_out;
+		shminit(NULL);
 	}
 
 	if (!IS_64BIT_PROCESS(p)) {
@@ -945,11 +1031,11 @@ IPCS_shm_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
 			break;
 		}
 		if (ipcs.u64.ipcs_datalen != (int)shmid_ds_sz) {
-			error = ENOMEM;
+			error = EINVAL;
 			break;
 		}
 		for( ; cursor < shminfo.shmmni; cursor++) {
-			if (shmsegs[cursor].shm_perm.mode & SHMSEG_ALLOCATED)
+			if (shmsegs[cursor].u.shm_perm.mode & SHMSEG_ALLOCATED)
 				break;
 			continue;
 		}
@@ -988,26 +1074,29 @@ ipcs_shm_sysctl_out:
 	return(error);
 }
 
-SYSCTL_NODE(_kern, KERN_SYSV, sysv, CTLFLAG_RW, 0, "SYSV");
+SYSCTL_NODE(_kern, KERN_SYSV, sysv, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "SYSV");
 
-SYSCTL_PROC(_kern_sysv, KSYSV_SHMMAX, shmmax, CTLTYPE_QUAD | CTLFLAG_RW,
+SYSCTL_PROC(_kern_sysv, OID_AUTO, shmmax, CTLTYPE_QUAD | CTLFLAG_RW,
     &shminfo.shmmax, 0, &sysctl_shminfo ,"Q","shmmax");
 
-SYSCTL_PROC(_kern_sysv, KSYSV_SHMMIN, shmmin, CTLTYPE_QUAD | CTLFLAG_RW,
+SYSCTL_PROC(_kern_sysv, OID_AUTO, shmmin, CTLTYPE_QUAD | CTLFLAG_RW,
     &shminfo.shmmin, 0, &sysctl_shminfo ,"Q","shmmin");
 
-SYSCTL_PROC(_kern_sysv, KSYSV_SHMMNI, shmmni, CTLTYPE_QUAD | CTLFLAG_RW,
+SYSCTL_PROC(_kern_sysv, OID_AUTO, shmmni, CTLTYPE_QUAD | CTLFLAG_RW,
     &shminfo.shmmni, 0, &sysctl_shminfo ,"Q","shmmni");
 
-SYSCTL_PROC(_kern_sysv, KSYSV_SHMSEG, shmseg, CTLTYPE_QUAD | CTLFLAG_RW,
+SYSCTL_PROC(_kern_sysv, OID_AUTO, shmseg, CTLTYPE_QUAD | CTLFLAG_RW,
     &shminfo.shmseg, 0, &sysctl_shminfo ,"Q","shmseg");
 
-SYSCTL_PROC(_kern_sysv, KSYSV_SHMALL, shmall, CTLTYPE_QUAD | CTLFLAG_RW,
+SYSCTL_PROC(_kern_sysv, OID_AUTO, shmall, CTLTYPE_QUAD | CTLFLAG_RW,
     &shminfo.shmall, 0, &sysctl_shminfo ,"Q","shmall");
 
-SYSCTL_NODE(_kern_sysv, OID_AUTO, ipcs, CTLFLAG_RW, 0, "SYSVIPCS");
+SYSCTL_NODE(_kern_sysv, OID_AUTO, ipcs, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "SYSVIPCS");
 
 SYSCTL_PROC(_kern_sysv_ipcs, OID_AUTO, shm, CTLFLAG_RW|CTLFLAG_ANYBODY,
 	0, 0, IPCS_shm_sysctl,
 	"S,IPCS_shm_command",
 	"ipcs shm command interface");
+#endif /* SYSV_SHM */
+
+/* DSEP Review Done pl-20051108-v02 @2743,@2908,@2913,@3009 */

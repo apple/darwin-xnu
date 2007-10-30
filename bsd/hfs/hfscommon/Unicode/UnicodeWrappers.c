@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
 	File:		UnicodeWrappers.c
@@ -25,6 +31,8 @@
 	Contains:	Wrapper routines for Unicode conversion and comparison.
 
 */
+
+#if HFS
 #include <sys/param.h>
 #include <sys/utfconv.h>
 
@@ -45,14 +53,14 @@ enum {
 				 ((c) >= 0x30 && (c) <= 0x39))
 
 
-#define IsHexDigit(c)		(((c) >= (UInt8) '0' && (c) <= (UInt8) '9') || \
-				 ((c) >= (UInt8) 'A' && (c) <= (UInt8) 'F'))
+#define IsHexDigit(c)		(((c) >= (u_int8_t) '0' && (c) <= (u_int8_t) '9') || \
+				 ((c) >= (u_int8_t) 'A' && (c) <= (u_int8_t) 'F'))
 
 
 static void	GetFilenameExtension( ItemCount length, ConstUniCharArrayPtr unicodeStr, char* extStr );
 
 
-static UInt32	HexStringToInteger( UInt32 length, const UInt8 *hexStr );
+static u_int32_t	HexStringToInteger( u_int32_t length, const u_int8_t *hexStr );
 
 
 /*
@@ -61,10 +69,10 @@ static UInt32	HexStringToInteger( UInt32 length, const UInt8 *hexStr );
 static void
 GetFilenameExtension(ItemCount length, ConstUniCharArrayPtr unicodeStr, char * extStr)
 {
-	UInt32	i;
+	u_int32_t	i;
 	UniChar	c;
-	UInt16	extChars;	/* number of extension chars (excluding dot) */
-	UInt16	maxExtChars;
+	u_int16_t	extChars;	/* number of extension chars (excluding dot) */
+	u_int16_t	maxExtChars;
 	Boolean	foundExtension;
 
 	extStr[0] = '\0';	/* assume there's no extension */
@@ -99,11 +107,11 @@ GetFilenameExtension(ItemCount length, ConstUniCharArrayPtr unicodeStr, char * e
 	
 	/* if we found one then copy it */
 	if ( foundExtension ) {
-		UInt8 *extStrPtr = extStr;
+		u_int8_t *extStrPtr = (u_int8_t *)extStr;
 		const UniChar *unicodeStrPtr = &unicodeStr[i];
 		
 		for ( i = 0; i <= extChars; ++i )
-			*(extStrPtr++) = (UInt8) *(unicodeStrPtr++);
+			*(extStrPtr++) = (u_int8_t) *(unicodeStrPtr++);
 		extStr[extChars + 1] = '\0';	/* terminate extension + dot */
 	}
 }
@@ -113,13 +121,13 @@ GetFilenameExtension(ItemCount length, ConstUniCharArrayPtr unicodeStr, char * e
 /*
  * Count filename extension characters (if any)
  */
-static UInt32
-CountFilenameExtensionChars( const unsigned char * filename, UInt32 length )
+static u_int32_t
+CountFilenameExtensionChars( const unsigned char * filename, u_int32_t length )
 {
-	UInt32	i;
+	u_int32_t	i;
 	UniChar	c;
-	UInt32	extChars;	/* number of extension chars (excluding dot) */
-	UInt16	maxExtChars;
+	u_int32_t	extChars;	/* number of extension chars (excluding dot) */
+	u_int16_t	maxExtChars;
 	Boolean	foundExtension;
 
 	if ( length < 3 )
@@ -138,7 +146,7 @@ CountFilenameExtensionChars( const unsigned char * filename, UInt32 length )
 		c = filename[i--];
 
 		/* look for leading dot */
-		if ( c == (UInt8) '.' )	{
+		if ( c == (u_int8_t) '.' )	{
 			if ( extChars > 0 )	/* cannot end with a dot */
 				return (extChars);
 
@@ -159,11 +167,11 @@ CountFilenameExtensionChars( const unsigned char * filename, UInt32 length )
  * extract the file id from a mangled name
  */
 HFSCatalogNodeID
-GetEmbeddedFileID(const unsigned char * filename, UInt32 length, UInt32 *prefixLength)
+GetEmbeddedFileID(const unsigned char * filename, u_int32_t length, u_int32_t *prefixLength)
 {
 	short	extChars;
 	short	i;
-	UInt8	c;
+	u_int8_t	c;
 
 	*prefixLength = 0;
 
@@ -205,13 +213,13 @@ GetEmbeddedFileID(const unsigned char * filename, UInt32 length, UInt32 *prefixL
 
 
 
-static UInt32
-HexStringToInteger(UInt32 length, const UInt8 *hexStr)
+static u_int32_t
+HexStringToInteger(u_int32_t length, const u_int8_t *hexStr)
 {
-	UInt32		value;
-	UInt32		i;
-	UInt8		c;
-	const UInt8	*p;
+	u_int32_t		value;
+	u_int32_t		i;
+	u_int8_t		c;
+	const u_int8_t	*p;
 
 	value = 0;
 	p = hexStr;
@@ -221,7 +229,7 @@ HexStringToInteger(UInt32 length, const UInt8 *hexStr)
 
 		if (c >= '0' && c <= '9') {
 			value = value << 4;
-			value += (UInt32) c - (UInt32) '0';
+			value += (u_int32_t) c - (u_int32_t) '0';
 		} else if (c >= 'A' && c <= 'F') {
 			value = value << 4;
 			value += 10 + ((unsigned int) c - (unsigned int) 'A');
@@ -242,12 +250,12 @@ HexStringToInteger(UInt32 length, const UInt8 *hexStr)
  *		return	 0 if equal
  *
  */
-SInt32	FastRelString( ConstStr255Param str1, ConstStr255Param str2 )
+int32_t	FastRelString( ConstStr255Param str1, ConstStr255Param str2 )
 {
-	UInt16*			compareTable;
-	SInt32	 		bestGuess;
-	UInt8 	 		length, length2;
-	UInt8 	 		delta;
+	u_int16_t*		compareTable;
+	int32_t	 		bestGuess;
+	u_int8_t 	 	length, length2;
+	u_int8_t 	 	delta;
 
 	delta = 0;
 	length = *(str1++);
@@ -266,18 +274,18 @@ SInt32	FastRelString( ConstStr255Param str1, ConstStr255Param str2 )
 		length = length2;
 	}
 
-	compareTable = (UInt16*) gCompareTable;
+	compareTable = (u_int16_t*) gCompareTable;
 
 	while (length--)
 	{
-		UInt8	aChar, bChar;
+		u_int8_t	aChar, bChar;
 
 		aChar = *(str1++);
 		bChar = *(str2++);
 		
 		if (aChar != bChar)		//	If they don't match exacly, do case conversion
 		{	
-			UInt16	aSortWord, bSortWord;
+			u_int16_t	aSortWord, bSortWord;
 
 			aSortWord = compareTable[aChar];
 			bSortWord = compareTable[bChar];
@@ -356,14 +364,14 @@ SInt32	FastRelString( ConstStr255Param str1, ConstStr255Param str2 )
 //			return 1;
 //
 
-SInt32 FastUnicodeCompare ( register ConstUniCharArrayPtr str1, register ItemCount length1,
+int32_t FastUnicodeCompare ( register ConstUniCharArrayPtr str1, register ItemCount length1,
 							register ConstUniCharArrayPtr str2, register ItemCount length2)
 {
-	register UInt16		c1,c2;
-	register UInt16		temp;
-	register UInt16*	lowerCaseTable;
+	register u_int16_t		c1,c2;
+	register u_int16_t		temp;
+	register u_int16_t*	lowerCaseTable;
 
-	lowerCaseTable = (UInt16*) gLowerCaseTable;
+	lowerCaseTable = (u_int16_t*) gLowerCaseTable;
 
 	while (1) {
 		/* Set default values for c1, c2 in case there are no more valid chars */
@@ -422,7 +430,7 @@ ConvertUnicodeToUTF8Mangled(ByteCount srcLen, ConstUniCharArrayPtr srcStr, ByteC
 	char fileIDStr[15];
 	char extStr[15];
 
-	sprintf(fileIDStr, "#%X", cnid);
+	snprintf(fileIDStr, sizeof(fileIDStr), "#%X", cnid);
 	GetFilenameExtension(srcLen/sizeof(UniChar), srcStr, extStr);
 
 	/* remove extension chars from source */
@@ -431,10 +439,29 @@ ConvertUnicodeToUTF8Mangled(ByteCount srcLen, ConstUniCharArrayPtr srcStr, ByteC
 
 	(void) utf8_encodestr(srcStr, srcLen, dstStr, &utf8len, subMaxLen, ':', 0);
 
-	strcat(dstStr, fileIDStr);
-	strcat(dstStr, extStr);
+	strlcat((char *)dstStr, fileIDStr, maxDstLen);
+	strlcat((char *)dstStr, extStr, maxDstLen);
 	*actualDstLen = utf8len + (strlen(extStr) + strlen(fileIDStr));
 
 	return noErr;
 }
+
+#else /* not HFS - temp workaround until 4277828 is fixed */
+/* stubs for exported routines that aren't present when we build kernel without HFS */
+
+#include <sys/types.h>
+
+int32_t FastUnicodeCompare( void * str1, u_int32_t length1, void * str2, u_int32_t length2 );
+
+
+int32_t FastUnicodeCompare( __unused void * str1, 
+							__unused u_int32_t length1, 
+							__unused void * str2, 
+							__unused u_int32_t length2 )
+{
+	return( 0 );
+}
+
+
+#endif /* HFS */
 

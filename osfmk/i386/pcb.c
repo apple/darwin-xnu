@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -87,10 +93,12 @@
 #include <i386/tss.h>
 #include <i386/user_ldt.h>
 #include <i386/fpu.h>
-#include <i386/iopb_entries.h>
 #include <i386/mp_desc.h>
 #include <i386/cpu_data.h>
+#include <i386/misc_protos.h>
 #include <i386/machine_routines.h>
+
+#include <machine/commpage.h>
 
 /*
  * Maps state flavor to number of words in the state:
@@ -115,27 +123,17 @@ unsigned int _MachineStateCount[] = {
 	x86_DEBUG_STATE_COUNT
 };
 
-zone_t		iss_zone32;		/* zone for 32bit saved_state area */
-zone_t		iss_zone64;		/* zone for 64bit saved_state area */
-zone_t		ids_zone32;		/* zone for 32bit debug_state area */
-zone_t		ids_zone64;		/* zone for 64bit debug_state area */
-
+zone_t		iss_zone;		/* zone for saved_state area */
+zone_t		ids_zone;		/* zone for debug_state area */
 
 /* Forward */
 
 void		act_machine_throughcall(thread_t thr_act);
-user_addr_t	get_useraddr(void);
 void		act_machine_return(int);
-void		act_machine_sv_free(thread_t, int);
 
-extern thread_t		Switch_context(
-				thread_t			old,
-				thread_continue_t	cont,
-				thread_t			new);
 extern void		Thread_continue(void);
 extern void		Load_context(
 				thread_t			thread);
-
 
 static void
 get_exception_state32(thread_t thread, x86_exception_state32_t *es);
@@ -258,7 +256,7 @@ set_debug_state32(thread_t thread, x86_debug_state32_t *ds)
 	ids = pcb->ids;
 
 	if (ids == NULL) {
-		ids = zalloc(ids_zone32);
+		ids = zalloc(ids_zone);
 		bzero(ids, sizeof *ids);
 
 		simple_lock(&pcb->lock);
@@ -268,7 +266,7 @@ set_debug_state32(thread_t thread, x86_debug_state32_t *ds)
 			simple_unlock(&pcb->lock);
 		} else {
 			simple_unlock(&pcb->lock);
-			zfree(ids_zone32, ids);
+			zfree(ids_zone, ids);
 		}
 	}
 
@@ -319,7 +317,7 @@ set_debug_state64(thread_t thread, x86_debug_state64_t *ds)
 	ids = pcb->ids;
 
 	if (ids == NULL) {
-		ids = zalloc(ids_zone64);
+		ids = zalloc(ids_zone);
 		bzero(ids, sizeof *ids);
 
 		simple_lock(&pcb->lock);
@@ -329,7 +327,7 @@ set_debug_state64(thread_t thread, x86_debug_state64_t *ds)
 			simple_unlock(&pcb->lock);
 		} else {
 			simple_unlock(&pcb->lock);
-			zfree(ids_zone64, ids);
+			zfree(ids_zone, ids);
 		}
 	}
 
@@ -423,8 +421,7 @@ void
 consider_machine_adjust(void)
 {
 }
-
-
+extern void *get_bsduthreadarg(thread_t th);
 
 static void
 act_machine_switch_pcb( thread_t new )
@@ -441,7 +438,6 @@ act_machine_switch_pcb( thread_t new )
 
 	if (!cpu_mode_is64bit()) {
 		x86_saved_state32_tagged_t	*hi_iss32;
-
 		/*
 		 *	Save a pointer to the top of the "kernel" stack -
 		 *	actually the place in the PCB where a trap into
@@ -450,7 +446,7 @@ act_machine_switch_pcb( thread_t new )
 		hi_iss = (vm_offset_t)((unsigned long)
 			pmap_cpu_high_map_vaddr(cpu_number(), HIGH_CPU_ISS0) |
 			((unsigned long)pcb->iss & PAGE_MASK));
-	 
+
 		cdp->cpu_hi_iss = (void *)hi_iss;
 
 		pmap_high_map(pcb->iss_pte0, HIGH_CPU_ISS0);
@@ -467,13 +463,15 @@ act_machine_switch_pcb( thread_t new )
 		*(vm_offset_t *) current_sstk() = hi_pcb_stack_top;
 
 		current_ktss()->esp0 = hi_pcb_stack_top;
-/* XXX: This check is performed against the thread save state flavor rather than the
- * task's 64-bit feature flag because of the thread/task 64-bit state divergence
- * that can arise in task_set_64bit() on x86. When that is addressed, we can
- * revert to checking the task 64 bit feature flag. The assert below is retained
- * for that reason.
- */
+
 	} else if (is_saved_state64(pcb->iss)) {
+		/*
+		 * The test above is performed against the thread save state
+		 * flavor and not task's 64-bit feature flag because of the
+		 * thread/task 64-bit state divergence that can arise in
+		 * task_set_64bit() x86: the task state is changed before
+		 * the individual thread(s).
+		 */
 	        x86_saved_state64_tagged_t	*iss64;
 		vm_offset_t			isf;
 
@@ -500,13 +498,14 @@ act_machine_switch_pcb( thread_t new )
 		 */
 		*current_sstk64() = UBER64(pcb_stack_top);
 
-		cdp->cpu_task_map = new->map->pmap->pm_kernel_cr3 ?
-					TASK_MAP_64BIT_SHARED : TASK_MAP_64BIT;
+		cdp->cpu_task_map = new->map->pmap->pm_task_map; 
 
 		/*
 		 * Enable the 64-bit user code segment, USER64_CS.
+		 * Disable the 32-bit user code segment, USER_CS.
 		 */
 		ldt_desc_p(USER64_CS)->access |= ACC_PL_U;
+		ldt_desc_p(USER_CS)->access &= ~ACC_PL_U;
 
 	} else {
 		x86_saved_state_compat32_t	*iss32compat;
@@ -533,11 +532,19 @@ act_machine_switch_pcb( thread_t new )
 		current_ktss64()->rsp0 = UBER64(pcb_stack_top);
 
 		cdp->cpu_task_map = TASK_MAP_32BIT;
+		/* Precalculate pointers to syscall argument store, for use
+		 * in the trampolines.
+		 */
+		cdp->cpu_uber_arg_store = UBER64((vm_offset_t)get_bsduthreadarg(new));
+		cdp->cpu_uber_arg_store_valid = UBER64((vm_offset_t)&pcb->arg_store_valid);
+		pcb->arg_store_valid = 0;
 
 		/*
 		 * Disable USER64_CS
+		 * Enable USER_CS
 		 */
 		ldt_desc_p(USER64_CS)->access &= ~ACC_PL_U;
+		ldt_desc_p(USER_CS)->access |= ACC_PL_U;
 	}
 
 	/*
@@ -570,6 +577,12 @@ act_machine_switch_pcb( thread_t new )
 		 */
 		user_ldt_set(new);
 	}
+
+	/*
+	 * Bump the scheduler generation count in the commpage.
+	 * This can be read by user code to detect its preemption.
+	 */
+	commpage_sched_gen_inc();
 }
 
 /*
@@ -617,15 +630,13 @@ machine_switch_context(
 	 *	Load the rest of the user state for the new thread
 	 */
 	act_machine_switch_pcb(new);
-	KERNEL_DEBUG_CONSTANT(
-		MACHDBG_CODE(DBG_MACH_SCHED,MACH_SCHED) | DBG_FUNC_NONE,
-		(int)old, (int)new, old->sched_pri, new->sched_pri, 0);
+
 	return(Switch_context(old, continuation, new));
 }
 
 /*
  * act_machine_sv_free
- * release saveareas associated with an act. if flag is true, release
+ * release saveareas associated with an act.  if flag is true, release
  * user level savearea(s) too, else don't
  */
 void
@@ -642,18 +653,18 @@ kern_return_t
 machine_thread_state_initialize(
 	thread_t thread)
 {
-        /*
-	 * If there's an fpu save area, free it.
-	 * The initialized state will then be lazily faulted-in, if required.
-	 * And if we're target, re-arm the no-fpu trap.
-	 */
+    /*
+     * If there's an fpu save area, free it.
+     * The initialized state will then be lazily faulted-in, if required.
+     * And if we're target, re-arm the no-fpu trap.
+     */
         if (thread->machine.pcb->ifps) {
-	        (void) fpu_set_fxstate(thread, NULL);
+	(void) fpu_set_fxstate(thread, NULL);
 
-		if (thread == current_thread())
-		        clear_fpu();
-	}
-	return KERN_SUCCESS;
+    	if (thread == current_thread())
+	   clear_fpu();
+    }
+    return  KERN_SUCCESS;
 }
 
 uint32_t
@@ -687,7 +698,7 @@ get_eflags_exportmask(void)
  *			   for either 32bit or 64bit tasks
  */
 
-
+ 
 static void
 get_exception_state64(thread_t thread, x86_exception_state64_t *es)
 {
@@ -785,7 +796,6 @@ set_thread_state64(thread_t thread, x86_thread_state64_t *ts)
 	saved_state->r14 = ts->r14;
 	saved_state->r15 = ts->r15;
 	saved_state->rax = ts->rax;
-	saved_state->rax = ts->rax;
 	saved_state->rbx = ts->rbx;
 	saved_state->rcx = ts->rcx;
 	saved_state->rdx = ts->rdx;
@@ -861,6 +871,69 @@ get_thread_state64(thread_t thread, x86_thread_state64_t *ts)
 }
 
 
+void
+thread_set_wq_state32(thread_t thread, thread_state_t tstate)
+{
+        x86_thread_state32_t	*state;
+        x86_saved_state32_t	*saved_state;
+	thread_t curth = current_thread();
+
+	saved_state = USER_REGS32(thread);
+	state = (x86_thread_state32_t *)tstate;
+	
+	if (curth != thread)
+	        thread_lock(thread);
+
+	saved_state->eip = state->eip;
+	saved_state->eax = state->eax;
+	saved_state->ebx = state->ebx;
+	saved_state->ecx = state->ecx;
+	saved_state->edx = state->edx;
+	saved_state->edi = state->edi;
+	saved_state->esi = state->esi;
+	saved_state->uesp = state->esp;
+	saved_state->efl = EFL_USER_SET;
+
+	saved_state->cs = USER_CS;
+	saved_state->ss = USER_DS;
+	saved_state->ds = USER_DS;
+	saved_state->es = USER_DS;
+
+	if (curth != thread)
+	        thread_unlock(thread);
+}
+
+
+void
+thread_set_wq_state64(thread_t thread, thread_state_t tstate)
+{
+        x86_thread_state64_t	*state;
+        x86_saved_state64_t	*saved_state;
+	thread_t curth = current_thread();
+
+	saved_state = USER_REGS64(thread);
+	state = (x86_thread_state64_t *)tstate;
+	
+	if (curth != thread)
+	        thread_lock(thread);
+
+	saved_state->rdi = state->rdi;
+	saved_state->rsi = state->rsi;
+	saved_state->rdx = state->rdx;
+	saved_state->rcx = state->rcx;
+	saved_state->r8  = state->r8;
+	saved_state->r9  = state->r9;
+
+	saved_state->isf.rip = state->rip;
+	saved_state->isf.rsp = state->rsp;
+	saved_state->isf.cs = USER64_CS;
+	saved_state->isf.rflags = EFL_USER_SET;
+
+	if (curth != thread)
+	        thread_unlock(thread);
+}
+
+
 
 /*
  *	act_machine_set_state:
@@ -875,28 +948,29 @@ machine_thread_set_state(
 	thread_state_t tstate,
 	mach_msg_type_number_t count)
 {
-
-	switch (flavor)
+	switch (flavor) {
+	case x86_SAVED_STATE32:
 	{
-	    case x86_SAVED_STATE32:
-	    {
 		x86_saved_state32_t	*state;
 		x86_saved_state32_t	*saved_state;
 
 		if (count < x86_SAVED_STATE32_COUNT)
-		        return(KERN_INVALID_ARGUMENT);
+			return(KERN_INVALID_ARGUMENT);
+        
+		if (thread_is_64bit(thr_act))
+			return(KERN_INVALID_ARGUMENT);
 
 		state = (x86_saved_state32_t *) tstate;
 
 		/* Check segment selectors are safe */
 		if (!valid_user_segment_selectors(state->cs,
-						  state->ss,
-						  state->ds,
-						  state->es,
-						  state->fs,
-						  state->gs))
-		        return KERN_INVALID_ARGUMENT;
-		
+					state->ss,
+					state->ds,
+					state->es,
+					state->fs,
+					state->gs))
+			return KERN_INVALID_ARGUMENT;
+
 		saved_state = USER_REGS32(thr_act);
 
 		/*
@@ -935,15 +1009,18 @@ machine_thread_set_state(
 		saved_state->fs = state->fs;
 		saved_state->gs = state->gs;
 		break;
-	    }
+	}
 
-	    case x86_SAVED_STATE64:
-	    {
+	case x86_SAVED_STATE64:
+	{
 		x86_saved_state64_t	*state;
 		x86_saved_state64_t	*saved_state;
 
 		if (count < x86_SAVED_STATE64_COUNT)
-		        return(KERN_INVALID_ARGUMENT);
+			return(KERN_INVALID_ARGUMENT);
+
+		if (!thread_is_64bit(thr_act))
+			return(KERN_INVALID_ARGUMENT);
 
 		state = (x86_saved_state64_t *) tstate;
 
@@ -987,22 +1064,21 @@ machine_thread_set_state(
 
 		saved_state->isf.rflags = (state->isf.rflags & ~EFL_USER_CLEAR) | EFL_USER_SET;
 
-	        /*
+		/*
 		 * User setting segment registers.
 		 * Code and stack selectors have already been
 		 * checked.  Others will be reset by 'sys'
 		 * if they are not valid.
 		 */
-	        saved_state->isf.cs = state->isf.cs;
+		saved_state->isf.cs = state->isf.cs;
 		saved_state->isf.ss = state->isf.ss;
 		saved_state->fs = state->fs;
 		saved_state->gs = state->gs;
-
 		break;
-	    }
+	}
 
-	    case x86_FLOAT_STATE32:
-	    {
+	case x86_FLOAT_STATE32:
+	{
 		if (count != x86_FLOAT_STATE32_COUNT)
 			return(KERN_INVALID_ARGUMENT);
 
@@ -1010,10 +1086,10 @@ machine_thread_set_state(
 			return(KERN_INVALID_ARGUMENT);
 
 		return fpu_set_fxstate(thr_act, tstate);
-	    }
+	}
 
-	    case x86_FLOAT_STATE64:
-	    {
+	case x86_FLOAT_STATE64:
+	{
 		if (count != x86_FLOAT_STATE64_COUNT)
 			return(KERN_INVALID_ARGUMENT);
 
@@ -1021,73 +1097,71 @@ machine_thread_set_state(
 			return(KERN_INVALID_ARGUMENT);
 
 		return fpu_set_fxstate(thr_act, tstate);
-	    }
+	}
 
-	    case x86_FLOAT_STATE:
-	    {
-	        x86_float_state_t	*state;
+	case x86_FLOAT_STATE:
+	{   
+		x86_float_state_t       *state;
 
 		if (count != x86_FLOAT_STATE_COUNT)
 			return(KERN_INVALID_ARGUMENT);
 
 		state = (x86_float_state_t *)tstate;
-
 		if (state->fsh.flavor == x86_FLOAT_STATE64 && state->fsh.count == x86_FLOAT_STATE64_COUNT &&
 		    thread_is_64bit(thr_act)) {
-		        return fpu_set_fxstate(thr_act, (thread_state_t)&state->ufs.fs64);
+			return fpu_set_fxstate(thr_act, (thread_state_t)&state->ufs.fs64);
 		}
 		if (state->fsh.flavor == x86_FLOAT_STATE32 && state->fsh.count == x86_FLOAT_STATE32_COUNT &&
 		    !thread_is_64bit(thr_act)) {
-		        return fpu_set_fxstate(thr_act, (thread_state_t)&state->ufs.fs32);
+			return fpu_set_fxstate(thr_act, (thread_state_t)&state->ufs.fs32); 
 		}
 		return(KERN_INVALID_ARGUMENT);
-	    }
+	}
 
-
-
-	    case OLD_i386_THREAD_STATE: 
-	    case x86_THREAD_STATE32: 
-	    {
+	case x86_THREAD_STATE32: 
+	{
 		if (count != x86_THREAD_STATE32_COUNT)
 			return(KERN_INVALID_ARGUMENT);
 
 		if (thread_is_64bit(thr_act))
 			return(KERN_INVALID_ARGUMENT);
-		
-		return set_thread_state32(thr_act, (x86_thread_state32_t *)tstate);
-	    }
 
-	    case x86_THREAD_STATE64: 
-	    {
+		return set_thread_state32(thr_act, (x86_thread_state32_t *)tstate);
+	}
+
+	case x86_THREAD_STATE64: 
+	{
 		if (count != x86_THREAD_STATE64_COUNT)
 			return(KERN_INVALID_ARGUMENT);
 
-		if ( !thread_is_64bit(thr_act))
+		if (!thread_is_64bit(thr_act))
 			return(KERN_INVALID_ARGUMENT);
 
 		return set_thread_state64(thr_act, (x86_thread_state64_t *)tstate);
-	    }
 
-	    case x86_THREAD_STATE: 
-	    {
-	        x86_thread_state_t	*state;
+	}
+	case x86_THREAD_STATE:
+	{
+		x86_thread_state_t      *state;
 
 		if (count != x86_THREAD_STATE_COUNT)
 			return(KERN_INVALID_ARGUMENT);
 
 		state = (x86_thread_state_t *)tstate;
 
-		if (state->tsh.flavor == x86_THREAD_STATE64 && state->tsh.count == x86_THREAD_STATE64_COUNT &&
+		if (state->tsh.flavor == x86_THREAD_STATE64 &&
+		    state->tsh.count == x86_THREAD_STATE64_COUNT &&
 		    thread_is_64bit(thr_act)) {
-		        return set_thread_state64(thr_act, &state->uts.ts64);
-		} else if (state->tsh.flavor == x86_THREAD_STATE32 && state->tsh.count == x86_THREAD_STATE32_COUNT &&
+			return set_thread_state64(thr_act, &state->uts.ts64);
+		} else if (state->tsh.flavor == x86_THREAD_STATE32 &&
+			   state->tsh.count == x86_THREAD_STATE32_COUNT &&
 			   !thread_is_64bit(thr_act)) {
-		        return set_thread_state32(thr_act, &state->uts.ts32);
+			return set_thread_state32(thr_act, &state->uts.ts32);
 		} else
-		        return(KERN_INVALID_ARGUMENT);
+			return(KERN_INVALID_ARGUMENT);
 
 		break;
-	    }
+	}
 	case x86_DEBUG_STATE32:
 	{
 		x86_debug_state32_t *state;
@@ -1160,6 +1234,7 @@ machine_thread_get_state(
 	thread_state_t tstate,
 	mach_msg_type_number_t *count)
 {
+
 	switch (flavor)  {
 
 	    case THREAD_STATE_FLAVOR_LIST:
@@ -1197,6 +1272,9 @@ machine_thread_get_state(
 		if (*count < x86_SAVED_STATE32_COUNT)
 		        return(KERN_INVALID_ARGUMENT);
 
+		if (thread_is_64bit(thr_act))
+			return(KERN_INVALID_ARGUMENT);
+
 		state = (x86_saved_state32_t *) tstate;
 		saved_state = USER_REGS32(thr_act);
 
@@ -1220,6 +1298,9 @@ machine_thread_get_state(
 
 		if (*count < x86_SAVED_STATE64_COUNT)
 		        return(KERN_INVALID_ARGUMENT);
+
+		if (!thread_is_64bit(thr_act))
+			return(KERN_INVALID_ARGUMENT);
 
 		state = (x86_saved_state64_t *)tstate;
 		saved_state = USER_REGS64(thr_act);
@@ -1291,8 +1372,6 @@ machine_thread_get_state(
 		return(kret);
 	    }
 
-
-	    case OLD_i386_THREAD_STATE: 
 	    case x86_THREAD_STATE32: 
 	    {
 		if (*count < x86_THREAD_STATE32_COUNT)
@@ -1456,7 +1535,7 @@ machine_thread_get_state(
 		*count = x86_DEBUG_STATE_COUNT;
 		break;
 	}
-	    default:
+	default:
 		return(KERN_INVALID_ARGUMENT);
 	}
 
@@ -1478,16 +1557,14 @@ machine_thread_get_kern_state(
 		return KERN_FAILURE;
 
 	switch(flavor) {
-        
-		case x86_THREAD_STATE32: 
+		case x86_THREAD_STATE32:
 		{
-
 			x86_thread_state32_t	*state;
 			x86_saved_state32_t	*saved_state;
 
 			if (*count < x86_THREAD_STATE32_COUNT)
-				return(KERN_INVALID_ARGUMENT);
-			
+				return(KERN_INVALID_ARGUMENT);     
+
 			state = (x86_thread_state32_t *)tstate;
 
 			assert(is_saved_state32(current_cpu_datap()->cpu_int_state));
@@ -1511,55 +1588,55 @@ machine_thread_get_kern_state(
 			state->es = saved_state->es & 0xffff;
 			state->fs = saved_state->fs & 0xffff;
 			state->gs = saved_state->gs & 0xffff;
-			
+
 			*count = x86_THREAD_STATE32_COUNT;
 
 			return KERN_SUCCESS;
 		}
-		break;	// for completeness
+		break;
 
 		case x86_THREAD_STATE:
 		{
 			// wrap a 32 bit thread state into a 32/64bit clean thread state
-			x86_thread_state_t		*state;
-			x86_saved_state32_t		*saved_state;
+            x86_thread_state_t      *state;
+            x86_saved_state32_t     *saved_state;
 
-			if(*count < x86_THREAD_STATE_COUNT)
-				return (KERN_INVALID_ARGUMENT);
+            if(*count < x86_THREAD_STATE_COUNT)
+                return (KERN_INVALID_ARGUMENT);
 
-			state = (x86_thread_state_t *)tstate;
-			assert(is_saved_state32(current_cpu_datap()->cpu_int_state));
-			saved_state = saved_state32(current_cpu_datap()->cpu_int_state);
+            state = (x86_thread_state_t *)tstate;
+            assert(is_saved_state32(current_cpu_datap()->cpu_int_state));
+            saved_state = saved_state32(current_cpu_datap()->cpu_int_state);
 
-			state->tsh.flavor = x86_THREAD_STATE32;
-			state->tsh.count = x86_THREAD_STATE32_COUNT;
-			
-			/* 
-			 * General registers.
-			 */
+            state->tsh.flavor = x86_THREAD_STATE32;
+            state->tsh.count = x86_THREAD_STATE32_COUNT;
 
-			state->uts.ts32.eax = saved_state->eax;
-			state->uts.ts32.ebx = saved_state->ebx;
-			state->uts.ts32.ecx = saved_state->ecx;
-			state->uts.ts32.edx = saved_state->edx;
-			state->uts.ts32.edi = saved_state->edi;
-			state->uts.ts32.esi = saved_state->esi;
-			state->uts.ts32.ebp = saved_state->ebp;
-			state->uts.ts32.esp = saved_state->uesp;
-			state->uts.ts32.eflags = saved_state->efl;
-			state->uts.ts32.eip = saved_state->eip;
-			state->uts.ts32.cs = saved_state->cs;
-			state->uts.ts32.ss = saved_state->ss;
-			state->uts.ts32.ds = saved_state->ds & 0xffff;
-			state->uts.ts32.es = saved_state->es & 0xffff;
-			state->uts.ts32.fs = saved_state->fs & 0xffff;
-			state->uts.ts32.gs = saved_state->gs & 0xffff;
-	
-			*count = x86_THREAD_STATE_COUNT;
-			return KERN_SUCCESS;
+            /* 
+             * General registers.
+             */
+
+            state->uts.ts32.eax = saved_state->eax;
+            state->uts.ts32.ebx = saved_state->ebx;
+            state->uts.ts32.ecx = saved_state->ecx;
+            state->uts.ts32.edx = saved_state->edx;
+            state->uts.ts32.edi = saved_state->edi;
+            state->uts.ts32.esi = saved_state->esi;
+            state->uts.ts32.ebp = saved_state->ebp;
+            state->uts.ts32.esp = saved_state->uesp;
+            state->uts.ts32.eflags = saved_state->efl;
+            state->uts.ts32.eip = saved_state->eip;
+            state->uts.ts32.cs = saved_state->cs;
+            state->uts.ts32.ss = saved_state->ss;
+            state->uts.ts32.ds = saved_state->ds & 0xffff;
+            state->uts.ts32.es = saved_state->es & 0xffff;
+            state->uts.ts32.fs = saved_state->fs & 0xffff;
+            state->uts.ts32.gs = saved_state->gs & 0xffff;
+
+            *count = x86_THREAD_STATE_COUNT;
+            return KERN_SUCCESS;
 		}
 		break;
-	}	
+	}
 	return KERN_FAILURE;
 }
 
@@ -1582,22 +1659,27 @@ machine_thread_create(
 	thread->machine.physwindow_pte = 0;
 	thread->machine.physwindow_busy = 0;
 
+	/*
+	 * Allocate pcb only if required.
+	 */
+	if (pcb->sf == NULL) {
+		pcb->sf = zalloc(iss_zone);
+		if (pcb->sf == NULL)
+			panic("iss_zone");
+	}
+
         if (task_has_64BitAddr(task)) {
 		x86_sframe64_t		*sf64;
 
-	        sf64 = (x86_sframe64_t *)zalloc(iss_zone64);
-
-		if (sf64 == NULL)
-		        panic("iss_zone64");
-		pcb->sf = (void *)sf64;
+		sf64 = (x86_sframe64_t *) pcb->sf;
 
 		bzero((char *)sf64, sizeof(x86_sframe64_t));
 
 		iss = (x86_saved_state_t *) &sf64->ssf;
 		iss->flavor = x86_SAVED_STATE64;
 		/*
-		 *	Guarantee that the bootstrapped thread will be in user
-		 *	mode.
+		 *      Guarantee that the bootstrapped thread will be in user
+		 *      mode.
 		 */
 		iss->ss_64.isf.rflags = EFL_USER_SET;
 		iss->ss_64.isf.cs = USER64_CS;
@@ -1606,12 +1688,9 @@ machine_thread_create(
 		iss->ss_64.gs = USER_DS;
 	} else {
 		if (cpu_mode_is64bit()) {
-			x86_sframe_compat32_t	   *sfc32;
+			x86_sframe_compat32_t      *sfc32;
 
-			sfc32 = (x86_sframe_compat32_t *)zalloc(iss_zone32);
-			if (sfc32 == NULL)
-			        panic("iss_zone32");
-			pcb->sf = (void *)sfc32;
+			sfc32 = (x86_sframe_compat32_t *)pcb->sf;
 
 			bzero((char *)sfc32, sizeof(x86_sframe_compat32_t));
 
@@ -1619,21 +1698,17 @@ machine_thread_create(
 			iss->flavor = x86_SAVED_STATE32;
 #if DEBUG
 			{
-			x86_saved_state_compat32_t *xssc;
+				x86_saved_state_compat32_t *xssc;
 
-			xssc  = (x86_saved_state_compat32_t *) iss;
-			xssc->pad_for_16byte_alignment[0] = 0x64326432;
-			xssc->pad_for_16byte_alignment[1] = 0x64326432;
+				xssc  = (x86_saved_state_compat32_t *) iss;
+				xssc->pad_for_16byte_alignment[0] = 0x64326432;
+				xssc->pad_for_16byte_alignment[1] = 0x64326432;
 			}
 #endif
 		} else {
-		        x86_sframe32_t	*sf32;
+			x86_sframe32_t  *sf32;
 
-			sf32 = (x86_sframe32_t *)zalloc(iss_zone32);
-
-			if (sf32 == NULL)
-			        panic("iss_zone32");
-			pcb->sf = (void *)sf32;
+			sf32 = (x86_sframe32_t *) pcb->sf;
 
 			bzero((char *)sf32, sizeof(x86_sframe32_t));
 
@@ -1641,8 +1716,8 @@ machine_thread_create(
 			iss->flavor = x86_SAVED_STATE32;
 		}
 		/*
-		 *	Guarantee that the bootstrapped thread will be in user
-		 *	mode.
+		 *      Guarantee that the bootstrapped thread will be in user
+		 *      mode.
 		 */
 		iss->ss_32.cs = USER_CS;
 		iss->ss_32.ss = USER_DS;
@@ -1651,6 +1726,7 @@ machine_thread_create(
 		iss->ss_32.fs = USER_DS;
 		iss->ss_32.gs = USER_DS;
 		iss->ss_32.efl = EFL_USER_SET;
+
 	}
 	pcb->iss = iss;
 
@@ -1663,6 +1739,7 @@ machine_thread_create(
 	pcb->uldt_selector = 0;
 
 	pcb->iss_pte0 = (uint64_t)pte_kernel_rw(kvtophys((vm_offset_t)pcb->iss));
+	pcb->arg_store_valid = 0;
 
 	if (0 == (paddr = pa_to_pte(kvtophys((vm_offset_t)(pcb->iss) + PAGE_SIZE))))
 	        pcb->iss_pte1 = INTEL_PTE_INVALID;
@@ -1686,40 +1763,36 @@ machine_thread_destroy(
 	if (pcb->ifps != 0)
 		fpu_free(pcb->ifps);
 	if (pcb->sf != 0) {
-	        if (thread_is_64bit(thread))
-		        zfree(iss_zone64, pcb->sf);
-		else
-		        zfree(iss_zone32, pcb->sf);
+		zfree(iss_zone, pcb->sf);
 		pcb->sf = 0;
 	}
 	if (pcb->ids) {
-	        if (thread_is_64bit(thread))
-		        zfree(ids_zone64, pcb->ids);
-		else
-		        zfree(ids_zone32, pcb->ids);
+		zfree(ids_zone, pcb->ids);
+		pcb->ids = NULL;
 	}
 	thread->machine.pcb = (pcb_t)0;
 
 }
 
 void
-machine_thread_switch_addrmode(thread_t thread, int oldmode_is64bit)
+machine_thread_switch_addrmode(thread_t thread)
 {
-	register pcb_t	pcb = thread->machine.pcb;
+	/*
+	 * We don't want to be preempted until we're done
+	 * - particularly if we're switching the current thread
+	 */
+	disable_preemption();
 
-        assert(pcb);
-	
-	if (pcb->sf != 0) {
-	        if (oldmode_is64bit)
-		        zfree(iss_zone64, pcb->sf);
-		else
-		        zfree(iss_zone32, pcb->sf);
-	}
+	/*
+	 * Reset the state saveareas.
+	 */
 	machine_thread_create(thread, thread->task);
 
 	/* If we're switching ourselves, reset the pcb addresses etc. */
 	if (thread == current_thread())
 		act_machine_switch_pcb(thread);
+
+	enable_preemption();
 }
 
 
@@ -1751,7 +1824,13 @@ machine_thread_terminate_self(void)
 }
 
 void
-act_machine_return(int code)
+act_machine_return(
+#if CONFIG_NO_PANIC_STRINGS
+		__unused int code
+#else
+		int code
+#endif
+		)
 {
 	/*
 	 * This code is called with nothing locked.
@@ -1778,40 +1857,31 @@ act_machine_return(int code)
 void
 machine_thread_init(void)
 {
-        if (cpu_mode_is64bit()) {
-	        iss_zone64 = zinit(sizeof(x86_sframe64_t),
-				   THREAD_MAX * sizeof(x86_sframe64_t),
-				   THREAD_CHUNK * sizeof(x86_sframe64_t),
-				   "x86_64 saved state");
-
+	if (cpu_mode_is64bit()) {
 		assert(sizeof(x86_sframe_compat32_t) % 16 == 0);
-	        iss_zone32 = zinit(sizeof(x86_sframe_compat32_t),
-				   THREAD_MAX * sizeof(x86_sframe_compat32_t),
-				   THREAD_CHUNK * sizeof(x86_sframe_compat32_t),
-				   "x86_32 saved state");
+		iss_zone = zinit(sizeof(x86_sframe64_t),
+				THREAD_MAX * sizeof(x86_sframe64_t),
+				THREAD_CHUNK * sizeof(x86_sframe64_t),
+				"x86_64 saved state");
 
-	        ids_zone32 = zinit(sizeof(x86_debug_state32_t),
-				   THREAD_MAX * (sizeof(x86_debug_state32_t)),
-				   THREAD_CHUNK * (sizeof(x86_debug_state32_t)),
-				   "x86_32 debug state");
-	        ids_zone64 = zinit(sizeof(x86_debug_state64_t),
-				   THREAD_MAX * sizeof(x86_debug_state64_t),
-				   THREAD_CHUNK * sizeof(x86_debug_state64_t),
-				   "x86_64 debug state");
+	        ids_zone = zinit(sizeof(x86_debug_state64_t),
+				 THREAD_MAX * sizeof(x86_debug_state64_t),
+				 THREAD_CHUNK * sizeof(x86_debug_state64_t),
+				 "x86_64 debug state");
 
 	} else {
-	        iss_zone32 = zinit(sizeof(x86_sframe32_t),
-				   THREAD_MAX * sizeof(x86_sframe32_t),
-				   THREAD_CHUNK * sizeof(x86_sframe32_t),
-				   "x86 saved state");
-	        ids_zone32 = zinit(sizeof(x86_debug_state32_t),
-				   THREAD_MAX * (sizeof(x86_debug_state32_t)),
-				   THREAD_CHUNK * (sizeof(x86_debug_state32_t)),
-				   "x86 debug state");
+		iss_zone = zinit(sizeof(x86_sframe32_t),
+				THREAD_MAX * sizeof(x86_sframe32_t),
+				THREAD_CHUNK * sizeof(x86_sframe32_t),
+				"x86 saved state");
+	        ids_zone = zinit(sizeof(x86_debug_state32_t),
+				THREAD_MAX * (sizeof(x86_debug_state32_t)),
+				THREAD_CHUNK * (sizeof(x86_debug_state32_t)),
+				"x86 debug state");
 	}
 	fpu_module_init();
-	iopb_init();
 }
+
 
 /*
  * Some routines for debugging activation code
@@ -1823,42 +1893,42 @@ int		dump_act(thread_t thr_act);
 static void
 dump_handlers(thread_t thr_act)
 {
-    ReturnHandler *rhp = thr_act->handlers;
-    int	counter = 0;
+	ReturnHandler *rhp = thr_act->handlers;
+	int	counter = 0;
 
-    printf("\t");
-    while (rhp) {
-	if (rhp == &thr_act->special_handler){
-	    if (rhp->next)
-		printf("[NON-Zero next ptr(%x)]", rhp->next);
-	    printf("special_handler()->");
-	    break;
+	printf("\t");
+	while (rhp) {
+		if (rhp == &thr_act->special_handler){
+			if (rhp->next)
+				printf("[NON-Zero next ptr(%p)]", rhp->next);
+			printf("special_handler()->");
+			break;
+		}
+		printf("hdlr_%d(%p)->", counter, rhp->handler);
+		rhp = rhp->next;
+		if (++counter > 32) {
+			printf("Aborting: HUGE handler chain\n");
+			break;
+		}
 	}
-	printf("hdlr_%d(%x)->",counter,rhp->handler);
-	rhp = rhp->next;
-	if (++counter > 32) {
-		printf("Aborting: HUGE handler chain\n");
-		break;
-	}
-    }
-    printf("HLDR_NULL\n");
+	printf("HLDR_NULL\n");
 }
 
 void
 dump_regs(thread_t thr_act)
 {
-        if (thr_act->machine.pcb == NULL)
-	        return;
+	if (thr_act->machine.pcb == NULL)
+		return;
 
-        if (thread_is_64bit(thr_act)) {
-	        x86_saved_state64_t	*ssp;
+	if (thread_is_64bit(thr_act)) {
+		x86_saved_state64_t	*ssp;
 
 		ssp = USER_REGS64(thr_act);
 
 		panic("dump_regs: 64bit tasks not yet supported");
 
 	} else {
-	        x86_saved_state32_t	*ssp;
+		x86_saved_state32_t	*ssp;
 
 		ssp = USER_REGS32(thr_act);
 
@@ -1866,10 +1936,10 @@ dump_regs(thread_t thr_act)
 		 * Print out user register state
 		 */
 		printf("\tRegs:\tedi=%x esi=%x ebp=%x ebx=%x edx=%x\n",
-		    ssp->edi, ssp->esi, ssp->ebp, ssp->ebx, ssp->edx);
+			ssp->edi, ssp->esi, ssp->ebp, ssp->ebx, ssp->edx);
 
 		printf("\t\tecx=%x eax=%x eip=%x efl=%x uesp=%x\n",
-		    ssp->ecx, ssp->eax, ssp->eip, ssp->efl, ssp->uesp);
+			ssp->ecx, ssp->eax, ssp->eip, ssp->efl, ssp->uesp);
 
 		printf("\t\tcs=%x ss=%x\n", ssp->cs, ssp->ss);
 	}
@@ -1881,21 +1951,22 @@ dump_act(thread_t thr_act)
 	if (!thr_act)
 		return(0);
 
-	printf("thread(0x%x)(%d): task=%x(%d)\n",
-	       thr_act, thr_act->ref_count,
-	       thr_act->task,   thr_act->task   ? thr_act->task->ref_count : 0);
+	printf("thread(%p)(%d): task=%p(%d)\n",
+			thr_act, thr_act->ref_count,
+			thr_act->task,
+			thr_act->task   ? thr_act->task->ref_count : 0);
 
 	printf("\tsusp=%d user_stop=%d active=%x ast=%x\n",
-		       thr_act->suspend_count, thr_act->user_stop_count,
-		       thr_act->active, thr_act->ast);
-	printf("\tpcb=%x\n", thr_act->machine.pcb);
+			thr_act->suspend_count, thr_act->user_stop_count,
+			thr_act->active, thr_act->ast);
+	printf("\tpcb=%p\n", thr_act->machine.pcb);
 
 	if (thr_act->kernel_stack) {
-	    vm_offset_t stack = thr_act->kernel_stack;
+		vm_offset_t stack = thr_act->kernel_stack;
 
-	    printf("\tk_stk %x  eip %x ebx %x esp %x iss %x\n",
-		stack, STACK_IKS(stack)->k_eip, STACK_IKS(stack)->k_ebx,
-		STACK_IKS(stack)->k_esp, STACK_IEL(stack)->saved_state);
+		printf("\tk_stk %x  eip %x ebx %x esp %x iss %p\n",
+			stack, STACK_IKS(stack)->k_eip, STACK_IKS(stack)->k_ebx,
+			STACK_IKS(stack)->k_esp, STACK_IEL(stack)->saved_state);
 	}
 
 	dump_handlers(thr_act);
@@ -1909,7 +1980,7 @@ get_useraddr(void)
         thread_t thr_act = current_thread();
  
 	if (thr_act->machine.pcb == NULL) 
-	        return (0);
+		return(0);
 
         if (thread_is_64bit(thr_act)) {
 	        x86_saved_state64_t	*iss64;
@@ -2006,10 +2077,6 @@ machine_stack_handoff(thread_t old,
 	PMAP_SWITCH_CONTEXT(old, new, cpu_number());
 	act_machine_switch_pcb(new);
 
-	KERNEL_DEBUG_CONSTANT(
-		MACHDBG_CODE(DBG_MACH_SCHED, MACH_STACK_HANDOFF)|DBG_FUNC_NONE,
-		old->reason, (int)new, old->sched_pri, new->sched_pri, 0);
-
 	machine_set_current_thread(new);
 
 	return;
@@ -2035,31 +2102,31 @@ struct x86_act_context64 {
 void *
 act_thread_csave(void)
 {
-        kern_return_t kret;
+	kern_return_t kret;
 	mach_msg_type_number_t val;
-        thread_t thr_act = current_thread();
+	thread_t thr_act = current_thread();
 
-        if (thread_is_64bit(thr_act)) {
-	        struct x86_act_context64 *ic64;
+	if (thread_is_64bit(thr_act)) {
+		struct x86_act_context64 *ic64;
 
-	        ic64 = (struct x86_act_context64 *)kalloc(sizeof(struct x86_act_context64));
+		ic64 = (struct x86_act_context64 *)kalloc(sizeof(struct x86_act_context64));
 
 		if (ic64 == (struct x86_act_context64 *)NULL)
-		        return((void *)0);
+			return((void *)0);
 
 		val = x86_SAVED_STATE64_COUNT; 
 		kret = machine_thread_get_state(thr_act, x86_SAVED_STATE64,
-						(thread_state_t) &ic64->ss, &val);
+				(thread_state_t) &ic64->ss, &val);
 		if (kret != KERN_SUCCESS) {
-		        kfree(ic64, sizeof(struct x86_act_context64));
+			kfree(ic64, sizeof(struct x86_act_context64));
 			return((void *)0);
 		}
 		val = x86_FLOAT_STATE64_COUNT; 
 		kret = machine_thread_get_state(thr_act, x86_FLOAT_STATE64,
-						(thread_state_t) &ic64->fs, &val);
+				(thread_state_t) &ic64->fs, &val);
 
 		if (kret != KERN_SUCCESS) {
-		        kfree(ic64, sizeof(struct x86_act_context64));
+			kfree(ic64, sizeof(struct x86_act_context64));
 			return((void *)0);
 		}
 
@@ -2075,25 +2142,25 @@ act_thread_csave(void)
 		return(ic64);
 
 	} else {
-	        struct x86_act_context32 *ic32;
+		struct x86_act_context32 *ic32;
 
-	        ic32 = (struct x86_act_context32 *)kalloc(sizeof(struct x86_act_context32));
+		ic32 = (struct x86_act_context32 *)kalloc(sizeof(struct x86_act_context32));
 
 		if (ic32 == (struct x86_act_context32 *)NULL)
-		        return((void *)0);
+			return((void *)0);
 
 		val = x86_SAVED_STATE32_COUNT; 
 		kret = machine_thread_get_state(thr_act, x86_SAVED_STATE32,
-						(thread_state_t) &ic32->ss, &val);
+				(thread_state_t) &ic32->ss, &val);
 		if (kret != KERN_SUCCESS) {
-		        kfree(ic32, sizeof(struct x86_act_context32));
+			kfree(ic32, sizeof(struct x86_act_context32));
 			return((void *)0);
 		}
 		val = x86_FLOAT_STATE32_COUNT; 
 		kret = machine_thread_get_state(thr_act, x86_FLOAT_STATE32,
-						(thread_state_t) &ic32->fs, &val);
+				(thread_state_t) &ic32->fs, &val);
 		if (kret != KERN_SUCCESS) {
-		        kfree(ic32, sizeof(struct x86_act_context32));
+			kfree(ic32, sizeof(struct x86_act_context32));
 			return((void *)0);
 		}
 
@@ -2118,7 +2185,7 @@ act_thread_catt(void *ctx)
 	kern_return_t kret;
 
 	if (ctx == (void *)NULL)
-	        return;
+				return;
 
         if (thread_is_64bit(thr_act)) {
 	        struct x86_act_context64 *ic64;
@@ -2128,8 +2195,8 @@ act_thread_catt(void *ctx)
 		kret = machine_thread_set_state(thr_act, x86_SAVED_STATE64,
 						(thread_state_t) &ic64->ss, x86_SAVED_STATE64_COUNT);
 		if (kret == KERN_SUCCESS) {
-		        machine_thread_set_state(thr_act, x86_FLOAT_STATE64,
-						 (thread_state_t) &ic64->fs, x86_FLOAT_STATE64_COUNT);
+			        machine_thread_set_state(thr_act, x86_FLOAT_STATE64,
+							 (thread_state_t) &ic64->fs, x86_FLOAT_STATE64_COUNT);
 		}
 		kfree(ic64, sizeof(struct x86_act_context64));
 	} else {
@@ -2156,4 +2223,14 @@ act_thread_catt(void *ctx)
 void act_thread_cfree(__unused void *ctx)
 {
 	/* XXX - Unused */
+}
+void x86_toggle_sysenter_arg_store(thread_t thread, boolean_t valid);
+void x86_toggle_sysenter_arg_store(thread_t thread, boolean_t valid) {
+	thread->machine.pcb->arg_store_valid = valid;
+}
+
+boolean_t x86_sysenter_arg_store_isvalid(thread_t thread);
+
+boolean_t x86_sysenter_arg_store_isvalid(thread_t thread) {
+	return (thread->machine.pcb->arg_store_valid);
 }

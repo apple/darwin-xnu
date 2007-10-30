@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ *
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ *
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ *
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/netinet6/nd6_rtr.c,v 1.11 2002/04/19 04:46:23 suz Exp $	*/
 /*	$KAME: nd6_rtr.c,v 1.111 2001/04/27 01:37:15 jinmei Exp $	*/
 
@@ -590,14 +618,7 @@ defrouter_delreq(
 		  RTF_GATEWAY, &oldrt);
 	if (oldrt) {
 		nd6_rtmsg(RTM_DELETE, oldrt);
-		if (oldrt->rt_refcnt <= 0) {
-			/*
-			 * XXX: borrowed from the RTM_DELETE case of
-			 * rtrequest().
-			 */
-			rtref(oldrt);
-			rtfree_locked(oldrt);
-		}
+		rtfree_locked(oldrt);
 	}
 
 	if (dofree)		/* XXX: necessary? */
@@ -845,9 +866,43 @@ nd6_prefix_lookup(
 			break;
 		}
 	}
+	if (search != NULL)
+		ndpr_hold(search, TRUE);
 	lck_mtx_unlock(nd6_mutex);
 
 	return(search);
+}
+
+void
+ndpr_hold(struct nd_prefix *pr, boolean_t locked)
+{
+	if (!locked)
+		lck_mtx_lock(nd6_mutex);
+
+	if (pr->ndpr_usecnt < 0)
+		panic("%s: bad usecnt %d for pr %p\n", __func__,
+		    pr->ndpr_usecnt, pr);
+
+	pr->ndpr_usecnt++;
+
+	if (!locked)
+		lck_mtx_unlock(nd6_mutex);
+}
+
+void
+ndpr_rele(struct nd_prefix *pr, boolean_t locked)
+{
+	if (!locked)
+		lck_mtx_lock(nd6_mutex);
+
+	if (pr->ndpr_usecnt <= 0)
+		panic("%s: bad usecnt %d for pr %p\n", __func__,
+		    pr->ndpr_usecnt, pr);
+
+	pr->ndpr_usecnt--;
+
+	if (!locked)
+		lck_mtx_unlock(nd6_mutex);
 }
 
 int
@@ -878,6 +933,9 @@ nd6_prelist_add(
 	/* link ndpr_entry to nd_prefix list */
 	lck_mtx_lock(nd6_mutex);
 	LIST_INSERT_HEAD(&nd_prefix, new, ndpr_entry);
+
+	new->ndpr_usecnt = 0;
+	ndpr_hold(new, TRUE);
 
 	/* ND_OPT_PI_FLAG_ONLINK processing */
 	if (new->ndpr_raf_onlink) {
@@ -927,11 +985,12 @@ prelist_remove(
 		/* what should we do? */
 	}
 
-	if (pr->ndpr_refcnt > 0)
-		return;		/* notice here? */
-
 	if (nd6locked == 0)
 		lck_mtx_lock(nd6_mutex);
+
+	if (pr->ndpr_usecnt > 0 || pr->ndpr_refcnt > 0)
+		goto done;	/* notice here? */
+
 	/* unlink ndpr_entry from nd_prefix list */
 	LIST_REMOVE(pr, ndpr_entry);
 
@@ -945,6 +1004,7 @@ prelist_remove(
 	FREE(pr, M_IP6NDP);
 
 	pfxlist_onlink_check(1);
+done:
 	if (nd6locked == 0)
 		lck_mtx_unlock(nd6_mutex);
 }
@@ -1192,7 +1252,9 @@ prelist_update(
 			/*
 			 * note that we should use pr (not new) for reference.
 			 */
+			lck_mtx_lock(nd6_mutex);
 			pr->ndpr_refcnt++;
+			lck_mtx_unlock(nd6_mutex);
 			ia6->ia6_ndpr = pr;
 
 #if 0
@@ -1234,9 +1296,12 @@ prelist_update(
 		}
 	}
 
-  afteraddrconf:
+afteraddrconf:
 
- end:
+end:
+	if (pr != NULL)
+		ndpr_rele(pr, FALSE);
+
 	return error;
 }
 
@@ -1644,13 +1709,9 @@ nd6_prefix_offlink(
 		    error));
 	}
 
-	if (rt != NULL) {
-		if (rt->rt_refcnt <= 0) {
-			/* XXX: we should free the entry ourselves. */
-			rtref(rt);
-			rtfree_locked(rt);
-		}
-	}
+	if (rt != NULL)
+		rtfree_locked(rt);
+
 	lck_mtx_unlock(rt_mtx);
 
 	return(error);
@@ -1895,6 +1956,7 @@ in6_tmpifadd(
 		    "no ifaddr\n"));
 		return(EINVAL); /* XXX */
 	}
+	lck_mtx_lock(nd6_mutex);
 	newia->ia6_ndpr = ia0->ia6_ndpr;
 	newia->ia6_ndpr->ndpr_refcnt++;
 
@@ -1906,7 +1968,8 @@ in6_tmpifadd(
 	 * and, in fact, we surely need the check when we create a new
 	 * temporary address due to deprecation of an old temporary address.
 	 */
-	pfxlist_onlink_check(0);
+	pfxlist_onlink_check(1);
+	lck_mtx_unlock(nd6_mutex);
 
 	return(0);
 }	    
@@ -1937,7 +2000,7 @@ in6_init_prefix_ltimes(struct nd_prefix *ndpr)
 }
 
 static void
-in6_init_address_ltimes(struct nd_prefix *new, struct in6_addrlifetime *lt6)
+in6_init_address_ltimes(__unused struct nd_prefix *new, struct in6_addrlifetime *lt6)
 {
 	struct timeval timenow;
 

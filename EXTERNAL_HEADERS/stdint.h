@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000,2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
  * We build on <machine/types.h> rather than <sys/types.h> in order to
  * minimize the global namespace pollution (i.e., we'd like to define
@@ -84,10 +84,10 @@ typedef unsigned long long      uintmax_t;
 
 
 /* 7.18.2.1 Limits of exact-width integer types */
-#define INT8_MIN         -128
-#define INT16_MIN        -32768
-#define INT32_MIN        -2147483648
-#define INT64_MIN        -9223372036854775808LL
+#define INT8_MIN         (-127-1)
+#define INT16_MIN        (-32767-1)
+#define INT32_MIN        (-2147483647-1)
+#define INT64_MIN        (-9223372036854775807LL-1LL)
 
 #define INT8_MAX         +127
 #define INT16_MAX        +32767
@@ -132,11 +132,15 @@ typedef unsigned long long      uintmax_t;
 #define UINT_FAST64_MAX   UINT64_MAX
 
 /* 7.18.2.4 Limits of integer types capable of holding object pointers */
-
+#if defined(__LP64__)
+#define INTPTR_MIN        INT64_MIN
+#define INTPTR_MAX        INT64_MAX
+#define UINTPTR_MAX       UINT64_MAX
+#else
 #define INTPTR_MIN        INT32_MIN
 #define INTPTR_MAX        INT32_MAX
-                             
 #define UINTPTR_MAX       UINT32_MAX
+#endif
 
 /* 7.18.2.5 Limits of greatest-width integer types */
 #define INTMAX_MIN        INT64_MIN
@@ -145,9 +149,13 @@ typedef unsigned long long      uintmax_t;
 #define UINTMAX_MAX       UINT64_MAX
 
 /* 7.18.3 "Other" */
+#if defined(__LP64__)
+#define PTRDIFF_MIN       INT64_MIN
+#define PTRDIFF_MAX       INT64_MAX
+#else
 #define PTRDIFF_MIN       INT32_MIN
 #define PTRDIFF_MAX       INT32_MAX
-
+#endif
 /* We have no sig_atomic_t yet, so no SIG_ATOMIC_{MIN,MAX}.
    Should end up being {-127,127} or {0,255} ... or bigger.
    My bet would be on one of {U}INT32_{MIN,MAX}. */

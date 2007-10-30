@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * file: pe_init.c
@@ -52,15 +58,15 @@ static int PE_stub_read_write_time_of_day(unsigned int options, long * secs)
     return 0;
 }
 
-static int PE_stub_poll_input(unsigned int options, char * c)
+static int PE_stub_poll_input(__unused unsigned int options, char * c)
 {
     *c = 0xff;
 
     return 1;
 }
 
-static int PE_stub_write_IIC(unsigned char addr, unsigned char reg,
-				unsigned char data)
+static int PE_stub_write_IIC(__unused unsigned char addr, __unused unsigned char reg,
+				__unused unsigned char data)
 {
     return 1;
 }
@@ -78,37 +84,30 @@ int (*PE_write_IIC)(unsigned char addr, unsigned char reg,
 int PE_initialize_console( PE_Video * info, int op )
 {
     static int		last_console = -1;
-    Boot_Video		bootInfo;
-    Boot_Video	*	bInfo;
 
-    if( info) {
-        bootInfo.v_baseAddr		= info->v_baseAddr;
-        bootInfo.v_rowBytes		= info->v_rowBytes;
-        bootInfo.v_width		= info->v_width;
-        bootInfo.v_height		= info->v_height;
-        bootInfo.v_depth		= info->v_depth;
-        bootInfo.v_display		= 0;
-	bInfo = &bootInfo;
-    } else
-	bInfo = 0;
+    if (info) {
+	info->v_offset  = 0;
+	info->v_length  = 0;
+	info->v_display = 0;
+    }
 
     switch( op ) {
 
 	case kPEDisableScreen:
-            initialize_screen((void *) bInfo, op);
+            initialize_screen(info, op);
             last_console = switch_to_serial_console();
             kprintf("kPEDisableScreen %d\n",last_console);
 	    break;
 
 	case kPEEnableScreen:
-            initialize_screen((void *) bInfo, op);
+            initialize_screen(info, op);
             kprintf("kPEEnableScreen %d\n",last_console);
             if( last_console != -1)
                 switch_to_old_console( last_console);
 	    break;
 	
 	default:
-            initialize_screen((void *) bInfo, op);
+            initialize_screen(info, op);
 	    break;
     }
 
@@ -118,14 +117,14 @@ int PE_initialize_console( PE_Video * info, int op )
 void PE_init_iokit(void)
 {
     kern_return_t	ret;
-    DTEntry		entry;
-    int			size;
-    void **		map;
+    DTEntry			entry;
+    unsigned int	size;
+    void **			map;
 
     PE_init_kprintf(TRUE);
     PE_init_printf(TRUE);
 
-    if( kSuccess == DTLookupEntry(0, "/chosen/memory-map", &entry)) {
+    if( kSuccess == DTLookupEntry(NULL, "/chosen/memory-map", &entry)) {
 
 	boot_progress_element * bootPict;
 
@@ -152,7 +151,7 @@ void PE_init_platform(boolean_t vm_initialized, void *_args)
 {
 	DTEntry dsouth, dnorth, root, dcpu;
 	char *model;
-	int msize, size;
+	unsigned int msize, size;
 	uint32_t *south, *north, *pdata, *ddata;
 	int i;
 	
@@ -169,7 +168,8 @@ void PE_init_platform(boolean_t vm_initialized, void *_args)
 	  PE_state.video.v_height	= args->Video.v_height;
 	  PE_state.video.v_depth	= args->Video.v_depth;
 	  PE_state.video.v_display	= args->Video.v_display;
-	  strcpy( PE_state.video.v_pixelFormat, "PPPPPPPP");
+	  strlcpy(PE_state.video.v_pixelFormat, "PPPPPPPP",
+		  sizeof(PE_state.video.v_pixelFormat));
 	}
 
 	if (!vm_initialized)
@@ -202,25 +202,25 @@ void PE_create_console( void )
 int PE_current_console( PE_Video * info )
 {
     *info = PE_state.video;
-    info->v_baseAddr = 0;
+
     return( 0);
 }
 
-void PE_display_icon(	unsigned int flags,
-			const char * name )
+void PE_display_icon(	__unused unsigned int flags,
+			__unused const char * name )
 {
     if( default_noroot_data)
 	vc_display_icon( &default_noroot, default_noroot_data );
 }
 
-extern boolean_t PE_get_hotkey(
-	unsigned char	key)
+boolean_t
+PE_get_hotkey(unsigned char key)
 {
     unsigned char * adbKeymap;
-    int		size;
-    DTEntry	entry;
+    unsigned int	size;
+    DTEntry			entry;
 
-    if( (kSuccess != DTLookupEntry( 0, "/", &entry))
+    if( (kSuccess != DTLookupEntry(NULL, "/", &entry))
     ||  (kSuccess != DTGetProperty( entry, "AAPL,adb-keymap",
             (void **)&adbKeymap, &size))
     || (size != 16))

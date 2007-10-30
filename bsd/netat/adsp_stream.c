@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *	Copyright (c) 1995-1998 Apple Computer, Inc.
@@ -57,13 +63,10 @@
 #include <netat/adsp.h>
 #include <netat/adsp_internal.h>
 
-void SndMsgUp();
-void adsp_rput();
-static void adsp_iocack();
-static void adsp_iocnak();
-void adsp_dequeue_ccb();
-unsigned char adspAssignSocket();
-int adspallocate(), adsprelease();
+void adsp_rput(gref_t *, gbuf_t *);
+static void adsp_iocack(gref_t *, gbuf_t *);
+static void adsp_iocnak(gref_t *, gbuf_t *, int err);
+void adsp_dequeue_ccb(CCB *);
 int adspInited = 0;
 
 GLOBAL adspGlobal;
@@ -148,6 +151,8 @@ void adsp_input(mp)
 }
 
 /**********/
+int adsp_readable(gref_t *);
+
 int adsp_readable(gref)
 	gref_t *gref;
 {
@@ -172,6 +177,7 @@ int adsp_readable(gref)
 	return rc;
 }
 
+int adsp_writeable(gref_t *);
 int adsp_writeable(gref)
 	gref_t *gref;
 {
@@ -196,7 +202,9 @@ int adsp_writeable(gref)
 	return rc;
 }
 
-static void adsp_init()
+static void adsp_init(void);
+
+static void adsp_init(void)
 {
 	adspInited++;
 	InitGlobals();
@@ -249,7 +257,7 @@ int adsp_close(gref)
 		adsp_dequeue_ccb(sp);
 		gbuf_freeb((gbuf_t *)gref->info);
 	}
-  } else
+  }
     return 0;
 }
 
@@ -284,8 +292,8 @@ void adsp_rput(gref, mp)
 #endif
 	/* fall through */
   default:
-	CheckReadQueue(gbuf_rptr(((gbuf_t *)gref->info)));
-	CheckSend(gbuf_rptr(((gbuf_t *)gref->info)));
+	CheckReadQueue((CCBPtr)gbuf_rptr(((gbuf_t *)gref->info)));
+	CheckSend((CCBPtr)gbuf_rptr(((gbuf_t *)gref->info)));
 
     	switch (gbuf_type(mp)) {
 	case MSG_IOCTL:
@@ -507,7 +515,7 @@ adspAssignSocket(gref, flag)
 	gref_t *gref;
 	int flag;
 {
-	unsigned char sVal, sMax, sMin, sSav, inputC;
+	unsigned char sVal, sMax, sMin, sSav = 0, inputC;
 	CCBPtr sp;
 
 	sMax = flag ? DDP_SOCKET_LAST-46 : DDP_SOCKET_LAST-6;

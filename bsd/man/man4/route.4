@@ -177,12 +177,7 @@ be reclaimed until all references to it are released.
 User processes can obtain information about the routing
 entry to a specific destination by using a
 .Dv RTM_GET
-message,
-or by reading the
-.Pa /dev/kmem
-device, or by issuing a
-.Xr getkerninfo 2
-system call.
+message.
 .Pp
 Messages include:
 .Bd -literal

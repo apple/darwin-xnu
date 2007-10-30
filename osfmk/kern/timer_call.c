@@ -1,50 +1,49 @@
 /*
- * Copyright (c) 1993-1995, 1999-2004 Apple Computer, Inc.
- * All rights reserved.
+ * Copyright (c) 1993-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Timer interrupt callout module.
- *
- * HISTORY
- *
- * 20 December 2000 (debo)
- *	Created.
  */
 
 #include <mach/mach_types.h>
 
 #include <kern/clock.h>
 #include <kern/processor.h>
-
+#include <kern/etimer.h>
 #include <kern/timer_call.h>
 #include <kern/call_entry.h>
 
 #include <sys/kdebug.h>
 
-decl_simple_lock_data(static,timer_call_lock)
+#if CONFIG_DTRACE && (DEVELOPMENT || DEBUG )
+#include <mach/sdt.h>
+#endif
 
-static struct {
-	int		delayed_num,
-			delayed_hiwat;
-} timer_call_vars;
+decl_simple_lock_data(static,timer_call_lock)
 
 static void
 timer_call_interrupt(
@@ -99,8 +98,6 @@ _delayed_call_enqueue(
 	}
 
 	insque(qe(call), qe(current));
-	if (++timer_call_vars.delayed_num > timer_call_vars.delayed_hiwat)
-		timer_call_vars.delayed_hiwat = timer_call_vars.delayed_num;
 
 	call->state = DELAYED;
 }
@@ -111,7 +108,6 @@ _delayed_call_dequeue(
 	timer_call_t			call)
 {
 	(void)remque(qe(call));
-	timer_call_vars.delayed_num--;
 
 	call->state = IDLE;
 }
@@ -141,7 +137,7 @@ timer_call_enter(
 	else
 		result = FALSE;
 
-	call->param1	= 0;
+	call->param1	= NULL;
 	call->deadline	= deadline;
 
 	queue = &PROCESSOR_DATA(current_processor(), timer_call_queue);
@@ -201,8 +197,18 @@ timer_call_cancel(
 	s = splclock();
 	simple_lock(&timer_call_lock);
 
-	if (call->state == DELAYED)
-		_delayed_call_dequeue(call);
+	if (call->state == DELAYED) {
+		queue_t			queue = &PROCESSOR_DATA(current_processor(), timer_call_queue);
+
+		if (queue_first(queue) == qe(call)) {
+			_delayed_call_dequeue(call);
+
+			if (!queue_empty(queue))
+				_set_delayed_call_timer((timer_call_t)queue_first(queue));
+		}
+		else
+			_delayed_call_dequeue(call);
+	}
 	else
 		result = FALSE;
 
@@ -271,10 +277,8 @@ timer_call_shutdown(
 	simple_unlock(&timer_call_lock);
 }
 
-static
-void
-timer_call_interrupt(
-	uint64_t				timestamp)
+static void
+timer_call_interrupt(uint64_t timestamp)
 {
 	timer_call_t		call;
 	queue_t				queue;
@@ -286,7 +290,6 @@ timer_call_interrupt(
 	call = TC(queue_first(queue));
 
 	while (!queue_end(queue, qe(call))) {
-
 		if (call->deadline <= timestamp) {
 			timer_call_func_t		func;
 			timer_call_param_t		param0, param1;
@@ -299,15 +302,36 @@ timer_call_interrupt(
 
 			simple_unlock(&timer_call_lock);
 
-			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI, 2) | DBG_FUNC_START, (int)func, param0, param1, 0, 0);
+			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI,
+							   2)
+							| DBG_FUNC_START,
+					      (unsigned int)func,
+					      (unsigned int)param0,
+					      (unsigned int)param1, 0, 0);
+
+#if CONFIG_DTRACE && (DEVELOPMENT || DEBUG )
+			DTRACE_TMR3(callout__start, timer_call_func_t, func, 
+										timer_call_param_t, param0, 
+										timer_call_param_t, param1);
+#endif
 
 			(*func)(param0, param1);
 
-			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI, 2) | DBG_FUNC_END, (int)func, param0, param1, 0, 0);
+#if CONFIG_DTRACE && (DEVELOPMENT || DEBUG )
+			DTRACE_TMR3(callout__end, timer_call_func_t, func, 
+										timer_call_param_t, param0, 
+										timer_call_param_t, param1);
+#endif
+
+			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI,
+							   2)
+							| DBG_FUNC_END,
+					      (unsigned int)func,
+					      (unsigned int)param0,
+					      (unsigned int)param1, 0, 0);
 
 			simple_lock(&timer_call_lock);
-		}
-		else
+		} else
 			break;
 
 		call = TC(queue_first(queue));
@@ -317,5 +341,4 @@ timer_call_interrupt(
 		_set_delayed_call_timer(call);
 
 	simple_unlock(&timer_call_lock);
-
 }

@@ -4,11 +4,13 @@
 #include <sys/cdefs.h>
 #include <sys/types.h>
 #include <sys/kernel_types.h>
+#include <kern/thread.h>
+#include <sys/user.h>
 #include <stdint.h>
 
-struct vfs_context {
-	proc_t   vc_proc;
-	ucred_t  vc_ucred;
-};
+/*
+ * XXX should go away; pulls in vfs_context structure definition from
+ * XXX <sys/user.h>
+ */
 
 #endif /* !_BSD_SYS_VFS_CONTEXT_H_ */

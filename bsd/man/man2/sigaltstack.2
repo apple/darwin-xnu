@@ -40,17 +40,12 @@
 .Nm sigaltstack
 .Nd set and/or get signal stack context
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
 .Fd #include <signal.h>
-.Bd -literal
-struct sigaltstack {
-	char   *ss_sp;
-	int	ss_size;
-	int     ss_flags;
-};
-.Ed
 .Ft int
-.Fn sigaltstack "const struct sigaltstack *ss" "struct sigaltstack *oss"
+.Fo sigaltstack
+.Fa "const stack_t *restrict ss"
+.Fa "stack_t *restrict oss"
+.Fc
 .Sh DESCRIPTION
 .Fn Sigaltstack
 allows users to define an alternate stack on which signals
@@ -138,10 +133,11 @@ Otherwise, a value of -1 is returned and
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
-.Fn Sigstack
+.Fn Sigaltstack
 will fail and the signal stack context will remain unchanged
 if one of the following occurs.
 .Bl -tag -width [ENOMEM]
+.\" ===========
 .It Bq Er EFAULT
 Either
 .Fa ss
@@ -149,15 +145,64 @@ or
 .Fa oss
 points to memory that is not a valid part of the process
 address space.
+.\" ===========
 .It Bq Er EINVAL
-An attempt was made to disable an active stack.
+An attempt is made to disable an active stack.
+.\" ===========
+.It Bq Er EINVAL
+The
+.Fa ss
+argument is not a null pointer, and the ss_flags member
+pointed to by
+.Fa ss
+contains flags other than SS_DISABLE.
+.\" ===========
 .It Bq Er ENOMEM
-Size of alternate stack area is less than or equal to
+The size of the alternate stack area is less than or equal to
 .Dv MINSIGSTKSZ .
+.\" ===========
+.It Bq Er EPERM
+An attempt was made to modify an active stack.
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <signal.h>
+.Pp
+The include file
+.In sys/types.h
+is necessary.
+.Pp
+.Bd -literal
+struct sigaltstack {
+	char   *ss_sp;
+	int	ss_size;
+	int     ss_flags;
+};
+.Ed
+.Pp
+.Ft int
+.br
+.Fo sigaltstack
+.Fa "const struct sigaltstack *ss"
+.Fa "struct sigaltstack *oss"
+.Fc ;
+.Pp
+The variable types have changed.
+Specifically, the
+.Vt sigaltstack
+struct is no longer used.
+.Sh COMPATIBILITY
+Use of the (obsolete)
+.Vt sigaltstack
+struct will cause compiler diagnostics.
+Use
+.Vt stack_t ,
+defined in
+.In signal.h .
 .Sh SEE ALSO
 .Xr sigaction 2 ,
-.Xr setjmp 3
+.Xr setjmp 3 ,
+.Xr compat 5
 .Sh HISTORY
 The predecessor to
 .Nm sigaltstack ,

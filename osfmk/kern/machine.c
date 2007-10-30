@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -82,7 +88,9 @@
 #include <kern/task.h>
 #include <kern/thread.h>
 
+#if HIBERNATION
 #include <IOKit/IOHibernatePrivate.h>
+#endif
 #include <IOKit/IOPlatformExpert.h>
 
 /*
@@ -103,22 +111,21 @@ void			processor_doshutdown(
  */
 void
 processor_up(
-	processor_t		processor)
+	processor_t			processor)
 {
-	processor_set_t		pset = &default_pset;
+	processor_set_t		pset;
 	spl_t				s;
 
 	s = splsched();
-	processor_lock(processor);
 	init_ast_check(processor);
-	simple_lock(&pset->sched_lock);
-	pset_add_processor(pset, processor);
-	enqueue_tail(&pset->active_queue, (queue_entry_t)processor);
+	pset = processor->processor_set;
+	pset_lock(pset);
+	pset->processor_count++;
+	enqueue_head(&pset->active_queue, (queue_entry_t)processor);
 	processor->state = PROCESSOR_RUNNING;
-	simple_unlock(&pset->sched_lock);
-	hw_atomic_add(&machine_info.avail_cpus, 1);
+	(void)hw_atomic_add(&processor_avail_count, 1);
+	pset_unlock(pset);
 	ml_cpu_up();
-	processor_unlock(processor);
 	splx(s);
 }
 
@@ -164,12 +171,13 @@ processor_shutdown(
 	spl_t				s;
 
 	s = splsched();
-	processor_lock(processor);
+	pset = processor->processor_set;
+	pset_lock(pset);
 	if (processor->state == PROCESSOR_OFF_LINE) {
 		/*
 		 * Success if already shutdown.
 		 */
-		processor_unlock(processor);
+		pset_unlock(pset);
 		splx(s);
 
 		return (KERN_SUCCESS);
@@ -179,45 +187,26 @@ processor_shutdown(
 		/*
 		 * Failure if currently being started.
 		 */
-		processor_unlock(processor);
+		pset_unlock(pset);
 		splx(s);
 
 		return (KERN_FAILURE);
 	}
 
 	/*
-	 * Must lock the scheduling lock
-	 * to get at the processor state.
+	 * If the processor is dispatching, let it finish.
 	 */
-	pset = processor->processor_set;
-	if (pset != PROCESSOR_SET_NULL) {
-		simple_lock(&pset->sched_lock);
-
-		/*
-		 * If the processor is dispatching, let it finish.
-		 */
-		while (processor->state == PROCESSOR_DISPATCHING) {
-			simple_unlock(&pset->sched_lock);
-			delay(1);
-			simple_lock(&pset->sched_lock);
-		}
-
-		/*
-		 * Success if already being shutdown.
-		 */
-		if (processor->state == PROCESSOR_SHUTDOWN) {
-			simple_unlock(&pset->sched_lock);
-			processor_unlock(processor);
-			splx(s);
-
-			return (KERN_SUCCESS);
-		}
+	while (processor->state == PROCESSOR_DISPATCHING) {
+		pset_unlock(pset);
+		delay(1);
+		pset_lock(pset);
 	}
-	else {
-		/*
-		 * Success, already being shutdown.
-		 */
-		processor_unlock(processor);
+
+	/*
+	 * Success if already being shutdown.
+	 */
+	if (processor->state == PROCESSOR_SHUTDOWN) {
+		pset_unlock(pset);
 		splx(s);
 
 		return (KERN_SUCCESS);
@@ -235,9 +224,7 @@ processor_shutdown(
 
 	processor->state = PROCESSOR_SHUTDOWN;
 
-	simple_unlock(&pset->sched_lock);
-
-	processor_unlock(processor);
+	pset_unlock(pset);
 
 	processor_doshutdown(processor);
 	splx(s);
@@ -255,59 +242,50 @@ processor_doshutdown(
 	processor_t			processor)
 {
 	thread_t			old_thread, self = current_thread();
-	processor_set_t		pset;
 	processor_t			prev;
-	int					pcount;
 
 	/*
 	 *	Get onto the processor to shutdown
 	 */
-	prev = thread_bind(self, processor);
+	prev = thread_bind(processor);
 	thread_block(THREAD_CONTINUE_NULL);
 
-	processor_lock(processor);
-	pset = processor->processor_set;
-	simple_lock(&pset->sched_lock);
-
-	if ((pcount = pset->processor_count) == 1) {
-		simple_unlock(&pset->sched_lock);
-		processor_unlock(processor);
-
+#if HIBERNATION
+	if (processor_avail_count < 2)
 		hibernate_vm_lock();
-
-		processor_lock(processor);
-		simple_lock(&pset->sched_lock);
-	}
+#endif
 
 	assert(processor->state == PROCESSOR_SHUTDOWN);
 
-	pset_remove_processor(pset, processor);
-	simple_unlock(&pset->sched_lock);
-	processor_unlock(processor);
-
-	if (pcount == 1)
+#if HIBERNATION
+	if (processor_avail_count < 2)
 		hibernate_vm_unlock();
+#endif
 
 	/*
 	 *	Continue processor shutdown in shutdown context.
 	 */
-	thread_bind(self, prev);
+	thread_bind(prev);
 	old_thread = machine_processor_shutdown(self, processor_offline, processor);
 
-	thread_begin(self, self->last_processor);
-
-	thread_dispatch(old_thread);
+	thread_dispatch(old_thread, self);
 
 	/*
-	 * If we just shutdown another processor, move the
-	 * timer call outs to the current processor.
+	 * If we just shutdown another processor, move any
+	 * threads and timer call outs to the current processor.
 	 */
 	if (processor != current_processor()) {
-		processor_lock(processor);
-		if (	processor->state == PROCESSOR_OFF_LINE	||
-				processor->state == PROCESSOR_SHUTDOWN	)
+		processor_set_t		pset = processor->processor_set;
+
+		pset_lock(pset);
+
+		if (processor->state == PROCESSOR_OFF_LINE || processor->state == PROCESSOR_SHUTDOWN) {
 			timer_call_shutdown(processor);
-		processor_unlock(processor);
+			processor_queue_shutdown(processor);
+			return;
+		}
+
+		pset_unlock(pset);
 	}
 }
 
@@ -318,33 +296,35 @@ processor_doshutdown(
  */
 void
 processor_offline(
-	processor_t		processor)
+	processor_t			processor)
 {
-	thread_t		thread, old_thread = processor->active_thread;
+	thread_t			new_thread, old_thread = processor->active_thread;
+	processor_set_t		pset;
 
-	thread = processor->idle_thread;
-	processor->active_thread = thread;
+	new_thread = processor->idle_thread;
+	processor->active_thread = new_thread;
 	processor->current_pri = IDLEPRI;
+	processor->deadline = UINT64_MAX;
+	new_thread->last_processor = processor;
 
 	processor->last_dispatch = mach_absolute_time();
-	timer_switch((uint32_t)processor->last_dispatch,
-							&PROCESSOR_DATA(processor, offline_timer));
+	timer_stop(PROCESSOR_DATA(processor, thread_timer), processor->last_dispatch);
 
-	thread_done(old_thread, thread, processor);
+	machine_set_current_thread(new_thread);
 
-	machine_set_current_thread(thread);
-
-	thread_begin(thread, processor);
-
-	thread_dispatch(old_thread);
+	thread_dispatch(old_thread, new_thread);
 
 	PMAP_DEACTIVATE_KERNEL(PROCESSOR_DATA(processor, slot_num));
 
-	processor_lock(processor);
+	pset = processor->processor_set;
+	pset_lock(pset);
+	pset->processor_count--;
 	processor->state = PROCESSOR_OFF_LINE;
-	hw_atomic_sub(&machine_info.avail_cpus, 1);
+	if (processor == pset->low_hint)
+		pset->low_hint = PROCESSOR_NULL;
+	(void)hw_atomic_sub(&processor_avail_count, 1);
+	pset_unlock(pset);
 	ml_cpu_down();
-	processor_unlock(processor);
 
 	cpu_sleep();
 	panic("zombie processor");

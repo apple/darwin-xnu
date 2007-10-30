@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
  * Copyright (c) 1992, 1993
@@ -53,16 +59,26 @@
  *
  *	@(#)libkern.h	8.1 (Berkeley) 6/10/93
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 #ifndef _LIBKERN_LIBKERN_H_
 #define _LIBKERN_LIBKERN_H_
 
 #include <sys/appleapiopts.h>
 #include <stdint.h>
+#include <stdarg.h>	/* for platform-specific va_list */
 #include <string.h>
 #include <sys/cdefs.h>
 #include <sys/types.h>
 #include <mach/vm_param.h>
+#if __arm__
+#include <arm/arch.h> /* for _ARM_ARCH_* */
+#endif
 
 #ifdef __APPLE_API_OBSOLETE
 /* BCD conversions. */
@@ -121,6 +137,8 @@ ulmin(u_long a, u_long b)
 	return (a < b ? a : b);
 }
 
+
+
 /* Prototypes for non-quad routines. */
 extern int	ffs(int);
 extern int	locc(int, char *, u_int);
@@ -132,11 +150,18 @@ extern long	strtol(const char*, char **, int);
 extern u_long	strtoul(const char *, char **, int);
 extern quad_t	strtoq(const char *, char **, int);
 extern u_quad_t strtouq(const char *, char **, int);
+extern char	*strsep(char **stringp, const char *delim);
 
-int	snprintf(char *, size_t, const char *, ...);
-int	sprintf(char *bufp, const char *, ...);
-int	sscanf(const char *, char const *, ...);
-void printf(const char *, ...);
+int	snprintf(char *, size_t, const char *, ...) __printflike(3,4);
+
+/* sprintf() is being deprecated. Please use snprintf() instead. */
+int	sprintf(char *bufp, const char *, ...) __deprecated;
+int	sscanf(const char *, char const *, ...) __scanflike(2,3);
+int	printf(const char *, ...) __printflike(1,2);
+
+#if CONFIG_NO_PRINTF_STRINGS
+#define printf(x, ...)  do {} while (0)
+#endif
 
 uint32_t	crc32(uint32_t crc, const void *bufp, size_t len);
 
@@ -146,14 +171,61 @@ int	copyoutstr(const void *kaddr, user_addr_t udaddr, size_t len, size_t *done);
 int	copyin(const user_addr_t uaddr, void *kaddr, size_t len);
 int	copyout(const void *kaddr, user_addr_t udaddr, size_t len);
 
-int vsscanf(const char *, char const *, __darwin_va_list);
-extern int	vsnprintf(char *, size_t, const char *, __darwin_va_list);
-extern int	vsprintf(char *bufp, const char *, __darwin_va_list); 
+int vsscanf(const char *, char const *, va_list);
+
+extern int	vprintf(const char *, va_list);
+extern int	vsnprintf(char *, size_t, const char *, va_list);
+
+/* vsprintf() is being deprecated. Please use vsnprintf() instead. */
+extern int	vsprintf(char *bufp, const char *, va_list) __deprecated;
 
 extern void invalidate_icache(vm_offset_t, unsigned, int);
 extern void flush_dcache(vm_offset_t, unsigned, int);
 extern void invalidate_icache64(addr64_t, unsigned, int);
 extern void flush_dcache64(addr64_t, unsigned, int);
+
+
+/*
+ * assembly versions of clz... ideally we would just call
+ * __builtin_clz(num), unfortunately this one is ill defined
+ * by gcc for num=0
+ */
+static __inline__ unsigned int
+clz(unsigned int num)
+{
+#if __ppc__
+	unsigned int result;
+	__asm__ volatile(
+		"cntlzw %0, %1"
+		: "=r" (result)
+		: "r" (num)
+	);
+	return result;
+
+#elif __i386__
+	unsigned int result;
+	__asm__ volatile(
+		"bsrl   %1, %0\n\t"
+		"cmovel %2, %0"
+		: "=r" (result)
+		: "rm" (num), "r" (63)
+	);
+	return 31 ^ result;
+
+#elif __arm__ && !__thumb__ && defined(_ARM_ARCH_5)
+	unsigned int result;
+	__asm__ volatile(
+		"clz %0, %1"
+		: "=r" (result)
+		: "r" (num)
+	);
+
+	return result;
+#else
+	return num?__builtin_clz(num):__builtin_clz(0);
+#endif
+}
+
 
 __END_DECLS
 

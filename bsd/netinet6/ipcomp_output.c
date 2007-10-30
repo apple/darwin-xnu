@@ -49,7 +49,7 @@
 
 #include <net/if.h>
 #include <net/route.h>
-#include <net/zlib.h>
+#include <libkern/zlib.h>
 #include <kern/cpu_number.h>
 #include <kern/locks.h>
 
@@ -78,10 +78,9 @@
 
 #include <net/net_osdep.h>
 
-extern lck_mtx_t  *sadb_mutex;
 
 static int ipcomp_output(struct mbuf *, u_char *, struct mbuf *,
-	struct ipsecrequest *, int);
+	int, struct secasvar *sav);
 
 /*
  * Modify the packet so that the payload is compressed.
@@ -102,19 +101,18 @@ static int ipcomp_output(struct mbuf *, u_char *, struct mbuf *,
  *	<-----------------> compoff
  */
 static int
-ipcomp_output(m, nexthdrp, md, isr, af)
+ipcomp_output(m, nexthdrp, md, af, sav)
 	struct mbuf *m;
 	u_char *nexthdrp;
 	struct mbuf *md;
-	struct ipsecrequest *isr;
 	int af;
+	struct secasvar *sav;
 {
 	struct mbuf *n;
 	struct mbuf *md0;
 	struct mbuf *mcopy;
 	struct mbuf *mprev;
 	struct ipcomp *ipcomp;
-	struct secasvar *sav = isr->sav;
 	const struct ipcomp_algorithm *algo;
 	u_int16_t cpi;		/* host order */
 	size_t plen0, plen;	/*payload length to be compressed*/
@@ -144,7 +142,7 @@ ipcomp_output(m, nexthdrp, md, isr, af)
 	/* grab parameters */
 	algo = ipcomp_algorithm_lookup(sav->alg_enc);
 	if ((ntohl(sav->spi) & ~0xffff) != 0 || !algo) {
-		stat->out_inval++;
+		IPSEC_STAT_INCREMENT(stat->out_inval);
 		m_freem(m);
 		return EINVAL;
 	}
@@ -189,7 +187,7 @@ ipcomp_output(m, nexthdrp, md, isr, af)
 	if (mprev == NULL || mprev->m_next != md) {
 		ipseclog((LOG_DEBUG, "ipcomp%d_output: md is not in chain\n",
 		    afnumber));
-		stat->out_inval++;
+		IPSEC_STAT_INCREMENT(stat->out_inval);
 		m_freem(m);
 		m_freem(md0);
 		m_freem(mcopy);
@@ -206,19 +204,16 @@ ipcomp_output(m, nexthdrp, md, isr, af)
 	mprev->m_next = md;
 
 	/* compress data part */
-	lck_mtx_unlock(sadb_mutex);
 	if ((*algo->compress)(m, md, &plen) || mprev->m_next == NULL) {
-		lck_mtx_lock(sadb_mutex);
 		ipseclog((LOG_ERR, "packet compression failure\n"));
 		m = NULL;
 		m_freem(md0);
 		m_freem(mcopy);
-		stat->out_inval++;
+		IPSEC_STAT_INCREMENT(stat->out_inval);
 		error = EINVAL;
 		goto fail;
 	}
-	lck_mtx_lock(sadb_mutex);
-	stat->out_comphist[sav->alg_enc]++;
+	IPSEC_STAT_INCREMENT(stat->out_comphist[sav->alg_enc]);
 	md = mprev->m_next;
 
 	/*
@@ -311,7 +306,7 @@ ipcomp_output(m, nexthdrp, md, isr, af)
 		else {
 			ipseclog((LOG_ERR,
 			    "IPv4 ESP output: size exceeds limit\n"));
-			ipsecstat.out_inval++;
+			IPSEC_STAT_INCREMENT(ipsecstat.out_inval);
 			m_freem(m);
 			error = EMSGSIZE;
 			goto fail;
@@ -330,9 +325,9 @@ ipcomp_output(m, nexthdrp, md, isr, af)
 		ipseclog((LOG_DEBUG,
 		    "NULL mbuf after compression in ipcomp%d_output",
 		    afnumber));
-		stat->out_inval++;
+		IPSEC_STAT_INCREMENT(stat->out_inval);
 	}
-		stat->out_success++;
+		IPSEC_STAT_INCREMENT(stat->out_success);
 
 	/* compute byte lifetime against original packet */
 	key_sa_recordxfer(sav, mcopy);
@@ -350,37 +345,37 @@ fail:
 
 #if INET
 int
-ipcomp4_output(m, isr)
+ipcomp4_output(m, sav)
 	struct mbuf *m;
-	struct ipsecrequest *isr;
+	struct secasvar *sav;
 {
 	struct ip *ip;
 	if (m->m_len < sizeof(struct ip)) {
 		ipseclog((LOG_DEBUG, "ipcomp4_output: first mbuf too short\n"));
-		ipsecstat.out_inval++;
+		IPSEC_STAT_INCREMENT(ipsecstat.out_inval);
 		m_freem(m);
 		return 0;
 	}
 	ip = mtod(m, struct ip *);
 	/* XXX assumes that m->m_next points to payload */
-	return ipcomp_output(m, &ip->ip_p, m->m_next, isr, AF_INET);
+	return ipcomp_output(m, &ip->ip_p, m->m_next, AF_INET, sav);
 }
 #endif /*INET*/
 
-#ifdef INET6
+#if INET6
 int
-ipcomp6_output(m, nexthdrp, md, isr)
+ipcomp6_output(m, nexthdrp, md, sav)
 	struct mbuf *m;
 	u_char *nexthdrp;
 	struct mbuf *md;
-	struct ipsecrequest *isr;
+	struct secasvar *sav;
 {
 	if (m->m_len < sizeof(struct ip6_hdr)) {
 		ipseclog((LOG_DEBUG, "ipcomp6_output: first mbuf too short\n"));
-		ipsec6stat.out_inval++;
+		IPSEC_STAT_INCREMENT(ipsec6stat.out_inval);
 		m_freem(m);
 		return 0;
 	}
-	return ipcomp_output(m, nexthdrp, md, isr, AF_INET6);
+	return ipcomp_output(m, nexthdrp, md, AF_INET6, sav);
 }
 #endif /*INET6*/

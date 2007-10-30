@@ -67,14 +67,25 @@
 
 #include <net/net_osdep.h>
 
+static __inline__ void*
+_cast_non_const(const void * ptr) {
+	union {
+		const void*		cval;
+		void*			val;
+	} ret;
+	
+	ret.cval = ptr;
+	return (ret.val);
+}
+
 int
 in6_gif_output(
 	struct ifnet *ifp,
 	int family, /* family of the packet to be encapsulate. */
 	struct mbuf *m,
-	struct rtentry *rt)
+	__unused struct rtentry *rt)
 {
-	struct gif_softc *sc = (struct gif_softc*)ifp;
+	struct gif_softc *sc = ifnet_softc(ifp);
 	struct sockaddr_in6 *dst = (struct sockaddr_in6 *)&sc->gif_ro6.ro_dst;
 	struct sockaddr_in6 *sin6_src = (struct sockaddr_in6 *)sc->gif_psrc;
 	struct sockaddr_in6 *sin6_dst = (struct sockaddr_in6 *)sc->gif_pdst;
@@ -96,7 +107,7 @@ in6_gif_output(
 		struct ip *ip;
 
 		proto = IPPROTO_IPV4;
-		if (m->m_len < sizeof(*ip)) {
+		if (mbuf_len(m) < sizeof(*ip)) {
 			m = m_pullup(m, sizeof(*ip));
 			if (!m)
 				return ENOBUFS;
@@ -109,9 +120,8 @@ in6_gif_output(
 #if INET6
 	case AF_INET6:
 	    {
-		struct ip6_hdr *ip6;
 		proto = IPPROTO_IPV6;
-		if (m->m_len < sizeof(*ip6)) {
+		if (mbuf_len(m) < sizeof(*ip6)) {
 			m = m_pullup(m, sizeof(*ip6));
 			if (!m)
 				return ENOBUFS;
@@ -132,7 +142,7 @@ in6_gif_output(
 	
 	/* prepend new IP header */
 	M_PREPEND(m, sizeof(struct ip6_hdr), M_DONTWAIT);
-	if (m && m->m_len < sizeof(struct ip6_hdr))
+	if (m && mbuf_len(m) < sizeof(struct ip6_hdr))
 		m = m_pullup(m, sizeof(struct ip6_hdr));
 	if (m == NULL) {
 		printf("ENOBUFS in in6_gif_output %d\n", __LINE__);
@@ -220,7 +230,7 @@ int in6_gif_input(mp, offp)
 
 	ip6 = mtod(m, struct ip6_hdr *);
 
-	gifp = (struct ifnet *)encap_getarg(m);
+	gifp = ((struct gif_softc*)encap_getarg(m))->gif_if;
 
 	if (gifp == NULL || (gifp->if_flags & IFF_UP) == 0) {
 		m_freem(m);
@@ -240,7 +250,7 @@ int in6_gif_input(mp, offp)
 		u_int8_t otos8;
 		af = AF_INET;
 		otos8 = (ntohl(otos) >> 20) & 0xff;
-		if (m->m_len < sizeof(*ip)) {
+		if (mbuf_len(m) < sizeof(*ip)) {
 			m = m_pullup(m, sizeof(*ip));
 			if (!m)
 				return IPPROTO_DONE;
@@ -256,9 +266,8 @@ int in6_gif_input(mp, offp)
 #if INET6
 	case IPPROTO_IPV6:
 	    {
-		struct ip6_hdr *ip6;
 		af = AF_INET6;
-		if (m->m_len < sizeof(*ip6)) {
+		if (mbuf_len(m) < sizeof(*ip6)) {
 			m = m_pullup(m, sizeof(*ip6));
 			if (!m)
 				return IPPROTO_DONE;
@@ -276,8 +285,11 @@ int in6_gif_input(mp, offp)
 		m_freem(m);
 		return IPPROTO_DONE;
 	}
-		
-	dlil_input(gifp, m, m);
+
+	if (m->m_pkthdr.rcvif)  /* replace the rcvif by gifp for ifnet_input to route it correctly */
+		m->m_pkthdr.rcvif = gifp;
+
+	ifnet_input(gifp, m, NULL);
 	return IPPROTO_DONE;
 }
 
@@ -285,10 +297,10 @@ int in6_gif_input(mp, offp)
  * validate outer address.
  */
 static int
-gif_validate6(ip6, sc, ifp)
-	const struct ip6_hdr *ip6;
-	struct gif_softc *sc;
-	struct ifnet *ifp;
+gif_validate6(
+	const struct ip6_hdr *ip6,
+	struct gif_softc *sc,
+	struct ifnet *ifp)
 {
 	struct sockaddr_in6 *src, *dst;
 
@@ -307,7 +319,7 @@ gif_validate6(ip6, sc, ifp)
 	/* martian filters on outer source - done in ip6_input */
 
 	/* ingress filters on outer source */
-	if ((sc->gif_if.if_flags & IFF_LINK2) == 0 && ifp) {
+	if ((ifnet_flags(sc->gif_if) & IFF_LINK2) == 0 && ifp) {
 		struct sockaddr_in6 sin6;
 		struct rtentry *rt;
 
@@ -342,11 +354,11 @@ gif_validate6(ip6, sc, ifp)
  * sanity check for arg should have been done in the caller.
  */
 int
-gif_encapcheck6(m, off, proto, arg)
-	const struct mbuf *m;
-	int off;
-	int proto;
-	void *arg;
+gif_encapcheck6(
+	const struct mbuf *m,
+	__unused int off,
+	__unused int proto,
+	void *arg)
 {
 	struct ip6_hdr ip6;
 	struct gif_softc *sc;
@@ -355,8 +367,7 @@ gif_encapcheck6(m, off, proto, arg)
 	/* sanity check done in caller */
 	sc = (struct gif_softc *)arg;
 
-	/* LINTED const cast */
-	m_copydata(m, 0, sizeof(ip6), (caddr_t)&ip6);
+	mbuf_copydata(m, 0, sizeof(ip6), &ip6);
 	ifp = ((m->m_flags & M_PKTHDR) != 0) ? m->m_pkthdr.rcvif : NULL;
 
 	return gif_validate6(&ip6, sc, ifp);

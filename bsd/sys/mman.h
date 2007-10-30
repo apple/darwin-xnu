@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*-
@@ -109,21 +115,22 @@ typedef __darwin_size_t	size_t;
  */
 #define	MAP_SHARED	0x0001		/* [MF|SHM] share changes */
 #define	MAP_PRIVATE	0x0002		/* [MF|SHM] changes are private */
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	MAP_COPY	MAP_PRIVATE	/* Obsolete */
-#endif	/* !_POSIX_C_SOURCE */
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 /*
  * Other flags
  */
 #define	MAP_FIXED	 0x0010	/* [MF|SHM] interpret addr exactly */
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	MAP_RENAME	 0x0020	/* Sun: rename private pages to file */
 #define	MAP_NORESERVE	 0x0040	/* Sun: don't reserve needed swap area */
 #define	MAP_RESERVED0080 0x0080	/* previously unimplemented MAP_INHERIT */
 #define	MAP_NOEXTEND	 0x0100	/* for MAP_FILE, don't change file size */
 #define	MAP_HASSEMAPHORE 0x0200	/* region may contain semaphores */
-#endif	/* !_POSIX_C_SOURCE */
+#define MAP_NOCACHE	 0x0400 /* don't cache pages for this mapping */
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 /*
  * Process memory locking
@@ -143,7 +150,7 @@ typedef __darwin_size_t	size_t;
 #define MS_INVALIDATE	0x0002	/* [MF|SIO] invalidate all cached data */
 #define	MS_SYNC		0x0010	/* [MF|SIO] msync synchronously */
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define MS_KILLPAGES    0x0004  /* invalidate pages, leave mapped */
 #define MS_DEACTIVATE   0x0008  /* deactivate pages, leave mapped */
 
@@ -152,7 +159,7 @@ typedef __darwin_size_t	size_t;
  */
 #define	MAP_FILE	0x0000	/* map from file (default) */
 #define	MAP_ANON	0x1000	/* allocated from memory, swap space */
-#endif	/* !_POSIX_C_SOURCE */
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 
 /*
@@ -164,7 +171,7 @@ typedef __darwin_size_t	size_t;
 #define	POSIX_MADV_WILLNEED	3	/* [MC1] will need these pages */
 #define	POSIX_MADV_DONTNEED	4	/* [MC1] dont need these pages */
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	MADV_NORMAL		POSIX_MADV_NORMAL
 #define	MADV_RANDOM		POSIX_MADV_RANDOM
 #define	MADV_SEQUENTIAL		POSIX_MADV_SEQUENTIAL
@@ -180,7 +187,7 @@ typedef __darwin_size_t	size_t;
 #define	MINCORE_MODIFIED	 0x4	 /* Page has been modified by us */
 #define	MINCORE_REFERENCED_OTHER 0x8	 /* Page has been referenced */
 #define	MINCORE_MODIFIED_OTHER	0x10	 /* Page has been modified */
-#endif	/* !_POSIX_C_SOURCE */
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 
 #ifndef KERNEL
@@ -199,7 +206,7 @@ void *	mmap(void *, size_t, int, int, int, off_t) __DARWIN_ALIAS(mmap);
 /* [MPR] */
 int	mprotect(void *, size_t, int) __DARWIN_ALIAS(mprotect);
 /* [MF|SIO] */
-int	msync(void *, size_t, int) __DARWIN_ALIAS(msync);
+int	msync(void *, size_t, int) __DARWIN_ALIAS_C(msync);
 /* [MR] */
 int	munlock(const void *, size_t);
 /* [MC3]*/
@@ -210,7 +217,7 @@ int	shm_unlink(const char *);
 /* [ADV] */
 int	posix_madvise(void *, size_t, int);
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 int	madvise(void *, size_t, int);
 int	mincore(const void *, size_t, char *);
 int	minherit(void *, size_t, int);
@@ -219,7 +226,8 @@ __END_DECLS
 
 #else	/* KERNEL */
 
-void pshm_cache_init(void);	/* for bsd_init() */
+void pshm_cache_init(void) __attribute__((section("__TEXT, initcode")));	/* for bsd_init() */
+void pshm_lock_init(void);
 
 /*
  * XXX routine exported by posix_shm.c, but never used there, only used in
@@ -231,7 +239,8 @@ int pshm_mmap(struct proc *p, struct mmap_args *uap, user_addr_t *retval,
 		struct fileproc *fp, off_t pageoff);
 /* Really need to overhaul struct fileops to avoid this... */
 struct pshmnode;
-int pshm_stat(struct pshmnode *pnode, struct stat *sb);
+struct stat;
+int pshm_stat(struct pshmnode *pnode, void *ub, int isstat64);
 struct fileproc;
 int pshm_truncate(struct proc *p, struct fileproc *fp, int fd, off_t length, register_t *retval);
 

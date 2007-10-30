@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -90,8 +96,7 @@ swtch_continue(void)
 
     disable_preemption();
 	myprocessor = current_processor();
-	result =		myprocessor->runq.count > 0					||
-				myprocessor->processor_set->runq.count > 0;
+	result = myprocessor->runq.count > 0 || rt_runq.count > 0;
 	enable_preemption();
 
 	thread_syscall_return(result);
@@ -107,8 +112,7 @@ swtch(
 
 	disable_preemption();
 	myprocessor = current_processor();
-	if (		myprocessor->runq.count == 0				&&
-			myprocessor->processor_set->runq.count == 0			) {
+	if (myprocessor->runq.count == 0 &&	rt_runq.count == 0) {
 		mp_enable_preemption();
 
 		return (FALSE);
@@ -121,8 +125,7 @@ swtch(
 
 	disable_preemption();
 	myprocessor = current_processor();
-	result =		myprocessor->runq.count > 0					||
-				myprocessor->processor_set->runq.count > 0;
+	result = myprocessor->runq.count > 0 || rt_runq.count > 0;
 	enable_preemption();
 
 	return (result);
@@ -138,8 +141,7 @@ swtch_pri_continue(void)
 
     disable_preemption();
 	myprocessor = current_processor();
-	result =		myprocessor->runq.count > 0					||
-				myprocessor->processor_set->runq.count > 0;
+	result = myprocessor->runq.count > 0 || rt_runq.count > 0;
 	mp_enable_preemption();
 
 	thread_syscall_return(result);
@@ -155,8 +157,7 @@ __unused	struct swtch_pri_args *args)
 
 	disable_preemption();
 	myprocessor = current_processor();
-	if (	myprocessor->runq.count == 0					&&
-			myprocessor->processor_set->runq.count == 0			) {
+	if (myprocessor->runq.count == 0 && rt_runq.count == 0) {
 		mp_enable_preemption();
 
 		return (FALSE);
@@ -173,8 +174,7 @@ __unused	struct swtch_pri_args *args)
 
 	disable_preemption();
 	myprocessor = current_processor();
-	result =	myprocessor->runq.count > 0						||
-				myprocessor->processor_set->runq.count > 0;
+	result = myprocessor->runq.count > 0 || rt_runq.count > 0;
 	enable_preemption();
 
 	return (result);
@@ -236,7 +236,7 @@ thread_switch(
 			ipc_port_release(port);
 
 			if (thread == self) {
-				thread_deallocate_internal(thread);
+				(void)thread_deallocate_internal(thread);
 				thread = THREAD_NULL;
 			}
 		}
@@ -257,9 +257,9 @@ thread_switch(
 		thread_lock(thread);
 
 		/*
-		 *	Check if the thread is in the right pset,
-		 *	is not bound to a different processor,
-		 *	and that realtime is not involved.
+		 *	Check that the thread is not bound
+		 *	to a different processor, and that realtime
+		 *	is not involved.
 		 *
 		 *	Next, pull it off its run queue.  If it
 		 *	doesn't come, it's not eligible.
@@ -267,16 +267,15 @@ thread_switch(
 		processor = current_processor();
 		if (processor->current_pri < BASEPRI_RTQUEUES			&&
 			thread->sched_pri < BASEPRI_RTQUEUES				&&
-			thread->processor_set == processor->processor_set	&&
 			(thread->bound_processor == PROCESSOR_NULL	||
 			 thread->bound_processor == processor)				&&
-			run_queue_remove(thread) != RUN_QUEUE_NULL			) {
+				run_queue_remove(thread)							) {
 			/*
 			 *	Hah, got it!!
 			 */
 			thread_unlock(thread);
 
-			thread_deallocate_internal(thread);
+			(void)thread_deallocate_internal(thread);
 
 			if (option == SWITCH_OPTION_WAIT)
 				assert_wait_timeout((event_t)assert_wait_timeout, THREAD_ABORTSAFE,
@@ -445,3 +444,27 @@ thread_poll_yield(
 	}
 	splx(s);
 }
+
+
+void
+thread_yield_internal(
+	mach_msg_timeout_t	ms)
+{
+	processor_t	myprocessor;
+
+	disable_preemption();
+	myprocessor = current_processor();
+	if (myprocessor->runq.count == 0 && rt_runq.count == 0) {
+		mp_enable_preemption();
+
+		return;
+	}
+	enable_preemption();
+
+	thread_depress_ms(ms);
+
+	thread_block_reason(THREAD_CONTINUE_NULL, NULL, AST_YIELD);
+
+	thread_depress_abort_internal(current_thread());
+}
+

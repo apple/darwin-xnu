@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1990, 1993
@@ -53,6 +59,12 @@
  *
  *	@(#)in_pcb.h	8.1 (Berkeley) 6/10/93
  * $FreeBSD: src/sys/netinet/in_pcb.h,v 1.32.2.4 2001/08/13 16:26:17 ume Exp $
+ */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2007 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
  */
 
 #ifndef _NETINET_IN_PCB_H_
@@ -104,6 +116,9 @@ struct in_addr_4in6 {
  * stable.
  */
 struct	icmp6_filter;
+#if CONFIG_MACF_NET
+struct	label;
+#endif
 
 struct inpcb {
 	LIST_ENTRY(inpcb) inp_hash;	/* hash list */
@@ -116,7 +131,7 @@ struct inpcb {
 	struct	inpcbinfo *inp_pcbinfo;	/* PCB list info */
 	struct	socket *inp_socket;	/* back pointer to socket */
 	u_char	nat_owner;		/* Used to NAT TCP/UDP traffic */
-	u_long  nat_cookie;		/* Cookie stored and returned to NAT */
+	u_int32_t nat_cookie;		/* Cookie stored and returned to NAT */
 	LIST_ENTRY(inpcb) inp_portlist;	/* list for this PCB's local port */
 	struct	inpcbport *inp_phd;	/* head of this list */
 	inp_gen_t inp_gencnt;		/* generation count of this instance */
@@ -177,7 +192,17 @@ struct inpcb {
 #else
 	void	  *inpcb_mtx;
 #endif
-	u_long	reserved[2];		/* For future use */
+	u_int32_t reserved[4];		/* future use (some already used) */
+#if CONFIG_MACF_NET
+	struct label *inp_label;	/* MAC label */
+#endif
+#if CONFIG_FORCE_OUT_IFP
+#ifdef _KERN_SYS_KERNELTYPES_H_
+	ifnet_t	pdp_ifp;
+#else
+	void	*pdp_ifp;
+#endif /* _KERN_SYS_KERNELTYPES_H_ */
+#endif /* CONFIG_EMBEDDED */
 };
 
 #endif /* KERNEL_PRIVATE */
@@ -202,32 +227,47 @@ struct inpcb {
  * CAUTION: Many fields may not be filled out. Fewer may be filled out
  * in the future. Code defensively.
  */
+
+#pragma pack(4)
+
+#if defined(__LP64__)
+struct _inpcb_list_entry {
+    u_int32_t	le_next;
+    u_int32_t	le_prev;
+};
+#define _INPCB_PTR(x)		u_int32_t
+#define _INPCB_LIST_ENTRY(x)	struct _inpcb_list_entry
+#else
+#define _INPCB_PTR(x)		x
+#define _INPCB_LIST_ENTRY(x)	LIST_ENTRY(x)	
+#endif
+
 #ifdef KERNEL_PRIVATE
 struct inpcb_compat {
 #else
 struct inpcbinfo;
 struct inpcbport;
 struct mbuf;
-struct	ip6_pktopts;
-struct	ip6_moptions;
-struct	icmp6_filter;
+struct ip6_pktopts;
+struct ip6_moptions;
+struct icmp6_filter;
 struct inpcbpolicy;
 
 struct inpcb {
 #endif /* KERNEL_PRIVATE */
-	LIST_ENTRY(inpcb) inp_hash;	/* hash list */
+	_INPCB_LIST_ENTRY(inpcb) inp_hash;	/* hash list */
 	struct	in_addr reserved1;	/* APPLE reserved: inp_faddr defined in protcol indep. part */
 	struct	in_addr reserved2; /* APPLE reserved */
 	u_short	inp_fport;		/* foreign port */
 	u_short	inp_lport;		/* local port */
-	LIST_ENTRY(inpcb) inp_list;	/* list for all PCBs of this proto */
-	caddr_t	inp_ppcb;		/* pointer to per-protocol pcb */
-	struct	inpcbinfo *inp_pcbinfo;	/* PCB list info */
-	void*	inp_socket;	/* back pointer to socket */
+	_INPCB_LIST_ENTRY(inpcb) inp_list;	/* list for all PCBs of this proto */
+	_INPCB_PTR(caddr_t)	inp_ppcb;	/* pointer to per-protocol pcb */
+	_INPCB_PTR(struct inpcbinfo *)	inp_pcbinfo;	/* PCB list info */
+	_INPCB_PTR(void *)	inp_socket;	/* back pointer to socket */
 	u_char	nat_owner;		/* Used to NAT TCP/UDP traffic */
-	u_long  nat_cookie;		/* Cookie stored and returned to NAT */
-	LIST_ENTRY(inpcb) inp_portlist;	/* list for this PCB's local port */
-	struct	inpcbport *inp_phd;	/* head of this list */
+	u_int32_t nat_cookie;		/* Cookie stored and returned to NAT */
+	_INPCB_LIST_ENTRY(inpcb) inp_portlist;	/* list for this PCB's local port */
+	_INPCB_PTR(struct inpcbport *)	inp_phd;		/* head of this list */
 	inp_gen_t inp_gencnt;		/* generation count of this instance */
 	int	inp_flags;		/* generic IP/datagram flags */
 	u_int32_t inp_flow;
@@ -256,23 +296,23 @@ struct inpcb {
 		/* type of service proto */
 		u_char inp4_ip_tos;
 		/* IP options */
-		struct mbuf *inp4_options;
+		_INPCB_PTR(struct mbuf *) inp4_options;
 		/* IP multicast options */
-		struct ip_moptions *inp4_moptions;
+		_INPCB_PTR(struct ip_moptions *) inp4_moptions;
 	} inp_depend4;
 
 	struct {
 		/* IP options */
-		struct mbuf *inp6_options;
+		_INPCB_PTR(struct mbuf *)	inp6_options;
 		u_int8_t	inp6_hlim;
 		u_int8_t	unused_uint8_1;
 		ushort	unused_uint16_1;
 		/* IP6 options for outgoing packets */
-		struct	ip6_pktopts *inp6_outputopts;
+		_INPCB_PTR(struct ip6_pktopts *)	inp6_outputopts;
 		/* IP multicast options */
-		struct	ip6_moptions *inp6_moptions;
+		_INPCB_PTR(struct ip6_moptions *)	inp6_moptions;
 		/* ICMPv6 code type filter */
-		struct	icmp6_filter *inp6_icmp6filt;
+		_INPCB_PTR(struct icmp6_filter *)	inp6_icmp6filt;
 		/* IPV6_CHECKSUM setsockopt */
 		int	inp6_cksum;
 		u_short	inp6_ifindex;
@@ -280,13 +320,13 @@ struct inpcb {
 	} inp_depend6;
 
 	int	hash_element;           /* Array index of pcb's hash list    */
-	caddr_t inp_saved_ppcb;		/* place to save pointer while cached */
-	struct inpcbpolicy *inp_sp;
-	u_long	reserved[3];		/* For future use */
+	_INPCB_PTR(caddr_t)	inp_saved_ppcb;	/* place to save pointer while cached */
+	_INPCB_PTR(struct inpcbpolicy *)	inp_sp;
+	u_int32_t	reserved[3];	/* For future use */
 };
 
 struct	xinpcb {
-	size_t	xi_len;		/* length of this structure */
+	u_int32_t	xi_len;		/* length of this structure */
 #ifdef KERNEL_PRIVATE
 	struct	inpcb_compat xi_inp;
 #else
@@ -297,11 +337,13 @@ struct	xinpcb {
 };
 
 struct	xinpgen {
-	size_t	xig_len;	/* length of this structure */
+	u_int32_t xig_len;	/* length of this structure */
 	u_int	xig_count;	/* number of PCBs at this time */
 	inp_gen_t xig_gen;	/* generation count at this time */
 	so_gen_t xig_sogen;	/* socket generation count at this time */
 };
+
+#pragma pack()
 
 /*
  * These defines are for use with the inpcb.
@@ -401,6 +443,7 @@ struct inpcbinfo {		/* XXX documentation, prefixes */
 #define  INP_INADDR_ANY 	0x800   /* local address wasn't specified */
 
 #define INP_RECVTTL		0x1000
+#define	INP_UDP_NOCKSUM		0x2000	/* Turn off outbound UDP checksum */
 
 #define IN6P_IPV6_V6ONLY	0x008000 /* restrict AF_INET6 socket for v6 */
 
@@ -481,6 +524,8 @@ int	in_pcbladdr(struct inpcb *, struct sockaddr *, struct sockaddr_in **);
 struct inpcb *
 	in_pcblookup_local(struct inpcbinfo *, struct in_addr, u_int, int);
 struct inpcb *
+	in_pcblookup_local_and_cleanup(struct inpcbinfo *, struct in_addr, u_int, int);
+struct inpcb *
 	in_pcblookup_hash(struct inpcbinfo *,
 			       struct in_addr, u_int, struct in_addr, u_int,
 			       int, struct ifnet *);
@@ -528,6 +573,9 @@ in_pcb_rem_share_client(struct inpcbinfo *pcbinfo, u_char owner_id);
 void	in_pcbremlists(struct inpcb *inp);
 int 	in_pcb_ckeckstate(struct inpcb *, int, int);
 void	inpcb_to_compat(struct inpcb *inp, struct inpcb_compat *inp_compat);
+#if CONFIG_FORCE_OUT_IFP
+void	pdp_context_route_locked(ifnet_t ifp, struct route *ro);
+#endif
 
 #endif /* KERNEL */
 #endif /* KERNEL_PRIVATE */

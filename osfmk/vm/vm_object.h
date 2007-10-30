@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -72,6 +78,7 @@
 #include <mach/machine/vm_types.h>
 #include <kern/queue.h>
 #include <kern/lock.h>
+#include <kern/locks.h>
 #include <kern/assert.h>
 #include <kern/misc_protos.h>
 #include <kern/macro_help.h>
@@ -88,11 +95,24 @@ struct vm_page;
  *	Types defined:
  *
  *	vm_object_t		Virtual memory object.
+ *	vm_object_fault_info_t	Used to determine cluster size.
  */
+
+struct vm_object_fault_info {
+	int		interruptible;
+        uint32_t	user_tag;
+        vm_size_t	cluster_size;
+        vm_behavior_t	behavior;
+        vm_map_offset_t	lo_offset;
+	vm_map_offset_t	hi_offset;
+	boolean_t	no_cache;
+};
+
+
 
 struct vm_object {
 	queue_head_t		memq;		/* Resident memory */
-	decl_mutex_data(,	Lock)		/* Synchronization */
+        lck_rw_t		Lock;		/* Synchronization */
 
 	vm_object_size_t	size;		/* Object size (only valid
 						 * if internal)
@@ -121,14 +141,6 @@ struct vm_object {
 
 	memory_object_copy_strategy_t
 				copy_strategy;	/* How to handle data copy */
-
-	unsigned int		absent_count;	/* The number of pages that
-						 * have been requested but
-						 * not filled.  That is, the
-						 * number of pages for which
-						 * the "absent" attribute is
-						 * asserted.
-						 */
 
 	int			paging_in_progress;
 						/* The memory object ports are
@@ -179,8 +191,7 @@ struct vm_object {
 	/* boolean_t */		alive:1,	/* Not yet terminated */
 
 	/* boolean_t */		purgable:2,	/* Purgable state.  See
-						 * VM_OBJECT_PURGABLE_*
-						 * items below.
+						 * VM_PURGABLE_* 
 						 */
 	/* boolean_t */		shadowed:1,	/* Shadow may exist */
 	/* boolean_t */		silent_overwrite:1,
@@ -250,9 +261,15 @@ struct vm_object {
 	queue_head_t		msr_q;		/* memory object synchronise
 						   request queue */
 
+  /*
+   * the following fields are not protected by any locks
+   * they are updated via atomic compare and swap
+   */
 	vm_object_offset_t	last_alloc;	/* last allocation offset */
-	vm_object_offset_t	sequential;	/* sequential access size */
-	vm_size_t		cluster_size;	/* size of paging cluster */
+	int			sequential;	/* sequential access size */
+
+        uint32_t		pages_created;
+        uint32_t		pages_used;
 #if	MACH_PAGEMAP
 	vm_external_map_t	existence_map;	/* bitmap of pages written to
 						 * backing storage */
@@ -265,12 +282,18 @@ struct vm_object {
 						 * put in current object
 						 */
 #endif
-					/* hold object lock when altering */
-	unsigned	int			/* cache WIMG bits         */		
-			wimg_bits:8,		/* wimg plus some expansion*/
-			not_in_use:24;
+	/* hold object lock when altering */
+	unsigned	int
+		wimg_bits:8,	        /* cache WIMG bits         */		
+		code_signed:1,		/* pages are signed and should be
+					   validated; the signatures are stored
+					   with the pager */
+		not_in_use:23;		/* for expansion */
+
 #ifdef	UPL_DEBUG
 	queue_head_t		uplq;		/* List of outstanding upls */
+#endif /* UPL_DEBUG */
+
 #ifdef	VM_PIP_DEBUG
 /*
  * Keep track of the stack traces for the first holders
@@ -282,7 +305,8 @@ struct vm_object {
 		void *pip_retaddr[VM_PIP_DEBUG_STACK_FRAMES];
 	} pip_holders[VM_PIP_DEBUG_MAX_REFS];
 #endif	/* VM_PIP_DEBUG  */
-#endif /* UPL_DEBUG */
+
+        queue_chain_t       objq;      /* object queue - currently used for purgable queues */
 };
 
 #define VM_PAGE_REMOVE(page)						\
@@ -357,9 +381,11 @@ typedef struct msync_req	*msync_req_t;
  *	Declare procedures that operate on VM objects.
  */
 
-__private_extern__ void		vm_object_bootstrap(void);
+__private_extern__ void		vm_object_bootstrap(void) __attribute__((section("__TEXT, initcode")));
 
 __private_extern__ void		vm_object_init(void);
+
+__private_extern__ void		vm_object_init_lck_grp(void);
 
 __private_extern__ void		vm_object_reaper_init(void);
 
@@ -388,12 +414,26 @@ __private_extern__ void	vm_object_res_deallocate(
 #endif	/* TASK_SWAPPER */
 
 #define vm_object_reference_locked(object)		\
-MACRO_BEGIN						\
-		vm_object_t RLObject = (object);	\
-		assert((RLObject)->ref_count > 0);	\
-		(RLObject)->ref_count++;		\
-		vm_object_res_reference(RLObject);	\
-MACRO_END
+	MACRO_BEGIN					\
+	vm_object_t RLObject = (object);		\
+	vm_object_lock_assert_exclusive(object);	\
+	assert((RLObject)->ref_count > 0);		\
+	(RLObject)->ref_count++;			\
+	assert((RLObject)->ref_count > 1);		\
+	vm_object_res_reference(RLObject);		\
+	MACRO_END
+
+
+#define vm_object_reference_shared(object)				\
+	MACRO_BEGIN							\
+	vm_object_t RLObject = (object);				\
+	vm_object_lock_assert_shared(object);				\
+	assert((RLObject)->ref_count > 0);				\
+	OSAddAtomic(1, (SInt32 *)&(RLObject)->ref_count);		\
+	assert((RLObject)->ref_count > 1);				\
+	/* XXX we would need an atomic version of the following ... */	\
+	vm_object_res_reference(RLObject);				\
+	MACRO_END
 
 
 __private_extern__ void		vm_object_reference(
@@ -490,7 +530,8 @@ __private_extern__ kern_return_t	vm_object_copy_slowly(
 __private_extern__ vm_object_t	vm_object_copy_delayed(
 				vm_object_t		src_object,
 				vm_object_offset_t	src_offset,
-				vm_object_size_t	size);
+				vm_object_size_t	size,
+				boolean_t		src_object_shared);
 
 
 
@@ -559,14 +600,11 @@ __private_extern__ vm_object_t	vm_object_enter(
 					boolean_t		check_named);
 
 
-/*
- * Purgable object state.
- */
-
-#define VM_OBJECT_NONPURGABLE		0	/* not a purgable object */
-#define VM_OBJECT_PURGABLE_NONVOLATILE	1	/* non-volatile purgable object */
-#define VM_OBJECT_PURGABLE_VOLATILE	2	/* volatile (but intact) purgable object */
-#define VM_OBJECT_PURGABLE_EMPTY	3	/* volatile purgable object that has been emptied */
+__private_extern__ void	vm_object_cluster_size(
+					vm_object_t		object,
+					vm_object_offset_t	*start,
+					vm_size_t		*length,
+					vm_object_fault_info_t  fault_info);
 
 __private_extern__ kern_return_t vm_object_populate_with_private(
 	vm_object_t		object,
@@ -599,7 +637,6 @@ extern kern_return_t vm_object_range_op(
 #define	VM_OBJECT_EVENT_INITIALIZED		0
 #define	VM_OBJECT_EVENT_PAGER_READY		1
 #define	VM_OBJECT_EVENT_PAGING_IN_PROGRESS	2
-#define	VM_OBJECT_EVENT_ABSENT_COUNT		3
 #define	VM_OBJECT_EVENT_LOCK_IN_PROGRESS	4
 #define	VM_OBJECT_EVENT_UNCACHING		5
 #define	VM_OBJECT_EVENT_COPY_CALL		6
@@ -615,7 +652,7 @@ extern kern_return_t vm_object_range_op(
 	thread_block(THREAD_CONTINUE_NULL))				\
 
 #define thread_sleep_vm_object(object, event, interruptible)		\
-	thread_sleep_mutex((event_t)(event), &(object)->Lock, (interruptible))
+        lck_rw_sleep(&(object)->Lock, LCK_SLEEP_DEFAULT, (event_t)(event), (interruptible))
 
 #define vm_object_sleep(object, event, interruptible)			\
 	(((object)->all_wanted |= 1 << (event)),			\
@@ -641,12 +678,12 @@ extern kern_return_t vm_object_range_op(
  *	Routines implemented as macros
  */
 #ifdef VM_PIP_DEBUG
-extern unsigned OSBacktrace(void **bt, unsigned maxAddrs);
+#include <libkern/OSDebug.h>
 #define VM_PIP_DEBUG_BEGIN(object)					\
 	MACRO_BEGIN							\
 	if ((object)->paging_in_progress < VM_PIP_DEBUG_MAX_REFS) {	\
 		int pip = (object)->paging_in_progress;			\
-		(void) OSBacktrace(&(object)->pip_holders[pip].retaddr[0], \
+		(void) OSBacktrace(&(object)->pip_holders[pip].pip_retaddr[0], \
 				   VM_PIP_DEBUG_STACK_FRAMES);		\
 	}								\
 	MACRO_END
@@ -656,6 +693,7 @@ extern unsigned OSBacktrace(void **bt, unsigned maxAddrs);
 
 #define		vm_object_paging_begin(object) 				\
 	MACRO_BEGIN							\
+	vm_object_lock_assert_exclusive((object));			\
 	assert((object)->paging_in_progress >= 0);			\
 	VM_PIP_DEBUG_BEGIN((object));					\
 	(object)->paging_in_progress++;					\
@@ -663,6 +701,7 @@ extern unsigned OSBacktrace(void **bt, unsigned maxAddrs);
 
 #define		vm_object_paging_end(object) 				\
 	MACRO_BEGIN							\
+	vm_object_lock_assert_exclusive((object));			\
 	assert((object)->paging_in_progress > 0);			\
 	if (--(object)->paging_in_progress == 0) {			\
 		vm_object_wakeup(object,				\
@@ -672,6 +711,7 @@ extern unsigned OSBacktrace(void **bt, unsigned maxAddrs);
 
 #define		vm_object_paging_wait(object, interruptible)		\
 	MACRO_BEGIN							\
+	vm_object_lock_assert_exclusive((object));			\
 	while ((object)->paging_in_progress != 0) {			\
 		wait_result_t  _wr;					\
 									\
@@ -684,29 +724,56 @@ extern unsigned OSBacktrace(void **bt, unsigned maxAddrs);
 	}								\
 	MACRO_END
 
-#define	vm_object_absent_assert_wait(object, interruptible)		\
-	MACRO_BEGIN							\
-	vm_object_assert_wait(	(object),				\
-			VM_OBJECT_EVENT_ABSENT_COUNT,			\
-			(interruptible));				\
-	MACRO_END
 
 
-#define	vm_object_absent_release(object)				\
-	MACRO_BEGIN							\
-	(object)->absent_count--;					\
-	vm_object_wakeup((object),					\
-			 VM_OBJECT_EVENT_ABSENT_COUNT);			\
-	MACRO_END
+#define OBJECT_LOCK_SHARED	0
+#define OBJECT_LOCK_EXCLUSIVE	1
+
+extern lck_grp_t	vm_object_lck_grp;
+extern lck_grp_attr_t	vm_object_lck_grp_attr;
+extern lck_attr_t	vm_object_lck_attr;
+extern lck_attr_t	kernel_object_lck_attr;
+
+extern vm_object_t	vm_pageout_scan_wants_object;
+
+extern void		vm_object_lock(vm_object_t);
+extern boolean_t	vm_object_lock_try(vm_object_t);
+extern void		vm_object_lock_shared(vm_object_t);
+extern boolean_t	vm_object_lock_try_shared(vm_object_t);
 
 /*
  *	Object locking macros
  */
 
-#define vm_object_lock_init(object)	mutex_init(&(object)->Lock, 0)
-#define vm_object_lock(object)		mutex_lock(&(object)->Lock)
-#define vm_object_unlock(object)	mutex_unlock(&(object)->Lock)
-#define vm_object_lock_try(object)	mutex_try(&(object)->Lock)
+#define vm_object_lock_init(object)					\
+	lck_rw_init(&(object)->Lock, &vm_object_lck_grp,		\
+		    (((object) == kernel_object ||			\
+		      (object) == vm_submap_object) ?			\
+		     &kernel_object_lck_attr :				\
+		     &vm_object_lck_attr))
+#define vm_object_lock_destroy(object)	lck_rw_destroy(&(object)->Lock, &vm_object_lck_grp)
+
+#define vm_object_unlock(object)	lck_rw_done(&(object)->Lock)
+#define vm_object_lock_upgrade(object)	lck_rw_lock_shared_to_exclusive(&(object)->Lock)
+#define vm_object_lock_try_scan(object)	lck_rw_try_lock_exclusive(&(object)->Lock)
+
+/*
+ * CAUTION: the following vm_object_lock_assert_held*() macros merely
+ * check if anyone is holding the lock, but the holder may not necessarily
+ * be the caller...
+ */
+#if DEBUG
+#define vm_object_lock_assert_held(object) \
+	lck_rw_assert(&(object)->Lock, LCK_RW_ASSERT_HELD)
+#define vm_object_lock_assert_shared(object)	\
+	lck_rw_assert(&(object)->Lock, LCK_RW_ASSERT_SHARED)
+#define vm_object_lock_assert_exclusive(object) \
+	lck_rw_assert(&(object)->Lock, LCK_RW_ASSERT_EXCLUSIVE)
+#else /* DEBUG */
+#define vm_object_lock_assert_held(object)
+#define vm_object_lock_assert_shared(object)
+#define vm_object_lock_assert_exclusive(object)
+#endif /* DEBUG */
 
 #define vm_object_round_page(x) (((vm_object_offset_t)(x) + PAGE_MASK) & ~((signed)PAGE_MASK))
 #define vm_object_trunc_page(x) ((vm_object_offset_t)(x) & ~((signed)PAGE_MASK))

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -69,6 +75,10 @@
 
 #ifdef BSD_KERNEL_PRIVATE
 
+/* VFS Supports "/..namedfork/rsrc" access. */
+#define NAMEDRSRCFORK		NAMEDSTREAMS
+
+
 #include <sys/queue.h>
 #include <sys/uio.h>
 #include <sys/vnode.h>
@@ -111,11 +121,14 @@ struct nameidata {
 #ifdef KERNEL
 /*
  * namei operational modifier flags, stored in ni_cnd.flags
+ * Also includes LOCKLEAF, LOCKPARENT, and WANTPARENT flags, defined above.
  */
-#define	NOCACHE		0x0020	/* name must not be left in cache */
-#define	NOFOLLOW	0x0000	/* do not follow symbolic links (pseudo) */
-#define	SHAREDLEAF	0x0080	/* OK to have shared leaf lock */
-#define	MODMASK		0x00fc	/* mask of operational modifiers */
+#define	NOCACHE		0x00000020 /* name must not be left in cache */
+#define	NOFOLLOW	0x00000000 /* do not follow symbolic links (pseudo) */
+/* public FOLLOW	0x00000040    see vnode.h */
+#define	SHAREDLEAF	0x00000080 /* OK to have shared leaf lock */
+/* public NOTRIGGER	0x10000000    see vnode.h */
+#define	MODMASK		0x100000fc /* mask of operational modifiers */
 /*
  * Namei parameter descriptors.
  *
@@ -125,19 +138,31 @@ struct nameidata {
  * name being sought. The caller is responsible for releasing the
  * buffer and for vrele'ing ni_startdir.
  */
+#define	SAVENAME	0          /* save pathanme buffer ***obsolete */
 #define	NOCROSSMOUNT	0x00000100 /* do not cross mount points */
 #define	RDONLY		0x00000200 /* lookup with read-only semantics */
 #define	HASBUF		0x00000400 /* has allocated pathname buffer */
-#define	SAVENAME	0x00000800 /* save pathanme buffer */
+#define DONOTAUTH	0x00000800 /* do not authorize during lookup */
 #define	SAVESTART	0x00001000 /* save starting directory */
+/* public ISDOTDOT	0x00002000    see vnode.h */
+/* public MAKEENTRY	0x00004000    see vnode.h */
+/* public ISLASTCN	0x00008000    see vnode.h */
 #define	ISSYMLINK	0x00010000 /* symlink needs interpretation */
-#define DONOTAUTH	0x00020000 /* do not authorize during lookup */
+/* public ISWHITEOUT	0x00020000    see vnode.h */
+/* public DOWHITEOUT	0x00040000    see vnode.h */
 #define	WILLBEDIR	0x00080000 /* new files will be dirs; allow trailing / */
 #define	AUDITVNPATH1	0x00100000 /* audit the path/vnode info */
 #define	AUDITVNPATH2	0x00200000 /* audit the path/vnode info */
 #define	USEDVP		0x00400000 /* start the lookup at ndp.ni_dvp */
-#define	PARAMASK	0x003fff00 /* mask of parameter descriptors */
+#define	CN_VOLFSPATH	0x00800000 /* user path was a volfs style path */
 #define FSNODELOCKHELD	0x01000000
+#define UNIONCREATED	0x02000000 /* union fs creation of vnode */
+#if NAMEDRSRCFORK
+#define CN_WANTSRSRCFORK 0x04000000
+#define CN_ALLOWRSRCFORK 0x08000000
+#endif
+/* public NOTRIGGER		0x10000000    see vnode.h */
+#define CN_NBMOUNTLOOK	0x20000000 /* do not block for cross mount lookups */
 
 /*
  * Initialization of an nameidata structure.
@@ -164,7 +189,6 @@ struct nameidata {
  * names looked up by namei.
  */
 
-#define	NCHNAMLEN	31	/* maximum name segment length we bother with */
 #define NCHASHMASK	0x7fffffff
 
 struct	namecache {
@@ -179,7 +203,7 @@ struct	namecache {
 	vnode_t			nc_vp;		/* vnode the name refers to */
         unsigned int		nc_whiteout:1,	/* name has whiteout applied */
 	                        nc_hashval:31;	/* hashval of stringname */
-	char		*	nc_name;	/* pointer to segment name in string cache */
+	const char		*nc_name;	/* pointer to segment name in string cache */
 };
 
 
@@ -198,10 +222,10 @@ void    cache_purgevfs(mount_t mp);
 int		cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp,
 			  vfs_context_t context, int *trailing_slash, int *dp_authorized);
 
-void	vnode_cache_credentials(vnode_t vp, vfs_context_t context);
-void	vnode_uncache_credentials(vnode_t vp);
-int		reverse_lookup(vnode_t start_vp, vnode_t *lookup_vpp, 
-				struct filedesc *fdp, vfs_context_t context, int *dp_authorized);
+void		vnode_cache_authorized_action(vnode_t vp, vfs_context_t context, kauth_action_t action);
+void		vnode_uncache_authorized_action(vnode_t vp, kauth_action_t action);
+boolean_t	vnode_cache_is_stale(vnode_t vp);
+boolean_t	vnode_cache_is_authorized(vnode_t vp, vfs_context_t context, kauth_action_t action);
 
 #endif /* KERNEL */
 

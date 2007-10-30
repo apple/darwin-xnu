@@ -7,6 +7,7 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 DATAFILES = \
+	aio.4	\
 	arp.4	\
 	bpf.4	\
 	divert.4	\
@@ -38,7 +39,6 @@ DATAFILES = \
 	tcp.4	\
 	termios.4	\
 	tty.4	\
-	tun.4	\
 	udp.4	\
 	unix.4	\
 	urandom.4	\

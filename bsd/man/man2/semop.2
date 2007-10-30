@@ -32,23 +32,25 @@
 .Nm semop
 .Nd atomic array of operations on a semaphore set
 .Sh SYNOPSIS
-.In sys/types.h
-.In sys/ipc.h
 .In sys/sem.h
 .Ft int
-.Fn semop "int semid" "struct sembuf *array" "size_t nops"
+.Fo semop
+.Fa "int semid"
+.Fa "struct sembuf *sops"
+.Fa "size_t nsops"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn semop
 system call
 atomically performs the array of operations indicated by
-.Fa array
+.Fa sops
 on the semaphore set indicated by
 .Fa semid .
 The length of
-.Fa array
+.Fa sops
 is indicated by
-.Fa nops .
+.Fa nsops .
 Each operation is encoded in a
 .Vt "struct sembuf" ,
 which is defined as follows:
@@ -64,7 +66,7 @@ struct sembuf {
 .Ed
 .Pp
 For each element in
-.Fa array ,
+.Fa sops ,
 .Va sem_op
 and
 .Va sem_flg
@@ -229,55 +231,75 @@ The
 .Fn semop
 system call will fail if:
 .Bl -tag -width Er
-.It Bq Er EINVAL
-No semaphore set corresponds to
-.Fa semid ,
-or the process would exceed the system-defined limit for the number of
-per-process
-.Dv SEM_UNDO
-structures.
-.It Bq Er EACCES
-Permission denied due to mismatch between operation and mode of
-semaphore set.
-.It Bq Er EAGAIN
-The semaphore's value would have resulted in the process being put to sleep
-and
-.Dv IPC_NOWAIT
-was specified.
+.\" ===========
 .It Bq Er E2BIG
-Too many operations were specified.
+Too many operations are specified.
 .Bq Dv SEMOPM
+.\" ===========
+.It Bq Er EACCES
+Permission is denied, due to a mismatch between the operation
+and the mode of the semaphore set.
+.\" ===========
+.It Bq Er EAGAIN
+The semaphore's value would result
+in the process being put to sleep and
+.Dv IPC_NOWAIT
+is specified.
+.\" ===========
 .It Bq Er EFBIG
 .\"
-.\" I'd have thought this would be EINVAL, but the source says
-.\" EFBIG.
+.\" I'd have thought this would be EINVAL,
+.\" but the source says EFBIG.
 .\"
 .Va sem_num
-was not in the range of valid semaphores for the set.
+is not in the range of valid semaphores for the set.
+.\" ===========
 .It Bq Er EIDRM
-The semaphore set was removed from the system.
+The semaphore set is removed from the system.
+.\" ===========
 .It Bq Er EINTR
 The
 .Fn semop
-system call was interrupted by a signal.
+system call is interrupted by a signal.
+.\" ===========
+.It Bq Er EINVAL
+No semaphore set corresponds to
+.Fa semid ,
+or the process would exceed the system-defined limit
+for the number of per-process
+.Dv SEM_UNDO
+structures.
+.\" ===========
 .It Bq Er ENOSPC
 The system
 .Dv SEM_UNDO
 pool
 .Bq Dv SEMMNU
 is full.
+.\" ===========
 .It Bq Er ERANGE
 The requested operation would cause either
 the semaphore's current value
 .Bq Dv SEMVMX
-or its adjust on exit value
+or its adjust-on-exit value
 .Bq Dv SEMAEM
 to exceed the system-imposed limits.
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/ipc.h>
+.Fd #include <sys/sem.h>
+.Pp
+The include files
+.In sys/types.h
+and
+.In sys/ipc.h
+are necessary.
 .Sh SEE ALSO
 .Xr semctl 2 ,
 .Xr semget 2 ,
-.Xr sigaction 2
+.Xr sigaction 2 ,
+.Xr compat 5
 .Sh BUGS
 The
 .Fn semop

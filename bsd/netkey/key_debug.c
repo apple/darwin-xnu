@@ -470,6 +470,7 @@ kdebug_secpolicy(sp)
 
 	switch (sp->policy) {
 	case IPSEC_POLICY_DISCARD:
+	case IPSEC_POLICY_GENERATE:
 		printf("  type=discard }\n");
 		break;
 	case IPSEC_POLICY_NONE:
@@ -483,8 +484,6 @@ kdebug_secpolicy(sp)
 			printf("  level=%u\n", isr->level);
 			kdebug_secasindex(&isr->saidx);
 
-			if (isr->sav != NULL)
-				kdebug_secasv(isr->sav);
 		}
 		printf("  }\n");
 	    }

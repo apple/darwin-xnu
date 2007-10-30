@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1989 Stephen Deering.
@@ -91,10 +97,17 @@
 #define GET_TIME(t)	microtime(&t)
 #endif KERNEL_PRIVATE
 
+#ifndef CONFIG_MAXVIFS
+#define CONFIG_MAXVIFS 32  /* 4635538 temp workaround */
+#endif
+
+#ifndef CONFIG_MFCTBLSIZ
+#define CONFIG_MFCTBLSIZ 256  /* 4635538 temp workaround */
+#endif
+
 /*
  * Types and macros for handling bitmaps with one bit per virtual interface.
  */
-#define	MAXVIFS 32
 typedef u_long vifbitmap_t;
 typedef u_short vifi_t;		/* type of a vif index */
 #define ALL_VIFS (vifi_t)-1
@@ -112,12 +125,12 @@ typedef u_short vifi_t;		/* type of a vif index */
  * (MRT_DEL_VIF takes a single vifi_t argument.)
  */
 struct vifctl {
-	vifi_t	vifc_vifi;	    	/* the index of the vif to be added */
-	u_char	vifc_flags;     	/* VIFF_ flags defined below */
-	u_char	vifc_threshold; 	/* min ttl required to forward on vif */
-	u_int	vifc_rate_limit;	/* max rate */
-	struct	in_addr vifc_lcl_addr;	/* local interface address */
-	struct	in_addr vifc_rmt_addr;	/* remote address (tunnels only) */
+    vifi_t	vifc_vifi;	    	/* the index of the vif to be added */
+    u_char	vifc_flags;     	/* VIFF_ flags defined below */
+    u_char	vifc_threshold; 	/* min ttl required to forward on vif */
+    u_int	vifc_rate_limit;	/* max rate */
+    struct	in_addr vifc_lcl_addr;	/* local interface address */
+    struct	in_addr vifc_rmt_addr;	/* remote address (tunnels only) */
 };
 
 #define	VIFF_TUNNEL	0x1		/* vif represents a tunnel end-point */
@@ -128,51 +141,51 @@ struct vifctl {
  * (mfcc_tos to be added at a future point)
  */
 struct mfcctl {
-    struct in_addr  mfcc_origin;		/* ip origin of mcasts       */
-    struct in_addr  mfcc_mcastgrp; 		/* multicast group associated*/
-    vifi_t	    mfcc_parent;   		/* incoming vif              */
-    u_char	    mfcc_ttls[MAXVIFS]; 	/* forwarding ttls on vifs   */
+    struct in_addr	mfcc_origin;		/* ip origin of mcasts       */
+    struct in_addr	mfcc_mcastgrp; 		/* multicast group associated*/
+    vifi_t		mfcc_parent;		/* incoming vif              */
+    u_char		mfcc_ttls[CONFIG_MAXVIFS];	/* forwarding ttls on vifs   */
 };
 
 /*
  * The kernel's multicast routing statistics.
  */
 struct mrtstat {
-    u_long	mrts_mfc_lookups;	/* # forw. cache hash table hits   */
-    u_long	mrts_mfc_misses;	/* # forw. cache hash table misses */
-    u_long	mrts_upcalls;		/* # calls to mrouted              */
-    u_long	mrts_no_route;		/* no route for packet's origin    */
-    u_long	mrts_bad_tunnel;	/* malformed tunnel options        */
-    u_long	mrts_cant_tunnel;	/* no room for tunnel options      */
-    u_long	mrts_wrong_if;		/* arrived on wrong interface	   */
-    u_long	mrts_upq_ovflw;		/* upcall Q overflow		   */
-    u_long	mrts_cache_cleanups;	/* # entries with no upcalls 	   */
-    u_long  	mrts_drop_sel;     	/* pkts dropped selectively        */
-    u_long  	mrts_q_overflow;    	/* pkts dropped - Q overflow       */
-    u_long  	mrts_pkt2large;     	/* pkts dropped - size > BKT SIZE  */
-    u_long	mrts_upq_sockfull;	/* upcalls dropped - socket full */
+    u_int32_t	mrts_mfc_lookups;	/* # forw. cache hash table hits   */
+    u_int32_t	mrts_mfc_misses;	/* # forw. cache hash table misses */
+    u_int32_t	mrts_upcalls;		/* # calls to mrouted              */
+    u_int32_t	mrts_no_route;		/* no route for packet's origin    */
+    u_int32_t	mrts_bad_tunnel;	/* malformed tunnel options        */
+    u_int32_t	mrts_cant_tunnel;	/* no room for tunnel options      */
+    u_int32_t	mrts_wrong_if;		/* arrived on wrong interface      */
+    u_int32_t	mrts_upq_ovflw;		/* upcall Q overflow               */
+    u_int32_t	mrts_cache_cleanups;	/* # entries with no upcalls       */
+    u_int32_t	mrts_drop_sel;		/* pkts dropped selectively        */
+    u_int32_t	mrts_q_overflow;	/* pkts dropped - Q overflow       */
+    u_int32_t	mrts_pkt2large;		/* pkts dropped - size > BKT SIZE  */
+    u_int32_t	mrts_upq_sockfull;	/* upcalls dropped - socket full   */
 };
 
 /*
  * Argument structure used by mrouted to get src-grp pkt counts
  */
 struct sioc_sg_req {
-    struct in_addr src;
-    struct in_addr grp;
-    u_long pktcnt;
-    u_long bytecnt;
-    u_long wrong_if;
+    struct in_addr	src;
+    struct in_addr	grp;
+    u_int32_t		pktcnt;
+    u_int32_t		bytecnt;
+    u_int32_t		wrong_if;
 };
 
 /*
  * Argument structure used by mrouted to get vif pkt counts
  */
 struct sioc_vif_req {
-    vifi_t vifi;		/* vif number				*/
-    u_long icount;		/* Input packet count on vif		*/
-    u_long ocount;		/* Output packet count on vif		*/
-    u_long ibytes;		/* Input byte count on vif		*/
-    u_long obytes;		/* Output byte count on vif		*/
+    vifi_t		vifi;		/* vif number			*/
+    u_int32_t		icount;		/* Input packet count on vif	*/
+    u_int32_t		ocount;		/* Output packet count on vif	*/
+    u_int32_t		ibytes;		/* Input byte count on vif	*/
+    u_int32_t		obytes;		/* Output byte count on vif	*/
 };
 
 #ifdef PRIVATE
@@ -209,7 +222,7 @@ struct mfc {
     struct in_addr  mfc_origin;	 		/* IP origin of mcasts   */
     struct in_addr  mfc_mcastgrp;  		/* multicast group associated*/
     vifi_t	    mfc_parent; 		/* incoming vif              */
-    u_char	    mfc_ttls[MAXVIFS]; 		/* forwarding ttls on vifs   */
+    u_char	    mfc_ttls[CONFIG_MAXVIFS]; 		/* forwarding ttls on vifs   */
     u_long	    mfc_pkt_cnt;		/* pkt count for src-grp     */
     u_long	    mfc_byte_cnt;		/* byte count for src-grp    */
     u_long	    mfc_wrong_if;		/* wrong if for src-grp	     */
@@ -224,8 +237,8 @@ struct mfc {
  * note the convenient similarity to an IP packet
  */
 struct igmpmsg {
-    u_long	    unused1;
-    u_long	    unused2;
+    u_int32_t	    unused1;
+    u_int32_t	    unused2;
     u_char	    im_msgtype;			/* what type of message	    */
 #define IGMPMSG_NOCACHE		1
 #define IGMPMSG_WRONGVIF	2
@@ -234,7 +247,8 @@ struct igmpmsg {
     u_char	    unused3;
     struct in_addr  im_src, im_dst;
 };
-#define MFCTBLSIZ       256
+
+#define MFCTBLSIZ       CONFIG_MFCTBLSIZ
 
 #ifdef KERNEL_PRIVATE
 /*
@@ -250,10 +264,10 @@ struct rtdetq {
     struct rtdetq	*next;		/* Next in list of packets          */
 };
 
-#if (MFCTBLSIZ & (MFCTBLSIZ - 1)) == 0	  /* from sys:route.h */
-#define MFCHASHMOD(h)	((h) & (MFCTBLSIZ - 1))
+#if (CONFIG_MFCTBLSIZ & (CONFIG_MFCTBLSIZ - 1)) == 0	  /* from sys:route.h */
+#define MFCHASHMOD(h)	((h) & (CONFIG_MFCTBLSIZ - 1))
 #else
-#define MFCHASHMOD(h)	((h) % MFCTBLSIZ)
+#define MFCHASHMOD(h)	((h) % CONFIG_MFCTBLSIZ)
 #endif
 
 #define MAX_UPQ	4		/* max. no of pkts in upcall Q */

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*-
@@ -114,20 +120,20 @@ typedef __darwin_pid_t	pid_t;
  * FREAD and FWRITE are excluded from the #ifdef KERNEL so that TIOCFLUSH,
  * which was documented to use FREAD/FWRITE, continues to work.
  */
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	FREAD		0x0001
 #define	FWRITE		0x0002
 #endif
 #define	O_NONBLOCK	0x0004		/* no delay */
 #define	O_APPEND	0x0008		/* set append mode */
 #define	O_SYNC		0x0080		/* synchronous writes */
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	O_SHLOCK	0x0010		/* open with shared file lock */
 #define	O_EXLOCK	0x0020		/* open with exclusive file lock */
 #define	O_ASYNC		0x0040		/* signal pgrp when data ready */
 #define	O_FSYNC		O_SYNC		/* source compatibility: do not use */
 #define O_NOFOLLOW  0x0100      /* don't follow symlinks */
-#endif /* _POSIX_C_SOURCE */
+#endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
 #define	O_CREAT		0x0200		/* create if nonexistant */
 #define	O_TRUNC		0x0400		/* truncate to zero length */
 #define	O_EXCL		0x0800		/* error if already exists */
@@ -136,7 +142,7 @@ typedef __darwin_pid_t	pid_t;
 #define	FDEFER		0x2000		/* defer for next gc pass */
 #define	FHASLOCK	0x4000		/* descriptor holds advisory lock */
 #endif
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	O_EVTONLY	0x8000		/* descriptor requested for event notifications only */
 #endif
 
@@ -144,12 +150,18 @@ typedef __darwin_pid_t	pid_t;
 #define	FWASWRITTEN	0x10000		/* descriptor was written */
 #endif
 
-#ifndef _POSIX_C_SOURCE
-#define O_DIRECTORY    0x100000
+#define	O_NOCTTY	0x20000		/* don't assign controlling terminal */
+
+#ifdef KERNEL
+#define FNOCACHE	0x40000		/* fcntl(F_NOCACHE, 1) */
+#define FNORDAHEAD	0x80000		/* fcntl(F_RDAHEAD, 0) */
 #endif
 
-/* defined by POSIX 1003.1; BSD default, so no bit required */
-#define	O_NOCTTY	0		/* don't assign controlling terminal */
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+#define O_DIRECTORY	0x100000
+#define O_SYMLINK	0x200000	/* allow open of a symlink */
+#endif
+
 //#define	O_SYNC  /* ??? POSIX: Write according to synchronized I/O file integrity completion */
 
 #ifdef KERNEL
@@ -168,7 +180,7 @@ typedef __darwin_pid_t	pid_t;
  * and by fcntl.  We retain the F* names for the kernel f_flags field
  * and for backward compatibility for fcntl.
  */
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	FAPPEND		O_APPEND	/* kernel/compat */
 #define	FASYNC		O_ASYNC		/* kernel/compat */
 #define	FFSYNC		O_FSYNC		/* kernel */
@@ -181,7 +193,7 @@ typedef __darwin_pid_t	pid_t;
  * Flags used for copyfile(2)
  */
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define CPF_OVERWRITE 1
 #define CPF_IGNORE_MODE 2
 #define CPF_MASK (CPF_OVERWRITE|CPF_IGNORE_MODE)
@@ -202,26 +214,37 @@ typedef __darwin_pid_t	pid_t;
 #define	F_GETLK		7		/* get record locking information */
 #define	F_SETLK		8		/* set record locking information */
 #define	F_SETLKW	9		/* F_SETLK; wait if blocked */
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define F_CHKCLEAN      41              /* Used for regression test */
 #define F_PREALLOCATE   42		/* Preallocate storage */
 #define F_SETSIZE       43		/* Truncate a file without zeroing space */	
 #define F_RDADVISE      44              /* Issue an advisory read async with no copy to user */
-#define F_RDAHEAD       45              /* turn read ahead off/on */
+#define F_RDAHEAD       45              /* turn read ahead off/on for this fd */
 #define F_READBOOTSTRAP 46              /* Read bootstrap from disk */
 #define F_WRITEBOOTSTRAP 47             /* Write bootstrap on disk */
-#define F_NOCACHE       48              /* turning data caching off/on */
+#define F_NOCACHE       48              /* turn data caching off/on for this fd */
 #define F_LOG2PHYS	49		/* file offset to device offset */
 #define F_GETPATH       50              /* return the full path of the fd */
 #define F_FULLFSYNC     51		/* fsync + ask the drive to flush to the media */
 #define F_PATHPKG_CHECK 52              /* find which component (if any) is a package */
 #define F_FREEZE_FS     53              /* "freeze" all fs operations */
 #define F_THAW_FS       54              /* "thaw" all fs operations */
-#define F_GLOBAL_NOCACHE 55		/* turn data caching off/on (globally) for this file */
+#define	F_GLOBAL_NOCACHE 55		/* turn data caching off/on (globally) for this file */
+
+#ifdef PRIVATE
+#define	F_OPENFROM	56		/* SPI: open a file relative to fd (must be a dir) */
+#define	F_UNLINKFROM	57		/* SPI: open a file relative to fd (must be a dir) */
+#define	F_CHECK_OPENEVT 58		/* SPI: if a process is marked OPENEVT, or in O_EVTONLY on opens of this vnode */
+#endif /* PRIVATE */
+
+#define F_ADDSIGS	59		/* add detached signatures */
+
+#define F_MARKDEPENDENCY 60             /* this process hosts the device supporting the fs backing this fd */
 
 // FS-specific fcntl()'s numbers begin at 0x00010000 and go up
 #define FCNTL_FS_SPECIFIC_BASE  0x00010000
-#endif /* _POSIX_C_SOURCE */
+
+#endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
 
 /* file descriptor flags (F_GETFD, F_SETFD) */
 #define	FD_CLOEXEC	1		/* close-on-exec flag */
@@ -234,6 +257,7 @@ typedef __darwin_pid_t	pid_t;
 #define	F_WAIT		0x010		/* Wait until lock is granted */
 #define	F_FLOCK		0x020	 	/* Use flock(2) semantics for lock */
 #define	F_POSIX		0x040	 	/* Use POSIX semantics for lock */
+#define	F_PROV		0x080		/* Non-coelesced provisional lock */
 #endif
 
 /*
@@ -260,7 +284,7 @@ typedef __darwin_pid_t	pid_t;
 #define	S_IFREG		0100000		/* [XSI] regular */
 #define	S_IFLNK		0120000		/* [XSI] symbolic link */
 #define	S_IFSOCK	0140000		/* [XSI] socket */
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	S_IFWHT		0160000		/* whiteout */
 #define S_IFXATTR	0200000		/* extended attribute */
 #endif
@@ -286,7 +310,7 @@ typedef __darwin_pid_t	pid_t;
 #define	S_ISGID		0002000		/* [XSI] set group id on execution */
 #define	S_ISVTX		0001000		/* [XSI] directory restrcted delete */
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	S_ISTXT		S_ISVTX		/* sticky bit: not supported */
 #define	S_IREAD		S_IRUSR		/* backward compatability */
 #define	S_IWRITE	S_IWUSR		/* backward compatability */
@@ -294,7 +318,7 @@ typedef __darwin_pid_t	pid_t;
 #endif
 #endif	/* !S_IFMT */
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /* allocate flags (F_PREALLOCATE) */
 
 #define F_ALLOCATECONTIG  0x00000002    /* allocate contigious space */
@@ -305,7 +329,7 @@ typedef __darwin_pid_t	pid_t;
 #define F_PEOFPOSMODE 3			/* Make it past all of the SEEK pos modes so that */
 					/* we can keep them in sync should we desire */	
 #define F_VOLPOSMODE	4		/* specify volume starting postion */
-#endif /* _POSIX_C_SOURCE */
+#endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
 
 /*
  * Advisory file segment locking data type -
@@ -320,7 +344,7 @@ struct flock {
 };
 
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /*
  * advisory file read data type -
  * information passed by user to system
@@ -330,6 +354,27 @@ struct radvisory {
        int     ra_count;
 };
 
+/*
+ * detached code signatures data type -
+ * information passed by user to system
+ * used by F_ADDSIGS
+ */
+typedef struct fsignatures {
+	off_t		fs_file_start;
+	void		*fs_blob_start;
+	size_t		fs_blob_size;
+} fsignatures_t;
+#ifdef KERNEL
+/* LP64 version of fsignatures.  all pointers 
+ * grow when we're dealing with a 64-bit process.
+ * WARNING - keep in sync with fsignatures
+ */
+typedef struct user_fsignatures {
+	off_t		fs_file_start;
+	user_addr_t	fs_blob_start;
+	user_size_t	fs_blob_size;
+} user_fsignatures_t;
+#endif /* KERNEL */
 
 /* lock operations for flock(2) */
 #define	LOCK_SH		0x01		/* shared file lock */
@@ -356,7 +401,6 @@ typedef struct fbootstraptransfer {
 } fbootstraptransfer_t;
 
 
-// LP64todo - should this move?
 #ifdef KERNEL
 /* LP64 version of fbootstraptransfer.  all pointers 
  * grow when we're dealing with a 64-bit process.
@@ -399,11 +443,38 @@ struct log2phys {
 
 #define	O_POPUP	   0x80000000   /* force window to popup on open */
 #define	O_ALERT	   0x20000000	/* small, clean popup window */
-#endif /* _POSIX_C_SOURCE */
+
+#ifdef PRIVATE
+/*
+ * SPI: Argument data for F_OPENFROM
+ */
+struct fopenfrom {
+	unsigned int	o_flags;	/* same as open(2) */
+	mode_t		o_mode;		/* same as open(2) */
+	char *		o_pathname;	/* relative pathname */
+};
+
+#ifdef KERNEL
+/*
+ * LP64 version of fopenfrom.  Memory pointers 
+ * grow when we're dealing with a 64-bit process.
+ *
+ * WARNING - keep in sync with fopenfrom (above)
+ */
+struct user_fopenfrom {
+	unsigned int	o_flags;
+	mode_t		o_mode;
+	user_addr_t	o_pathname;
+};
+#endif /* KERNEL */
+
+#endif /* PRIVATE */
+
+#endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
 
 #ifndef KERNEL
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #ifndef _FILESEC_T
 struct _filesec;
 typedef struct _filesec	*filesec_t;
@@ -424,13 +495,13 @@ typedef enum {
 
 /* XXX backwards compatibility */
 #define FILESEC_GUID FILESEC_UUID
-#endif /* _POSIX_C_SOURCE */
+#endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
 
 __BEGIN_DECLS
-int	open(const char *, int, ...);
-int	creat(const char *, mode_t);
-int	fcntl(int, int, ...);
-#ifndef _POSIX_C_SOURCE
+int	open(const char *, int, ...) __DARWIN_ALIAS_C(open);
+int	creat(const char *, mode_t) __DARWIN_ALIAS_C(creat);
+int	fcntl(int, int, ...) __DARWIN_ALIAS_C(fcntl);
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 int	openx_np(const char *, int, filesec_t);
 int	flock(int, int);
 filesec_t filesec_init(void);
@@ -438,11 +509,10 @@ filesec_t filesec_dup(filesec_t);
 void	filesec_free(filesec_t);
 int	filesec_get_property(filesec_t, filesec_property_t, void *);
 int	filesec_set_property(filesec_t, filesec_property_t, const void *);
-int	filesec_unset_property(filesec_t, filesec_property_t);
 int	filesec_query_property(filesec_t, filesec_property_t, int *);
 #define _FILESEC_UNSET_PROPERTY	((void *)0)
 #define _FILESEC_REMOVE_ACL	((void *)1)
-#endif /* !_POSIX_C_SOURCE */
+#endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 __END_DECLS
 #endif
 

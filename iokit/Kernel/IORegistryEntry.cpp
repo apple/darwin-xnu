@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1998 Apple Computer, Inc.  All rights reserved. 
@@ -48,7 +54,11 @@ OSDefineMetaClassAndStructors(IORegistryEntry, OSObject)
 #define kIORegPlaneChildSuffix		"ChildLinks"
 #define kIORegPlaneNameSuffix		"Name"
 #define kIORegPlaneLocationSuffix	"Location"
+
 #define kIORegPlaneParentSuffixLen	(sizeof(kIORegPlaneParentSuffix) - 1)
+#define kIORegPlaneChildSuffixLen	(sizeof(kIORegPlaneChildSuffix) - 1)
+#define kIORegPlaneNameSuffixLen	(sizeof(kIORegPlaneNameSuffix) - 1)
+#define kIORegPlaneLocationSuffixLen	(sizeof(kIORegPlaneLocationSuffix) - 1)
 
 static IORegistryEntry * gRegistryRoot;
 static OSDictionary * 	 gIORegistryPlanes;
@@ -173,22 +183,21 @@ const IORegistryPlane * IORegistryEntry::makePlane( const char * name )
     char		key[ kIOMaxPlaneName + 16 ];
     char *		end;
 
-    strncpy( key, name, kIOMaxPlaneName );
-    key[ kIOMaxPlaneName ] = 0;
-    end = key + strlen( name );
+    strlcpy( key, name, kIOMaxPlaneName + 1 );
+    end = key + strlen( key );
 
     nameKey = OSSymbol::withCString( key);
 
-    strcpy( end, kIORegPlaneParentSuffix );
+    strlcpy( end, kIORegPlaneParentSuffix, kIORegPlaneParentSuffixLen + 1 );
     parentKey = OSSymbol::withCString( key);
 
-    strcpy( end, kIORegPlaneChildSuffix );
+    strlcpy( end, kIORegPlaneChildSuffix, kIORegPlaneChildSuffixLen + 1 );
     childKey = OSSymbol::withCString( key);
 
-    strcpy( end, kIORegPlaneNameSuffix );
+    strlcpy( end, kIORegPlaneNameSuffix, kIORegPlaneNameSuffixLen + 1 );
     pathNameKey = OSSymbol::withCString( key);
 
-    strcpy( end, kIORegPlaneLocationSuffix );
+    strlcpy( end, kIORegPlaneLocationSuffix, kIORegPlaneLocationSuffixLen + 1 );
     pathLocationKey = OSSymbol::withCString( key);
 
     plane = new IORegistryPlane;
@@ -334,15 +343,15 @@ void IORegistryEntry::free( void )
 
 #if DEBUG_FREE
 #define msg ": attached at free()"
-    char buf[ strlen(msg) + 40 ];
+    int len = strlen(msg) + 40;
+    char buf[len];
 
     if( registryTable() && gIOServicePlane) {
         if( getParentSetReference( gIOServicePlane )
             || getChildSetReference( gIOServicePlane )) {
 
-            strncpy( buf, getName(), 32);
-            buf[32] = 0;
-            strcat( buf, msg );
+            strlcpy( buf, getName(), 32);
+            strlcat( buf, msg, len );
             IOPanic( buf );
         }
     }
@@ -839,7 +848,7 @@ bool IORegistryEntry::getPath(	char * path, int * length,
     IORegistryEntry *	parent;
     const OSSymbol *	alias;
     int			index;
-    int			len, maxLength, compLen;
+    int			len, maxLength, compLen, aliasLen;
     char *		nextComp;
     bool		ok;
 
@@ -853,16 +862,17 @@ bool IORegistryEntry::getPath(	char * path, int * length,
     len = plane->nameKey->getLength();
     if( len >= maxLength)
 	return( false);
-    strcpy( nextComp, plane->nameKey->getCStringNoCopy());
+    strlcpy( nextComp, plane->nameKey->getCStringNoCopy(), len + 1);
     nextComp[ len++ ] = ':';
     nextComp += len;
 
     if( (alias = hasAlias( plane ))) {
-	len += alias->getLength();
+	aliasLen = alias->getLength();
+	len += aliasLen;
 	ok = (maxLength > len);
 	*length = len;
 	if( ok)
-	    strcpy( nextComp, alias->getCStringNoCopy());
+	    strlcpy( nextComp, alias->getCStringNoCopy(), aliasLen + 1);
 	return( ok );
     }
 
@@ -905,9 +915,9 @@ bool IORegistryEntry::getPath(	char * path, int * length,
             nextComp = path + len;
 
             compLen = alias->getLength();
-            ok = (maxLength > len + compLen);
+            ok = (maxLength > (len + compLen));
             if( ok)
-                strcpy( nextComp, alias->getCStringNoCopy());
+                strlcpy( nextComp, alias->getCStringNoCopy(), compLen + 1);
         } else {
             compLen = maxLength - len;
             ok = entry->getPathComponent( nextComp + 1, &compLen, plane );
@@ -949,14 +959,14 @@ bool IORegistryEntry::getPathComponent( char * path, int * length,
     else
 	locLen = 0;
 
-    ok = ((len + locLen) < maxLength);
+    ok = ((len + locLen + 1) < maxLength);
     if( ok) {
-        strcpy( path, compName );
+        strlcpy( path, compName, len + 1 );
 	if( loc) {
             path += len;
             len += locLen;
             *path++ = '@';
-            strcpy( path, loc );
+            strlcpy( path, loc, locLen );
 	}
         *length = len;
     }
@@ -1117,8 +1127,7 @@ const char * IORegistryEntry::dealiasPath(
         {}
     end--;
     if( (end - path) < kIOMaxPlaneName) {
-        strncpy( temp, path, end - path );
-        temp[ end - path ] = 0;
+        strlcpy( temp, path, end - path + 1 );
 
         RLOCK;
         entry = IORegistryEntry::fromPath( "/aliases", plane );
@@ -1161,8 +1170,7 @@ IORegistryEntry * IORegistryEntry::fromPath(
 	// get plane name
         end = strchr( path, ':' );
 	if( end && ((end - path) < kIOMaxPlaneName)) {
-	    strncpy( temp, path, end - path );
-	    temp[ end - path ] = 0;
+	    strlcpy( temp, path, end - path + 1 );
             plane = getPlane( temp );
 	    path = end + 1;
 	}
@@ -1213,10 +1221,10 @@ IORegistryEntry * IORegistryEntry::fromPath(
 
 	if( opath && length) {
             // copy out residual path
-	    len2 = len + strlen( path );
-	    if( len2 < *length)
-                strcpy( opath + len, path );
-	    *length = len2;
+	    len2 = strlen( path );
+	    if( (len + len2) < *length)
+                strlcpy( opath + len, path, len2 + 1 );
+	    *length = (len + len2);
 
 	} else if( path[0])
 	    // no residual path => must be no tail for success
@@ -1550,12 +1558,16 @@ bool IORegistryEntry::inPlane( const IORegistryPlane * plane ) const
 	    const OSSymbol *key;
 
             while( (key = (OSSymbol *) iter->getNextObject()) ) {
-		const char *keysuffix;
+		size_t keysuffix;
 
 		// Get a pointer to this keys suffix
-		keysuffix = key->getCStringNoCopy()
-			  + key->getLength() - kIORegPlaneParentSuffixLen;
-		if( !strcmp(keysuffix, kIORegPlaneParentSuffix) ) {
+		keysuffix = key->getLength();
+		if (keysuffix <= kIORegPlaneParentSuffixLen)
+		    continue;
+		keysuffix -= kIORegPlaneParentSuffixLen;
+		if( !strncmp(key->getCStringNoCopy() + keysuffix, 
+				kIORegPlaneParentSuffix, 
+				kIORegPlaneParentSuffixLen + 1) ) {
 		    ret = true;
 		    break;
 		}
@@ -1851,7 +1863,7 @@ void IORegistryIterator::enterEntry( const IORegistryPlane * enterPlane )
     IORegCursor *	prev;
 
     prev = where;
-    where = (IORegCursor *) IOMalloc( sizeof( IORegCursor));
+    where = (IORegCursor *) IOMalloc( sizeof(IORegCursor));
     assert( where);
 
     if( where) {
@@ -1881,7 +1893,7 @@ bool IORegistryIterator::exitEntry( void )
     if( where != &start) {
 	gone = where;
         where = gone->next;
-        IOFree( gone, sizeof( IORegCursor));
+        IOFree( gone, sizeof(IORegCursor));
 	return( true);
 
     } else

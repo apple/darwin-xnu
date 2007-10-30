@@ -189,8 +189,10 @@ typedef uint64_t	ia32_mci_misc_t;
 #define IA32_MCG_R14		(0x196)
 #define IA32_MCG_R15		(0x197)
 
+extern void	mca_cpu_alloc(cpu_data_t *cdp);
 extern void	mca_cpu_init(void);
 extern void	mca_dump(void);
+extern void	mca_check_save(void);
 
 #endif	/* _I386_MACHINE_CHECK_H_ */
 #endif	/* KERNEL_PRIVATE */

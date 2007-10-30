@@ -1,26 +1,38 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
+ */
+/*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
  */
 
 #ifndef	_MISC_PROTOS_H_
@@ -34,6 +46,13 @@
 #include <mach/machine/vm_types.h>
 #include <ipc/ipc_types.h>
 #include <kern/debug.h>
+
+#ifndef MIN
+#define MIN(a,b) (((a)<(b))?(a):(b))
+#endif /* MIN */
+#ifndef MAX
+#define MAX(a,b) (((a)>(b))?(a):(b))
+#endif  /* MAX */
 
 /* Set a bit in a bit array */
 extern void setbit(
@@ -79,7 +98,7 @@ extern int copyinmsg(
 
 /* Move arbitrarily-aligned data from a kernel space to user space */
 extern int copyout(
-	const char      *kernel_addr,
+	const void      *kernel_addr,
 	user_addr_t     user_addr,
 	vm_size_t       nbytes);
 
@@ -90,18 +109,18 @@ extern int copyoutmsg(
 	mach_msg_size_t nbytes);
 
 /* Invalidate copy window(s) cache */
-extern void	inval_copy_windows(thread_t);
+extern void    inval_copy_windows(thread_t);
 
+extern int sscanf(const char *input, const char *fmt, ...) __scanflike(2,3);
 
-extern int sscanf(const char *input, const char *fmt, ...);
+/* sprintf() is being deprecated. Please use snprintf() instead. */ 
+extern integer_t sprintf(char *buf, const char *fmt, ...) __deprecated;
 
-extern integer_t sprintf(char *buf, const char *fmt, ...);
+extern int printf(const char *format, ...) __printflike(1,2);
 
-extern void printf(const char *format, ...);
+extern void dbugprintf(const char *format, ...) __printflike(1,2);
 
-extern void dbugprintf(const char *format, ...);
-
-extern void kdb_printf(const char *format, ...);
+extern int kdb_printf(const char *format, ...) __printflike(1,2);
 
 extern void printf_init(void);
 
@@ -164,5 +183,20 @@ extern kern_return_t	kernel_set_special_port(
 		host_priv_t	host_priv,
 		int 		which,
 		ipc_port_t	port);
+
+user_addr_t get_useraddr(void);
+
+/* symbol lookup */
+struct kmod_info_t;
+
+extern int syms_formataddr(
+		vm_offset_t	addr,
+		char		*out,
+		vm_offset_t	outsize);
+
+extern const char *syms_nameforaddr(
+		vm_offset_t	addr,
+		vm_offset_t	*ofs,
+		kmod_info_t	**kmod);
 
 #endif	/* _MISC_PROTOS_H_ */

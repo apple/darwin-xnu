@@ -26,9 +26,11 @@ OBJS_NO_WERROR=				\
 	OSSymbol.cpo			\
 	OSUnserialize.cpo		\
 	OSIterator.cpo			\
-	OSSet.cpo				\
-	scanf.o					\
-	OSUnserializeXML.cpo
+	OSSet.cpo			\
+	scanf.o				\
+	OSUnserializeXML.cpo		\
+	zlib.o				\
+	uuid.o
 
 OBJS_WERROR=$(filter-out $(OBJS_NO_WERROR),$(OBJS))
 

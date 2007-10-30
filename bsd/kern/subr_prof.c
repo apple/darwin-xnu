@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*-
@@ -55,6 +61,10 @@
  *	@(#)subr_prof.c	8.3 (Berkeley) 9/23/93
  */
 
+#ifdef GPROF
+#include <kern/mach_header.h>
+#endif
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -71,13 +81,14 @@
 #include <kern/cpu_number.h>
 #include <kern/kalloc.h>
 
-extern boolean_t ml_set_interrupts_enabled(boolean_t enable);
-
 #ifdef GPROF
 #include <sys/malloc.h>
 #include <sys/gmon.h>
-#include <kern/mach_header.h>
-#include <machine/profile.h>
+
+extern int sysctl_doprof(int *, u_int, user_addr_t, size_t *, 
+		user_addr_t, size_t newlen);
+extern int sysctl_struct(user_addr_t, size_t *,
+		user_addr_t, size_t, void *, int);
 
 lck_spin_t * mcount_lock;
 lck_grp_t * mcount_lock_grp;
@@ -86,7 +97,7 @@ lck_attr_t * mcount_lock_attr;
 /*
  * Froms is actually a bunch of unsigned shorts indexing tos
  */
-struct gmonparam _gmonparam = { GMON_PROF_OFF };
+struct gmonparam _gmonparam = { .state = GMON_PROF_OFF };
 
 /*
  * This code uses 32 bit mach object segment information from the currently
@@ -96,7 +107,6 @@ void
 kmstartup(void)
 {
 	char *cp;
-	u_long	fromssize, tossize;
 	struct segment_command	*sgp;	/* 32 bit mach object file segment */
 	struct gmonparam *p = &_gmonparam;
 	
@@ -111,7 +121,7 @@ kmstartup(void)
 	p->lowpc = ROUNDDOWN(p->lowpc, HISTFRACTION * sizeof(HISTCOUNTER));
 	p->highpc = ROUNDUP(p->highpc, HISTFRACTION * sizeof(HISTCOUNTER));
 	p->textsize = p->highpc - p->lowpc;
-	printf("Profiling kernel, textsize=%d [0x%08x..0x%08x]\n",
+	printf("Profiling kernel, textsize=%lu [0x%016lx..0x%016lx]\n",
 	       p->textsize, p->lowpc, p->highpc);
 	p->kcountsize = p->textsize / HISTFRACTION;
 	p->hashfraction = HASHFRACTION;
@@ -188,14 +198,14 @@ sysctl_doprof(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
  */
 void
 mcount(
-    register u_long frompc,
-    register u_long selfpc
+    u_long frompc,
+    u_long selfpc
 )
 {
     unsigned short *frompcindex;
-	register struct tostruct *top, *prevtop;
+	struct tostruct *top, *prevtop;
 	struct gmonparam *p = &_gmonparam;
-	register long toindex;
+	long toindex;
 
     /*
      * check that we are profiling
@@ -302,110 +312,177 @@ overflow:
 #define PROFILE_LOCK(x)
 #define PROFILE_UNLOCK(x)
 
+static int profil_funneled(struct proc *p, struct profil_args *uap, register_t *retval);
+static int add_profil_funneled(struct proc *p, struct add_profil_args *uap, register_t *retval);
+
+
 int
-profil(struct proc *p, register struct profil_args *uap, __unused register_t *retval)
+profil(struct proc *p, struct profil_args *uap, register_t *retval)
 {
-    struct uprof *upp = &p->p_stats->p_prof;
-    int s;
+	boolean_t funnel_state;
+	int error;
+
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	error = profil_funneled(p, uap, retval);
+	thread_funnel_set(kernel_flock, funnel_state);
+	return(error);
+}
+
+static int
+profil_funneled(struct proc *p, struct profil_args *uap, __unused register_t *retval)
+{
+        struct uprof *upp = &p->p_stats->p_prof;
+	int s;
 
 	if (uap->pcscale > (1 << 16))
 		return (EINVAL);
+
 	if (uap->pcscale == 0) {
 		stopprofclock(p);
 		return (0);
 	}
-
-	/* Block profile interrupts while changing state. */
-    s = ml_set_interrupts_enabled(FALSE);	
+	/*
+	 * Block profile interrupts while changing state.
+	 */
+	s = ml_set_interrupts_enabled(FALSE);	
 
 	if (proc_is64bit(p)) {
-        struct user_uprof *user_upp = &p->p_stats->user_p_prof;
-    	struct user_uprof *upc, *nupc;
+	        struct user_uprof *user_upp = &p->p_stats->user_p_prof;
+		struct user_uprof *upc, *nupc;
 	
-	    PROFILE_LOCK(&user_upp->pr_lock);
-        user_upp->pr_base = uap->bufbase;
-        user_upp->pr_size = uap->bufsize;
-        user_upp->pr_off = uap->pcoffset;
-	    user_upp->pr_scale = uap->pcscale;
-        upp->pr_base = NULL;
-        upp->pr_size = 0;
-        upp->pr_scale = 0;
+		PROFILE_LOCK(&user_upp->pr_lock);
 
-        /* remove buffers previously allocated with add_profil() */
-        for (upc = user_upp->pr_next; upc; upc = nupc) {
-            nupc = upc->pr_next;
-            kfree(upc, sizeof (*upc));
-        }
-        user_upp->pr_next = 0;
-	    PROFILE_UNLOCK(&user_upp->pr_lock);
-	}
-	else {
-    	struct uprof *upc, *nupc;
+		user_upp->pr_base = uap->bufbase;
+		user_upp->pr_size = uap->bufsize;
+		user_upp->pr_off = uap->pcoffset;
+		user_upp->pr_scale = uap->pcscale;
+		upp->pr_base = NULL;
+		upp->pr_size = 0;
+		upp->pr_scale = 0;
+
+		/*
+		 * remove buffers previously allocated with add_profil()
+		 * don't do the kfree's while interrupts disabled
+		 */
+		upc = user_upp->pr_next;
+		user_upp->pr_next = 0;
+
+		PROFILE_UNLOCK(&user_upp->pr_lock);
+
+		startprofclock(p);
+		ml_set_interrupts_enabled(s);
+
+		while (upc) {
+		        nupc = upc->pr_next;
+			kfree(upc, sizeof (*upc));
+			upc = nupc;
+		}
+
+	} else {
+	        struct uprof *upc, *nupc;
 	    
-	    PROFILE_LOCK(&upp->pr_lock);
-        upp->pr_base = CAST_DOWN(caddr_t, uap->bufbase);
-        upp->pr_size = uap->bufsize;
-        upp->pr_off = uap->pcoffset;
-	    upp->pr_scale = uap->pcscale;
+		PROFILE_LOCK(&upp->pr_lock);
 
-        /* remove buffers previously allocated with add_profil() */
-        for (upc = upp->pr_next; upc; upc = nupc) {
-            nupc = upc->pr_next;
-            kfree(upc, sizeof (struct uprof));
-        }
-        upp->pr_next = 0;
-	    PROFILE_UNLOCK(&upp->pr_lock);
+		upp->pr_base = CAST_DOWN(caddr_t, uap->bufbase);
+		upp->pr_size = uap->bufsize;
+		upp->pr_off = uap->pcoffset;
+		upp->pr_scale = uap->pcscale;
+
+		/*
+		 * remove buffers previously allocated with add_profil()
+		 * don't do the kfree's while interrupts disabled
+		 */
+		upc = upp->pr_next;
+		upp->pr_next = 0;
+
+		PROFILE_UNLOCK(&upp->pr_lock);
+
+		startprofclock(p);
+		ml_set_interrupts_enabled(s);
+
+		while (upc) {
+		        nupc = upc->pr_next;
+			kfree(upc, sizeof (struct uprof));
+			upc = nupc;
+		}
 	}
-
-	startprofclock(p);
-	ml_set_interrupts_enabled(s);
 	return(0);
 }
 
 int
-add_profil(struct proc *p, register struct add_profil_args *uap, __unused register_t *retval)
+add_profil(struct proc *p, struct add_profil_args *uap, register_t *retval)
+{
+	boolean_t funnel_state;
+	int error;
+
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	error = add_profil_funneled(p, uap, retval);
+	thread_funnel_set(kernel_flock, funnel_state);
+	return(error);
+}
+
+
+static int
+add_profil_funneled(struct proc *p, struct add_profil_args *uap, __unused register_t *retval)
 {
 	struct uprof *upp = &p->p_stats->p_prof, *upc;
 	struct user_uprof *user_upp = NULL, *user_upc;
 	int s;
 	boolean_t is64bit = proc_is64bit(p);
 
-	if (is64bit) {
-       user_upp = &p->p_stats->user_p_prof;
-       if (user_upp->pr_scale == 0)
-            return (0);
-    }
-    else {
-        if (upp->pr_scale == 0)
-            return (0);
-    }
 
-    s = ml_set_interrupts_enabled(FALSE);	
+	upc = NULL;
+	user_upc = NULL;
+
+	if (is64bit) {
+	        user_upp = &p->p_stats->user_p_prof;
+
+		if (user_upp->pr_scale == 0)
+		        return (0);
+	}
+	else {
+	        if (upp->pr_scale == 0)
+		        return (0);
+	}
+	if (is64bit) {
+	        user_upc = (struct user_uprof *) kalloc(sizeof (struct user_uprof));
+	        user_upc->pr_base = uap->bufbase;
+		user_upc->pr_size = uap->bufsize;
+		user_upc->pr_off = uap->pcoffset;
+		user_upc->pr_scale = uap->pcscale;
+	} else {
+	        upc = (struct uprof *) kalloc(sizeof (struct uprof));
+	        upc->pr_base = CAST_DOWN(caddr_t, uap->bufbase);
+		upc->pr_size = uap->bufsize;
+		upc->pr_off = uap->pcoffset;
+		upc->pr_scale = uap->pcscale;
+	}
+	s = ml_set_interrupts_enabled(FALSE);	
     
 	if (is64bit) {
-        user_upc = (struct user_uprof *) kalloc(sizeof (struct user_uprof));
-        user_upc->pr_base = uap->bufbase;
-        user_upc->pr_size = uap->bufsize;
-        user_upc->pr_off = uap->pcoffset;
-        user_upc->pr_scale = uap->pcscale;
-        PROFILE_LOCK(&user_upp->pr_lock);
-        user_upc->pr_next = user_upp->pr_next;
-        user_upp->pr_next = user_upc;
-        PROFILE_UNLOCK(&user_upp->pr_lock);
-    }
-    else {
-        upc = (struct uprof *) kalloc(sizeof (struct uprof));
-        upc->pr_base = CAST_DOWN(caddr_t, uap->bufbase);
-        upc->pr_size = uap->bufsize;
-        upc->pr_off = uap->pcoffset;
-        upc->pr_scale = uap->pcscale;
-        PROFILE_LOCK(&upp->pr_lock);
-        upc->pr_next = upp->pr_next;
-        upp->pr_next = upc;
-        PROFILE_UNLOCK(&upp->pr_lock);
-    }
-    
+		PROFILE_LOCK(&user_upp->pr_lock);
+		if (user_upp->pr_scale) {
+		        user_upc->pr_next = user_upp->pr_next;
+			user_upp->pr_next = user_upc;
+			user_upc = NULL;
+		}
+		PROFILE_UNLOCK(&user_upp->pr_lock);
+	} else {
+		PROFILE_LOCK(&upp->pr_lock);
+	        if (upp->pr_scale) {
+		        upc->pr_next = upp->pr_next;
+			upp->pr_next = upc;
+			upc = NULL;
+		}
+		PROFILE_UNLOCK(&upp->pr_lock);
+	}
 	ml_set_interrupts_enabled(s);		
+
+	if (upc)
+	        kfree(upc, sizeof(struct uprof));
+	if (user_upc)
+	        kfree(user_upc, sizeof(struct user_uprof));
+
 	return(0);
 }
 
@@ -433,12 +510,9 @@ add_profil(struct proc *p, register struct add_profil_args *uap, __unused regist
  * update fails, we simply turn off profiling.
  */
 void
-addupc_task(p, pc, ticks)
-	register struct proc *p;
-	user_addr_t pc;
-	u_int ticks;
+addupc_task(struct proc *p, user_addr_t pc, u_int ticks)
 {
-	register u_int off;
+	u_int off;
 	u_short count;
 
 	/* Testing P_PROFIL may be unnecessary, but is certainly safe. */

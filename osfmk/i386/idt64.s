@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <i386/asm.h>
 #include <i386/asm64.h>
@@ -35,7 +41,6 @@
  */
 #define	LO_ALLINTRS		EXT(lo_allintrs)
 #define	LO_ALLTRAPS		EXT(lo_alltraps)
-#define	LO_SYSENTER		EXT(lo_sysenter)
 #define	LO_SYSCALL		EXT(lo_syscall)
 #define	LO_UNIX_SCALL		EXT(lo_unix_scall)
 #define	LO_MACH_SCALL		EXT(lo_mach_scall)
@@ -168,7 +173,7 @@ EXCEP64_IST(0x0c,db_task_stk_fault64,1)
 EXCEP64_SPC(0x0c,hi64_stack_fault)
 #endif
 EXCEP64_SPC(0x0d,hi64_gen_prot)
-EXCEP64_ERR(0x0e,t64_page_fault)
+EXCEP64_SPC(0x0e, hi64_page_fault)
 EXCEPTION64(0x0f,t64_trap_0f)
 EXCEPTION64(0x10,t64_fpu_err)
 EXCEPTION64(0x11,t64_trap_11)
@@ -287,7 +292,7 @@ INTERRUPT64(0x7b)
 INTERRUPT64(0x7c)
 INTERRUPT64(0x7d)
 INTERRUPT64(0x7e)
-INTERRUPT64(0x7f)
+EXCEP64_USR(0x7f, t64_dtrace_ret)
 
 EXCEP64_SPC_USR(0x80,hi64_unix_scall)
 EXCEP64_SPC_USR(0x81,hi64_mach_scall)
@@ -481,9 +486,9 @@ Entry(lo64_ret_to_user)
 	movl	ACT_PCB_IDS(%ecx),%eax	/* Obtain this thread's debug state */
 	cmpl	$0,%eax			/* Is there a debug register context? */
 	je	2f 			/* branch if not */
-	cmpl	$(TASK_MAP_32BIT), %gs:CPU_TASK_MAP	/* Are we a 64-bit task? */
+	cmpl	$(TASK_MAP_32BIT), %gs:CPU_TASK_MAP /* Are we a 32-bit task? */
 	jne	1f
-	movl	DS_DR0(%eax), %ecx	/* If not, load the 32 bit DRs */
+	movl	DS_DR0(%eax), %ecx	/* If so, load the 32 bit DRs */
 	movl	%ecx, %db0
 	movl	DS_DR1(%eax), %ecx
 	movl	%ecx, %db1
@@ -614,14 +619,14 @@ EXT(ret32_iret):
         iretq				/* return from interrupt */
 
 L_fast_exit:
-	pop	%rdx                    /* user return eip */
-        pop	%rcx                    /* pop and toss cs */
+	pop	%rdx			/* user return eip */
+	pop	%rcx			/* pop and toss cs */
 	andl	$(~EFL_IF), (%rsp)	/* clear interrupts enable, sti below */
-        popf                            /* flags - carry denotes failure */
-        pop	%rcx                    /* user return esp */
+	popf				/* flags - carry denotes failure */
+	pop	%rcx			/* user return esp */
 	.code32
 	sti				/* interrupts enabled after sysexit */
-        sysexit				/* 32-bit sysexit */
+	sysexit				/* 32-bit sysexit */
 	.code64
 
 L_64bit_return:
@@ -674,7 +679,7 @@ L_sysret:
 	mov	ISF64_RIP-16(%rsp), %rcx
 	mov	ISF64_RFLAGS-16(%rsp), %r11
 	mov	ISF64_RSP-16(%rsp), %rsp
-        sysretq				/* return from system call */
+	sysretq				/* return from system call */
 
 /*
  * Common path to enter locore handlers.
@@ -750,7 +755,15 @@ L_syscall_continue:
 	movl	$(0), ISF64_TRAPNO(%rsp)	/* trapno */
 	movl	$(LO_SYSCALL), ISF64_TRAPFN(%rsp)
 	jmp	L_64bit_enter		/* this can only be a 64-bit task */
-	
+
+
+L_32bit_enter_check:
+	/*
+	 * Check we're not a confused 64-bit user.
+	 */
+	cmpl	$(TASK_MAP_32BIT), %gs:CPU_TASK_MAP
+	jne	L_64bit_entry_reject
+	jmp	L_32bit_enter
 /*
  * sysenter entry point
  * Requires user code to set up:
@@ -771,10 +784,9 @@ Entry(hi64_sysenter)
 	push	%rcx			/* uesp */
 	pushf				/* flags */
 	/*
-	* Clear, among others, the Nested Task (NT) flags bit;
-	* This is cleared by INT, but not by sysenter, which only
-	* clears RF, VM and IF.
-	*/
+	 * Clear, among others, the Nested Task (NT) flags bit;
+	 * this is zeroed by INT, but not by SYSENTER.
+	 */
 	push	$0
 	popf
 	push	$(SYSENTER_CS)		/* cs */
@@ -783,16 +795,39 @@ L_sysenter_continue:
 	push	%rdx			/* eip */
 	push	%rax			/* err/eax - syscall code */
 	push	$(0)
-	movl	$(LO_SYSENTER), ISF64_TRAPFN(%rsp)
 	orl	$(EFL_IF), ISF64_RFLAGS(%rsp)
-
-L_32bit_enter_check:
-	/*
-	 * Check we're not a confused 64-bit user.
-	 */
-	cmpl	$(TASK_MAP_32BIT), %gs:CPU_TASK_MAP
-	jne	L_64bit_entry_reject
-	/* fall through to 32-bit handler: */
+	movl	$(LO_MACH_SCALL), ISF64_TRAPFN(%rsp)
+	testl	%eax, %eax
+	js	L_32bit_enter_check
+	movl	$(LO_UNIX_SCALL), ISF64_TRAPFN(%rsp)
+ 	cmpl	$(TASK_MAP_32BIT), %gs:CPU_TASK_MAP
+ 	jne	L_64bit_entry_reject
+/* If the caller (typically LibSystem) has recorded the cumulative size of
+ * the arguments in EAX, copy them over from the user stack directly.
+ * We recover from exceptions inline--if the copy loop doesn't complete
+ * due to an exception, we fall back to copyin from compatibility mode.
+ * We can potentially extend this mechanism to mach traps as well (DRK).
+ */
+L_sysenter_copy_args:
+	testl	$(I386_SYSCALL_ARG_BYTES_MASK), %eax
+	jz	L_32bit_enter
+	xor	%r9, %r9
+	mov	%gs:CPU_UBER_ARG_STORE, %r8
+	movl	%eax, %r9d
+	mov	%gs:CPU_UBER_ARG_STORE_VALID, %r12
+	xor	%r10, %r10
+	shrl	$(I386_SYSCALL_ARG_DWORDS_SHIFT), %r9d
+	andl	$(I386_SYSCALL_ARG_DWORDS_MASK), %r9d
+	movl	$0, (%r12)
+EXT(hi64_sysenter_user_arg_copy):
+0:
+	movl	4(%rcx, %r10, 4), %r11d
+	movl	%r11d, (%r8, %r10, 4)
+	incl	%r10d
+	decl	%r9d
+	jnz	0b
+	movl	$1, (%r12)
+	/* Fall through to 32-bit handler */
 
 L_32bit_enter:
 	/*
@@ -958,6 +993,16 @@ L_64bit_enter_after_fault:
 
 	jmp	L_enter_lohandler2
 
+Entry(hi64_page_fault)
+	push	$(T_PAGE_FAULT)
+	movl	$(LO_ALLTRAPS), 4(%rsp)
+	cmpl	$(KERNEL_UBER_BASE_HI32), ISF64_RIP+4(%rsp)
+	jne	L_enter_lohandler
+	cmpl	$(EXT(hi64_sysenter_user_arg_copy)), ISF64_RIP(%rsp)
+	jne	L_enter_lohandler
+	mov	ISF64_RSP(%rsp), %rsp
+	jmp	L_32bit_enter
+
 /*
  * Debug trap.  Check for single-stepping across system call into
  * kernel.  If this is the case, taking the debug trap has turned
@@ -1075,6 +1120,10 @@ trap_check_kernel_exit:
 	cmpl	$(EXT(ret64_iret)), 16(%rsp)
 	je	L_fault_iret64
 
+	cmpl	$(EXT(hi64_sysenter_user_arg_copy)), ISF64_RIP(%rsp)
+	jne	hi64_take_trap
+	mov	ISF64_RSP(%rsp), %rsp
+	jmp	L_32bit_enter
 hi64_take_trap:
 	jmp	L_enter_lohandler
 

@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 1999, 2000-2001 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 /*
@@ -98,12 +104,12 @@ static DWORD mutexCreatorId = 0;
 static void 
 prng_do_SHA1(GEN_CTX *ctx) 
 {
-	SHA1_CTX sha;
+	YSHA1_CTX sha;
 
-	SHA1Init(&sha);
-	SHA1Update(&sha,ctx->IV,20);
-	SHA1Update(&sha,ctx->out,20);
-	SHA1Final(ctx->out,&sha);
+	YSHA1Init(&sha);
+	YSHA1Update(&sha,ctx->IV,20);
+	YSHA1Update(&sha,ctx->out,20);
+	YSHA1Final(ctx->out,&sha);
 	ctx->index = 0;
 }
 
@@ -117,12 +123,12 @@ prng_do_SHA1(GEN_CTX *ctx)
 static void 
 prng_make_new_state(GEN_CTX *ctx,BYTE *newState) 
 {
-	SHA1_CTX sha;
+	YSHA1_CTX sha;
 
 	memcpy(ctx->IV,newState,20);
-	SHA1Init(&sha);
-	SHA1Update(&sha,ctx->IV,20);
-	SHA1Final(ctx->out,&sha);
+	YSHA1Init(&sha);
+	YSHA1Update(&sha,ctx->IV,20);
+	YSHA1Final(ctx->out,&sha);
 	ctx->numout = 0;
 	ctx->index = 0;
 }
@@ -139,7 +145,7 @@ static void
 prng_slow_init(PRNG *p)
 /* This fails silently and must be fixed. */
 {
-	SHA1_CTX* ctx = NULL;
+	YSHA1_CTX* ctx = NULL;
 	MMPTR mmctx = MM_NULL;
 	BYTE* bigbuf = NULL;
 	MMPTR mmbigbuf = MM_NULL;
@@ -155,19 +161,19 @@ prng_slow_init(PRNG *p)
 	if(mmbuf == MM_NULL) {goto cleanup_slow_init;}
 	buf = (BYTE*)mmGetPtr(mmbuf);
 
-	mmctx = mmMalloc(sizeof(SHA1_CTX));
+	mmctx = mmMalloc(sizeof(YSHA1_CTX));
 	if(mmctx == MM_NULL) {goto cleanup_slow_init;}
-	ctx = (SHA1_CTX*)mmGetPtr(mmctx);
+	ctx = (YSHA1_CTX*)mmGetPtr(mmctx);
 
 
 	/* Initialize the secret state. */
 	/* Init entropy pool */
-	SHA1Init(&p->pool);
+	YSHA1Init(&p->pool);
 	/* Init output generator */
 	polllength = prng_slow_poll(bigbuf,SPLEN);
-	SHA1Init(ctx);
-	SHA1Update(ctx,bigbuf,polllength);
-	SHA1Final(buf,ctx);
+	YSHA1Init(ctx);
+	YSHA1Update(ctx,bigbuf,polllength);
+	YSHA1Final(buf,ctx);
 	prng_make_new_state(&p->outstate, buf);
 
 cleanup_slow_init:
@@ -259,7 +265,7 @@ prngInitialize(PrngRef *prng)
 	/* Initialize the secret state. */
 	/* FIXME - might want to make this an option here and have the caller
 	 * do it after we return....? */
-	SHA1Init(&p->pool);
+	YSHA1Init(&p->pool);
 #if		SLOW_POLL_ENABLE
 	prng_slow_init(p);	/* Does a slow poll and then calls prng_make_state(...) */
 #else	
@@ -372,15 +378,15 @@ prngForceReseed(PRNG *p, LONGLONG ticks)
 	{
 		/* Do a couple of iterations between time checks */
 		prngOutput(p, buf,64);
-		SHA1Update(&p->pool,buf,64);
+		YSHA1Update(&p->pool,buf,64);
 		prngOutput(p, buf,64);
-		SHA1Update(&p->pool,buf,64);
+		YSHA1Update(&p->pool,buf,64);
 		prngOutput(p, buf,64);
-		SHA1Update(&p->pool,buf,64);
+		YSHA1Update(&p->pool,buf,64);
 		prngOutput(p, buf,64);
-		SHA1Update(&p->pool,buf,64);
+		YSHA1Update(&p->pool,buf,64);
 		prngOutput(p, buf,64);
-		SHA1Update(&p->pool,buf,64);
+		YSHA1Update(&p->pool,buf,64);
 
 #if		defined(macintosh) || defined(__APPLE__)
 	#if		defined(TARGET_API_MAC_OSX) || defined(KERNEL_BUILD)
@@ -399,12 +405,12 @@ prngForceReseed(PRNG *p, LONGLONG ticks)
 #else
 	} while ( (now-start) < ticks) ;
 #endif
-	SHA1Final(dig,&p->pool);
-	SHA1Update(&p->pool,dig,20); 
-	SHA1Final(dig,&p->pool);
+	YSHA1Final(dig,&p->pool);
+	YSHA1Update(&p->pool,dig,20); 
+	YSHA1Final(dig,&p->pool);
 
 	/* Reset secret state */
-	SHA1Init(&p->pool);
+	YSHA1Init(&p->pool);
 	prng_make_new_state(&p->outstate,dig);
 
 	/* Clear counter variables */
@@ -431,9 +437,9 @@ prngProcessSeedBuffer(PRNG *p, BYTE *buf,LONGLONG ticks)
 	PCHECK(buf);
 
 	/* Put the data into the entropy, add some data from the unknown state, reseed */
-	SHA1Update(&p->pool,buf,20);			/* Put it into the entropy pool */
+	YSHA1Update(&p->pool,buf,20);			/* Put it into the entropy pool */
 	prng_do_SHA1(&p->outstate);				/* Output 20 more bytes and     */
-	SHA1Update(&p->pool,p->outstate.out,20);/* add it to the pool as well.  */
+	YSHA1Update(&p->pool,p->outstate.out,20);/* add it to the pool as well.  */
 	prngForceReseed(p, ticks); 				/* Do a reseed */
 	return prngOutput(p, buf,20); /* Return the first 20 bytes of output in buf */
 }
@@ -444,7 +450,7 @@ prngProcessSeedBuffer(PRNG *p, BYTE *buf,LONGLONG ticks)
 prng_error_status
 prngStretch(BYTE *inbuf,UINT inbuflen,BYTE *outbuf,UINT outbuflen) {
 	long int left,prev;
-	SHA1_CTX ctx;
+	YSHA1_CTX ctx;
 	BYTE dig[20];
 
 	PCHECK(inbuf);
@@ -457,13 +463,13 @@ prngStretch(BYTE *inbuf,UINT inbuflen,BYTE *outbuf,UINT outbuflen) {
 	}
 	else  /* Extend using SHA1 hash of inbuf */
 	{
-		SHA1Init(&ctx);
-		SHA1Update(&ctx,inbuf,inbuflen);
-		SHA1Final(dig,&ctx);
+		YSHA1Init(&ctx);
+		YSHA1Update(&ctx,inbuf,inbuflen);
+		YSHA1Final(dig,&ctx);
 		for(prev=0,left=outbuflen;left>0;prev+=20,left-=20) 
 		{
-			SHA1Update(&ctx,dig,20);
-			SHA1Final(dig,&ctx);
+			YSHA1Update(&ctx,dig,20);
+			YSHA1Final(dig,&ctx);
 			memcpy(outbuf+prev,dig,(left>20)?20:left);
 		}
 		trashMemory(dig,20*sizeof(BYTE));
@@ -489,7 +495,7 @@ prngInput(PRNG *p, BYTE *inbuf,UINT inbuflen,UINT poolnum, __unused UINT estbits
 	if(poolnum >= TOTAL_SOURCES) {return PRNG_ERR_OUT_OF_BOUNDS;}
 
 	/* Add to entropy pool */
-	SHA1Update(&p->pool,inbuf,inbuflen);
+	YSHA1Update(&p->pool,inbuf,inbuflen);
 	
 	#ifndef	YARROW_KERNEL
 	/* skip this step for the kernel */

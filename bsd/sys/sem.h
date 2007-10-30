@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*	$NetBSD: sem.h,v 1.5 1994/06/29 06:45:15 cgd Exp $	*/
 
@@ -70,7 +76,8 @@ typedef __darwin_size_t	size_t;
  * legacy interface there for binary compatibility only.  Currently, we
  * are only forcing this for programs requesting standards conformance.
  */
-#if defined(__POSIX_C_SOURCE) || defined(kernel) || defined(__LP64__)
+#if __DARWIN_UNIX03 || defined(KERNEL)
+#pragma pack(4)
 /*
  * Structure used internally.
  * 
@@ -81,7 +88,13 @@ typedef __darwin_size_t	size_t;
  * Note: only the fields sem_perm, sem_nsems, sem_otime, and sem_ctime
  * are meaningful in user space.
  */
-struct __semid_ds_new {
+#if (defined(_POSIX_C_SOURCE) && !defined(_DARWIN_C_SOURCE))
+struct semid_ds
+#else
+#define	semid_ds	__semid_ds_new
+struct __semid_ds_new
+#endif
+{
 	struct __ipc_perm_new sem_perm;	/* [XSI] operation permission struct */
 	__int32_t	sem_base;	/* 32 bit base ptr for semaphore set */
 	unsigned short	sem_nsems;	/* [XSI] number of sems in set */
@@ -93,12 +106,12 @@ struct __semid_ds_new {
 	__int32_t	sem_pad2;	/* RESERVED: DO NOT USE! */
 	__int32_t	sem_pad3[4];	/* RESERVED: DO NOT USE! */
 };
-#define	semid_ds	__semid_ds_new
-#else	/* !_POSIX_C_SOURCE */
+#pragma pack()
+#else	/* !__DARWIN_UNIX03 */
 #define	semid_ds	__semid_ds_old
-#endif	/* !_POSIX_C_SOURCE */
+#endif	/* __DARWIN_UNIX03 */
 
-#if !defined(__POSIX_C_SOURCE) && !defined(__LP64__)
+#if !__DARWIN_UNIX03
 struct __semid_ds_old {
 	struct __ipc_perm_old sem_perm;	/* [XSI] operation permission struct */
 	__int32_t	sem_base;	/* 32 bit base ptr for semaphore set */
@@ -111,7 +124,7 @@ struct __semid_ds_old {
 	__int32_t	sem_pad2;	/* RESERVED: DO NOT USE! */
 	__int32_t	sem_pad3[4];	/* RESERVED: DO NOT USE! */
 };
-#endif	/* !_POSIX_C_SOURCE */
+#endif	/* !__DARWIN_UNIX03 */
 
 /*
  * Possible values for the third argument to semctl()
@@ -149,7 +162,7 @@ struct sembuf {
 #define SEM_UNDO	010000		/* [XSI] Set up adjust on exit entry */
 
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 
 /*
  * System imposed limit on the value of the third parameter to semop().
@@ -195,16 +208,16 @@ typedef union semun semun_t;
 #define SEM_A		0200	/* alter permission */
 #define SEM_R		0400	/* read permission */
 
-#endif	/* !_POSIX_C_SOURCE */
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 
 
 #ifndef KERNEL
 
 __BEGIN_DECLS
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 int	semsys(int, ...);
-#endif /* !_POSIX_C_SOURCE */
+#endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 int	semctl(int, int, int, ...) __DARWIN_ALIAS(semctl);
 int	semget(key_t, int, int);
 int	semop(int, struct sembuf *, size_t);

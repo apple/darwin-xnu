@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1998-1999 Apple Computer, Inc.  All rights reserved.
@@ -44,6 +50,7 @@
 
 #include <vfs/vfs_support.h>
 #include <sys/kauth.h>
+#include <sys/ubc.h>	/* ubc_upl_abort_range() */
 
 
 struct vnop_create_args /* {
@@ -55,7 +62,7 @@ struct vnop_create_args /* {
 } */;
 
 int
-nop_create(struct vnop_create_args *ap)
+nop_create(__unused struct vnop_create_args *ap)
 {
 #if DIAGNOSTIC
 	if ((ap->a_cnp->cn_flags & HASBUF) == 0)
@@ -80,13 +87,13 @@ struct vnop_whiteout_args /* {
 } */;
 
 int
-nop_whiteout(struct vnop_whiteout_args *ap)
+nop_whiteout(__unused struct vnop_whiteout_args *ap)
 {
 	return (0);
 }
 
 int
-err_whiteout(struct vnop_whiteout_args *ap)
+err_whiteout(__unused struct vnop_whiteout_args *ap)
 {
 	return (ENOTSUP);
 }
@@ -101,7 +108,7 @@ struct vnop_mknod_args /* {
 } */;
 
 int
-nop_mknod(struct vnop_mknod_args *ap)
+nop_mknod(__unused struct vnop_mknod_args *ap)
 {
 #if DIAGNOSTIC
 	if ((ap->a_cnp->cn_flags & HASBUF) == 0)
@@ -124,13 +131,13 @@ struct vnop_open_args /* {
 } */;
 
 int
-nop_open(struct vnop_open_args *ap)
+nop_open(__unused struct vnop_open_args *ap)
 {
 	return (0);
 }
 
 int
-err_open(struct vnop_open_args *ap)
+err_open(__unused struct vnop_open_args *ap)
 {
 	return (ENOTSUP);
 }
@@ -143,13 +150,13 @@ struct vnop_close_args /* {
 } */;
 
 int
-nop_close(struct vnop_close_args *ap)
+nop_close(__unused struct vnop_close_args *ap)
 {
 	return (0);
 }
 
 int
-err_close(struct vnop_close_args *ap)
+err_close(__unused struct vnop_close_args *ap)
 {
 	return (ENOTSUP);
 }
@@ -162,13 +169,13 @@ struct vnop_access_args /* {
 } */;
 
 int
-nop_access(struct vnop_access_args *ap)
+nop_access(__unused struct vnop_access_args *ap)
 {
 	return (0);
 }
 
 int
-err_access(struct vnop_access_args *ap)
+err_access(__unused struct vnop_access_args *ap)
 {
 	return (ENOTSUP);
 }
@@ -181,13 +188,13 @@ struct vnop_getattr_args /* {
 } */;
 
 int
-nop_getattr(struct vnop_getattr_args *ap)
+nop_getattr(__unused struct vnop_getattr_args *ap)
 {
 	return (0);
 }
 
 int
-err_getattr(struct vnop_getattr_args *ap)
+err_getattr(__unused struct vnop_getattr_args *ap)
 {
 	return (ENOTSUP);
 }
@@ -200,59 +207,16 @@ struct vnop_setattr_args /* {
 } */;
 
 int
-nop_setattr(struct vnop_setattr_args *ap)
+nop_setattr(__unused struct vnop_setattr_args *ap)
 {
 	return (0);
 }
 
 int
-err_setattr(struct vnop_setattr_args *ap)
+err_setattr(__unused struct vnop_setattr_args *ap)
 {
 	return (ENOTSUP);
 }
-
-
-struct vnop_getattrlist_args /* {
-	struct vnode *a_vp;
-	struct attrlist *a_alist;
-	struct uio *a_uio;
-	int a_options;
-	vfs_context a_context;
-} */;
-
-int
-nop_getattrlist(struct vnop_getattrlist_args *ap)
-{
-	return (0);
-}
-
-int
-err_getattrlist(struct vnop_getattrlist_args *ap)
-{
-	return (ENOTSUP);
-}
-
-
-struct vnop_setattrlist_args /* {
-	struct vnode *a_vp;
-	struct attrlist *a_alist;
-	struct uio *a_uio;
-	int a_options;
-	vfs_context_t a_context;
-} */;
-
-int
-nop_setattrlist(struct vnop_setattrlist_args *ap)
-{
-	return (0);
-}
-
-int
-err_setattrlist(struct vnop_setattrlist_args *ap)
-{
-	return (ENOTSUP);
-}
-
 
 struct vnop_read_args /*  {
 	struct vnode *a_vp;
@@ -262,13 +226,13 @@ struct vnop_read_args /*  {
 } */;
 
 int
-nop_read(struct vnop_read_args *ap)
+nop_read(__unused struct vnop_read_args *ap)
 {
 	return (0);
 }
 
 int
-err_read(struct vnop_read_args *ap)
+err_read(__unused struct vnop_read_args *ap)
 {
 	return (ENOTSUP);
 }
@@ -282,13 +246,13 @@ struct vnop_write_args /*  {
 } */;
 
 int
-nop_write(struct vnop_write_args *ap)
+nop_write(__unused struct vnop_write_args *ap)
 {
 	return (0);
 }
 
 int
-err_write(struct vnop_write_args *ap)
+err_write(__unused struct vnop_write_args *ap)
 {
 	return (ENOTSUP);
 }
@@ -310,7 +274,7 @@ nop_ioctl(__unused struct vnop_ioctl_args *ap)
 }
 
 int
-err_ioctl(struct vnop_ioctl_args *ap)
+err_ioctl(__unused struct vnop_ioctl_args *ap)
 {
 	return (ENOTSUP);
 }
@@ -332,7 +296,7 @@ nop_select(__unused struct vnop_select_args *ap)
 }
 
 int
-err_select(struct vnop_select_args *ap)
+err_select(__unused struct vnop_select_args *ap)
 {
 	return (ENOTSUP);
 }
@@ -346,13 +310,13 @@ struct vnop_exchange_args /* {
 } */;
 
 int
-nop_exchange(struct vnop_exchange_args *ap)
+nop_exchange(__unused struct vnop_exchange_args *ap)
 {
 	return (0);
 }
 
 int
-err_exchange(struct vnop_exchange_args *ap)
+err_exchange(__unused struct vnop_exchange_args *ap)
 {
 	return (ENOTSUP);
 }
@@ -392,7 +356,7 @@ nop_mmap(__unused struct vnop_mmap_args *ap)
 }
 
 int
-err_mmap(struct vnop_mmap_args *ap)
+err_mmap(__unused struct vnop_mmap_args *ap)
 {
 	return (ENOTSUP);
 }
@@ -405,13 +369,13 @@ struct vnop_fsync_args /* {
 } */;
 
 int
-nop_fsync(struct vnop_fsync_args *ap)
+nop_fsync(__unused struct vnop_fsync_args *ap)
 {
 	return (0);
 }
 
 int
-err_fsync(struct vnop_fsync_args *ap)
+err_fsync(__unused struct vnop_fsync_args *ap)
 {
 	return (ENOTSUP);
 }
@@ -426,7 +390,7 @@ struct vnop_remove_args /* {
 } */;
 
 int
-nop_remove(struct vnop_remove_args *ap)
+nop_remove(__unused struct vnop_remove_args *ap)
 {
 	return (0);
 }
@@ -447,7 +411,7 @@ struct vnop_link_args /* {
 } */;
 
 int
-nop_link(struct vnop_link_args *ap)
+nop_link(__unused struct vnop_link_args *ap)
 {
 	return (0);
 }
@@ -471,7 +435,7 @@ struct vnop_rename_args /* {
 } */;
 
 int
-nop_rename(struct vnop_rename_args *ap)
+nop_rename(__unused struct vnop_rename_args *ap)
 {
 	return (0);
 }
@@ -493,13 +457,13 @@ struct vnop_mkdir_args /* {
 } */;
 
 int
-nop_mkdir(struct vnop_mkdir_args *ap)
+nop_mkdir(__unused struct vnop_mkdir_args *ap)
 {
 	return (0);
 }
 
 int
-err_mkdir(struct vnop_mkdir_args *ap)
+err_mkdir(__unused struct vnop_mkdir_args *ap)
 {
 	return (ENOTSUP);
 }
@@ -513,7 +477,7 @@ struct vnop_rmdir_args /* {
 } */;
 
 int
-nop_rmdir(struct vnop_rmdir_args *ap)
+nop_rmdir(__unused struct vnop_rmdir_args *ap)
 {
 	return (0);
 }
@@ -536,7 +500,7 @@ struct vnop_symlink_args /* {
 } */;
 
 int
-nop_symlink(struct vnop_symlink_args *ap)
+nop_symlink(__unused struct vnop_symlink_args *ap)
 {
 #if DIAGNOSTIC
 	if ((ap->a_cnp->cn_flags & HASBUF) == 0)
@@ -563,13 +527,13 @@ struct vnop_readdir_args /* {
 } */;
 
 int
-nop_readdir(struct vnop_readdir_args *ap)
+nop_readdir(__unused struct vnop_readdir_args *ap)
 {
 	return (0);
 }
 
 int
-err_readdir(struct vnop_readdir_args *ap)
+err_readdir(__unused struct vnop_readdir_args *ap)
 {
 	return (ENOTSUP);
 }
@@ -610,13 +574,13 @@ struct vnop_readlink_args /* {
 } */;
 
 int
-nop_readlink(struct vnop_readlink_args *ap)
+nop_readlink(__unused struct vnop_readlink_args *ap)
 {
 	return (0);
 }
 
 int
-err_readlink(struct vnop_readlink_args *ap)
+err_readlink(__unused struct vnop_readlink_args *ap)
 {
 	return (ENOTSUP);
 }
@@ -628,7 +592,7 @@ struct vnop_inactive_args /* {
 } */;
 
 int
-nop_inactive(struct vnop_inactive_args *ap)
+nop_inactive(__unused struct vnop_inactive_args *ap)
 {
 	return (0);
 }
@@ -647,13 +611,13 @@ struct vnop_reclaim_args /* {
 } */;
 
 int
-nop_reclaim(struct vnop_reclaim_args *ap)
+nop_reclaim(__unused struct vnop_reclaim_args *ap)
 {
 	return (0);
 }
 
 int
-err_reclaim(struct vnop_reclaim_args *ap)
+err_reclaim(__unused struct vnop_reclaim_args *ap)
 {
 	return (ENOTSUP);
 }
@@ -664,13 +628,13 @@ struct vnop_strategy_args /* {
 } */;
 
 int
-nop_strategy(struct vnop_strategy_args *ap)
+nop_strategy(__unused struct vnop_strategy_args *ap)
 {
 	return (0);
 }
 
 int
-err_strategy(struct vnop_strategy_args *ap)
+err_strategy(__unused struct vnop_strategy_args *ap)
 {
 	return (ENOTSUP);
 }
@@ -684,13 +648,13 @@ struct vnop_pathconf_args /* {
 } */;
 
 int
-nop_pathconf(struct vnop_pathconf_args *ap)
+nop_pathconf(__unused struct vnop_pathconf_args *ap)
 {
 	return (0);
 }
 
 int
-err_pathconf(struct vnop_pathconf_args *ap)
+err_pathconf(__unused struct vnop_pathconf_args *ap)
 {
 	return (ENOTSUP);
 }
@@ -706,13 +670,13 @@ struct vnop_advlock_args /* {
 } */;
 
 int
-nop_advlock(struct vnop_advlock_args *ap)
+nop_advlock(__unused struct vnop_advlock_args *ap)
 {
 	return (0);
 }
 
 int
-err_advlock(struct vnop_advlock_args *ap)
+err_advlock(__unused struct vnop_advlock_args *ap)
 {
 	return (ENOTSUP);
 }
@@ -753,7 +717,7 @@ nop_bwrite(struct vnop_bwrite_args *ap)
 }
 
 int
-err_bwrite(struct vnop_bwrite_args *ap)
+err_bwrite(__unused struct vnop_bwrite_args *ap)
 {
 	return (ENOTSUP);
 }
@@ -853,7 +817,7 @@ struct vnop_copyfile_args /*{
 }*/; 
 
 int
-nop_copyfile(struct vnop_copyfile_args *ap)
+nop_copyfile(__unused struct vnop_copyfile_args *ap)
 {
 	return (0);
 }
@@ -917,12 +881,12 @@ struct vnop_blockmap_args /* {
 	int a_flags;
 } */;
 
-int nop_blockmap(struct vnop_blockmap_args *ap)
+int nop_blockmap(__unused struct vnop_blockmap_args *ap)
 {
 	return (0);
 }
 
-int err_blockmap(struct vnop_blockmap_args *ap)
+int err_blockmap(__unused struct vnop_blockmap_args *ap)
 {
 	return (ENOTSUP);
 }

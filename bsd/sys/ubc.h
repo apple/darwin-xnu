@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 1999-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* 
  *	Header file for Unified Buffer Cache.
@@ -48,8 +54,11 @@ daddr64_t	ubc_offtoblk(struct vnode *, off_t);
 off_t	ubc_getsize(struct vnode *);
 int	ubc_setsize(struct vnode *, off_t);
 
-struct ucred *ubc_getcred(struct vnode *);
-int	ubc_setcred(struct vnode *, struct proc *);
+kauth_cred_t ubc_getcred(struct vnode *);
+#ifdef __APPLE_API_OBSOLETE
+/* This API continues to exist only until <rdar://4714366> is resolved */
+int	ubc_setcred(struct vnode *, struct proc *) __deprecated;
+#endif
 struct thread;
 int	ubc_setthreadcred(struct vnode *, struct proc *, struct thread *);
 
@@ -57,17 +66,40 @@ int     ubc_sync_range(vnode_t, off_t, off_t, int);
 errno_t ubc_msync(vnode_t, off_t, off_t, off_t *, int);
 int	ubc_pages_resident(vnode_t);
 
+/* code signing */
+struct cs_blob;
+int	ubc_cs_blob_add(vnode_t, cpu_type_t, off_t, vm_address_t, vm_size_t);
+struct cs_blob *ubc_cs_blob_get(vnode_t, cpu_type_t, off_t);
+struct cs_blob *ubc_get_cs_blobs(vnode_t);
+int	ubc_cs_getcdhash(vnode_t, off_t, unsigned char *);
+
 
 /* cluster IO routines */
 int	advisory_read(vnode_t, off_t, off_t, int);
+int	advisory_read_ext(vnode_t, off_t, off_t, int, int (*)(buf_t, void *), void *, int);
 
 int	cluster_read(vnode_t, struct uio *, off_t, int);
+int	cluster_read_ext(vnode_t, struct uio *, off_t, int, int (*)(buf_t, void *), void *);
+
 int	cluster_write(vnode_t, struct uio *, off_t, off_t, off_t, off_t, int);
+int	cluster_write_ext(vnode_t, struct uio *, off_t, off_t, off_t, off_t, int, int (*)(buf_t, void *), void *);
+
 int	cluster_pageout(vnode_t, upl_t, vm_offset_t, off_t, int, off_t, int);
+int	cluster_pageout_ext(vnode_t, upl_t, vm_offset_t, off_t, int, off_t, int, int (*)(buf_t, void *), void *);
+
 int	cluster_pagein(vnode_t, upl_t, vm_offset_t, off_t, int, off_t, int);
+int	cluster_pagein_ext(vnode_t, upl_t, vm_offset_t, off_t, int, off_t, int, int (*)(buf_t, void *), void *);
+
 int	cluster_push(vnode_t, int);
-int cluster_bp(buf_t);
-void cluster_zero(upl_t, vm_offset_t, int, buf_t);
+int	cluster_push_ext(vnode_t, int, int (*)(buf_t, void *), void *);
+
+int	cluster_bp(buf_t);
+int	cluster_bp_ext(buf_t, int (*)(buf_t, void *), void *);
+
+void	cluster_zero(upl_t, vm_offset_t, int, buf_t);
+
+int	cluster_copy_upl_data(uio_t, upl_t, int, int *);
+int	cluster_copy_ubc_data(vnode_t, uio_t, int *, int);
 
 
 /* UPL routines */
@@ -80,6 +112,7 @@ int	ubc_upl_abort(upl_t, int);
 int	ubc_upl_abort_range(upl_t, upl_offset_t, upl_size_t, int);
 
 upl_page_info_t *ubc_upl_pageinfo(upl_t);
+upl_size_t ubc_upl_maxbufsize(void);
 
 __END_DECLS
 

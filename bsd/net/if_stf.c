@@ -29,6 +29,12 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2006 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 /*
  * 6to4 interface, based on RFC3056.
@@ -102,70 +108,88 @@
 #include <netinet/ip_ecn.h>
 
 #include <netinet/ip_encap.h>
-#include <net/dlil.h>
+#include <net/kpi_interface.h>
+#include <net/kpi_protocol.h>
 
 
 #include <net/net_osdep.h>
 
 #include <net/bpf.h>
 
+#if CONFIG_MACF_NET
+#include <security/mac_framework.h>
+#endif
+
 #define IN6_IS_ADDR_6TO4(x)	(ntohs((x)->s6_addr16[0]) == 0x2002)
-#define GET_V4(x)	((struct in_addr *)(&(x)->s6_addr16[1]))
+#define GET_V4(x)	((const struct in_addr *)(&(x)->s6_addr16[1]))
 
 struct stf_softc {
-	struct ifnet	sc_if;	   /* common area */
-#ifdef __APPLE__
-	u_long sc_protocol_family; /* dlil protocol attached */
-#endif
+	ifnet_t				sc_if;	   /* common area */
+	u_long				sc_protocol_family; /* dlil protocol attached */
 	union {
 		struct route  __sc_ro4;
 		struct route_in6 __sc_ro6; /* just for safety */
 	} __sc_ro46;
 #define sc_ro	__sc_ro46.__sc_ro4
 	const struct encaptab *encap_cookie;
+	bpf_tap_mode		tap_mode;
+	bpf_packet_func		tap_callback;
 };
 
-static struct stf_softc *stf;
-
-#ifdef __APPLE__
 void stfattach (void);
-#endif
 
-#ifndef __APPLE__
-static MALLOC_DEFINE(M_STF, "stf", "6to4 Tunnel Interface");
-#endif
 static int ip_stf_ttl = 40;
 
 static void in_stf_input(struct mbuf *, int);
 extern  struct domain inetdomain;
 struct protosw in_stf_protosw =
 { SOCK_RAW,	&inetdomain,	IPPROTO_IPV6,	PR_ATOMIC|PR_ADDR,
-  in_stf_input, 0,	0,		rip_ctloutput,
-  0,
-  0,
+  in_stf_input, NULL,	NULL,		rip_ctloutput,
+  NULL,
+  NULL,		NULL,	NULL,	NULL,
+  NULL,
   &rip_usrreqs,
-  0,            rip_unlock,	0
+  NULL,		rip_unlock,	NULL, {NULL, NULL}, NULL, {0}
 };
 
 static int stf_encapcheck(const struct mbuf *, int, int, void *);
 static struct in6_ifaddr *stf_getsrcifa6(struct ifnet *);
-int stf_pre_output(struct ifnet *, u_long, register struct mbuf **,
-	const struct sockaddr *, caddr_t, char *, char *);
-static int stf_checkaddr4(struct stf_softc *, struct in_addr *,
+int stf_pre_output(struct ifnet *, protocol_family_t, struct mbuf **,
+	const struct sockaddr *, void *, char *, char *);
+static int stf_checkaddr4(struct stf_softc *, const struct in_addr *,
 	struct ifnet *);
 static int stf_checkaddr6(struct stf_softc *, struct in6_addr *,
 	struct ifnet *);
 static void stf_rtrequest(int, struct rtentry *, struct sockaddr *);
-int stf_ioctl(struct ifnet *, u_long, void *);
+static errno_t stf_ioctl(ifnet_t ifp, u_int32_t cmd, void *data);
+static errno_t stf_output(ifnet_t ifp, mbuf_t m);
 
-static
-int  stf_add_proto(
-	struct ifnet *ifp,
-	u_long protocol_family,
-	struct ddesc_head_str *desc_head)
-{       
+/*
+ * gif_input is the input handler for IP and IPv6 attached to gif
+ */
+static errno_t
+stf_media_input(
+	__unused ifnet_t	ifp,
+	protocol_family_t	protocol_family,
+	mbuf_t				m,
+	__unused char		*frame_header)
+{
+	proto_input(protocol_family, m);
+
+	return (0);
+}
+
+
+
+static errno_t
+stf_add_proto(
+	ifnet_t									ifp,
+	protocol_family_t						protocol_family,
+	__unused const struct ifnet_demux_desc	*demux_array,
+	__unused u_int32_t						demux_count)
+{
 	/* Only one protocol may be attached at a time */
-	struct stf_softc* stf = (struct stf_softc*)ifp;
+	struct stf_softc* stf = ifnet_softc(ifp);
 	if (stf->sc_protocol_family == 0)
 		stf->sc_protocol_family = protocol_family;
 	else {
@@ -176,115 +200,148 @@ int  stf_add_proto(
 	return 0;
 }
 
-static
-int  stf_del_proto(
-	struct ifnet *ifp,
-	u_long protocol_family)
-{   
-	if (((struct stf_softc*)ifp)->sc_protocol_family == protocol_family)
-		((struct stf_softc*)ifp)->sc_protocol_family = 0;
-	else
-		return ENOENT;
-
+static errno_t
+stf_del_proto(
+	ifnet_t				ifp,
+	protocol_family_t	protocol_family)
+{
+	if (((struct stf_softc*)ifnet_softc(ifp))->sc_protocol_family == protocol_family)
+		((struct stf_softc*)ifnet_softc(ifp))->sc_protocol_family = 0;
+	
 	return 0;
 }
 
-static int
-stf_attach_inet6(struct ifnet *ifp, u_long protocol_family)
-{       
-    struct dlil_proto_reg_str   reg;
-    int   stat, i;
+static errno_t
+stf_attach_inet6(
+	ifnet_t				ifp,
+	protocol_family_t	protocol_family)
+{
+    struct ifnet_attach_proto_param	reg;
+    errno_t							stat;
+    
+    if (protocol_family != PF_INET6)
+    	return EPROTONOSUPPORT;
 
 	bzero(&reg, sizeof(reg));
-    TAILQ_INIT(&reg.demux_desc_head); 
-    reg.interface_family = ifp->if_family;
-    reg.unit_number      = ifp->if_unit;
-    reg.pre_output       = stf_pre_output;
-    reg.protocol_family  = PF_INET6;
+    reg.input = stf_media_input;
+    reg.pre_output = stf_pre_output;
 
-    stat = dlil_attach_protocol(&reg);
+    stat = ifnet_attach_protocol(ifp, protocol_family, &reg);
+    if (stat && stat != EEXIST) {
+        printf("stf_attach_proto_family can't attach interface fam=%d\n",
+        	   protocol_family);
+    }
 
     return stat;
 }
 
-static int
+static errno_t
 stf_demux(
-	struct ifnet *ifp,
-	struct mbuf *m,
-	char *frame_ptr,
-	u_long *protocol_family)
+	ifnet_t					ifp,
+	__unused mbuf_t			m,
+	__unused char			*frame_ptr,
+	protocol_family_t		*protocol_family)
 {
-	*protocol_family = PF_INET6;
+	struct stf_softc* stf = ifnet_softc(ifp);
+	*protocol_family = stf->sc_protocol_family;
 	return 0;
 }
 
-void stf_reg_if_mods()
-{   
-	int error;
-
-	/* Register protocol registration functions */
-	if ( error = dlil_reg_proto_module(AF_INET6, APPLE_IF_FAM_STF, stf_attach_inet6, NULL) != 0)
-		kprintf("dlil_reg_proto_module failed for AF_INET6 error=%d\n", error);
+static errno_t
+stf_set_bpf_tap(
+	ifnet_t			ifp,
+	bpf_tap_mode	mode,
+	bpf_packet_func	callback)
+{
+	struct stf_softc	*sc = ifnet_softc(ifp);
+	
+	sc->tap_mode = mode;
+	sc->tap_callback = callback;
+	
+	return 0;
 }
 
 void
 stfattach(void)
 {
-	struct ifnet *ifp;
 	struct stf_softc *sc;
-	int i, error;
-	int err;
+	int error;
 	const struct encaptab *p;
+	struct ifnet_init_params	stf_init;
 
-	stf_reg_if_mods(); /* DLIL modules */
+	error = proto_register_plumber(PF_INET6, APPLE_IF_FAM_STF,
+								   stf_attach_inet6, NULL);
+	if (error != 0)
+		printf("proto_register_plumber failed for AF_INET6 error=%d\n", error);
 
 	sc = _MALLOC(sizeof(struct stf_softc), M_DEVBUF, M_WAITOK);
 	if (sc == 0) {
 		printf("stf softc attach failed\n" );
 		return;
 	}
-		
+	
 	bzero(sc, sizeof(*sc));
-	sc->sc_if.if_name = "stf";
-	sc->sc_if.if_unit = 0;
-
+	
 	p = encap_attach_func(AF_INET, IPPROTO_IPV6, stf_encapcheck,
 	    &in_stf_protosw, sc);
 	if (p == NULL) {
-		printf("%s: attach failed\n", if_name(&sc->sc_if));
+		printf("sftattach encap_attach_func failed\n");
 		FREE(sc, M_DEVBUF);
 		return;
 	}
 	sc->encap_cookie = p;
-	sc->sc_if.if_mtu    = IPV6_MMTU;
-	sc->sc_if.if_flags  = 0;
-	sc->sc_if.if_ioctl  = stf_ioctl;
-	sc->sc_if.if_output = NULL; /* processing done in pre_output */
-	sc->sc_if.if_type   = IFT_STF;
-	sc->sc_if.if_family= APPLE_IF_FAM_STF;
-	sc->sc_if.if_add_proto = stf_add_proto;
-	sc->sc_if.if_del_proto = stf_del_proto;
-	sc->sc_if.if_demux = stf_demux;
+	
+	bzero(&stf_init, sizeof(stf_init));
+	stf_init.name = "stf";
+	stf_init.unit = 0;
+	stf_init.type = IFT_STF;
+	stf_init.family = IFNET_FAMILY_STF;
+	stf_init.output = stf_output;
+	stf_init.demux = stf_demux;
+	stf_init.add_proto = stf_add_proto;
+	stf_init.del_proto = stf_del_proto;
+	stf_init.softc = sc;
+	stf_init.ioctl = stf_ioctl;
+	stf_init.set_bpf_tap = stf_set_bpf_tap;
+	
+	error = ifnet_allocate(&stf_init, &sc->sc_if);
+	if (error != 0) {
+		printf("stfattach, ifnet_allocate failed - %d\n", error);
+		encap_detach(sc->encap_cookie);
+		FREE(sc, M_DEVBUF);
+		return;
+	}
+	ifnet_set_mtu(sc->sc_if, IPV6_MMTU);
+	ifnet_set_flags(sc->sc_if, 0, 0xffff); /* clear all flags */
 #if 0
 	/* turn off ingress filter */
-	sc->sc_if.if_flags  |= IFF_LINK2;
+	ifnet_set_flags(sc->sc_if, IFF_LINK2, IFF_LINK2);
 #endif
-	sc->sc_if.if_snd.ifq_maxlen = IFQ_MAXLEN;
 
-	if (error = dlil_if_attach(&sc->sc_if))
-		printf("stfattach: can't dlil_if_attach error=%d\n");
-	else 
-		bpfattach(&sc->sc_if, DLT_NULL, sizeof(u_int));
+#if CONFIG_MACF_NET
+	mac_ifnet_label_init(&sc->sc_if);
+#endif
 	
-	return ;
+	error = ifnet_attach(sc->sc_if, NULL);
+	if (error != 0) {
+		printf("stfattach: ifnet_attach returned error=%d\n", error);
+		encap_detach(sc->encap_cookie);
+		ifnet_release(sc->sc_if);
+		FREE(sc, M_DEVBUF);
+		return;
+	}
+	
+	bpfattach(sc->sc_if, DLT_NULL, sizeof(u_int));
+	
+	return;
 }
 
 static int
-stf_encapcheck(m, off, proto, arg)
-	const struct mbuf *m;
-	int off;
-	int proto;
-	void *arg;
+stf_encapcheck(
+	const struct mbuf *m,
+	__unused int off,
+	int proto,
+	void *arg)
 {
 	struct ip ip;
 	struct in6_ifaddr *ia6;
@@ -295,23 +352,23 @@ stf_encapcheck(m, off, proto, arg)
 	if (sc == NULL)
 		return 0;
 
-	if ((sc->sc_if.if_flags & IFF_UP) == 0)
+	if ((ifnet_flags(sc->sc_if) & IFF_UP) == 0)
 		return 0;
 
 	/* IFF_LINK0 means "no decapsulation" */
-	if ((sc->sc_if.if_flags & IFF_LINK0) != 0)
+	if ((ifnet_flags(sc->sc_if) & IFF_LINK0) != 0)
 		return 0;
 
 	if (proto != IPPROTO_IPV6)
 		return 0;
 
 	/* LINTED const cast */
-	m_copydata((struct mbuf *)m, 0, sizeof(ip), (caddr_t)&ip);
+	mbuf_copydata(m, 0, sizeof(ip), &ip);
 
 	if (ip.ip_v != 4)
 		return 0;
 
-	ia6 = stf_getsrcifa6(&sc->sc_if);
+	ia6 = stf_getsrcifa6(sc->sc_if);
 	if (ia6 == NULL)
 		return 0;
 
@@ -343,8 +400,7 @@ stf_encapcheck(m, off, proto, arg)
 }
 
 static struct in6_ifaddr *
-stf_getsrcifa6(ifp)
-	struct ifnet *ifp;
+stf_getsrcifa6(struct ifnet *ifp)
 {
 	struct ifaddr *ia;
 	struct in_ifaddr *ia4;
@@ -387,30 +443,30 @@ stf_getsrcifa6(ifp)
 
 int
 stf_pre_output(
-	struct ifnet *ifp,
-	u_long protocol_family,
-	register struct mbuf **m0,
-	const struct sockaddr *dst,
-	caddr_t			rt,
-	char		     *frame_type,
-	char		     *address)
+	struct ifnet	*ifp,
+	__unused protocol_family_t  protocol_family,
+	struct mbuf	**m0,
+	const struct sockaddr	*dst,
+	__unused void *route,
+	__unused char *desk_linkaddr,
+	__unused char *frame_type)
 {
-	register struct mbuf *m = *m0;
+	struct mbuf *m = *m0;
 	struct stf_softc *sc;
-	struct sockaddr_in6 *dst6;
-	struct in_addr *in4;
-	struct sockaddr_in *dst4;
+	const struct sockaddr_in6 *dst6;
+	const struct in_addr *in4;
 	u_int8_t tos;
 	struct ip *ip;
 	struct ip6_hdr *ip6;
 	struct in6_ifaddr *ia6;
-	int error = 0 ;
+	struct sockaddr_in 	*dst4;
+	errno_t				result = 0;
 
-	sc = (struct stf_softc*)ifp;
-	dst6 = (struct sockaddr_in6 *)dst;
+	sc = ifnet_softc(ifp);
+	dst6 = (const struct sockaddr_in6 *)dst;
 
 	/* just in case */
-	if ((ifp->if_flags & IFF_UP) == 0) {
+	if ((ifnet_flags(ifp) & IFF_UP) == 0) {
 		printf("stf: IFF_DOWN\n");
 		return ENETDOWN;
 	}
@@ -425,7 +481,7 @@ stf_pre_output(
 		return ENETDOWN;
 	}
 
-	if (m->m_len < sizeof(*ip6)) {
+	if (mbuf_len(m) < sizeof(*ip6)) {
 		m = m_pullup(m, sizeof(*ip6));
 		if (!m) {
 			*m0 = NULL; /* makes sure this won't be double freed */
@@ -448,25 +504,14 @@ stf_pre_output(
 	}
 
 	if (ifp->if_bpf) {
-		/*
-		 * We need to prepend the address family as
-		 * a four byte field.  Cons up a dummy header
-		 * to pacify bpf.  This is safe because bpf
-		 * will only read from the mbuf (i.e., it won't
-		 * try to free it or keep a pointer a to it).
-		 */
-		struct mbuf m1;
+		/* We need to prepend the address family as a four byte field. */
 		u_int32_t af = AF_INET6;
 		
-		m1.m_next = m;
-		m1.m_len = 4;
-		m1.m_data = (char *)&af;
-		
-		bpf_mtap(ifp, &m1);
+		bpf_tap_out(ifp, 0, m, &af, sizeof(af));
 	}
 
 	M_PREPEND(m, sizeof(struct ip), M_DONTWAIT);
-	if (m && m->m_len < sizeof(struct ip))
+	if (m && mbuf_len(m) < sizeof(struct ip))
 		m = m_pullup(m, sizeof(struct ip));
 	if (m == NULL) {
 		*m0 = NULL; 
@@ -491,6 +536,7 @@ stf_pre_output(
 	if (dst4->sin_family != AF_INET ||
 	    bcmp(&dst4->sin_addr, &ip->ip_dst, sizeof(ip->ip_dst)) != 0) {
 		/* cache route doesn't match */
+		printf("stf_output: cached route doesn't match \n");
 		dst4->sin_family = AF_INET;
 		dst4->sin_len = sizeof(struct sockaddr_in);
 		bcopy(&ip->ip_dst, &dst4->sin_addr, sizeof(dst4->sin_addr));
@@ -507,19 +553,30 @@ stf_pre_output(
 		}
 	}
 
-	error = ip_output(m, NULL, &sc->sc_ro, 0, NULL);
-	if (error == 0)
-		return EJUSTRETURN;
-
-	*m0 = NULL; 
-	return error;
+	result = ip_output_list(m, 0, NULL, &sc->sc_ro, 0, NULL, NULL);
+	/* Assumption: ip_output will free mbuf on errors */
+	/* All the output processing is done here, don't let stf_output be called */
+	if (result == 0)
+		result = EJUSTRETURN;
+	*m0 = NULL;
+	return result;
 }
+static errno_t
+stf_output(
+	__unused ifnet_t	ifp,
+	__unused mbuf_t	m)
+{
+	/* All processing is done in stf_pre_output
+	 * this shouldn't be called as the pre_output returns "EJUSTRETURN"
+	 */
+	return 0;
+}	
 
 static int
-stf_checkaddr4(sc, in, inifp)
-	struct stf_softc *sc;
-	struct in_addr *in;
-	struct ifnet *inifp;	/* incoming interface */
+stf_checkaddr4(
+	struct stf_softc *sc,
+	const struct in_addr *in,
+	struct ifnet *inifp)	/* incoming interface */
 {
 	struct in_ifaddr *ia4;
 
@@ -554,7 +611,7 @@ stf_checkaddr4(sc, in, inifp)
 	/*
 	 * perform ingress filter
 	 */
-	if (sc && (sc->sc_if.if_flags & IFF_LINK2) == 0 && inifp) {
+	if (sc && (ifnet_flags(sc->sc_if) & IFF_LINK2) == 0 && inifp) {
 		struct sockaddr_in sin;
 		struct rtentry *rt;
 
@@ -566,7 +623,7 @@ stf_checkaddr4(sc, in, inifp)
 		if (!rt || rt->rt_ifp != inifp) {
 #if 1
 			log(LOG_WARNING, "%s: packet from 0x%x dropped "
-			    "due to ingress filter\n", if_name(&sc->sc_if),
+			    "due to ingress filter\n", if_name(sc->sc_if),
 			    (u_int32_t)ntohl(sin.sin_addr.s_addr));
 #endif
 			if (rt)
@@ -580,10 +637,10 @@ stf_checkaddr4(sc, in, inifp)
 }
 
 static int
-stf_checkaddr6(sc, in6, inifp)
-	struct stf_softc *sc;
-	struct in6_addr *in6;
-	struct ifnet *inifp;	/* incoming interface */
+stf_checkaddr6(
+	struct stf_softc *sc,
+	struct in6_addr *in6,
+	struct ifnet *inifp)	/* incoming interface */
 {
 	/*
 	 * check 6to4 addresses
@@ -604,20 +661,20 @@ stf_checkaddr6(sc, in6, inifp)
 }
 
 static void
-in_stf_input(m, off)
-	struct mbuf *m;
-	int off;
+in_stf_input(
+	struct mbuf *m,
+	int off)
 {
 	struct stf_softc *sc;
 	struct ip *ip;
-	struct ip6_hdr *ip6;
+	struct ip6_hdr ip6;
 	u_int8_t otos, itos;
 	int proto;
 	struct ifnet *ifp;
+	struct ifnet_stat_increment_param	stats;
 
 	ip = mtod(m, struct ip *);
 	proto = ip->ip_p;
-
 
 	if (proto != IPPROTO_IPV6) {
 		m_freem(m);
@@ -628,12 +685,16 @@ in_stf_input(m, off)
 
 	sc = (struct stf_softc *)encap_getarg(m);
 
-	if (sc == NULL || (sc->sc_if.if_flags & IFF_UP) == 0) {
+	if (sc == NULL || (ifnet_flags(sc->sc_if) & IFF_UP) == 0) {
 		m_freem(m);
 		return;
 	}
 
-	ifp = &sc->sc_if;
+	ifp = sc->sc_if;
+
+#if MAC_LABEL
+	mac_mbuf_label_associate_ifnet(ifp, m);
+#endif
 
 	/*
 	 * perform sanity check against outer src/dst.
@@ -646,55 +707,34 @@ in_stf_input(m, off)
 	}
 
 	otos = ip->ip_tos;
-	m_adj(m, off);
-
-	if (m->m_len < sizeof(*ip6)) {
-		m = m_pullup(m, sizeof(*ip6));
-		if (!m)
-			return;
-	}
-	ip6 = mtod(m, struct ip6_hdr *);
+	mbuf_copydata(m, off, sizeof(ip6), &ip6);
 
 	/*
 	 * perform sanity check against inner src/dst.
 	 * for source, perform ingress filter as well.
 	 */
-	if (stf_checkaddr6(sc, &ip6->ip6_dst, NULL) < 0 ||
-	    stf_checkaddr6(sc, &ip6->ip6_src, m->m_pkthdr.rcvif) < 0) {
+	if (stf_checkaddr6(sc, &ip6.ip6_dst, NULL) < 0 ||
+	    stf_checkaddr6(sc, &ip6.ip6_src, m->m_pkthdr.rcvif) < 0) {
 		m_freem(m);
 		return;
 	}
 
-	itos = (ntohl(ip6->ip6_flow) >> 20) & 0xff;
-	if ((ifp->if_flags & IFF_LINK1) != 0)
+	itos = (ntohl(ip6.ip6_flow) >> 20) & 0xff;
+	if ((ifnet_flags(ifp) & IFF_LINK1) != 0)
 		ip_ecn_egress(ECN_ALLOWED, &otos, &itos);
 	else
 		ip_ecn_egress(ECN_NOCARE, &otos, &itos);
-	ip6->ip6_flow &= ~htonl(0xff << 20);
-	ip6->ip6_flow |= htonl((u_int32_t)itos << 20);
+	ip6.ip6_flow &= ~htonl(0xff << 20);
+	ip6.ip6_flow |= htonl((u_int32_t)itos << 20);
 
 	m->m_pkthdr.rcvif = ifp;
+	mbuf_pkthdr_setheader(m, mbuf_data(m));
+	mbuf_adj(m, off);
 	
 	if (ifp->if_bpf) {
-		/*
-		 * We need to prepend the address family as
-		 * a four byte field.  Cons up a dummy header
-		 * to pacify bpf.  This is safe because bpf
-		 * will only read from the mbuf (i.e., it won't
-		 * try to free it or keep a pointer a to it).
-		 */
-		struct mbuf m0;
+		/* We need to prepend the address family as a four byte field. */
 		u_int32_t af = AF_INET6;
-		
-		m0.m_next = m;
-		m0.m_len = 4;
-		m0.m_data = (char *)&af;
-		
-#ifdef HAVE_OLD_BPF
-		bpf_mtap(ifp, &m0);
-#else
-		bpf_mtap(ifp->if_bpf, &m0);
-#endif
+		bpf_tap_in(ifp, 0, m, &af, sizeof(af));
 	}
 
 	/*
@@ -703,30 +743,31 @@ in_stf_input(m, off)
 	 * See net/if_gif.c for possible issues with packet processing
 	 * reorder due to extra queueing.
 	 */
-	proto_input(PF_INET6, m);
-	ifp->if_ipackets++;
-	ifp->if_ibytes += m->m_pkthdr.len;
-
+	bzero(&stats, sizeof(stats));
+	stats.packets_in = 1;
+	stats.bytes_in = mbuf_pkthdr_len(m);
+	mbuf_pkthdr_setrcvif(m, ifp);
+	ifnet_input(ifp, m, &stats);
+	
 	return;
 }
 
-/* ARGSUSED */
 static void
-stf_rtrequest(cmd, rt, sa)
-	int cmd;
-	struct rtentry *rt;
-	struct sockaddr *sa;
+stf_rtrequest(
+	__unused int cmd,
+	struct rtentry *rt,
+	__unused struct sockaddr *sa)
 {
 
 	if (rt)
 		rt->rt_rmx.rmx_mtu = IPV6_MMTU;
 }
 
-int
-stf_ioctl(ifp, cmd, data)
-	struct ifnet *ifp;
-	u_long cmd;
-	void *data;
+static errno_t
+stf_ioctl(
+	ifnet_t		ifp,
+	u_int32_t	cmd,
+	void		*data)
 {
 	struct ifaddr *ifa;
 	struct ifreq *ifr;

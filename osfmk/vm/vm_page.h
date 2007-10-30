@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -70,25 +76,60 @@
 #include <kern/lock.h>
 
 #include <kern/macro_help.h>
+#include <libkern/OSAtomic.h>
+
 
 /* 
- * Each page entered on the inactive queue obtains a ticket from a
- * particular ticket roll.  Pages granted tickets from a particular 
- * roll  generally flow through the queue as a group.  In this way when a
- * page with a ticket from a particular roll is pulled from the top of the
- * queue it is extremely likely that the pages near the top will have tickets
- * from the same or adjacent rolls.  In this way the proximity to the top
- * of the queue can be loosely ascertained by determining the identity of
- * the roll the pages ticket came from. 
+ * VM_PAGE_MIN_SPECULATIVE_AGE_Q through VM_PAGE_MAX_SPECULATIVE_AGE_Q
+ * represents a set of aging bins that are 'protected'...
+ *
+ * VM_PAGE_SPECULATIVE_AGED_Q is a list of the speculative pages that have
+ * not yet been 'claimed' but have been aged out of the protective bins
+ * this occurs in vm_page_speculate when it advances to the next bin 
+ * and discovers that it is still occupied... at that point, all of the
+ * pages in that bin are moved to the VM_PAGE_SPECULATIVE_AGED_Q.  the pages
+ * in that bin are all guaranteed to have reached at least the maximum age
+ * we allow for a protected page... they can be older if there is no
+ * memory pressure to pull them from the bin, or there are no new speculative pages
+ * being generated to push them out.
+ * this list is the one that vm_pageout_scan will prefer when looking 
+ * for pages to move to the underweight free list
+ * 
+ * VM_PAGE_MAX_SPECULATIVE_AGE_Q * VM_PAGE_SPECULATIVE_Q_AGE_MS
+ * defines the amount of time a speculative page is normally
+ * allowed to live in the 'protected' state (i.e. not available
+ * to be stolen if vm_pageout_scan is running and looking for
+ * pages)...  however, if the total number of speculative pages
+ * in the protected state exceeds our limit (defined in vm_pageout.c)
+ * and there are none available in VM_PAGE_SPECULATIVE_AGED_Q, then
+ * vm_pageout_scan is allowed to steal pages from the protected
+ * bucket even if they are underage.
+ *
+ * vm_pageout_scan is also allowed to pull pages from a protected
+ * bin if the bin has reached the "age of consent" we've set
  */
+#define VM_PAGE_MAX_SPECULATIVE_AGE_Q	10
+#define VM_PAGE_MIN_SPECULATIVE_AGE_Q	1
+#define VM_PAGE_SPECULATIVE_AGED_Q	0
+
+#define VM_PAGE_SPECULATIVE_Q_AGE_MS	500
 
 
-extern unsigned int	vm_page_ticket_roll;
-extern unsigned int	vm_page_ticket;
+struct vm_speculative_age_q {
+	/*
+	 * memory queue for speculative pages via clustered pageins
+	 */
+        queue_head_t	age_q;
+        mach_timespec_t	age_ts;
+};
 
 
-#define VM_PAGE_TICKETS_IN_ROLL  512
-#define VM_PAGE_TICKET_ROLL_IDS  16
+extern
+struct vm_speculative_age_q	vm_page_queue_speculative[];
+
+extern int			speculative_steal_index;
+extern int			speculative_age_index;
+
 
 /*
  *	Management of resident (logical) pages.
@@ -130,11 +171,10 @@ struct vm_page {
 	 * by the "page queues" lock.
 	 */
 	unsigned int	wire_count:16,	/* how many wired down maps use me? (O&P) */
-			page_ticket:4,	/* age of the page on the       */
-					/* inactive queue.		    */
 	/* boolean_t */	inactive:1,	/* page is in inactive list (P) */
 			active:1,	/* page is in active list (P) */
 			pageout_queue:1,/* page is on queue for pageout (P) */
+			speculative:1,	/* page is on speculative list (P) */
 			laundry:1,	/* page is being cleaned now (P)*/
 			free:1,		/* page is on free list (P) */
 			reference:1,	/* page has been used (P) */
@@ -142,20 +182,20 @@ struct vm_page {
 			gobbled:1,      /* page used internally (P) */
 			private:1,	/* Page should not be returned to
 					 *  the free list (P) */
-			zero_fill:1,
-			:0;
+			throttled:1,	/* pager is not responding (P) */
+			__unused_pageq_bits:5;	/* 5 bits available here */
 
 	/*
 	 * The following word of flags is protected
 	 * by the "VM object" lock.
 	 */
 	unsigned int
-	                page_error:8,   /* error from I/O operations */
 	/* boolean_t */	busy:1,		/* page is in transit (O) */
 			wanted:1,	/* someone is waiting for page (O) */
 			tabled:1,	/* page is in VP table (O) */
 			fictitious:1,	/* Physical page doesn't exist (O) */
-			no_isync:1,     /* page has not been instruction synced */
+			pmapped:1,     	/* page has been entered at some
+					 * point into a pmap (O) */
 			absent:1,	/* Data has been requested, but is
 					 *  not yet available (O) */
 			error:1,	/* Data manager was unable to provide
@@ -171,21 +211,26 @@ struct vm_page {
 			restart:1,	/* Page was pushed higher in shadow
 					   chain by copy_call-related pagers;
 					   start again at top of chain */
-			lock_supplied:1,/* protection supplied by pager (O) */
-	/* vm_prot_t */	page_lock:3,	/* Uses prohibited by pager (O) */
-	/* vm_prot_t */	unlock_request:3,/* Outstanding unlock request (O) */
 			unusual:1,	/* Page is absent, error, restart or
 					   page locked */
 			encrypted:1,	/* encrypted for secure swap (O) */
+			encrypted_cleaning:1,	/* encrypting page */
 			list_req_pending:1, /* pagein/pageout alt mechanism */
 					    /* allows creation of list      */
 					    /* requests on pages that are   */
 					    /* actively being paged.        */
-			dump_cleaning:1;   /* set by the pageout daemon when */
+			dump_cleaning:1,   /* set by the pageout daemon when */
 					   /* a page being cleaned is       */
 					   /* encountered and targeted as   */
 					   /* a pageout candidate           */
-        /* we've used up all 32 bits */
+			cs_validated:1,    /* code-signing: page was checked */	
+			cs_tainted:1,	   /* code-signing: page is tainted */
+			no_cache:1,	   /* page is not to be cached and */
+					   /* should be reused ahead of    */
+					   /* other pages		   */
+	                deactivated:1,
+			zero_fill:1,
+			__unused_object_bits:9;  /* 9 bits available here */
 
 	ppnum_t		phys_page;	/* Physical address of page, passed
 					 *  to pmap_enter (read-only) */
@@ -220,18 +265,43 @@ typedef struct vm_page	*vm_page_t;
  *	some useful check on a page structure.
  */
 
-#define VM_PAGE_CHECK(mem)
+#define VM_PAGE_CHECK(mem) do {} while (0)
+
+/*     Page coloring:
+ *
+ *     The free page list is actually n lists, one per color,
+ *     where the number of colors is a function of the machine's
+ *     cache geometry set at system initialization.  To disable
+ *     coloring, set vm_colors to 1 and vm_color_mask to 0.
+ *     The boot-arg "colors" may be used to override vm_colors.
+ *     Note that there is little harm in having more colors than needed.
+ */
+ 
+#define MAX_COLORS      128
+#define	DEFAULT_COLORS	32
+
+extern
+unsigned int	vm_colors;		/* must be in range 1..MAX_COLORS */
+extern
+unsigned int	vm_color_mask;		/* must be (vm_colors-1) */
+extern
+unsigned int	vm_cache_geometry_colors; /* optimal #colors based on cache geometry */
 
 /*
  *	Each pageable resident page falls into one of three lists:
  *
  *	free	
- *		Available for allocation now.
+ *		Available for allocation now.  The free list is
+ *		actually an array of lists, one per color.
  *	inactive
  *		Not referenced in any map, but still has an
  *		object/offset-page mapping, and may be dirty.
  *		This is the list of pages that should be
- *		paged out next.
+ *		paged out next.  There are actually two
+ *		inactive lists, one for pages brought in from
+ *		disk or other backing store, and another
+ *		for "zero-filled" pages.  See vm_pageout_scan()
+ *		for the distinction and usage.
  *	active
  *		A list of pages which have been placed in
  *		at least one physical map.  This list is
@@ -239,14 +309,18 @@ typedef struct vm_page	*vm_page_t;
  */
 
 extern
-vm_page_t	vm_page_queue_free;	/* memory free queue */
+queue_head_t	vm_page_queue_free[MAX_COLORS];	/* memory free queue */
+extern
+queue_head_t	vm_lopage_queue_free;		/* low memory free queue */
 extern
 vm_page_t	vm_page_queue_fictitious;	/* fictitious free queue */
 extern
 queue_head_t	vm_page_queue_active;	/* active memory queue */
 extern
-queue_head_t	vm_page_queue_inactive;	/* inactive memory queue */
+queue_head_t	vm_page_queue_inactive;	/* inactive memory queue for normal pages */
+extern
 queue_head_t	vm_page_queue_zf;	/* inactive memory queue for zero fill */
+queue_head_t	vm_page_queue_throttled;	/* memory queue for throttled pageout pages */
 
 extern
 vm_offset_t	first_phys_addr;	/* physical address for first_page */
@@ -254,7 +328,7 @@ extern
 vm_offset_t	last_phys_addr;		/* physical address for last_page */
 
 extern
-unsigned int	vm_page_free_count;	/* How many pages are free? */
+unsigned int	vm_page_free_count;	/* How many pages are free? (sum of all colors) */
 extern
 unsigned int	vm_page_fictitious_count;/* How many fictitious pages are free? */
 extern
@@ -262,7 +336,15 @@ unsigned int	vm_page_active_count;	/* How many pages are active? */
 extern
 unsigned int	vm_page_inactive_count;	/* How many pages are inactive? */
 extern
+unsigned int	vm_page_throttled_count;/* How many inactives are throttled */
+extern
+unsigned int	vm_page_speculative_count;	/* How many speculative pages are unclaimed? */
+extern
 unsigned int	vm_page_wire_count;	/* How many pages are wired? */
+extern
+vm_map_size_t	vm_user_wire_limit;	/* How much memory can be locked by a user? */
+extern
+vm_map_size_t	vm_global_user_wire_limit;	/* How much memory can be locked system wide by users? */
 extern
 unsigned int	vm_page_free_target;	/* How many do we want free? */
 extern
@@ -270,12 +352,18 @@ unsigned int	vm_page_free_min;	/* When to wakeup pageout */
 extern
 unsigned int	vm_page_inactive_target;/* How many do we want inactive? */
 extern
+unsigned int	vm_page_inactive_min;   /* When do wakeup pageout */
+extern
 unsigned int	vm_page_free_reserved;	/* How many pages reserved to do pageout */
 extern
-unsigned int	vm_page_throttled_count;/* Count of zero-fill allocations throttled */
+unsigned int	vm_page_zfill_throttle_count;/* Count of zero-fill allocations throttled */
 extern
 unsigned int	vm_page_gobble_count;
 
+extern
+unsigned int	vm_page_speculative_unused;
+extern
+unsigned int	vm_page_speculative_used;
 extern
 unsigned int	vm_page_purgeable_count;/* How many pages are purgeable now ? */
 extern
@@ -284,13 +372,20 @@ uint64_t	vm_page_purged_count;	/* How many pages got purged so far ? */
 decl_mutex_data(,vm_page_queue_lock)
 				/* lock on active and inactive page queues */
 decl_mutex_data(,vm_page_queue_free_lock)
-				/* lock on free page queue */
+				/* lock on free page queue array (ie, all colors) */
 
 extern unsigned int	vm_page_free_wanted;
 				/* how many threads are waiting for memory */
 
+extern unsigned int	vm_page_free_wanted_privileged;
+				/* how many VM privileged threads are waiting for memory */
+
 extern vm_offset_t	vm_page_fictitious_addr;
 				/* (fake) phys_addr of fictitious pages */
+
+extern vm_offset_t	vm_page_guard_addr;
+				/* (fake) phys_addr of guard pages */
+
 
 extern boolean_t	vm_page_deactivate_hint;
 
@@ -307,10 +402,10 @@ extern uint64_t		max_valid_dma_address;
  */
 extern void		vm_page_bootstrap(
 					vm_offset_t	*startp,
-					vm_offset_t	*endp);
+					vm_offset_t	*endp) __attribute__((section("__TEXT, initcode")));
 
-extern void		vm_page_module_init(void);
-
+extern void		vm_page_module_init(void) __attribute__((section("__TEXT, initcode")));
+					
 extern void		vm_page_create(
 					ppnum_t		start,
 					ppnum_t		end);
@@ -321,11 +416,10 @@ extern vm_page_t	vm_page_lookup(
 
 extern vm_page_t	vm_page_grab_fictitious(void);
 
+extern vm_page_t	vm_page_grab_guard(void);
+
 extern void		vm_page_release_fictitious(
 					vm_page_t page);
-
-extern boolean_t	vm_page_convert(
-					vm_page_t	page);
 
 extern void		vm_page_more_fictitious(void);
 
@@ -349,11 +443,18 @@ extern vm_page_t	vm_page_alloclo(
 					vm_object_t		object,
 					vm_object_offset_t	offset);
 
+extern vm_page_t	vm_page_alloc_guard(
+	vm_object_t		object,
+	vm_object_offset_t	offset);
+
 extern void		vm_page_init(
 					vm_page_t	page,
 					ppnum_t		phys_page);
 
 extern void		vm_page_free(
+					vm_page_t	page);
+
+extern void		vm_page_free_prepare(
 					vm_page_t	page);
 
 extern void		vm_page_activate(
@@ -362,10 +463,21 @@ extern void		vm_page_activate(
 extern void		vm_page_deactivate(
 					vm_page_t	page);
 
+extern void		vm_page_lru(
+					vm_page_t	page);
+
+extern void		vm_page_speculate(
+					vm_page_t	page,
+					boolean_t	new);
+
+extern void		vm_page_speculate_ageit(
+					struct vm_speculative_age_q *aq);
+
 extern void		vm_page_rename(
 					vm_page_t		page,
 					vm_object_t		new_object,
-					vm_object_offset_t	new_offset);
+					vm_object_offset_t	new_offset,
+					boolean_t		encrypted_ok);
 
 extern void		vm_page_insert(
 					vm_page_t		page,
@@ -410,6 +522,8 @@ extern void		vm_set_page_size(void);
 extern void		vm_page_gobble(
 				        vm_page_t      page);
 
+extern void		vm_page_validate_cs(vm_page_t	page);
+
 /*
  *	Functions implemented as macros. m->wanted and m->busy are
  *	protected by the object lock.
@@ -453,46 +567,88 @@ extern void		vm_page_gobble(
 			vm_page_more_fictitious();			\
 		MACRO_END
 
-#define VM_PAGE_THROTTLED()						\
+#define VM_PAGE_ZFILL_THROTTLED()						\
 		(vm_page_free_count < vm_page_free_min &&		\
-		 !(current_thread()->options & TH_OPT_VMPRIV) && 			\
-		 ++vm_page_throttled_count)
+		 !(current_thread()->options & TH_OPT_VMPRIV) &&	\
+		 ++vm_page_zfill_throttle_count)
 
 #define	VM_PAGE_WAIT()		((void)vm_page_wait(THREAD_UNINT))
 
 #define vm_page_lock_queues()	mutex_lock(&vm_page_queue_lock)
 #define vm_page_unlock_queues()	mutex_unlock(&vm_page_queue_lock)
 
+#define vm_page_lockspin_queues()	mutex_lock_spin(&vm_page_queue_lock)
+
 #define VM_PAGE_QUEUES_REMOVE(mem)				\
 	MACRO_BEGIN						\
 	assert(!mem->laundry);					\
 	if (mem->active) {					\
 		assert(mem->object != kernel_object);		\
-		assert(!mem->inactive);				\
+		assert(!mem->inactive && !mem->speculative);	\
+		assert(!mem->throttled);			\
 		queue_remove(&vm_page_queue_active,		\
 			mem, vm_page_t, pageq);			\
-		mem->pageq.next = NULL;				\
-		mem->pageq.prev = NULL;			       	\
 		mem->active = FALSE;				\
-		if (!mem->fictitious)				\
+		if (!mem->fictitious) {				\
 			vm_page_active_count--;			\
+		} else {					\
+			assert(mem->phys_page ==		\
+			       vm_page_fictitious_addr);	\
+		}						\
 	}							\
 								\
-	if (mem->inactive) {					\
+	else if (mem->inactive) {				\
 		assert(mem->object != kernel_object);		\
-		assert(!mem->active);				\
+		assert(!mem->active && !mem->speculative);	\
+		assert(!mem->throttled);			\
 		if (mem->zero_fill) {				\
 			queue_remove(&vm_page_queue_zf,		\
 			mem, vm_page_t, pageq);			\
+			vm_zf_queue_count--;			\
 		} else {					\
 			queue_remove(&vm_page_queue_inactive,	\
 			mem, vm_page_t, pageq);			\
 		}						\
-		mem->pageq.next = NULL;				\
-		mem->pageq.prev = NULL;			       	\
 		mem->inactive = FALSE;				\
-		if (!mem->fictitious)				\
+		if (!mem->fictitious) {				\
 			vm_page_inactive_count--;		\
+			vm_purgeable_q_advance_all(1);		\
+		} else {					\
+			assert(mem->phys_page ==		\
+			       vm_page_fictitious_addr);	\
+		}						\
+	}							\
+								\
+	else if (mem->throttled) {				\
+		assert(!mem->active && !mem->inactive);		\
+		assert(!mem->speculative);			\
+		queue_remove(&vm_page_queue_throttled,		\
+			     mem, vm_page_t, pageq);		\
+		mem->throttled = FALSE;				\
+		if (!mem->fictitious)				\
+			vm_page_throttled_count--;		\
+	}							\
+								\
+	else if (mem->speculative) {				\
+		assert(!mem->active && !mem->inactive);		\
+		assert(!mem->throttled);			\
+		assert(!mem->fictitious);			\
+                remque(&mem->pageq);				\
+		mem->speculative = FALSE;			\
+		vm_page_speculative_count--;			\
+	}							\
+	mem->pageq.next = NULL;					\
+	mem->pageq.prev = NULL;					\
+	MACRO_END
+
+
+#define VM_PAGE_CONSUME_CLUSTERED(mem)				\
+	MACRO_BEGIN						\
+	if (mem->clustered) {					\
+	        assert(mem->object);				\
+	        mem->object->pages_used++;			\
+		mem->clustered = FALSE;				\
+		OSAddAtomic(1, (SInt32 *)&vm_page_speculative_used);	\
 	}							\
 	MACRO_END
 

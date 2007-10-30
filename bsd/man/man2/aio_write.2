@@ -35,16 +35,18 @@
 .Sh SYNOPSIS
 .In aio.h
 .Ft int
-.Fn aio_write "struct aiocb *iocb"
+.Fo aio_write
+.Fa "struct aiocb *aiocbp"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn aio_write
 system call allows the calling process to write
-.Fa iocb->aio_nbytes
+.Fa aiocbp->aio_nbytes
 from the buffer pointed to by
-.Fa iocb->aio_buf
+.Fa aiocbp->aio_buf
 to the descriptor
-.Fa iocb->aio_fildes .
+.Fa aiocbp->aio_fildes .
 The call returns immediately after the write request has been enqueued
 to the descriptor; the write may or may not have completed at the time
 the call returns.  If the request could not be enqueued, generally due
@@ -54,24 +56,24 @@ request.
 If
 .Dv O_APPEND
 is set for
-.Fa iocb->aio_fildes ,
+.Fa aiocbp->aio_fildes ,
 .Fn aio_write
 operations append to the file in the same order as the calls were
 made.  If
 .Dv O_APPEND
 is not set for the file descriptor, the write operation will occur at
 the absolute position from the beginning of the file plus
-.Fa iocb->aio_offset .
+.Fa aiocbp->aio_offset .
 .Pp
 If
 .Dv _POSIX_PRIORITIZED_IO
 is defined, and the descriptor supports it, then the enqueued
 operation is submitted at a priority equal to that of the calling
 process minus
-.Fa iocb->aio_reqprio .
+.Fa aiocbp->aio_reqprio .
 .Pp
 The
-.Fa iocb
+.Fa aiocbp
 pointer may be subsequently used as an argument to
 .Fn aio_return
 and
@@ -80,20 +82,20 @@ in order to determine return or error status for the enqueued operation
 while it is in progress.
 .Pp
 If the request is successfully enqueued, the value of
-.Fa iocb->aio_offset
+.Fa aiocbp->aio_offset
 can be modified during the request as context, so this value must not
 be referenced after the request is enqueued.
 .Sh RESTRICTIONS
 The Asynchronous I/O Control Block structure pointed to by
-.Fa iocb
+.Fa aiocbp
 and the buffer that the
-.Fa iocb->aio_buf
+.Fa aiocbp->aio_buf
 member of that structure references must remain valid until the
 operation has completed.  For this reason, use of auto (stack) variables
 for these objects is discouraged.
 .Pp
 The asynchronous I/O control buffer
-.Fa iocb
+.Fa aiocbp
 should be zeroed before the
 .Fn aio_write
 system call to avoid passing bogus context information to the kernel.
@@ -103,9 +105,9 @@ buffer contents after the request has been enqueued, but before the
 request has completed, are not allowed.
 .Pp
 If the file offset in
-.Fa iocb->aio_offset
+.Fa aiocbp->aio_offset
 is past the offset maximum  for
-.Fa iocb->aio_fildes ,
+.Fa aiocbp->aio_fildes ,
 no I/O will occur.
 .Sh RETURN VALUES
 .Rv -std aio_write
@@ -114,8 +116,11 @@ The
 .Fn aio_write
 system call will fail if:
 .Bl -tag -width Er
+.\" ==========
 .It Bq Er EAGAIN
-The request was not queued because of system resource limitations.
+Due to system resource limitations,
+the request was not queued.
+.\" ==========
 .It Bq Er ENOSYS
 The
 .Fn aio_write
@@ -138,18 +143,20 @@ returned in
 .Va errno .
 .Pp
 .Bl -tag -width Er
+.\" ==========
 .It Bq Er EBADF
 The
-.Fa iocb->aio_fildes
+.Fa aiocbp->aio_fildes
 argument
 is invalid, or is not opened for writing.
+.\" ==========
 .It Bq Er EINVAL
 The offset
-.Fa iocb->aio_offset
+.Fa aiocbp->aio_offset
 is not valid, the priority specified by
-.Fa iocb->aio_reqprio
+.Fa aiocbp->aio_reqprio
 is not a valid priority, or the number of bytes specified by
-.Fa iocb->aio_nbytes
+.Fa aiocbp->aio_nbytes
 is not valid.
 .El
 .Pp
@@ -164,17 +171,20 @@ system call is either one of the error returns from the
 .Xr write 2
 system call, or one of:
 .Bl -tag -width Er
+.\" ==========
 .It Bq Er EBADF
 The
-.Fa iocb->aio_fildes
+.Fa aiocbp->aio_fildes
 argument
 is invalid for writing.
+.\" ==========
 .It Bq Er ECANCELED
 The request was explicitly canceled via a call to
 .Fn aio_cancel .
+.\" ==========
 .It Bq Er EINVAL
 The offset
-.Fa iocb->aio_offset
+.Fa aiocbp->aio_offset
 would be invalid.
 .El
 .Sh SEE ALSO
@@ -200,5 +210,5 @@ This manual page was written by
 .An Wes Peters Aq wes@softweyr.com .
 .Sh BUGS
 Invalid information in
-.Fa iocb->_aiocb_private
+.Fa aiocbp->_aiocb_private
 may confuse the kernel.

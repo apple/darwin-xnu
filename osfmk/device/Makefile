@@ -43,7 +43,8 @@ COMP_FILES	= ${DEVICE_FILES}
 .ORDER: ${DEVICE_FILES}
 
 ${DEVICE_FILES}: device.defs
-	${MIG} ${MIGFLAGS} ${MIGKSFLAGS}	\
+	@echo MIG $@
+	$(_v)${MIG} ${MIGFLAGS} ${MIGKSFLAGS}	\
 	-header /dev/null			\
 	-user /dev/null				\
 	-sheader device_server.h		\
@@ -51,7 +52,6 @@ ${DEVICE_FILES}: device.defs
 	$<
 
 
+
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-
-

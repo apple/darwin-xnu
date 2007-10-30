@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -339,6 +345,9 @@ struct interrupt_frame {
 	int		  if_efl;	/* saved efl(iret_i) */
 };
 
+extern const char *trap_type[];
+extern int	TRAP_TYPES;
+
 /* 
  * Figure out the next frame up in the call stack.  
  * For trap(), we print the address of the faulting instruction and 
@@ -357,66 +366,65 @@ db_nextframe(
 	int			frame_type,	/* in */
 	thread_t		thr_act)	/* in */
 {
-        x86_saved_state32_t	*iss32;
-	extern char *	trap_type[];
-	extern int	TRAP_TYPES;
-
+	x86_saved_state32_t	*iss32;
 	struct interrupt_frame *ifp;
 	task_t task = (thr_act != THREAD_NULL)? thr_act->task: TASK_NULL;
 
 	switch(frame_type) {
 	case TRAP:
-	    /*
-	     * We know that trap() has 1 argument and we know that
-	     * it is an (x86_saved_state32_t *).
-	     */
-	    iss32 = (x86_saved_state32_t *)
-	                 db_get_task_value((int)&((*fp)->f_arg0),4,FALSE,task);
-	    
-	    if (iss32->trapno >= 0 && iss32->trapno < TRAP_TYPES) {
-	            db_printf(">>>>> %s trap at ",
-			      trap_type[iss32->trapno]);
-	    } else {
-	            db_printf(">>>>> trap (number %d) at ",
-			      iss32->trapno & 0xffff);
-	    }
-	    db_task_printsym(iss32->eip, DB_STGY_PROC, task);
-	    db_printf(" <<<<<\n");
-	    *fp = (struct i386_frame *)iss32->ebp;
-	    *ip = (db_addr_t)iss32->eip;
-	    break;
-	case INTERRUPT:
-	    if (*lfp == 0) {
-		db_printf(">>>>> interrupt <<<<<\n");
-		goto miss_frame;
-	    }
-	    db_printf(">>>>> interrupt at "); 
-	    ifp = (struct interrupt_frame *)(*lfp);
-	    *fp = ifp->if_frame;
-	    if (ifp->if_iretaddr == db_return_to_iret_symbol_value) {
-	            *ip = ((x86_saved_state32_t *) ifp->if_edx)->eip;
-	    } else
-	            *ip = (db_addr_t) ifp->if_eip;
-	    db_task_printsym(*ip, DB_STGY_PROC, task);
-	    db_printf(" <<<<<\n");
-	    break;
-	case SYSCALL:
-	    if (thr_act != THREAD_NULL && thr_act->machine.pcb) {
-		    iss32 = (x86_saved_state32_t *)thr_act->machine.pcb->iss;
+		/*
+		 * We know that trap() has 1 argument and we know that
+		 * it is an (strcut x86_saved_state32_t *).
+		 */
+		iss32 = (x86_saved_state32_t *)
+			db_get_task_value((int)&((*fp)->f_arg0),4,FALSE,task);
 
-		    *ip = (db_addr_t)(iss32->eip);
-		    *fp = (struct i386_frame *)(iss32->ebp);
-	    }
-	    break;
-	    /* falling down for unknown case */
-	default:
-	miss_frame:
-	    *ip = (db_addr_t)
-		db_get_task_value((int)&(*fp)->f_retaddr, 4, FALSE, task);
-	    *lfp = *fp;
-	    *fp = (struct i386_frame *)
-		db_get_task_value((int)&(*fp)->f_frame, 4, FALSE, task);
-	    break;
+		if (iss32->trapno >= 0 && iss32->trapno < TRAP_TYPES) {
+			db_printf(">>>>> %s trap at ",
+					trap_type[iss32->trapno]);
+		} else {
+			db_printf(">>>>> trap (number %d) at ",
+					iss32->trapno & 0xffff);
+		}
+		db_task_printsym(iss32->eip, DB_STGY_PROC, task);
+		db_printf(" <<<<<\n");
+		*fp = (struct i386_frame *)iss32->ebp;
+		*ip = (db_addr_t)iss32->eip;
+		break;
+
+	case INTERRUPT:
+		if (*lfp == 0) {
+			db_printf(">>>>> interrupt <<<<<\n");
+			goto miss_frame;
+		}
+		db_printf(">>>>> interrupt at "); 
+		ifp = (struct interrupt_frame *)(*lfp);
+		*fp = ifp->if_frame;
+		if (ifp->if_iretaddr == db_return_to_iret_symbol_value) {
+			*ip = ((x86_saved_state32_t *)ifp->if_edx)->eip;
+		} else
+			*ip = (db_addr_t)ifp->if_eip;
+		db_task_printsym(*ip, DB_STGY_PROC, task);
+		db_printf(" <<<<<\n");
+		break;
+
+	case SYSCALL:
+		if (thr_act != THREAD_NULL && thr_act->machine.pcb) {
+			iss32 = (x86_saved_state32_t *)thr_act->machine.pcb->iss;
+
+			*ip = (db_addr_t)(iss32->eip);
+			*fp = (struct i386_frame *)(iss32->ebp);
+		}
+		break;
+
+	default:	/* falling down for unknown case */
+miss_frame:
+		*ip = (db_addr_t)
+			db_get_task_value((int)&(*fp)->f_retaddr, 4, FALSE, task);
+		*lfp = *fp;
+		*fp = (struct i386_frame *)
+			db_get_task_value((int)&(*fp)->f_frame, 4, FALSE, task);
+		break;
 	}
 }
 
@@ -501,7 +509,7 @@ db_stack_trace_cmd(
 	if (count == -1)
 	    count = 65535;
 
-    next_thread:
+next_thread:
 	top_act = THREAD_NULL;
 
 	user_frame = 0;
@@ -559,8 +567,8 @@ db_stack_trace_cmd(
 
 		    iss32 = (x86_saved_state32_t *)th->machine.pcb->iss;
 
-		    frame = (struct i386_frame *) (iss32->ebp);
-		    callpc = (db_addr_t) (iss32->eip);
+			frame = (struct i386_frame *) (iss32->ebp);
+			callpc = (db_addr_t) (iss32->eip);
 
 		} else {
 		    int cpu;
@@ -580,8 +588,8 @@ db_stack_trace_cmd(
 			     */
 		            iss32 = (x86_saved_state32_t *)th->machine.pcb->iss;
 
-			    frame = (struct i386_frame *) (iss32->ebp);
-			    callpc = (db_addr_t) (iss32->eip);
+				    frame = (struct i386_frame *) (iss32->ebp);
+				    callpc = (db_addr_t) (iss32->eip);
 		    } else {
 			    if (cpu == real_ncpus) {
 			    register struct x86_kernel_state32 *iks;
@@ -612,12 +620,12 @@ db_stack_trace_cmd(
 
 			    iss32 = (x86_saved_state32_t *)cpu_datap(cpu)->cpu_kdb_saved_state;
 
-			    frame = (struct i386_frame *) (iss32->ebp);
-			    callpc = (db_addr_t) (iss32->eip);
+				    frame = (struct i386_frame *) (iss32->ebp);
+				    callpc = (db_addr_t) (iss32->eip);
+			    }
 			}
 		    }
 	        }
-	    }
 	} else {
 	    frame = (struct i386_frame *)addr;
 	    th = (db_default_act)? db_default_act: current_thread();
@@ -752,7 +760,7 @@ db_stack_trace_cmd(
 	    }
 	    db_printf("\n");
 
-	next_frame:
+next_frame:
 	    lastcallpc = callpc;
 	    db_nextframe(&lastframe, &frame, &callpc, frame_type,
 			 (user_frame) ? th : THREAD_NULL);
@@ -788,7 +796,7 @@ db_stack_trace_cmd(
 	    }
 	}
 
-    thread_done:
+thread_done:
 	if (trace_all_threads) {
 	    if (top_act != THREAD_NULL)
 		th = top_act;
@@ -810,15 +818,18 @@ extern boolean_t kdp_trans_off;
  *		
  *		dr [entaddr]
  */
-void db_display_real(db_expr_t addr, __unused int have_addr,  __unused db_expr_t count,  __unused char * modif) {
-
+void
+db_display_real(db_expr_t addr, boolean_t have_addr, db_expr_t count,
+		char *modif)
+{
 	int				i;
 	unsigned int xbuf[8];
 	unsigned read_result = 0;
 /* Print 256 bytes */
 	for(i=0; i<8; i++) {
 
-/* Do a physical read using kdp_vm_read(), rather than replicating the same
+/*
+ * Do a physical read using kdp_vm_read(), rather than replicating the same
  * facility
  */
 		kdp_trans_off = 1;
@@ -839,10 +850,11 @@ void db_display_real(db_expr_t addr, __unused int have_addr,  __unused db_expr_t
 /*
  *	Displays all of the kmods in the system.
  *
-  *	dk
+ *		dk
  */
 void 
-db_display_kmod(__unused db_expr_t addr, __unused int have_addr, __unused db_expr_t count, __unused char *modif)
+db_display_kmod(__unused db_expr_t addr, __unused boolean_t have_addr,
+		__unused db_expr_t count, __unused char *modif)
 {
 
 	kmod_info_t    *kmd;
@@ -859,6 +871,10 @@ db_display_kmod(__unused db_expr_t addr, __unused int have_addr, __unused db_exp
 			kmd, kmd->address, strt, end, kmd->name, kmd->version);
 		kmd = kmd->next;
 	}
+}
 
-	return;
+void
+db_display_iokit(__unused db_expr_t addr, __unused boolean_t have_addr,
+		__unused db_expr_t count, __unused char *modif)
+{
 }

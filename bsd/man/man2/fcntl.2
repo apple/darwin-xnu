@@ -42,12 +42,16 @@
 .Sh SYNOPSIS
 .Fd #include <fcntl.h>
 .Ft int
-.Fn fcntl "int fd" "int cmd" "int arg"
+.Fo fcntl
+.Fa "int fildes"
+.Fa "int cmd"
+.Fa "..."
+.Fc
 .Sh DESCRIPTION
 .Fn Fcntl
 provides for control over descriptors.
 The argument
-.Fa fd
+.Fa fildes
 is a descriptor to be operated on by
 .Fa cmd
 as follows:
@@ -77,7 +81,7 @@ system calls.
 .El
 .It Dv F_GETFD
 Get the close-on-exec flag associated with the file descriptor
-.Fa fd .
+.Fa fildes .
 If the low-order bit of the returned value is 0,
 the file will remain open across
 .Fn exec ,
@@ -87,7 +91,7 @@ otherwise the file will be closed upon execution of
 is ignored).
 .It Dv F_SETFD
 Set the close-on-exec flag associated with
-.Fa fd
+.Fa fildes
 to the low order bit of
 .Fa arg
 (0 or 1 as above).
@@ -120,6 +124,12 @@ process groups are specified by supplying
 as negative, otherwise 
 .Fa arg
 is interpreted as a process ID.
+.It Dv F_GETPATH
+Get the path of the file descriptor 
+.Fa Fildes .  
+The argument must be a buffer of size
+.Sy MAXPATHLEN
+or greater.
 .It Dv F_PREALLOCATE
 Preallocate file storage space.
 .It Dv F_SETSIZE
@@ -160,11 +170,11 @@ flush all buffered data to
 the permanent storage device
 .Fa ( arg
 is ignored).
-This is currently
-only implemented on HFS filesystems and
-the operation may take quite a while to
-complete.  Certain FireWire drives have
-also been known to ignore this request.
+This is currently implemented on HFS, MS-DOS (FAT),
+and Universal Disk Format (UDF) file systems.
+The operation may take quite a while to complete.
+Certain FireWire drives have also been known
+to ignore the request to flush their buffered data.
 .El
 .Pp
 The flags for the
@@ -471,9 +481,11 @@ Otherwise, a value of -1 is returned and
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
-.Fn Fcntl
-will fail if:
+The
+.Fn fcntl
+system call will fail if:
 .Bl -tag -width Er
+.\" ==========
 .It Bq Er EACCES
 The argument
 .Fa cmd
@@ -498,6 +510,7 @@ is either
 or
 .Dv F_WRITEBOOTSTRAP
 and the calling process does not have root privileges.
+.\" ==========
 .It Bq Er EBADF
 .Fa Fildes
 is not a valid open file descriptor.
@@ -544,24 +557,21 @@ is
 and
 .Fa fildes
 is not a valid file descriptor open for reading.
-.It Bq Er EMFILE
-.Fa Cmd
-is
-.Dv F_DUPFD
-and the maximum allowed number of file descriptors are currently
-open.
+.\" ==========
 .It Bq Er EDEADLK
 The argument
 .Fa cmd
 is
 .Dv F_SETLKW ,
 and a deadlock condition was detected.
+.\" ==========
 .It Bq Er EINTR
 The argument
 .Fa cmd
 is
 .Dv F_SETLKW ,
 and the function was interrupted by a signal.
+.\" ==========
 .It Bq Er EINVAL
 .Fa Cmd
 is
@@ -610,6 +620,14 @@ is either
 or
 .Dv F_WRITEBOOTSTRAP
 and the operation was attempted on a non-HFS disk type.
+.\" ==========
+.It Bq Er EMFILE
+.Fa Cmd
+is
+.Dv F_DUPFD
+and the maximum allowed number of file descriptors are currently
+open.
+.\" ==========
 .It Bq Er EMFILE
 The argument
 .Fa cmd
@@ -620,6 +638,7 @@ process are already in use,
 or no file descriptors greater than or equal to
 .Fa arg
 are available.
+.\" ==========
 .It Bq Er ENOLCK
 The argument
 .Fa cmd
@@ -629,6 +648,16 @@ or
 .Dv F_SETLKW ,
 and satisfying the lock or unlock request would result in the
 number of locked regions in the system exceeding a system-imposed limit.
+.\" ==========
+.It Bq Er EOVERFLOW
+A return value would overflow its representation.
+For example,
+.Fa cmd
+is F_GETLK, F_SETLK, or F_SETLKW
+and the smallest (or, if l_len is non-zero, the largest) offset
+of a byte in the requested segment
+will not fit in an object of type off_t.
+.\" ==========
 .It Bq Er ESRCH
 .Fa Cmd
 is

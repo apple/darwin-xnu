@@ -42,7 +42,11 @@
 .Sh SYNOPSIS
 .Fd #include <sys/ioctl.h>
 .Ft int
-.Fn ioctl "int d" "unsigned long request" "char *argp"
+.Fo ioctl
+.Fa "int fildes"
+.Fa "unsigned long request"
+.Fa "..."
+.Fc
 .Sh DESCRIPTION
 The
 .Fn ioctl
@@ -53,7 +57,7 @@ may be controlled with
 .Fn ioctl
 requests.
 The argument
-.Fa d
+.Fa fildes
 must be an open file descriptor.
 .Pp
 An  ioctl
@@ -78,32 +82,36 @@ is set to indicate the error.
 .Fn Ioctl
 will fail if:
 .Bl -tag -width Er
+.\" ==========
 .It Bq Er EBADF
-.Fa d
+.Fa fildes
 is not a valid descriptor.
-.It Bq Er ENOTTY
-.Fa d
-is not associated with a character
-special device.
-.It Bq Er ENOTTY
-The specified request does not apply to the kind
-of object that the descriptor
-.Fa d
-references.
+.\" ==========
 .It Bq Er EINVAL
 .Fa Request
 or
 .Fa argp
 is not valid.
+.\" ==========
+.It Bq Er ENOTTY
+.Fa fildes
+is not associated with a character
+special device.
+.\" ==========
+.It Bq Er ENOTTY
+The specified request does not apply to the kind
+of object that the descriptor
+.Fa fildes
+references.
 .El
 .Sh SEE ALSO
-.Xr mt 1 ,
 .Xr cdio 1 ,
 .Xr chio 1 ,
+.Xr mt 1 ,
 .Xr execve 2 ,
 .Xr fcntl 2 ,
-.Xr tty 4 ,
-.Xr intro 4
+.Xr intro 4 ,
+.Xr tty 4
 .Sh HISTORY
 An
 .Fn ioctl

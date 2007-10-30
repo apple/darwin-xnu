@@ -1,28 +1,35 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/buf.h>
+#include <sys/buf_internal.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/mount.h>
@@ -33,18 +40,22 @@
 #include "hfs_cnode.h"
 #include "hfs_dbg.h"
 #include "hfs_endian.h"
+#include "hfs_btreeio.h"
 
 #include "hfscommon/headers/FileMgrInternal.h"
 #include "hfscommon/headers/BTreesPrivate.h"
 
 #define FORCESYNCBTREEWRITES 0
 
+/* From bsd/vfs/vfs_bio.c */
+extern int bdwrite_internal(struct buf *, int);
 
 static int ClearBTNodes(struct vnode *vp, long blksize, off_t offset, off_t amount);
+static int btree_journal_modify_block_end(struct hfsmount *hfsmp, struct buf *bp);
 
 
 __private_extern__
-OSStatus SetBTreeBlockSize(FileReference vp, ByteCount blockSize, ItemCount minBlockCount)
+OSStatus SetBTreeBlockSize(FileReference vp, ByteCount blockSize, __unused ItemCount minBlockCount)
 {
 	BTreeControlBlockPtr	bTreePtr;
 	
@@ -61,7 +72,7 @@ OSStatus SetBTreeBlockSize(FileReference vp, ByteCount blockSize, ItemCount minB
 
 
 __private_extern__
-OSStatus GetBTreeBlock(FileReference vp, UInt32 blockNum, GetBlockOptions options, BlockDescriptor *block)
+OSStatus GetBTreeBlock(FileReference vp, u_int32_t blockNum, GetBlockOptions options, BlockDescriptor *block)
 {
     OSStatus	 retval = E_NONE;
     struct buf   *bp = NULL;
@@ -112,7 +123,7 @@ OSStatus GetBTreeBlock(FileReference vp, UInt32 blockNum, GetBlockOptions option
             	 * This is necessary on big endian since the test below won't trigger.
             	 */
                 retval = hfs_swap_BTNode (block, vp, kSwapBTNodeBigToHost);
-            } else if (*((UInt16 *)((char *)block->buffer + (block->blockSize - sizeof (UInt16)))) == 0x0e00) {
+            } else if (*((u_int16_t *)((char *)block->buffer + (block->blockSize - sizeof (u_int16_t)))) == 0x0e00) {
 				/*
 				 * The node was left in the cache in non-native order, so swap it.
 				 * This only happens on little endian, after the node is written
@@ -156,7 +167,7 @@ void ModifyBlockStart(FileReference vp, BlockDescPtr blockPtr)
 	
     bp = (struct buf *) blockPtr->blockHeader;
     if (bp == NULL) {
-		panic("ModifyBlockStart: null bp  for blockdescptr 0x%x?!?\n", blockPtr);
+		panic("ModifyBlockStart: null bp  for blockdescptr %p?!?\n", blockPtr);
 		return;
     }
 
@@ -164,9 +175,10 @@ void ModifyBlockStart(FileReference vp, BlockDescPtr blockPtr)
 	blockPtr->isModified = 1;
 }
 
-static int
-btree_journal_modify_block_end(struct hfsmount *hfsmp, struct buf *bp)
+static void
+btree_swap_node(struct buf *bp, __unused void *arg)
 {
+    //	struct hfsmount *hfsmp = (struct hfsmount *)arg;
 	int retval;
     struct vnode *vp = buf_vnode(bp);
     BlockDescriptor block;
@@ -179,12 +191,17 @@ btree_journal_modify_block_end(struct hfsmount *hfsmp, struct buf *bp)
     block.blockReadFromDisk = (buf_fromcache(bp) == 0);
     block.blockSize = buf_count(bp);
 
-    // XXXdbg have to swap the data before it goes in the journal
+    // swap the data now that this node is ready to go to disk
     retval = hfs_swap_BTNode (&block, vp, kSwapBTNodeHostToBig);
     if (retval)
-    	panic("btree_journal_modify_block_end: about to write corrupt node!\n");
+    	panic("btree_swap_node: about to write corrupt node!\n");
+}
 
-    return journal_modify_block_end(hfsmp->jnl, bp);
+
+static int
+btree_journal_modify_block_end(struct hfsmount *hfsmp, struct buf *bp)
+{
+    return journal_modify_block_end(hfsmp->jnl, bp, btree_swap_node, hfsmp);
 }
 
 
@@ -192,7 +209,6 @@ __private_extern__
 OSStatus ReleaseBTreeBlock(FileReference vp, BlockDescPtr blockPtr, ReleaseBlockOptions options)
 {
     struct hfsmount	*hfsmp = VTOHFS(vp);
-    extern int bdwrite_internal(struct buf *, int);
     OSStatus	retval = E_NONE;
     struct buf *bp = NULL;
 
@@ -215,7 +231,7 @@ OSStatus ReleaseBTreeBlock(FileReference vp, BlockDescPtr blockPtr, ReleaseBlock
         if (options & kForceWriteBlock) {
 			if (hfsmp->jnl) {
 				if (blockPtr->isModified == 0) {
-					panic("hfs: releaseblock: modified is 0 but forcewrite set! bp 0x%x\n", bp);
+					panic("hfs: releaseblock: modified is 0 but forcewrite set! bp %p\n", bp);
 				}
 
 				retval = btree_journal_modify_block_end(hfsmp, bp);
@@ -235,8 +251,6 @@ OSStatus ReleaseBTreeBlock(FileReference vp, BlockDescPtr blockPtr, ReleaseBlock
                  * isn't going to work.
                  *
                  */
-                extern int count_lock_queue(void);
-
                 /* Don't hog all the buffers... */
                 if (count_lock_queue() > kMaxLockedMetaBuffers) {
                      hfs_btsync(vp, HFS_SYNCTRANS);
@@ -253,7 +267,7 @@ OSStatus ReleaseBTreeBlock(FileReference vp, BlockDescPtr blockPtr, ReleaseBlock
              */
 			if (hfsmp->jnl) {
 				if (blockPtr->isModified == 0) {
-					panic("hfs: releaseblock: modified is 0 but markdirty set! bp 0x%x\n", bp);
+					panic("hfs: releaseblock: modified is 0 but markdirty set! bp %p\n", bp);
 				}
 				retval = btree_journal_modify_block_end(hfsmp, bp);
 				blockPtr->isModified = 0;
@@ -390,8 +404,8 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 	if ((retval == 0) &&
 	    ((VCBTOHFS(vcb)->hfs_flags & HFS_METADATA_ZONE) == 0) &&
 	    (vcb->nextAllocation > startAllocation) &&
-	    ((vcb->nextAllocation + fileblocks) < vcb->totalBlocks)) {
-		vcb->nextAllocation += fileblocks;
+	    ((vcb->nextAllocation + fileblocks) < vcb->allocLimit)) {
+		HFS_UPDATE_NEXT_ALLOCATION(vcb, vcb->nextAllocation + fileblocks); 
 	}
 		
 	filePtr->fcbEOF = (u_int64_t)filePtr->ff_blocks * (u_int64_t)vcb->blockSize;
@@ -543,19 +557,15 @@ ClearBTNodes(struct vnode *vp, long blksize, off_t offset, off_t amount)
 
 extern char  hfs_attrname[];
 
-extern int  hfs_attrkeycompare(HFSPlusAttrKey *searchKey, HFSPlusAttrKey *trialKey);
-
-int  hfs_create_attr_btree(struct hfsmount *hfsmp, uint32_t nodesize, uint32_t nodecnt);
-
 /*
  * Create an HFS+ Attribute B-tree File.
  *
- * A journal transaction must be already started.
+ * No global resources should be held.
  */
 int
-hfs_create_attr_btree(struct hfsmount *hfsmp, uint32_t nodesize, uint32_t nodecnt)
+hfs_create_attr_btree(struct hfsmount *hfsmp, u_int32_t nodesize, u_int32_t nodecnt)
 {
-	struct vnode* vp = NULL;
+	struct vnode* vp = NULLVP;
 	struct cat_desc cndesc;
 	struct cat_attr cnattr;
 	struct cat_fork cfork;
@@ -567,22 +577,45 @@ hfs_create_attr_btree(struct hfsmount *hfsmp, uint32_t nodesize, uint32_t nodecn
 	void * buffer;
 	u_int16_t *index;
 	u_int16_t  offset;
+	int intrans = 0;
 	int result;
+again:
+	/*
+	 * Serialize creation using HFS_CREATING_BTREE flag.
+	 */
+	lck_mtx_lock(&hfsmp->hfs_mutex);
+	if (hfsmp->hfs_flags & HFS_CREATING_BTREE) {
+			/* Someone else beat us, wait for them to finish. */
+			(void) msleep(hfsmp->hfs_attribute_cp, &hfsmp->hfs_mutex,
+			              PDROP | PINOD, "hfs_create_attr_btree", 0);
+			if (hfsmp->hfs_attribute_vp) {
+				return (0);
+			}
+			goto again;
+	}
+	hfsmp->hfs_flags |= HFS_CREATING_BTREE;
+	lck_mtx_unlock(&hfsmp->hfs_mutex);
 
-	printf("Creating HFS+ Attribute B-tree File (%d nodes) on %s\n", nodecnt, hfsmp->vcbVN);
+	/* Check if were out of usable disk space. */
+	if ((hfs_freeblks(hfsmp, 1) == 0)) {
+		result = ENOSPC;
+		goto exit;
+	}
 
 	/*
 	 * Set up Attribute B-tree vnode
+	 * (this must be done before we start a transaction
+	 *  or take any system file locks)
 	 */
 	bzero(&cndesc, sizeof(cndesc));
 	cndesc.cd_parentcnid = kHFSRootParentID;
 	cndesc.cd_flags |= CD_ISMETA;
-	cndesc.cd_nameptr = hfs_attrname;
+	cndesc.cd_nameptr = (const u_int8_t *)hfs_attrname;
 	cndesc.cd_namelen = strlen(hfs_attrname);
 	cndesc.cd_cnid = kHFSAttributesFileID;
 
 	bzero(&cnattr, sizeof(cnattr));
-	cnattr.ca_nlink = 1;
+	cnattr.ca_linkcount = 1;
 	cnattr.ca_mode = S_IFREG;
 	cnattr.ca_fileid = cndesc.cd_cnid;
 
@@ -590,9 +623,9 @@ hfs_create_attr_btree(struct hfsmount *hfsmp, uint32_t nodesize, uint32_t nodecn
 	cfork.cf_clump = nodesize * nodecnt;
 
 	result = hfs_getnewvnode(hfsmp, NULL, NULL, &cndesc, 0, &cnattr, &cfork, &vp);
-	if (result)
-		return (result);
-
+	if (result) {
+		goto exit;
+	}
 	/*
 	 * Set up Attribute B-tree control block
 	 */
@@ -616,6 +649,13 @@ hfs_create_attr_btree(struct hfsmount *hfsmp, uint32_t nodesize, uint32_t nodecn
 	/*
 	 * Allocate some space
 	 */
+	if (hfs_start_transaction(hfsmp) != 0) {
+		result = EINVAL;
+		goto exit;
+	}
+	intrans = 1;
+
+	/* Note ExtendBTreeFile will acquire the necessary system file locks. */
 	result = ExtendBTreeFile(vp, nodesize, cfork.cf_clump);
 	if (result)
 		goto exit;
@@ -644,7 +684,7 @@ hfs_create_attr_btree(struct hfsmount *hfsmp, uint32_t nodesize, uint32_t nodecn
 		panic("hfs_create_attr_btree: bad buffer size (%d)\n", buf_size(bp));
 
 	bzero(buffer, nodesize);
-	index = (int16_t *)buffer;
+	index = (u_int16_t *)buffer;
 
 	/* FILL IN THE NODE DESCRIPTOR:  */
 	ndp = (BTNodeDescriptor *)buffer;
@@ -654,7 +694,7 @@ hfs_create_attr_btree(struct hfsmount *hfsmp, uint32_t nodesize, uint32_t nodecn
 	index[(nodesize / 2) - 1] = offset;
 
 	/* FILL IN THE HEADER RECORD:  */
-	bthp = (BTHeaderRec *)((UInt8 *)buffer + offset);
+	bthp = (BTHeaderRec *)((u_int8_t *)buffer + offset);
 	bthp->nodeSize     = nodesize;
 	bthp->totalNodes   = btcb->totalNodes;
 	bthp->freeNodes    = btcb->freeNodes;
@@ -684,21 +724,38 @@ hfs_create_attr_btree(struct hfsmount *hfsmp, uint32_t nodesize, uint32_t nodecn
 	if (result)
 		goto exit;
 
-	/* Publish new btree file */
+	/* Update vp/cp for attribute btree */
+	lck_mtx_lock(&hfsmp->hfs_mutex);
+	hfsmp->hfs_attribute_cp = VTOC(vp);
 	hfsmp->hfs_attribute_vp = vp;
-	(void) hfs_flushvolumeheader(hfsmp, MNT_WAIT, HFS_ALTFLUSH);
+	lck_mtx_unlock(&hfsmp->hfs_mutex);
 
+	(void) hfs_flushvolumeheader(hfsmp, MNT_WAIT, HFS_ALTFLUSH);
 exit:
-	hfs_unlock(VTOC(vp));
+	if (vp) {
+		hfs_unlock(VTOC(vp));
+	}
 	if (result) {
 		if (btcb) {
 			FREE (btcb, M_TEMP);
 		}
-		vnode_put(vp);
-	//	hfs_truncate();  /* XXX need to give back blocks */
+		if (vp) {
+			vnode_put(vp);
+		}
+		/* XXX need to give back blocks ? */
 	}
+	if (intrans) {
+		hfs_end_transaction(hfsmp);
+	}
+
+	/*
+	 * All done, clear HFS_CREATING_BTREE, and wake up any sleepers.
+	 */
+	lck_mtx_lock(&hfsmp->hfs_mutex);
+	hfsmp->hfs_flags &= ~HFS_CREATING_BTREE;
+	wakeup((caddr_t)hfsmp->hfs_attribute_cp);
+	lck_mtx_unlock(&hfsmp->hfs_mutex);
+
 	return (result);
 }
-
-
 

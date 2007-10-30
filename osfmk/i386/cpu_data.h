@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -39,13 +45,16 @@
 #include <mach/i386/thread_status.h>
 #include <i386/rtclock.h>
 #include <i386/pmCPU.h>
+#include <i386/cpu_topology.h>
+
+#include <i386/vmx/vmx_cpu.h>
 
 /*
  * Data structures referenced (anonymously) from per-cpu data:
  */
-struct cpu_core;
 struct cpu_cons_buffer;
 struct cpu_desc_table;
+struct mca_state;
 
 
 /*
@@ -57,12 +66,20 @@ typedef struct rtclock_timer {
 	boolean_t	has_expired;
 } rtclock_timer_t;
 
-typedef struct {
+typedef struct rtc_nanotime {
 	uint64_t	tsc_base;		/* timestamp */
 	uint64_t	ns_base;		/* nanoseconds */
 	uint32_t	scale;			/* tsc -> nanosec multiplier */
 	uint32_t	shift;			/* tsc -> nanosec shift/div */
+						/* shift is overloaded with
+						 * lower 32bits of tsc_freq
+						 * on slower machines (SLOW_TSC_THRESHOLD) */
+	uint32_t	generation;		/* 0 == being updated */
+	uint32_t	spare1;
 } rtc_nanotime_t;
+
+#define	SLOW_TSC_THRESHOLD	1000067800	/* TSC is too slow for regular nanotime() algorithm */
+
 
 typedef struct {
 	struct i386_tss         *cdi_ktss;
@@ -129,15 +146,15 @@ typedef struct cpu_data
 	int			cpu_running;
 	uint64_t		rtclock_intr_deadline;
 	rtclock_timer_t		rtclock_timer;
-        boolean_t		cpu_is64bit;
-        task_map_t		cpu_task_map;
-        addr64_t		cpu_task_cr3;
-        addr64_t		cpu_active_cr3;
-        addr64_t		cpu_kernel_cr3;
+	boolean_t		cpu_is64bit;
+	task_map_t		cpu_task_map;
+	addr64_t		cpu_task_cr3;
+	addr64_t		cpu_active_cr3;
+	addr64_t		cpu_kernel_cr3;
 	cpu_uber_t		cpu_uber;
 	void			*cpu_chud;
 	void			*cpu_console_buf;
-	struct cpu_core		*cpu_core;		/* cpu's parent core */
+	struct x86_lcpu		lcpu;
 	struct processor	*cpu_processor;
 	struct cpu_pmap		*cpu_pmap;
 	struct cpu_desc_table	*cpu_desc_tablep;
@@ -147,40 +164,48 @@ typedef struct cpu_data
 #ifdef MACH_KDB
 	/* XXX Untested: */
 	int			cpu_db_pass_thru;
-	vm_offset_t	cpu_db_stacks;
-	void		*cpu_kdb_saved_state;
-	spl_t		cpu_kdb_saved_ipl;
+	vm_offset_t		cpu_db_stacks;
+	void			*cpu_kdb_saved_state;
+	spl_t			cpu_kdb_saved_ipl;
 	int			cpu_kdb_is_slave;
 	int			cpu_kdb_active;
 #endif /* MACH_KDB */
 	boolean_t		cpu_iflag;
 	boolean_t		cpu_boot_complete;
 	int			cpu_hibernate;
-	pmsd			pms;					/* Power Management Stepper control */
-	uint64_t		rtcPop;			/* when the etimer wants a timer pop */
-	
-	vm_offset_t	cpu_copywindow_base;
-	uint64_t	*cpu_copywindow_pdp;
-	
-	vm_offset_t	cpu_physwindow_base;
-	uint64_t	*cpu_physwindow_ptep;
-	void 		*cpu_hi_iss;
-	boolean_t	cpu_tlb_invalid;
-	
-	uint64_t	*cpu_pmHpet;		/* Address of the HPET for this processor */
-	uint32_t	cpu_pmHpetVec;		/* Interrupt vector for HPET for this processor */
-/*	Statistics */
-	pmStats_t	cpu_pmStats;		/* Power management data */
-	uint32_t	cpu_hwIntCnt[256];		/* Interrupt counts */
-	
+
+	vm_offset_t		cpu_copywindow_base;
+	uint64_t		*cpu_copywindow_pdp;
+
+	vm_offset_t		cpu_physwindow_base;
+	uint64_t		*cpu_physwindow_ptep;
+	void 			*cpu_hi_iss;
+	boolean_t		cpu_tlb_invalid;
+	uint32_t		cpu_hwIntCnt[256];		/* Interrupt counts */
 	uint64_t		cpu_dr7; /* debug control register */
+	uint64_t		cpu_int_event_time;	/* intr entry/exit time */
+	vmx_cpu_t		cpu_vmx;		/* wonderful world of virtualization */
+	struct mca_state	*cpu_mca_state;		/* State at MC fault */
+	uint64_t		cpu_uber_arg_store;	/* Double mapped address
+							 * of current thread's
+							 * uu_arg array.
+							 */
+	uint64_t		cpu_uber_arg_store_valid; /* Double mapped
+							   * address of pcb
+							   * arg store
+							   * validity flag.
+							   */
+
+							  
 } cpu_data_t;
 
 extern cpu_data_t	*cpu_data_ptr[];  
 extern cpu_data_t	cpu_data_master;  
 
 /* Macro to generate inline bodies to retrieve per-cpu data fields. */
+#ifndef offsetof
 #define offsetof(TYPE,MEMBER) ((size_t) &((TYPE *)0)->MEMBER)
+#endif /* offsetof */
 #define CPU_DATA_GET(member,type)					\
 	type ret;							\
 	__asm__ volatile ("movl %%gs:%P1,%0"				\
@@ -232,11 +257,6 @@ static inline int
 get_cpu_phys_number(void)
 {
 	CPU_DATA_GET(cpu_phys_number,int)
-}
-static inline struct
-cpu_core * get_cpu_core(void)
-{
-	CPU_DATA_GET(cpu_core,struct cpu_core *)
 }
 
 static inline void

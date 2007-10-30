@@ -42,13 +42,16 @@
 .Sh SYNOPSIS
 .Fd #include <sys/socket.h>
 .Ft int
-.Fn shutdown "int s" "int how"
+.Fo shutdown
+.Fa "int socket"
+.Fa "int how"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn shutdown
 call causes all or part of a full-duplex connection on
 the socket associated with
-.Fa s
+.Fa socket
 to be shut down.
 If
 .Fa how
@@ -65,19 +68,27 @@ If
 is 
 .Dv SHUT_RDWR ,
 further sends and receives will be disallowed.
-.Sh DIAGNOSTICS
-A 0 is returned if the call succeeds, -1 if it fails.
+.Sh RETURN VALUES
+.Rv -std shutdown
 .Sh ERRORS
 The call succeeds unless:
 .Bl -tag -width Er
+.\" ===========
 .It Bq Er EBADF
-.Fa S
+.Fa Socket
 is not a valid descriptor.
-.It Bq Er ENOTSOCK
-.Fa S
-is a file, not a socket.
+.\" ===========
+.It Bq Er EINVAL
+The
+.Fa how
+argument is invalid.
+.\" ===========
 .It Bq Er ENOTCONN
 The specified socket is not connected.
+.\" ===========
+.It Bq Er ENOTSOCK
+.Fa Socket
+is a file, not a socket.
 .El
 .Sh SEE ALSO
 .Xr connect 2 ,

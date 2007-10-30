@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1997 by Apple Computer, Inc., all rights reserved
@@ -38,9 +44,8 @@
 #include <sys/ioctl.h>
 #include <sys/tty.h>
 #include <sys/conf.h>
+#include <dev/ppc/cons.h>
 
-
-extern int	nulldev();
 
 struct bdevsw	bdevsw[] =
 {
@@ -88,15 +93,26 @@ struct bdevsw	bdevsw[] =
 int	nblkdev = sizeof (bdevsw) / sizeof (bdevsw[0]);
 
 extern struct tty *km_tty[];
-extern int	consopen(), consclose(), consread(), conswrite(), consioctl(),
-		consselect(), cons_getc(), cons_putc();
-extern int	kmopen(),kmclose(),kmread(),kmwrite(),kmioctl(),
-		kmgetc(), kmputc(dev_t dev, char c);
 
-extern int	cttyopen(), cttyread(), cttywrite(), cttyioctl(), cttyselect();
+dev_t chrtoblk(dev_t dev);
+int chrtoblk_set(int cdev, int bdev);
+int isdisk(dev_t dev, int type);
+int iskmemdev(dev_t dev);
 
-extern int 	mmread(),mmwrite(),mmioctl();
-#define	mmselect	seltrue
+
+/* XXX No support for linker sets, so must declare here */
+int cttyopen(dev_t dev, int flag, int mode, struct proc *p);
+int cttyread(dev_t dev, struct uio *uio, int flag);
+int cttywrite(dev_t dev, struct uio *uio, int flag);
+int cttyioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p);
+int cttyselect(dev_t dev, int flag, void* wql, struct proc *p);
+
+/* XXX bsd/dev/ppc/mem.c */
+int mmread(dev_t dev, struct uio *uio, int flag);
+int mmioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p);
+int mmwrite(dev_t dev, struct uio *uio, int flag);
+
+#define	mmselect	(select_fcn_t *)seltrue
 
 #if 1
 #ifdef NPTY
@@ -108,9 +124,18 @@ extern int 	mmread(),mmwrite(),mmioctl();
 #endif /* 1 */
 #if NPTY > 0
 extern struct tty *pt_tty[];
-extern int	ptsopen(),ptsclose(),ptsread(),ptswrite(),ptsstop(),ptsputc();
-extern int	ptcopen(),ptcclose(),ptcread(),ptcwrite(),ptcselect(),
-		ptyioctl();
+extern d_open_t		ptsopen;
+extern d_close_t	ptsclose;
+extern d_read_t		ptsread;
+extern d_write_t	ptswrite;
+extern d_stop_t		ptsstop;
+extern d_putc_t		ptsputc;
+extern d_open_t		ptcopen;
+extern d_close_t	ptcclose;
+extern d_read_t		ptcread;
+extern d_write_t	ptcwrite;
+extern d_select_t	ptcselect;
+extern d_ioctl_t	ptyioctl;
 #else
 #define ptsopen		eno_opcl
 #define ptsclose	eno_opcl
@@ -127,8 +152,11 @@ extern int	ptcopen(),ptcclose(),ptcread(),ptcwrite(),ptcselect(),
 #define ptyioctl	eno_ioctl
 #endif
 
-extern int	logopen(),logclose(),logread(),logioctl(),logselect();
-extern int	seltrue();
+extern d_open_t         logopen;
+extern d_close_t        logclose;
+extern d_read_t         logread;
+extern d_ioctl_t        logioctl;
+extern d_select_t       logselect;
 
 struct cdevsw	cdevsw[] =
 {
@@ -145,33 +173,46 @@ struct cdevsw	cdevsw[] =
 
     {
 	consopen,	consclose,	consread,	conswrite,	/* 0*/
-	consioctl,	nulldev,	nulldev,	0,	consselect,
-	eno_mmap,	eno_strat,	(getc_fcn_t *)cons_getc,	(putc_fcn_t *)cons_putc, D_TTY
+	consioctl,	((stop_fcn_t *)&nulldev),
+					((reset_fcn_t *)&nulldev),
+							0,	consselect,
+	eno_mmap,	eno_strat,	cons_getc,	cons_putc, D_TTY
    },
     NO_CDEVICE,								/* 1*/
     {
-	cttyopen,	nulldev,	cttyread,	cttywrite,	/* 2*/
-	cttyioctl,	nulldev,	nulldev,	0,		cttyselect,
+	cttyopen,	((open_close_fcn_t *)&nulldev),
+					cttyread,	cttywrite,	/* 2*/
+	cttyioctl,	((stop_fcn_t *)&nulldev),
+					((reset_fcn_t *)&nulldev),
+							0,	cttyselect,
 	eno_mmap,	eno_strat,	eno_getc,	eno_putc,	D_TTY
     },
     {
-	nulldev,	nulldev,	mmread,		mmwrite,	/* 3*/
-	mmioctl,	nulldev,	nulldev,	0,		(select_fcn_t *)mmselect,
+	((open_close_fcn_t *)&nulldev),
+			((open_close_fcn_t *)&nulldev),
+					mmread,		mmwrite,	/* 3*/
+	mmioctl,	((stop_fcn_t *)&nulldev),
+					((reset_fcn_t *)&nulldev),
+							0,	mmselect,
 	eno_mmap,		eno_strat,	eno_getc,	eno_putc,	D_DISK
     },
     {
 	ptsopen,	ptsclose,	ptsread,	ptswrite,	/* 4*/
-	ptyioctl,	ptsstop,	nulldev,	pt_tty,		ttselect,
+	ptyioctl,	ptsstop,	((reset_fcn_t *)&nulldev),
+							pt_tty,		ttselect,
 	eno_mmap,	eno_strat,	eno_getc,	eno_putc,	D_TTY
     },
     {
 	ptcopen,	ptcclose,	ptcread,	ptcwrite,	/* 5*/
-	ptyioctl,	nulldev,	nulldev,	0,		ptcselect,
+	ptyioctl,	((stop_fcn_t *)&nulldev),
+					((reset_fcn_t *)&nulldev),
+							0,		ptcselect,
 	eno_mmap,	eno_strat,	eno_getc,	eno_putc,	D_TTY
     },
     {
 	logopen,	logclose,	logread,	eno_rdwrt,	/* 6*/
-	logioctl,	eno_stop,	nulldev,	0,		logselect,
+	logioctl,	eno_stop,	((reset_fcn_t *)&nulldev),
+							0,		logselect,
 	eno_mmap,	eno_strat,	eno_getc,	eno_putc,	0
     },
     NO_CDEVICE,								/* 7*/
@@ -181,7 +222,9 @@ struct cdevsw	cdevsw[] =
     NO_CDEVICE,								/*11*/
     {
 	kmopen,		kmclose,	kmread,		kmwrite,	/*12*/
-	kmioctl,	nulldev,	nulldev,	km_tty,		ttselect,
+	kmioctl,	((stop_fcn_t *)&nulldev),
+					((reset_fcn_t *)&nulldev),
+							km_tty,		ttselect,
 	eno_mmap,	eno_strat,	kmgetc,		kmputc,		0
     },
     NO_CDEVICE,								/*13*/
@@ -229,9 +272,7 @@ int	nchrdev = sizeof (cdevsw) / sizeof (cdevsw[0]);
  * return true if a disk
  */
 int
-isdisk(dev, type)
-	dev_t dev;
-	int type;
+isdisk(dev_t dev, int type)
 {
 	dev_t	maj = major(dev);
 
@@ -282,8 +323,7 @@ static int chrtoblktab[] = {
  * convert chr dev to blk dev
  */
 dev_t
-chrtoblk(dev)
-	dev_t dev;
+chrtoblk(dev_t dev)
 {
 	int blkmaj;
 
@@ -309,8 +349,8 @@ chrtoblk_set(int cdev, int bdev)
 /*
  * Returns true if dev is /dev/mem or /dev/kmem.
  */
-int iskmemdev(dev)
-	dev_t dev;
+int
+iskmemdev(dev_t dev)
 {
 
 	return (major(dev) == 3 && minor(dev) < 2);

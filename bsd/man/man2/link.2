@@ -42,42 +42,44 @@
 .Sh SYNOPSIS
 .Fd #include <unistd.h>
 .Ft int
-.Fn link "const char *name1" "const char *name2"
+.Fo link
+.Fa "const char *path1"
+.Fa "const char *path2"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn link
 function call
 atomically creates the specified directory entry (hard link)
-.Fa name2
+.Fa path2
 with the attributes of the underlying object pointed at by
-.Fa name1
-If the link is successful: the link count of the underlying object
-is incremented;
-.Fa name1
+.Fa path1 .
+If the link is successful,
+the link count of the underlying object is incremented;
+.Fa path1
 and
-.Fa name2
+.Fa path2
 share equal access and rights
 to the
 underlying object.
 .Pp
 If
-.Fa name1
+.Fa path1
 is removed, the file
-.Fa name2
+.Fa path2
 is not deleted and the link count of the
 underlying object is
 decremented.
 .Pp
-.Fa Name1
-must exist for the hard link to
-succeed and
-both
-.Fa name1
+In order for the system call to succeed,
+.Fa path1
+must exist and both
+.Fa path1
 and
-.Fa name2
+.Fa path2
 must be in the same file system.
-As mandated by POSIX.1
-.Fa name1
+As mandated by POSIX.1,
+.Fa path1
 may not be a directory.
 .Sh RETURN VALUES
 Upon successful completion, a value of 0 is returned.  Otherwise,
@@ -88,60 +90,81 @@ is set to indicate the error.
 .Fn Link
 will fail and no link will be created if:
 .Bl -tag -width Er
-.It Bq Er ENOTDIR
-A component of either path prefix is not a directory.
-.It Bq Er ENAMETOOLONG
-A component of a pathname exceeded 
-.Dv {NAME_MAX}
-characters, or an entire path name exceeded 
-.Dv {PATH_MAX}
-characters.
-.It Bq Er ENOENT
-A component of either path prefix does not exist.
+.\" ==========
 .It Bq Er EACCES
 A component of either path prefix denies search permission.
+.\" ==========
 .It Bq Er EACCES
 The requested link requires writing in a directory with a mode
 that denies write permission.
-.It Bq Er ELOOP
-Too many symbolic links were encountered in translating one of the pathnames.
-.It Bq Er ENOENT
-The file named by
-.Fa name1
-does not exist.
-.It Bq Er EEXIST
-The link named by
-.Fa name2
-does exist.
-.It Bq Er EPERM
-The file named by
-.Fa name1
-is a directory.
-.It Bq Er EXDEV
-The link named by
-.Fa name2
-and the file named by
-.Fa name1
-are on different file systems.
-.It Bq Er ENOSPC
-The directory in which the entry for the new link is being placed
-cannot be extended because there is no space left on the file
-system containing the directory.
-.ne 3v
+.\" ==========
+.It Bq Er EACCES
+The current process cannot access the existing file.
+.\" ==========
 .It Bq Er EDQUOT
 The directory in which the entry for the new link
 is being placed cannot be extended because the
 user's quota of disk blocks on the file system
 containing the directory has been exhausted.
-.It Bq Er EIO
-An I/O error occurred while reading from or writing to 
-the file system to make the directory entry.
-.It Bq Er EROFS
-The requested link requires writing in a directory on a read-only file
-system.
+.\" ==========
+.It Bq Er EEXIST
+The link named by
+.Fa path2
+already exists.
+.\" ==========
 .It Bq Er EFAULT
 One of the pathnames specified
 is outside the process's allocated address space.
+.\" ==========
+.It Bq Er EIO
+An I/O error occurs while reading from or writing to 
+the file system to make the directory entry.
+.\" ==========
+.It Bq Er ELOOP
+Too many symbolic links are encountered in translating one of the pathnames.
+This is taken to be indicative of a looping symbolic link.
+.\" ==========
+.It Bq Er EMLINK
+The file already has {LINK_MAX} links.
+.\" ==========
+.It Bq Er ENAMETOOLONG
+A component of a pathname exceeds 
+.Dv {NAME_MAX}
+characters, or an entire path name exceeded 
+.Dv {PATH_MAX}
+characters.
+.\" ==========
+.It Bq Er ENOENT
+A component of either path prefix does not exist.
+.\" ==========
+.It Bq Er ENOENT
+The file named by
+.Fa path1
+does not exist.
+.\" ==========
+.It Bq Er ENOSPC
+The directory in which the entry for the new link is being placed
+cannot be extended because there is no space left on the file
+system containing the directory.
+.\" ==========
+.It Bq Er ENOTDIR
+A component of either path prefix is not a directory.
+.\" ==========
+.It Bq Er EPERM
+The file named by
+.Fa path1
+is a directory.
+.\" ==========
+.It Bq Er EROFS
+The requested link requires writing in a directory
+on a read-only file system.
+.\" ==========
+.It Bq Er EXDEV
+The link named by
+.Fa path2
+and the file named by
+.Fa path1
+are on different file systems.
 .El
 .Sh SEE ALSO
 .Xr symlink 2 ,

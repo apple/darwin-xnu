@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1988, 1993
@@ -114,6 +120,30 @@ static struct tcpcb *
 static struct tcpcb *
 		tcp_usrclosed(struct tcpcb *);
 
+__private_extern__ int	tcp_win_scale = 3;
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, win_scale_factor, CTLFLAG_RW,
+    &tcp_win_scale, 0, "Window scaling factor");
+
+static u_int32_t tcps_in_sw_cksum;
+SYSCTL_UINT(_net_inet_tcp, OID_AUTO, in_sw_cksum, CTLFLAG_RD,
+    &tcps_in_sw_cksum, 0,
+    "Number of received packets checksummed in software");
+
+static u_int64_t tcps_in_sw_cksum_bytes;
+SYSCTL_QUAD(_net_inet_tcp, OID_AUTO, in_sw_cksum_bytes, CTLFLAG_RD,
+    &tcps_in_sw_cksum_bytes,
+    "Amount of received data checksummed in software");
+
+static u_int32_t tcps_out_sw_cksum;
+SYSCTL_UINT(_net_inet_tcp, OID_AUTO, out_sw_cksum, CTLFLAG_RD,
+    &tcps_out_sw_cksum, 0,
+    "Number of transmitted packets checksummed in software");
+
+static u_int64_t tcps_out_sw_cksum_bytes;
+SYSCTL_QUAD(_net_inet_tcp, OID_AUTO, out_sw_cksum_bytes, CTLFLAG_RD,
+    &tcps_out_sw_cksum_bytes,
+    "Amount of transmitted data checksummed in software");
+
 #if TCPDEBUG
 #define	TCPDEBUG0	int ostate = 0
 #define	TCPDEBUG1()	ostate = tp ? tp->t_state : 0
@@ -125,12 +155,22 @@ static struct tcpcb *
 #define	TCPDEBUG2(req)
 #endif
 
+__private_extern__ unsigned int	tcp_sockthreshold = 64;
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, sockthreshold, CTLFLAG_RW, 
+    &tcp_sockthreshold , 0, "TCP Socket size increased if less than threshold");
+
 /*
  * TCP attaches to socket via pru_attach(), reserving space,
  * and an internet control block.
+ *
+ * Returns:	0			Success
+ *		EISCONN
+ *	tcp_attach:ENOBUFS
+ *	tcp_attach:ENOMEM
+ *	tcp_attach:???			[IPSEC specific]
  */
 static int
-tcp_usr_attach(struct socket *so, int proto, struct proc *p)
+tcp_usr_attach(struct socket *so, __unused int proto, struct proc *p)
 {
 	int error;
 	struct inpcb *inp = sotoinpcb(so);
@@ -201,6 +241,17 @@ out:
 
 /*
  * Give the socket an address.
+ *
+ * Returns:	0			Success
+ *		EINVAL			Invalid argument [COMMON_START]
+ *		EAFNOSUPPORT		Address family not supported
+ *	in_pcbbind:EADDRNOTAVAIL	Address not available.
+ *	in_pcbbind:EINVAL		Invalid argument
+ *	in_pcbbind:EAFNOSUPPORT		Address family not supported [notdef]
+ *	in_pcbbind:EACCES		Permission denied
+ *	in_pcbbind:EADDRINUSE		Address in use
+ *	in_pcbbind:EAGAIN		Resource unavailable, try again
+ *	in_pcbbind:EPERM		Operation not permitted
  */
 static int
 tcp_usr_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
@@ -211,6 +262,11 @@ tcp_usr_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 	struct sockaddr_in *sinp;
 
 	COMMON_START();
+
+	if (nam->sa_family != 0 && nam->sa_family != AF_INET) {
+		error = EAFNOSUPPORT;
+		goto out;
+	}
 
 	/*
 	 * Must check for multicast addresses and disallow binding
@@ -239,6 +295,11 @@ tcp6_usr_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 	struct sockaddr_in6 *sin6p;
 
 	COMMON_START();
+
+	if (nam->sa_family != 0 && nam->sa_family != AF_INET6) {
+		error = EAFNOSUPPORT;
+		goto out;
+	}
 
 	/*
 	 * Must check for multicast addresses and disallow binding
@@ -274,6 +335,16 @@ tcp6_usr_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 
 /*
  * Prepare to accept connections.
+ *
+ * Returns:	0			Success
+ *		EINVAL [COMMON_START]
+ *	in_pcbbind:EADDRNOTAVAIL	Address not available.
+ *	in_pcbbind:EINVAL		Invalid argument
+ *	in_pcbbind:EAFNOSUPPORT		Address family not supported [notdef]
+ *	in_pcbbind:EACCES		Permission denied
+ *	in_pcbbind:EADDRINUSE		Address in use
+ *	in_pcbbind:EAGAIN		Resource unavailable, try again
+ *	in_pcbbind:EPERM		Operation not permitted
  */
 static int
 tcp_usr_listen(struct socket *so, struct proc *p)
@@ -326,8 +397,24 @@ tcp_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 	struct tcpcb *tp;
 	struct sockaddr_in *sinp;
 
-	COMMON_START();
+	TCPDEBUG0;
+	if (inp == 0)
+		return EINVAL;
+	else if (inp->inp_state == INPCB_STATE_DEAD) {
+		if (so->so_error) {
+			error = so->so_error;
+			so->so_error = 0;
+			return error;
+		} else
+			return EINVAL;
+	}
+	tp = intotcpcb(inp);
+	TCPDEBUG1();
 
+	if (nam->sa_family != 0 && nam->sa_family != AF_INET) {
+		error = EAFNOSUPPORT;
+		goto out;
+	}
 	/*
 	 * Must disallow TCP ``connections'' to multicast addresses.
 	 */
@@ -338,9 +425,6 @@ tcp_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 		goto out;
 	}
 
-#ifndef __APPLE__
-	prison_remote_ip(p, 0, &sinp->sin_addr.s_addr);
-#endif
 
 	if ((error = tcp_connect(tp, nam, p)) != 0)
 		goto out;
@@ -358,6 +442,11 @@ tcp6_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 	struct sockaddr_in6 *sin6p;
 
 	COMMON_START();
+
+	if (nam->sa_family != 0 && nam->sa_family != AF_INET6) {
+		error = EAFNOSUPPORT;
+		goto out;
+	}
 
 	/*
 	 * Must disallow TCP ``connections'' to multicast addresses.
@@ -471,8 +560,23 @@ tcp6_usr_accept(struct socket *so, struct sockaddr **nam)
 	COMMON_END(PRU_ACCEPT);
 }
 #endif /* INET6 */
+
 /*
  * Mark the connection as being incapable of further output.
+ *
+ * Returns:	0			Success
+ *		EINVAL [COMMON_START]
+ *	tcp_output:EADDRNOTAVAIL
+ *	tcp_output:ENOBUFS
+ *	tcp_output:EMSGSIZE
+ *	tcp_output:EHOSTUNREACH
+ *	tcp_output:ENETUNREACH
+ *	tcp_output:ENETDOWN
+ *	tcp_output:ENOMEM
+ *	tcp_output:EACCES
+ *	tcp_output:EMSGSIZE
+ *	tcp_output:ENOBUFS
+ *	tcp_output:???			[ignorable: mostly IPSEC/firewall/DLIL]
  */
 static int
 tcp_usr_shutdown(struct socket *so)
@@ -496,7 +600,7 @@ tcp_usr_shutdown(struct socket *so)
  * After a receive, possibly send window update to peer.
  */
 static int
-tcp_usr_rcvd(struct socket *so, int flags)
+tcp_usr_rcvd(struct socket *so, __unused int flags)
 {
 	int error = 0;
 	struct inpcb *inp = sotoinpcb(so);
@@ -516,6 +620,30 @@ tcp_usr_rcvd(struct socket *so, int flags)
  * pru_*() routines, the mbuf chains are our responsibility.  We
  * must either enqueue them or free them.  The other pru_* routines
  * generally are caller-frees.
+ *
+ * Returns:	0			Success
+ *		ECONNRESET
+ *		EINVAL
+ *		ENOBUFS
+ *	tcp_connect:EADDRINUSE		Address in use
+ *	tcp_connect:EADDRNOTAVAIL	Address not available.
+ *	tcp_connect:EINVAL		Invalid argument
+ *	tcp_connect:EAFNOSUPPORT	Address family not supported [notdef]
+ *	tcp_connect:EACCES		Permission denied
+ *	tcp_connect:EAGAIN		Resource unavailable, try again
+ *	tcp_connect:EPERM		Operation not permitted
+ *	tcp_output:EADDRNOTAVAIL
+ *	tcp_output:ENOBUFS
+ *	tcp_output:EMSGSIZE
+ *	tcp_output:EHOSTUNREACH
+ *	tcp_output:ENETUNREACH
+ *	tcp_output:ENETDOWN
+ *	tcp_output:ENOMEM
+ *	tcp_output:EACCES
+ *	tcp_output:EMSGSIZE
+ *	tcp_output:ENOBUFS
+ *	tcp_output:???			[ignorable: mostly IPSEC/firewall/DLIL]
+ *	tcp6_connect:???		[IPV6 only]
  */
 static int
 tcp_usr_send(struct socket *so, int flags, struct mbuf *m, 
@@ -561,7 +689,7 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 		m_freem(control);	/* empty control, just free it */
 	}
 	if(!(flags & PRUS_OOB)) {
-		sbappend(&so->so_snd, m);
+		sbappendstream(&so->so_snd, m);
 		if (nam && tp->t_state < TCPS_SYN_SENT) {
 			/*
 			 * Do implied connect if not yet connected,
@@ -610,7 +738,7 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 		 * of data past the urgent section.
 		 * Otherwise, snd_up should be one lower.
 		 */
-		sbappend(&so->so_snd, m);
+		sbappendstream(&so->so_snd, m);
 		if (nam && tp->t_state < TCPS_SYN_SENT) {
 			/*
 			 * Do implied connect if not yet connected,
@@ -659,6 +787,11 @@ tcp_usr_abort(struct socket *so)
 
 /*
  * Receive out-of-band data.
+ *
+ * Returns:	0			Success
+ *		EINVAL [COMMON_START]
+ *		EINVAL
+ *		EWOULDBLOCK
  */
 static int
 tcp_usr_rcvoob(struct socket *so, struct mbuf *m, int flags)
@@ -714,6 +847,20 @@ struct pr_usrreqs tcp6_usrreqs = {
  * sending CC options and if the connection duration was < MSL, then
  * truncate the previous TIME-WAIT state and proceed.
  * Initialize connection parameters and enter SYN-SENT state.
+ *
+ * Returns:	0			Success
+ *		EADDRINUSE
+ *		EINVAL
+ *	in_pcbbind:EADDRNOTAVAIL	Address not available.
+ *	in_pcbbind:EINVAL		Invalid argument
+ *	in_pcbbind:EAFNOSUPPORT		Address family not supported [notdef]
+ *	in_pcbbind:EACCES		Permission denied
+ *	in_pcbbind:EADDRINUSE		Address in use
+ *	in_pcbbind:EAGAIN		Resource unavailable, try again
+ *	in_pcbbind:EPERM		Operation not permitted
+ *	in_pcbladdr:EINVAL		Invalid argument
+ *	in_pcbladdr:EAFNOSUPPORT	Address family not supported
+ *	in_pcbladdr:EADDRNOTAVAIL	Address not available
  */
 static int
 tcp_connect(tp, nam, p)
@@ -764,11 +911,11 @@ tcp_connect(tp, nam, p)
 
 		if (oinp != inp && (otp = intotcpcb(oinp)) != NULL &&
 		otp->t_state == TCPS_TIME_WAIT &&
-		    otp->t_starttime < tcp_msl &&
+		    otp->t_starttime < (u_long)tcp_msl &&
 		    (otp->t_flags & TF_RCVD_CC))
 			otp = tcp_close(otp);
 		else {
-			printf("tcp_connect: inp=%x err=EADDRINUSE\n", inp);
+			printf("tcp_connect: inp=%p err=EADDRINUSE\n", inp);
 			if (oinp != inp)
 				tcp_unlock(oinp->inp_socket, 1, 0);
 			return EADDRINUSE;
@@ -794,10 +941,23 @@ skip_oinp:
 	in_pcbrehash(inp);
 	lck_rw_done(inp->inp_pcbinfo->mtx);
 
-	/* Compute window scaling to request.  */
+	/* Compute window scaling to requesti according to sb_hiwat
+	 * or leave us some room to increase potentially increase the window size depending
+	 * on the default win scale
+	 */
 	while (tp->request_r_scale < TCP_MAX_WINSHIFT &&
-	    (TCP_MAXWIN << tp->request_r_scale) < so->so_rcv.sb_hiwat)
+   	 (TCP_MAXWIN << tp->request_r_scale) < so->so_rcv.sb_hiwat)
 		tp->request_r_scale++;
+
+	/*
+	 * Inflate window size only if no setsockopt was performed on the recv sockbuf and
+	 * if we're not over our number of active pcbs.
+	 */
+
+	if (((so->so_rcv.sb_flags & SB_USRSIZE) == 0) && (inp->inp_pcbinfo->ipi_count < tcp_sockthreshold)) {
+		tp->request_r_scale = max(tcp_win_scale, tp->request_r_scale);
+		so->so_rcv.sb_hiwat = min(TCP_MAXWIN << tp->request_r_scale, (sb_max / (MSIZE+MCLBYTES)) * MCLBYTES);  
+	}
 
 	soisconnecting(so);
 	tcpstat.tcps_connattempt++;
@@ -868,7 +1028,7 @@ tcp6_connect(tp, nam, p)
 	if (oinp) {
 		if (oinp != inp && (otp = intotcpcb(oinp)) != NULL &&
 		    otp->t_state == TCPS_TIME_WAIT &&
-		    otp->t_starttime < tcp_msl &&
+		    otp->t_starttime < (u_long)tcp_msl &&
 		    (otp->t_flags & TF_RCVD_CC))
 			otp = tcp_close(otp);
 		else
@@ -884,7 +1044,7 @@ tcp6_connect(tp, nam, p)
 		inp->in6p_laddr = addr6;
 	inp->in6p_faddr = sin6->sin6_addr;
 	inp->inp_fport = sin6->sin6_port;
-	if ((sin6->sin6_flowinfo & IPV6_FLOWINFO_MASK) != NULL)
+	if ((sin6->sin6_flowinfo & IPV6_FLOWINFO_MASK) != 0)
 		inp->in6p_flowinfo = sin6->sin6_flowinfo;
 	in_pcbrehash(inp);
 	lck_rw_done(inp->inp_pcbinfo->mtx);
@@ -1003,15 +1163,17 @@ tcp_ctloutput(so, sopt)
 				error = EINVAL;
 			break;
 
-                case TCP_KEEPALIVE:
-                        error = sooptcopyin(sopt, &optval, sizeof optval,
-                                            sizeof optval);
-                        if (error)
-                                break;
-                        if (optval < 0)
-                                error = EINVAL;
-			else
-				tp->t_keepidle = optval * PR_SLOWHZ;
+		case TCP_KEEPALIVE:
+			error = sooptcopyin(sopt, &optval, sizeof optval,
+						sizeof optval);
+			if (error)
+				break;
+			if (optval < 0)
+				error = EINVAL;
+			else {
+				tp->t_keepidle = optval * TCP_RETRANSHZ;
+				tp->t_timer[TCPT_KEEP] = TCP_KEEPIDLE(tp); /* reset the timer to new value */
+			}
                         break;
 		
 		default:
@@ -1029,7 +1191,7 @@ tcp_ctloutput(so, sopt)
 			optval = tp->t_maxseg;
 			break;
 		case TCP_KEEPALIVE:
-			optval = tp->t_keepidle / PR_SLOWHZ;
+			optval = tp->t_keepidle / TCP_RETRANSHZ;
 			break;
 		case TCP_NOOPT:
 			optval = tp->t_flags & TF_NOOPT;
@@ -1053,22 +1215,24 @@ tcp_ctloutput(so, sopt)
  * sizes, respectively.  These are obsolescent (this information should
  * be set by the route).
  */
-u_long	tcp_sendspace = 1024*16;
+u_long	tcp_sendspace = 1448*256;
 SYSCTL_INT(_net_inet_tcp, TCPCTL_SENDSPACE, sendspace, CTLFLAG_RW, 
     &tcp_sendspace , 0, "Maximum outgoing TCP datagram size");
-u_long	tcp_recvspace = 1024*16;
+u_long	tcp_recvspace = 1448*384;
 SYSCTL_INT(_net_inet_tcp, TCPCTL_RECVSPACE, recvspace, CTLFLAG_RW, 
     &tcp_recvspace , 0, "Maximum incoming TCP datagram size");
 
-__private_extern__ int	tcp_sockthreshold = 256;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, sockthreshold, CTLFLAG_RW, 
-    &tcp_sockthreshold , 0, "TCP Socket size increased if less than threshold");
 
-#define TCP_INCREASED_SPACE	65535	/* Automatically increase tcp send/rcv space to this value */
 /*
  * Attach TCP protocol to socket, allocating
  * internet protocol control block, tcp control block,
  * bufer space, and entering LISTEN state if to accept connections.
+ *
+ * Returns:	0			Success
+ *	in_pcballoc:ENOBUFS
+ *	in_pcballoc:ENOMEM
+ *	in_pcballoc:???			[IPSEC specific]
+ *	soreserve:ENOBUFS
  */
 static int
 tcp_attach(so, p)
@@ -1078,8 +1242,9 @@ tcp_attach(so, p)
 	register struct tcpcb *tp;
 	struct inpcb *inp;
 	int error;
+	u_long sb_effective_max;
 #if INET6
-	int isipv6 = INP_CHECK_SOCKAF(so, AF_INET6) != NULL;
+	int isipv6 = INP_CHECK_SOCKAF(so, AF_INET6) != 0;
 #endif
 
 	error = in_pcballoc(so, &tcbinfo, p);
@@ -1090,14 +1255,21 @@ tcp_attach(so, p)
 
 	if (so->so_snd.sb_hiwat == 0 || so->so_rcv.sb_hiwat == 0) {
 		/*
-		 * The goal is to let clients have large send/rcv default windows (TCP_INCREASED_SPACE)
-		 * while not hogging mbuf space for servers. This is done by watching a threshold
-		 * of tcpcbs in use and bumping the default send and rcvspace only if under that threshold.
-		 * The theory being that busy servers have a lot more active tcpcbs and don't want the potential
-		 * memory penalty of having much larger sockbuffs. The sysctl allows to fine tune that threshold value.		 */
+		 * The goal is to let clients machines use large send/rcv default windows to compensate for link
+		 * latency and make sure the receiver is not constraining the sender window.
+		 * But we doon't want to have a few connections use all our mbuf space for servers.
+		 * This is done by watching a threshold of tcpcbs in use and bumping the default send and rcvspace
+		 * only if that threshold isn't reached.
+		 * We're also advertising a much bigger window size (tuneable by sysctl) in correlation with				 * the max socket buffer size if 
+		 * we consider that we have enough ressources for it. This window will be adjusted depending on the
+		 * global socket layer buffer use with the use of tcp_sbpace
+		 */
 
-		if (inp->inp_pcbinfo->ipi_count < tcp_sockthreshold)
-			error = soreserve(so, MAX(TCP_INCREASED_SPACE, tcp_sendspace), MAX(TCP_INCREASED_SPACE,tcp_recvspace));
+		if (inp->inp_pcbinfo->ipi_count < tcp_sockthreshold) {
+			sb_effective_max = (sb_max / (MSIZE+MCLBYTES)) * MCLBYTES;  
+			error = soreserve(so, max(min((TCP_MAXWIN << tcp_win_scale)/4, sb_effective_max), tcp_sendspace),
+				       	max(min((TCP_MAXWIN << tcp_win_scale)/2, sb_effective_max), tcp_recvspace));
+		}
 		else	
 			error = soreserve(so, tcp_sendspace, tcp_recvspace);
 		if (error)
@@ -1203,3 +1375,16 @@ tcp_usrclosed(tp)
 	return (tp);
 }
 
+void
+tcp_in_cksum_stats(u_int32_t len)
+{
+	tcps_in_sw_cksum++;
+	tcps_in_sw_cksum_bytes += len;
+}
+
+void
+tcp_out_cksum_stats(u_int32_t len)
+{
+	tcps_out_sw_cksum++;
+	tcps_out_sw_cksum_bytes += len;
+}

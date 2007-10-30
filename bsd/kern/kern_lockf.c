@@ -1,4 +1,31 @@
 /*
+ * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+/*
  * Copyright (c) 1982, 1986, 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -39,7 +66,9 @@
 #include <sys/lock.h>
 #include <sys/mount.h>
 #include <sys/proc.h>
+#include <sys/signalvar.h>
 #include <sys/unistd.h>
+#include <sys/user.h>
 #include <sys/vnode.h>
 #include <sys/vnode_internal.h>
 #include <sys/vnode_if.h>
@@ -47,24 +76,34 @@
 #include <sys/fcntl.h>
 #include <sys/lockf.h>
 
-#if DEAD_CODE
 /*
  * This variable controls the maximum number of processes that will
  * be checked in doing deadlock detection.
  */
 static int maxlockdepth = MAXDEPTH;
-#endif	/* DEAD_CODE */
 
-#ifdef LOCKF_DEBUG
+#ifdef LOCKF_DEBUGGING
 #include <sys/sysctl.h>
-
 #include <ufs/ufs/quota.h>
 #include <ufs/ufs/inode.h>
-
-
+void lf_print(const char *tag, struct lockf *lock);
+void lf_printlist(const char *tag, struct lockf *lock);
 static int	lockf_debug = 2;
 SYSCTL_INT(_debug, OID_AUTO, lockf_debug, CTLFLAG_RW, &lockf_debug, 0, "");
-#endif
+
+/*
+ * If there is no mask bit selector, or there is on, and the selector is
+ * set, then output the debugging diagnostic.
+ */
+#define LOCKF_DEBUG(mask, ...)					\
+	do {							\
+		if( !(mask) || ((mask) & lockf_debug)) {	\
+			printf(__VA_ARGS__);			\
+		}						\
+	} while(0)
+#else	/* !LOCKF_DEBUGGING */
+#define LOCKF_DEBUG(mask, ...)		/* mask */
+#endif	/* !LOCKF_DEBUGGING */
 
 MALLOC_DEFINE(M_LOCKF, "lockf", "Byte-range locking structures");
 
@@ -72,29 +111,55 @@ MALLOC_DEFINE(M_LOCKF, "lockf", "Byte-range locking structures");
 #define SELF	0x1
 #define OTHERS	0x2
 #define OFF_MAX	0x7fffffffffffffffULL	/* max off_t */
-static int	 lf_clearlock(struct lockf *);
-static int	 lf_findoverlap(struct lockf *,
-	    struct lockf *, int, struct lockf ***, struct lockf **);
-static struct lockf *
-	 lf_getblock(struct lockf *);
-static int	 lf_getlock(struct lockf *, struct flock *);
-static int	 lf_setlock(struct lockf *);
-static void	 lf_split(struct lockf *, struct lockf *);
-static void	 lf_wakelock(struct lockf *);
 
 /*
- * Advisory record locking support
+ * Overlapping lock states
+ */
+typedef enum {
+	OVERLAP_NONE = 0,
+	OVERLAP_EQUALS_LOCK,
+	OVERLAP_CONTAINS_LOCK,
+	OVERLAP_CONTAINED_BY_LOCK,
+	OVERLAP_STARTS_BEFORE_LOCK,
+	OVERLAP_ENDS_AFTER_LOCK
+} overlap_t;
+
+static int	 lf_clearlock(struct lockf *);
+static overlap_t lf_findoverlap(struct lockf *,
+	    struct lockf *, int, struct lockf ***, struct lockf **);
+static struct lockf *lf_getblock(struct lockf *);
+static int	 lf_getlock(struct lockf *, struct flock *);
+static int	 lf_setlock(struct lockf *);
+static int	 lf_split(struct lockf *, struct lockf *);
+static void	 lf_wakelock(struct lockf *);
+
+
+/*
+ * lf_advlock
+ *
+ * Description:	Advisory record locking support
+ *
+ * Parameters:	ap			Argument pointer to a vnop_advlock_args
+ *					argument descriptor structure for the
+ *					lock operation to be attempted.
+ *
+ * Returns:	0			Success
+ *		EOVERFLOW
+ *		EINVAL
+ *		ENOLCK			Number of locked regions exceeds limit
+ *	lf_setlock:EAGAIN
+ *	lf_setlock:EDEADLK
+ *	lf_setlock:EINTR
+ *	lf_setlock:ENOLCK
+ *	lf_clearlock:ENOLCK
+ *	vnode_size:???
+ *
+ * Notes:	We return ENOLCK when we run out of memory to support locks; as
+ *		such, there is no specific expectation limit other than the
+ *		amount of available resources.
  */
 int
-lf_advlock(ap)
-	struct vnop_advlock_args /* {
-		struct vnode *a_vp;
-		caddr_t  a_id;
-		int  a_op;
-		struct flock *a_fl;
-		int  a_flags;
-		vfs_context_t a_context;
-	} */ *ap;
+lf_advlock(struct vnop_advlock_args *ap)
 {
 	struct vnode *vp = ap->a_vp;
 	struct flock *fl = ap->a_fl;
@@ -113,9 +178,7 @@ lf_advlock(ap)
 	if (*head == (struct lockf *)0) {
 		if (ap->a_op != F_SETLK) {
 			fl->l_type = F_UNLCK;
-#ifdef LOCKF_DEBUG
-		printf("lf_advlock: unlock without lock\n");
-#endif /* LOCKF_DEBUG */
+			LOCKF_DEBUG(0, "lf_advlock: '%s' unlock without lock\n", vfs_context_proc(context)->p_comm);
 			return (0);
 		}
 	}
@@ -136,67 +199,59 @@ lf_advlock(ap)
 
 	case SEEK_END:
 
-		if ((error = vnode_size(vp, &size, context)))
-{
-#ifdef LOCKF_DEBUG
-		printf("lf_advlock: vnode_getattr failed: %d\n", error);
-#endif /* LOCKF_DEBUG */
+		/*
+		 * It's OK to cast the u_quad_t to and off_t here, since they
+		 * are the same storage size, and the value of the returned
+		 * contents will never overflow into the sign bit.  We need to
+		 * do this because we will use size to force range checks.
+		 */
+		if ((error = vnode_size(vp, (off_t *)&size, context))) {
+			LOCKF_DEBUG(0, "lf_advlock: vnode_getattr failed: %d\n", error);
 			return (error);
-}
+		}
 
 		if (size > OFF_MAX ||
-		    (fl->l_start > 0 && size > OFF_MAX - fl->l_start))
+		    (fl->l_start > 0 &&
+		     size > (u_quad_t)(OFF_MAX - fl->l_start)))
 			return (EOVERFLOW);
 		start = size + fl->l_start;
 		break;
 
 	default:
-#ifdef LOCKF_DEBUG
-		printf("lf_advlock: unknown whence %d\n", fl->l_whence);
-#endif /* LOCKF_DEBUG */
+		LOCKF_DEBUG(0, "lf_advlock: unknown whence %d\n", fl->l_whence);
 		return (EINVAL);
 	}
-	if (start < 0)
-{
-#ifdef LOCKF_DEBUG
-		printf("lf_advlock: start < 0 (%qd)\n", start);
-#endif /* LOCKF_DEBUG */
+	if (start < 0) {
+		LOCKF_DEBUG(0, "lf_advlock: start < 0 (%qd)\n", start);
 		return (EINVAL);
-}
+	}
 	if (fl->l_len < 0) {
-		if (start == 0)
-{
-#ifdef LOCKF_DEBUG
-		printf("lf_advlock: len < 0 & start == 0\n");
-#endif /* LOCKF_DEBUG */
+		if (start == 0) {
+			LOCKF_DEBUG(0, "lf_advlock: len < 0 & start == 0\n");
 			return (EINVAL);
-}
+		}
 		end = start - 1;
 		start += fl->l_len;
-		if (start < 0)
-{
-#ifdef LOCKF_DEBUG
-		printf("lf_advlock: start < 0 (%qd)\n", start);
-#endif /* LOCKF_DEBUG */
+		if (start < 0) {
+			LOCKF_DEBUG(0, "lf_advlock: start < 0 (%qd)\n", start);
 			return (EINVAL);
-}
+		}
 	} else if (fl->l_len == 0)
 		end = -1;
 	else {
 		oadd = fl->l_len - 1;
-		if (oadd > (off_t)(OFF_MAX - start))
-{
-#ifdef LOCKF_DEBUG
-		printf("lf_advlock: overflow\n");
-#endif /* LOCKF_DEBUG */
+		if (oadd > (off_t)(OFF_MAX - start)) {
+			LOCKF_DEBUG(0, "lf_advlock: overflow\n");
 			return (EOVERFLOW);
-}
+		}
 		end = start + oadd;
 	}
 	/*
 	 * Create the lockf structure
 	 */
 	MALLOC(lock, struct lockf *, sizeof *lock, M_LOCKF, M_WAITOK);
+	if (lock == NULL)
+		return (ENOLCK);
 	lock->lf_start = start;
 	lock->lf_end = end;
 	lock->lf_id = ap->a_id;
@@ -233,30 +288,108 @@ lf_advlock(ap)
 	}
 	lck_mtx_unlock(&vp->v_lock);	/* done maniplulating the list */
 
-#ifdef LOCKF_DEBUG
-	printf("lf_advlock: normal exit: %d\n", error);
-#endif /* LOCKF_DEBUG */
+	LOCKF_DEBUG(0, "lf_advlock: normal exit: %d\n\n", error);
 	return (error);
 }
 
+
 /*
- * Set a byte-range lock.
+ * lf_coelesce_adjacent
+ *
+ * Description:	Helper function: when setting a lock, coelesce adjacent
+ *		locks.  Needed because adjacent locks are not overlapping,
+ *		but POSIX requires that they be coelesced.
+ *
+ * Parameters:	lock			The new lock which may be adjacent
+ *					to already locked reagions, and which
+ *					should therefore be coelesced with them
+ *
+ * Returns:	<void>
+ */
+static void
+lf_coelesce_adjacent(struct lockf *lock)
+{
+	struct lockf **lf = lock->lf_head;
+
+	while (*lf != NOLOCKF) {
+		/* reject locks that obviously could not be coelesced */
+		if ((*lf == lock) ||
+		    ((*lf)->lf_id != lock->lf_id) ||
+		    ((*lf)->lf_type != lock->lf_type)) {
+			lf = &(*lf)->lf_next;
+			continue;
+		}
+
+		/* If the lock ends adjacent to us, we can coelesce it */
+		if ((*lf)->lf_end != -1 &&
+		    ((*lf)->lf_end + 1) == lock->lf_start) {
+			struct lockf *adjacent = *lf;
+
+			LOCKF_DEBUG(0, "lf_coelesce_adjacent: coelesce adjacent previous\n");
+			lock->lf_start = (*lf)->lf_start;
+			*lf = lock;
+			lf = &(*lf)->lf_next;
+			FREE(adjacent, M_LOCKF);
+			continue;
+		}
+		/* If the lock starts adjacent to us, we can coelesce it */
+		if (lock->lf_end != -1 &&
+		    (lock->lf_end + 1) == (*lf)->lf_start) {
+			struct lockf *adjacent = *lf;
+
+			LOCKF_DEBUG(0, "lf_coelesce_adjacent: coelesce adjacent following\n");
+			lock->lf_end = (*lf)->lf_end;
+			lock->lf_next = (*lf)->lf_next;
+			lf = &lock->lf_next;
+			FREE(adjacent, M_LOCKF);
+			continue;
+		}
+
+		/* no matching conditions; go on to next lock */
+		lf = &(*lf)->lf_next;
+	}
+}
+
+
+/*
+ * lf_setlock
+ *
+ * Description:	Set a byte-range lock.
+ *
+ * Parameters:	lock			The lock structure describing the lock
+ *					to be set; allocated by the caller, it
+ *					will be linked into the lock list if
+ *					the set is successful, and freed if the
+ *					set is unsuccessful.
+ *
+ * Returns:	0			Success
+ *		EAGAIN
+ *		EDEADLK
+ *	lf_split:ENOLCK
+ *	lf_clearlock:ENOLCK
+ *	msleep:EINTR
+ *
+ * Notes:	We add the lock to the provisional lock list.  We do not
+ *		coelesce at this time; this has implications for other lock
+ *		requestors in the blocker search mechanism.
  */
 static int
-lf_setlock(lock)
-	struct lockf *lock;
+lf_setlock(struct lockf *lock)
 {
 	struct lockf *block;
 	struct lockf **head = lock->lf_head;
 	struct lockf **prev, *overlap, *ltmp;
 	static char lockstr[] = "lockf";
-	int ovcase, priority, needtolink, error;
+	int priority, needtolink, error;
 	struct vnode *vp = lock->lf_vnode;
+	overlap_t ovcase;
 
-#ifdef LOCKF_DEBUG
-	if (lockf_debug & 1)
+#ifdef LOCKF_DEBUGGING
+	if (lockf_debug & 1) {
 		lf_print("lf_setlock", lock);
-#endif /* LOCKF_DEBUG */
+		lf_printlist("lf_setlock(in)", lock);
+	}
+#endif /* LOCKF_DEBUGGING */
 
 	/*
 	 * Set the priority
@@ -276,10 +409,7 @@ lf_setlock(lock)
 			FREE(lock, M_LOCKF);
 			return (EAGAIN);
 		}
-#if DEAD_CODE
-/*
- * XXX This is dead code on MacOS X; it shouldn't be.
- */
+
 		/*
 		 * We are blocked. Since flock style locks cover
 		 * the whole file, there is no chance for deadlock.
@@ -292,35 +422,66 @@ lf_setlock(lock)
 		 */
 		if ((lock->lf_flags & F_POSIX) &&
 		    (block->lf_flags & F_POSIX)) {
-			struct proc *wproc;
-			struct thread *td;
+			struct proc *wproc, *bproc;
+			struct uthread *ut;
 			struct lockf *waitblock;
 			int i = 0;
 
 			/* The block is waiting on something */
-			/* XXXKSE this is not complete under threads */
 			wproc = (struct proc *)block->lf_id;
-			mtx_lock_spin(&sched_lock);
-			FOREACH_THREAD_IN_PROC(wproc, td) {
-				while (td->td_wchan &&
-				    (td->td_wmesg == lockstr) &&
+			proc_lock(wproc);
+			TAILQ_FOREACH(ut, &wproc->p_uthlist, uu_list) {
+				/*
+				 * While the thread is asleep (uu_wchan != 0)
+				 * in this code (uu_wmesg == lockstr)
+				 * and we have not exceeded the maximum cycle
+				 * depth (i < maxlockdepth), then check for a
+				 * cycle to see if the lock is blocked behind
+				 * someone blocked behind us.
+				 */
+				while (((waitblock = (struct lockf *)ut->uu_wchan) != NULL) &&
+				    ut->uu_wmesg == lockstr &&
 				    (i++ < maxlockdepth)) {
-					waitblock = (struct lockf *)td->td_wchan;
-					/* Get the owner of the blocking lock */
+					waitblock = (struct lockf *)ut->uu_wchan;
+					/*
+					 * Get the lock blocking the lock
+					 * which would block us, and make
+					 * certain it hasn't come unblocked
+					 * (been granted, e.g. between the time
+					 * we called lf_getblock, and the time
+					 * we successfully acquired the
+					 * proc_lock).
+					 */
 					waitblock = waitblock->lf_next;
+					if (waitblock == NULL)
+						break;
+
+					/*
+					 * Make sure it's an advisory range
+					 * lock and not an overall file lock;
+					 * if we mix lock types, it's our own
+					 * fault.
+					 */
 					if ((waitblock->lf_flags & F_POSIX) == 0)
 						break;
-					wproc = (struct proc *)waitblock->lf_id;
-					if (wproc == (struct proc *)lock->lf_id) {
-						mtx_unlock_spin(&sched_lock);
+
+					/*
+					 * If the owner of the lock that's
+					 * blocking a lock that's blocking us
+					 * getting the requested lock, then we
+					 * would deadlock, so error out.
+					 */
+					bproc = (struct proc *)waitblock->lf_id;
+					if (bproc == (struct proc *)lock->lf_id) {
+						proc_unlock(wproc);
 						FREE(lock, M_LOCKF);
 						return (EDEADLK);
 					}
 				}
 			}
-			mtx_unlock_spin(&sched_lock);
+			proc_unlock(wproc);
 		}
-#endif	/* DEAD_CODE */
+
 		/*
 		 * For flock type locks, we must first remove
 		 * any shared locks that we hold before we sleep
@@ -329,7 +490,10 @@ lf_setlock(lock)
 		if ((lock->lf_flags & F_FLOCK) &&
 		    lock->lf_type == F_WRLCK) {
 			lock->lf_type = F_UNLCK;
-			(void) lf_clearlock(lock);
+			if ((error = lf_clearlock(lock)) != 0) {
+				FREE(lock, M_LOCKF);
+				return (error);
+			}
 			lock->lf_type = F_WRLCK;
 		}
 		/*
@@ -338,12 +502,12 @@ lf_setlock(lock)
 		 */
 		lock->lf_next = block;
 		TAILQ_INSERT_TAIL(&block->lf_blkhd, lock, lf_block);
-#ifdef LOCKF_DEBUG
+#ifdef LOCKF_DEBUGGING
 		if (lockf_debug & 1) {
 			lf_print("lf_setlock: blocking on", block);
-			lf_printlist("lf_setlock", block);
+			lf_printlist("lf_setlock(block)", block);
 		}
-#endif /* LOCKF_DEBUG */
+#endif /* LOCKF_DEBUGGING */
 		error = msleep(lock, &vp->v_lock, priority, lockstr, 0);
 		if (error) {	/* XXX */
 			/*
@@ -387,14 +551,14 @@ lf_setlock(lock)
 		 *	5) overlap ends after lock
 		 */
 		switch (ovcase) {
-		case 0: /* no overlap */
+		case OVERLAP_NONE:
 			if (needtolink) {
 				*prev = lock;
 				lock->lf_next = overlap;
 			}
 			break;
 
-		case 1: /* overlap == lock */
+		case OVERLAP_EQUALS_LOCK:
 			/*
 			 * If downgrading lock, others may be
 			 * able to acquire it.
@@ -404,28 +568,37 @@ lf_setlock(lock)
 				lf_wakelock(overlap);
 			overlap->lf_type = lock->lf_type;
 			FREE(lock, M_LOCKF);
-			lock = overlap; /* for debug output below */
+			lock = overlap; /* for lf_coelesce_adjacent() */
 			break;
 
-		case 2: /* overlap contains lock */
+		case OVERLAP_CONTAINS_LOCK:
 			/*
 			 * Check for common starting point and different types.
 			 */
 			if (overlap->lf_type == lock->lf_type) {
 				FREE(lock, M_LOCKF);
-				lock = overlap; /* for debug output below */
+				lock = overlap; /* for lf_coelesce_adjacent() */
 				break;
 			}
 			if (overlap->lf_start == lock->lf_start) {
 				*prev = lock;
 				lock->lf_next = overlap;
 				overlap->lf_start = lock->lf_end + 1;
-			} else
-				lf_split(overlap, lock);
+			} else {
+				/*
+				 * If we can't split the lock, we can't
+				 * grant it.  Claim a system limit for the
+				 * resource shortage.
+				 */
+				if (lf_split(overlap, lock)) {
+					FREE(lock, M_LOCKF);
+					return (ENOLCK);
+				}
+			}
 			lf_wakelock(overlap);
 			break;
 
-		case 3: /* lock contains overlap */
+		case OVERLAP_CONTAINED_BY_LOCK:
 			/*
 			 * If downgrading lock, others may be able to
 			 * acquire it, otherwise take the list.
@@ -456,7 +629,7 @@ lf_setlock(lock)
 			FREE(overlap, M_LOCKF);
 			continue;
 
-		case 4: /* overlap starts before lock */
+		case OVERLAP_STARTS_BEFORE_LOCK:
 			/*
 			 * Add lock after overlap on the list.
 			 */
@@ -468,7 +641,7 @@ lf_setlock(lock)
 			needtolink = 0;
 			continue;
 
-		case 5: /* overlap ends after lock */
+		case OVERLAP_ENDS_AFTER_LOCK:
 			/*
 			 * Add the new lock before overlap.
 			 */
@@ -482,101 +655,136 @@ lf_setlock(lock)
 		}
 		break;
 	}
-#ifdef LOCKF_DEBUG
+	/* Coelesce adjacent locks with identical attributes */
+	lf_coelesce_adjacent(lock);
+#ifdef LOCKF_DEBUGGING
 	if (lockf_debug & 1) {
 		lf_print("lf_setlock: got the lock", lock);
-		lf_printlist("lf_setlock", lock);
+		lf_printlist("lf_setlock(out)", lock);
 	}
-#endif /* LOCKF_DEBUG */
+#endif /* LOCKF_DEBUGGING */
 	return (0);
 }
 
+
 /*
- * Remove a byte-range lock on an inode.
+ * lf_clearlock
  *
- * Generally, find the lock (or an overlap to that lock)
- * and remove it (or shrink it), then wakeup anyone we can.
+ * Description:	Remove a byte-range lock on an vnode.  Generally, find the
+ *		lock (or an overlap to that lock) and remove it (or shrink
+ *		it), then wakeup anyone we can.
+ *
+ * Parameters:	unlock			The lock to clear
+ *
+ * Returns:	0			Success
+ *	lf_split:ENOLCK
+ *
+ * Notes:	A caller may unlock all the locks owned by the caller by
+ *		specifying the entire file range; locks owned by other
+ *		callers are not effected by this operation.
  */
 static int
-lf_clearlock(unlock)
-	struct lockf *unlock;
+lf_clearlock(struct lockf *unlock)
 {
 	struct lockf **head = unlock->lf_head;
 	struct lockf *lf = *head;
 	struct lockf *overlap, **prev;
-	int ovcase;
+	overlap_t ovcase;
 
 	if (lf == NOLOCKF)
 		return (0);
-#ifdef LOCKF_DEBUG
+#ifdef LOCKF_DEBUGGING
 	if (unlock->lf_type != F_UNLCK)
 		panic("lf_clearlock: bad type");
 	if (lockf_debug & 1)
 		lf_print("lf_clearlock", unlock);
-#endif /* LOCKF_DEBUG */
+#endif /* LOCKF_DEBUGGING */
 	prev = head;
-	while ((ovcase = lf_findoverlap(lf, unlock, SELF, &prev, &overlap))) {
+	while ((ovcase = lf_findoverlap(lf, unlock, SELF, &prev, &overlap)) != OVERLAP_NONE) {
 		/*
 		 * Wakeup the list of locks to be retried.
 		 */
 		lf_wakelock(overlap);
 
 		switch (ovcase) {
+		case OVERLAP_NONE:	/* satisfy compiler enum/switch */
+			break;
 
-		case 1: /* overlap == lock */
+		case OVERLAP_EQUALS_LOCK:
 			*prev = overlap->lf_next;
 			FREE(overlap, M_LOCKF);
 			break;
 
-		case 2: /* overlap contains lock: split it */
+		case OVERLAP_CONTAINS_LOCK: /* split it */
 			if (overlap->lf_start == unlock->lf_start) {
 				overlap->lf_start = unlock->lf_end + 1;
 				break;
 			}
-			lf_split(overlap, unlock);
+			/*
+			 * If we can't split the lock, we can't grant it.
+			 * Claim a system limit for the resource shortage.
+			 */
+			if (lf_split(overlap, unlock))
+				return (ENOLCK);
 			overlap->lf_next = unlock->lf_next;
 			break;
 
-		case 3: /* lock contains overlap */
+		case OVERLAP_CONTAINED_BY_LOCK:
 			*prev = overlap->lf_next;
 			lf = overlap->lf_next;
 			FREE(overlap, M_LOCKF);
 			continue;
 
-		case 4: /* overlap starts before lock */
+		case OVERLAP_STARTS_BEFORE_LOCK:
 			overlap->lf_end = unlock->lf_start - 1;
 			prev = &overlap->lf_next;
 			lf = overlap->lf_next;
 			continue;
 
-		case 5: /* overlap ends after lock */
+		case OVERLAP_ENDS_AFTER_LOCK:
 			overlap->lf_start = unlock->lf_end + 1;
 			break;
 		}
 		break;
 	}
-#ifdef LOCKF_DEBUG
+#ifdef LOCKF_DEBUGGING
 	if (lockf_debug & 1)
 		lf_printlist("lf_clearlock", unlock);
-#endif /* LOCKF_DEBUG */
+#endif /* LOCKF_DEBUGGING */
 	return (0);
 }
 
+
 /*
- * Check whether there is a blocking lock,
- * and if so return its process identifier.
+ * lf_getlock
+ *
+ * Description:	Check whether there is a blocking lock, and if so return
+ *		its process identifier into the lock being requested.
+ *
+ * Parameters:	lock			Pointer to lock to test for blocks
+ *		fl			Pointer to flock structure to receive
+ *					the blocking lock information, if a
+ *					blocking lock is found.
+ *
+ * Returns:	0			Success
+ *
+ * Implicit Returns:
+ *		*fl			Contents modified to reflect the
+ *					blocking lock, if one is found; not
+ *					modified otherwise
+ *
+ * Notes:	fl->l_pid will be (-1) for file locks and will only be set to
+ *		the blocking process ID for advisory record locks.
  */
 static int
-lf_getlock(lock, fl)
-	struct lockf *lock;
-	struct flock *fl;
+lf_getlock(struct lockf *lock, struct flock *fl)
 {
 	struct lockf *block;
 
-#ifdef LOCKF_DEBUG
+#ifdef LOCKF_DEBUGGING
 	if (lockf_debug & 1)
 		lf_print("lf_getlock", lock);
-#endif /* LOCKF_DEBUG */
+#endif /* LOCKF_DEBUGGING */
 
 	if ((block = lf_getblock(lock))) {
 		fl->l_type = block->lf_type;
@@ -596,19 +804,30 @@ lf_getlock(lock, fl)
 	return (0);
 }
 
+
 /*
- * Walk the list of locks for an inode and
- * return the first blocking lock.
+ * lf_getblock
+ *
+ * Description:	Walk the list of locks for an inode and return the first
+ *		blocking lock.  A lock is considered blocking if we are not
+ *		the lock owner; otherwise, we are permitted to upgrade or
+ *		downgrade it, and it's not considered blocking.
+ *
+ * Parameters:	lock			The lock for which we are interested
+ *					in obtaining the blocking lock, if any
+ *
+ * Returns:	NOLOCKF			No blocking lock exists
+ *		!NOLOCKF		The address of the blocking lock's
+ *					struct lockf.
  */
 static struct lockf *
-lf_getblock(lock)
-	struct lockf *lock;
+lf_getblock(struct lockf *lock)
 {
 	struct lockf **prev, *overlap, *lf = *(lock->lf_head);
 	int ovcase;
 
 	prev = lock->lf_head;
-	while ((ovcase = lf_findoverlap(lf, lock, OTHERS, &prev, &overlap))) {
+	while ((ovcase = lf_findoverlap(lf, lock, OTHERS, &prev, &overlap)) != OVERLAP_NONE) {
 		/*
 		 * We've found an overlap, see if it blocks us
 		 */
@@ -623,30 +842,64 @@ lf_getblock(lock)
 	return (NOLOCKF);
 }
 
+
 /*
- * Walk the list of locks to
- * find an overlapping lock (if any).
+ * lf_findoverlap
  *
- * NOTE: this returns only the FIRST overlapping lock.  There
- *	 may be more than one.
+ * Description:	Walk the list of locks to find an overlapping lock (if any).
+ *
+ * Parameters:	lf			First lock on lock list
+ *		lock			The lock we are checking for an overlap
+ *		check			Check type
+ *		prev			pointer to pointer pointer to contain
+ *					address of pointer to previous lock
+ *					pointer to overlapping lock, if overlap
+ *		overlap			pointer to pointer to contain address
+ *					of overlapping lock
+ *
+ * Returns:	OVERLAP_NONE
+ *		OVERLAP_EQUALS_LOCK
+ *		OVERLAP_CONTAINS_LOCK
+ *		OVERLAP_CONTAINED_BY_LOCK
+ *		OVERLAP_STARTS_BEFORE_LOCK
+ *		OVERLAP_ENDS_AFTER_LOCK
+ *
+ * Implicit Returns:
+ *		*prev			The address of the next pointer in the
+ *					lock previous to the overlapping lock;
+ *					this is generally used to relink the
+ *					lock list, avoiding a second iteration.
+ *		*overlap		The pointer to the overlapping lock
+ *					itself; this is ussed to return data in
+ *					the check == OTHERS case, and for the
+ *					caller to modify the overlapping lock,
+ *					in the check == SELF case
+ *
+ * Note:	This returns only the FIRST overlapping lock.  There may be
+ *		more than one.  lf_getlock will return the first blocking lock,
+ *		while lf_setlock will iterate over all overlapping locks to
+ *
+ *		The check parameter can be SELF, meaning we are looking for
+ *		overelapping locks owned by us, or it can be OTHERS, meaning
+ *		we are looking for overlapping locks owned by someone else so
+ *		we can report a blocking lock on an F_GETLK request.
+ *
+ *		The value of *overlap and *prev are modified, even if there is
+ *		no overlapping lock found; always check the return code.
  */
-static int
-lf_findoverlap(lf, lock, type, prev, overlap)
-	struct lockf *lf;
-	struct lockf *lock;
-	int type;
-	struct lockf ***prev;
-	struct lockf **overlap;
+static overlap_t
+lf_findoverlap(struct lockf *lf, struct lockf *lock, int type,
+	       struct lockf ***prev, struct lockf **overlap)
 {
 	off_t start, end;
 
 	*overlap = lf;
 	if (lf == NOLOCKF)
 		return (0);
-#ifdef LOCKF_DEBUG
+#ifdef LOCKF_DEBUGGING
 	if (lockf_debug & 2)
 		lf_print("lf_findoverlap: looking for overlap in", lock);
-#endif /* LOCKF_DEBUG */
+#endif /* LOCKF_DEBUGGING */
 	start = lock->lf_start;
 	end = lock->lf_end;
 	while (lf != NOLOCKF) {
@@ -656,122 +909,111 @@ lf_findoverlap(lf, lock, type, prev, overlap)
 			*overlap = lf = lf->lf_next;
 			continue;
 		}
-#ifdef LOCKF_DEBUG
+#ifdef LOCKF_DEBUGGING
 		if (lockf_debug & 2)
 			lf_print("\tchecking", lf);
-#endif /* LOCKF_DEBUG */
+#endif /* LOCKF_DEBUGGING */
 		/*
 		 * OK, check for overlap
-		 *
-		 * Six cases:
-		 *	0) no overlap
-		 *	1) overlap == lock
-		 *	2) overlap contains lock
-		 *	3) lock contains overlap
-		 *	4) overlap starts before lock
-		 *	5) overlap ends after lock
 		 */
 		if ((lf->lf_end != -1 && start > lf->lf_end) ||
 		    (end != -1 && lf->lf_start > end)) {
 			/* Case 0 */
-#ifdef LOCKF_DEBUG
-			if (lockf_debug & 2)
-				printf("no overlap\n");
-#endif /* LOCKF_DEBUG */
+			LOCKF_DEBUG(2, "no overlap\n");
 			if ((type & SELF) && end != -1 && lf->lf_start > end)
-				return (0);
+				return (OVERLAP_NONE);
 			*prev = &lf->lf_next;
 			*overlap = lf = lf->lf_next;
 			continue;
 		}
 		if ((lf->lf_start == start) && (lf->lf_end == end)) {
-			/* Case 1 */
-#ifdef LOCKF_DEBUG
-			if (lockf_debug & 2)
-				printf("overlap == lock\n");
-#endif /* LOCKF_DEBUG */
-			return (1);
+			LOCKF_DEBUG(2, "overlap == lock\n");
+			return (OVERLAP_EQUALS_LOCK);
 		}
 		if ((lf->lf_start <= start) &&
 		    (end != -1) &&
 		    ((lf->lf_end >= end) || (lf->lf_end == -1))) {
-			/* Case 2 */
-#ifdef LOCKF_DEBUG
-			if (lockf_debug & 2)
-				printf("overlap contains lock\n");
-#endif /* LOCKF_DEBUG */
-			return (2);
+			LOCKF_DEBUG(2, "overlap contains lock\n");
+			return (OVERLAP_CONTAINS_LOCK);
 		}
 		if (start <= lf->lf_start &&
 		           (end == -1 ||
 			   (lf->lf_end != -1 && end >= lf->lf_end))) {
-			/* Case 3 */
-#ifdef LOCKF_DEBUG
-			if (lockf_debug & 2)
-				printf("lock contains overlap\n");
-#endif /* LOCKF_DEBUG */
-			return (3);
+			LOCKF_DEBUG(2, "lock contains overlap\n");
+			return (OVERLAP_CONTAINED_BY_LOCK);
 		}
 		if ((lf->lf_start < start) &&
 			((lf->lf_end >= start) || (lf->lf_end == -1))) {
-			/* Case 4 */
-#ifdef LOCKF_DEBUG
-			if (lockf_debug & 2)
-				printf("overlap starts before lock\n");
-#endif /* LOCKF_DEBUG */
-			return (4);
+			LOCKF_DEBUG(2, "overlap starts before lock\n");
+			return (OVERLAP_STARTS_BEFORE_LOCK);
 		}
 		if ((lf->lf_start > start) &&
 			(end != -1) &&
 			((lf->lf_end > end) || (lf->lf_end == -1))) {
-			/* Case 5 */
-#ifdef LOCKF_DEBUG
-			if (lockf_debug & 2)
-				printf("overlap ends after lock\n");
-#endif /* LOCKF_DEBUG */
-			return (5);
+			LOCKF_DEBUG(2, "overlap ends after lock\n");
+			return (OVERLAP_ENDS_AFTER_LOCK);
 		}
 		panic("lf_findoverlap: default");
 	}
-	return (0);
+	return (OVERLAP_NONE);
 }
 
+
 /*
- * Split a lock and a contained region into
- * two or three locks as necessary.
+ * lf_split
+ *
+ * Description:	Split a lock and a contained region into two or three locks
+ *		as necessary.
+ *
+ * Parameters:	lock1			Lock to split
+ *		lock2			Overlapping lock region requiring the
+ *					split (upgrade/downgrade/unlock)
+ *
+ * Returns:	0			Success
+ *		ENOLCK			No memory for new lock
+ *
+ * Implicit Returns:
+ *		*lock1			Modified original lock
+ *		*lock2			Overlapping lock (inserted into list)
+ *		(new lock)		Potential new lock inserted into list
+ *					if split results in 3 locks
+ *
+ * Notes:	This operation can only fail if the split would result in three
+ *		locks, and there is insufficient memory to allocate the third
+ *		lock; in that case, neither of the locks will be modified.
  */
-static void
-lf_split(lock1, lock2)
-	struct lockf *lock1;
-	struct lockf *lock2;
+static int
+lf_split(struct lockf *lock1, struct lockf *lock2)
 {
 	struct lockf *splitlock;
 
-#ifdef LOCKF_DEBUG
+#ifdef LOCKF_DEBUGGING
 	if (lockf_debug & 2) {
 		lf_print("lf_split", lock1);
 		lf_print("splitting from", lock2);
 	}
-#endif /* LOCKF_DEBUG */
+#endif /* LOCKF_DEBUGGING */
 	/*
 	 * Check to see if spliting into only two pieces.
 	 */
 	if (lock1->lf_start == lock2->lf_start) {
 		lock1->lf_start = lock2->lf_end + 1;
 		lock2->lf_next = lock1;
-		return;
+		return (0);
 	}
 	if (lock1->lf_end == lock2->lf_end) {
 		lock1->lf_end = lock2->lf_start - 1;
 		lock2->lf_next = lock1->lf_next;
 		lock1->lf_next = lock2;
-		return;
+		return (0);
 	}
 	/*
 	 * Make a new lock consisting of the last part of
 	 * the encompassing lock
 	 */
 	MALLOC(splitlock, struct lockf *, sizeof *splitlock, M_LOCKF, M_WAITOK);
+	if (splitlock == NULL)
+		return (ENOLCK);
 	bcopy(lock1, splitlock, sizeof *splitlock);
 	splitlock->lf_start = lock2->lf_end + 1;
 	TAILQ_INIT(&splitlock->lf_blkhd);
@@ -782,14 +1024,31 @@ lf_split(lock1, lock2)
 	splitlock->lf_next = lock1->lf_next;
 	lock2->lf_next = splitlock;
 	lock1->lf_next = lock2;
+
+	return (0);
 }
 
+
 /*
- * Wakeup a blocklist
+ * lf_wakelock
+ *
+ * Wakeup a blocklist in the case of a downgrade or unlock, since others
+ * waiting on the lock may now be able to acquire it.
+ *
+ * Parameters:	listhead		Lock list head on which waiters may
+ *					have pending locks
+ *
+ * Returns:	<void>
+ *
+ * Notes:	This function iterates a list of locks and wakes all waiters,
+ *		rather than only waiters for the contended regions.  Because
+ *		of this, for heavily contended files, this can result in a
+ *		"thundering herd" situation.  Refactoring the code could make
+ *		this operation more efficient, if heavy contention ever results
+ *		in a real-world performance problem.
  */
 static void
-lf_wakelock(listhead)
-	struct lockf *listhead;
+lf_wakelock(struct lockf *listhead)
 {
 	struct lockf *wakelock;
 
@@ -797,38 +1056,44 @@ lf_wakelock(listhead)
 		wakelock = TAILQ_FIRST(&listhead->lf_blkhd);
 		TAILQ_REMOVE(&listhead->lf_blkhd, wakelock, lf_block);
 		wakelock->lf_next = NOLOCKF;
-#ifdef LOCKF_DEBUG
+#ifdef LOCKF_DEBUGGING
 		if (lockf_debug & 2)
 			lf_print("lf_wakelock: awakening", wakelock);
-#endif /* LOCKF_DEBUG */
+#endif /* LOCKF_DEBUGGING */
 		wakeup(wakelock);
 	}
 }
 
-#ifdef LOCKF_DEBUG
+
+#ifdef LOCKF_DEBUGGING
 /*
- * Print out a lock.
+ * lf_print DEBUG
+ *
+ * Print out a lock; lock information is prefixed by the string in 'tag'
+ *
+ * Parameters:	tag			A string tag for debugging
+ *		lock			The lock whose information should be
+ *					displayed
+ *
+ * Returns:	<void>
  */
 void
-lf_print(tag, lock)
-	char *tag;
-	struct lockf *lock;
+lf_print(const char *tag, struct lockf *lock)
 {
-
 	printf("%s: lock %p for ", tag, (void *)lock);
 	if (lock->lf_flags & F_POSIX)
 		printf("proc %ld", (long)((struct proc *)lock->lf_id)->p_pid);
 	else
 		printf("id %p", (void *)lock->lf_id);
 	if (lock->lf_vnode != 0)
-		printf(" in vno 0x%08x, %s, start %jd, end %jd",
+		printf(" in vno %p, %s, start 0x%016llx, end 0x%016llx",
 		    lock->lf_vnode,
 		    lock->lf_type == F_RDLCK ? "shared" :
 		    lock->lf_type == F_WRLCK ? "exclusive" :
 		    lock->lf_type == F_UNLCK ? "unlock" : "unknown",
 		    (intmax_t)lock->lf_start, (intmax_t)lock->lf_end);
 	else
-		printf(" %s, start %jd, end %jd",
+		printf(" %s, start 0x%016llx, end 0x%016llx",
 		    lock->lf_type == F_RDLCK ? "shared" :
 		    lock->lf_type == F_WRLCK ? "exclusive" :
 		    lock->lf_type == F_UNLCK ? "unlock" : "unknown",
@@ -839,17 +1104,28 @@ lf_print(tag, lock)
 		printf("\n");
 }
 
+
+/*
+ * lf_printlist DEBUG
+ *
+ * Print out a lock list for the vnode associated with 'lock'; lock information
+ * is prefixed by the string in 'tag'
+ *
+ * Parameters:	tag			A string tag for debugging
+ *		lock			The lock whose vnode's lock list should
+ *					be displayed
+ *
+ * Returns:	<void>
+ */
 void
-lf_printlist(tag, lock)
-	char *tag;
-	struct lockf *lock;
+lf_printlist(const char *tag, struct lockf *lock)
 {
 	struct lockf *lf, *blk;
 
 	if (lock->lf_vnode == 0)
 		return;
 
-	printf("%s: Lock list for vno 0x%08x:\n",
+	printf("%s: Lock list for vno %p:\n",
 	    tag, lock->lf_vnode);
 	for (lf = lock->lf_vnode->v_lockf; lf; lf = lf->lf_next) {
 		printf("\tlock %p for ",(void *)lf);
@@ -858,7 +1134,7 @@ lf_printlist(tag, lock)
 			    (long)((struct proc *)lf->lf_id)->p_pid);
 		else
 			printf("id %p", (void *)lf->lf_id);
-		printf(", %s, start %jd, end %jd",
+		printf(", %s, start 0x%016llx, end 0x%016llx",
 		    lf->lf_type == F_RDLCK ? "shared" :
 		    lf->lf_type == F_WRLCK ? "exclusive" :
 		    lf->lf_type == F_UNLCK ? "unlock" :
@@ -870,7 +1146,7 @@ lf_printlist(tag, lock)
 				    (long)((struct proc *)blk->lf_id)->p_pid);
 			else
 				printf("id %p", (void *)blk->lf_id);
-			printf(", %s, start %jd, end %jd",
+			printf(", %s, start 0x%016llx, end 0x%016llx",
 			    blk->lf_type == F_RDLCK ? "shared" :
 			    blk->lf_type == F_WRLCK ? "exclusive" :
 			    blk->lf_type == F_UNLCK ? "unlock" :
@@ -882,4 +1158,4 @@ lf_printlist(tag, lock)
 		printf("\n");
 	}
 }
-#endif /* LOCKF_DEBUG */
+#endif /* LOCKF_DEBUGGING */

@@ -1,110 +1,60 @@
 /*
- * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <machine/cpu_capabilities.h>
 
-        .text
-        .align  2, 0x90
-	.globl	__commpage_set_timestamp
-/* extern void	_commpage_set_timestamp(uint64_t abstime, uint64_t secs); */
-__commpage_set_timestamp:
+
+/*
+ * extern void	commpage_sched_gen_inc(void);
+ */
+	.text
+	.align  2, 0x90
+	.globl	_commpage_sched_gen_inc
+
+_commpage_sched_gen_inc:
 	push	%ebp
 	mov	%esp,%ebp
 
-	mov	_commPagePtr32,%ecx
-	sub	$ _COMM_PAGE32_BASE_ADDRESS,%ecx
-	mov	_commPagePtr64,%edx			/* point to 64-bit commpage too */
-	mov	%edx,%eax
-	sub	$ _COMM_PAGE32_START_ADDRESS,%edx	/* because kernel is built 32-bit */
-	test	%eax,%eax
-	cmovz	%ecx,%edx				/* if no 64-bit commpage, point to 32 with both */
-
-	movl	$0,_COMM_PAGE_TIMEENABLE(%ecx)
-	movl	$0,_COMM_PAGE_TIMEENABLE(%edx)
-
-	mov	8(%ebp),%eax
-	or	12(%ebp),%eax
+	/* Increment 32-bit commpage field if present */
+	mov	_commPagePtr32,%edx
+	testl	%edx,%edx
 	je	1f
+	sub	$(_COMM_PAGE32_BASE_ADDRESS),%edx
+	lock
+	incl	_COMM_PAGE_SCHED_GEN(%edx)
 
-	mov	8(%ebp),%eax
-	mov	%eax,_COMM_PAGE_TIMEBASE(%ecx)
-	mov	%eax,_COMM_PAGE_TIMEBASE(%edx)
-	mov	12(%ebp),%eax
-	mov	%eax,_COMM_PAGE_TIMEBASE+4(%ecx)
-	mov	%eax,_COMM_PAGE_TIMEBASE+4(%edx)
-
-	mov	16(%ebp),%eax
-	mov	%eax,_COMM_PAGE_TIMESTAMP(%ecx)
-	mov	%eax,_COMM_PAGE_TIMESTAMP(%edx)
-	mov	20(%ebp),%eax
-	mov	%eax,_COMM_PAGE_TIMESTAMP+4(%ecx)
-	mov	%eax,_COMM_PAGE_TIMESTAMP+4(%edx)
-
-	movl	$1,_COMM_PAGE_TIMEENABLE(%ecx)
-	movl	$1,_COMM_PAGE_TIMEENABLE(%edx)
-1:
-	pop	%ebp
-	ret
-
-        .text
-        .align  2, 0x90
-	.globl	_commpage_set_nanotime
-/* extern void	commpage_set_nanotime(uint64_t tsc_base, uint64_t ns_base, uint32_t scale, uint32_t shift); */
-_commpage_set_nanotime:
-	push	%ebp
-	mov	%esp,%ebp
-
-	mov	_commPagePtr32,%ecx
-	testl	%ecx,%ecx
+	/* Increment 64-bit commpage field if present */
+	mov	_commPagePtr64,%edx
+	testl	%edx,%edx
 	je	1f
-
-	sub	$(_COMM_PAGE_BASE_ADDRESS),%ecx
-	mov	_commPagePtr64,%edx			/* point to 64-bit commpage too */
-	mov	%edx,%eax
-	sub	$ _COMM_PAGE32_START_ADDRESS,%edx	/* because kernel is built 32-bit */
-	test	%eax,%eax
-	cmovz	%ecx,%edx				/* if no 64-bit commpage, point to 32 with both */
-
-	mov	8(%ebp),%eax
-	mov	%eax,_COMM_PAGE_NT_TSC_BASE(%ecx)
-	mov	%eax,_COMM_PAGE_NT_TSC_BASE(%edx)
-	mov	12(%ebp),%eax
-	mov	%eax,_COMM_PAGE_NT_TSC_BASE+4(%ecx)
-	mov	%eax,_COMM_PAGE_NT_TSC_BASE+4(%edx)
-
-	mov	24(%ebp),%eax
-	mov	%eax,_COMM_PAGE_NT_SCALE(%ecx)
-	mov	%eax,_COMM_PAGE_NT_SCALE(%edx)
-
-	mov	28(%ebp),%eax
-	mov	%eax,_COMM_PAGE_NT_SHIFT(%ecx)
-	mov	%eax,_COMM_PAGE_NT_SHIFT(%edx)
-
-	mov	16(%ebp),%eax
-	mov	%eax,_COMM_PAGE_NT_NS_BASE(%ecx)
-	mov	%eax,_COMM_PAGE_NT_NS_BASE(%edx)
-	mov	20(%ebp),%eax
-	mov	%eax,_COMM_PAGE_NT_NS_BASE+4(%ecx)
-	mov	%eax,_COMM_PAGE_NT_NS_BASE+4(%edx)
+	sub	$(_COMM_PAGE32_START_ADDRESS),%edx
+	lock
+	incl	_COMM_PAGE_SCHED_GEN(%edx)
 1:
 	pop	%ebp
 	ret
@@ -121,6 +71,10 @@ _commpage_32_routines:
 	.long	CPN(compare_and_swap32_up)
 	.long	CPN(compare_and_swap64_mp)
 	.long	CPN(compare_and_swap64_up)
+	.long	CPN(AtomicEnqueue)
+	.long	CPN(AtomicDequeue)
+	.long	CPN(memory_barrier)
+	.long	CPN(memory_barrier_sse2)
 	.long	CPN(atomic_add32_mp)
 	.long	CPN(atomic_add32_up)
 	.long	CPN(mach_absolute_time)
@@ -140,14 +94,14 @@ _commpage_32_routines:
 	.long	CPN(bit_test_and_clear_mp)
 	.long	CPN(bit_test_and_clear_up)
 	.long	CPN(bzero_scalar)
-	.long	CPN(bzero_sse3)
+	.long	CPN(bzero_sse2)
 	.long	CPN(bcopy_scalar)
-	.long	CPN(bcopy_sse3)
-	.long	CPN(bcopy_sse4)
-	.long	CPN(old_nanotime)
-	.long	CPN(memset_pattern_sse3)
-	.long	CPN(longcopy_sse4)
+	.long	CPN(bcopy_sse2)
+	.long	CPN(bcopy_sse3x)
+	.long	CPN(memset_pattern_sse2)
+	.long	CPN(longcopy_sse3x)
 	.long	CPN(nanotime)
+	.long	CPN(nanotime_slow)
 	.long	0
 
 
@@ -161,6 +115,9 @@ _commpage_64_routines:
 	.long	CPN(compare_and_swap32_up_64)
 	.long	CPN(compare_and_swap64_mp_64)
 	.long	CPN(compare_and_swap64_up_64)
+	.long	CPN(AtomicEnqueue_64)
+	.long	CPN(AtomicDequeue_64)
+	.long	CPN(memory_barrier_sse2)	/* same routine as 32-bit version */
 	.long	CPN(atomic_add32_mp_64)
 	.long	CPN(atomic_add32_up_64)
 	.long	CPN(atomic_add64_mp_64)
@@ -180,11 +137,10 @@ _commpage_64_routines:
 	.long	CPN(bit_test_and_set_up_64)
 	.long	CPN(bit_test_and_clear_mp_64)
 	.long	CPN(bit_test_and_clear_up_64)
-	.long	CPN(bzero_sse3_64)
-	.long	CPN(bcopy_sse4_64)
-	.long	CPN(old_nanotime_64)
-	.long	CPN(memset_pattern_sse3_64)
-	.long	CPN(longcopy_sse4_64)
+	.long	CPN(bzero_sse2_64)
+	.long	CPN(bcopy_sse3x_64)
+	.long	CPN(memset_pattern_sse2_64)
+	.long	CPN(longcopy_sse3x_64)
 	.long	CPN(nanotime_64)
 	.long	0
 

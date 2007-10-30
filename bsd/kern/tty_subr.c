@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1997 Apple Computer, Inc. All Rights Reserved */
 /*
@@ -48,7 +54,6 @@
  *
  */
 
-#ifdef NeXT
 /*
  * We use the NetBSD based clist system, it is much more efficient than the
  * old style clist stuff used by free bsd.
@@ -60,7 +65,6 @@
 #include <sys/tty.h>
 #include <sys/malloc.h>
 
-#include <machine/spl.h>
 
 /*
  * At compile time, choose:
@@ -97,12 +101,8 @@ cinit(void)
  * of the specified length, with/without quoting support.
  */
 int
-clalloc(clp, size, quot)
-	struct clist *clp;
-	int size;
-	int quot;
+clalloc(struct clist *clp, int size, int quot)
 {
-
 	MALLOC_ZONE(clp->c_cs, u_char *, size, M_TTYS, M_WAITOK);
 	if (!clp->c_cs)
 		return (-1);
@@ -126,8 +126,7 @@ clalloc(clp, size, quot)
 }
 
 void
-clfree(clp)
-	struct clist *clp;
+clfree(struct clist *clp)
 {
 	if(clp->c_cs)
 		FREE_ZONE(clp->c_cs, clp->c_cn, M_TTYS);
@@ -141,13 +140,10 @@ clfree(clp)
  * Get a character from a clist.
  */
 int
-getc(clp)
-	struct clist *clp;
+getc(struct clist *clp)
 {
-	register int c = -1;
-	int s;
+	int c = -1;
 
-	s = spltty();
 	if (clp->c_cc == 0)
 		goto out;
 
@@ -166,7 +162,6 @@ getc(clp)
 	if (--clp->c_cc == 0)
 		clp->c_cf = clp->c_cl = (u_char *)0;
 out:
-	splx(s);
 	return c;
 }
 
@@ -175,16 +170,11 @@ out:
  * Return number of bytes moved.
  */
 int
-q_to_b(clp, cp, count)
-	struct clist *clp;
-	u_char *cp;
-	int count;
+q_to_b(struct clist *clp, u_char *cp, int count)
 {
-	register int cc;
+	int cc;
 	u_char *p = cp;
-	int s;
 
-	s = spltty();
 	/* optimize this while loop */
 	while (count > 0 && clp->c_cc > 0) {
 		cc = clp->c_cl - clp->c_cf;
@@ -202,7 +192,6 @@ q_to_b(clp, cp, count)
 	}
 	if (clp->c_cc == 0)
 		clp->c_cf = clp->c_cl = (u_char *)0;
-	splx(s);
 	return p - cp;
 }
 
@@ -211,16 +200,12 @@ q_to_b(clp, cp, count)
  * Stop counting if flag&character is non-null.
  */
 int
-ndqb(clp, flag)
-	struct clist *clp;
-	int flag;
+ndqb(struct clist *clp, int flag)
 {
 	int count = 0;
 	register int i;
 	register int cc;
-	int s;
 
-	s = spltty();
 	if ((cc = clp->c_cc) == 0)
 		goto out;
 
@@ -247,7 +232,6 @@ ndqb(clp, flag)
 		}
 	}
 out:
-	splx(s);
 	return count;
 }
 
@@ -255,18 +239,14 @@ out:
  * Flush count bytes from clist.
  */
 void
-ndflush(clp, count)
-	struct clist *clp;
-	int count;
+ndflush(struct clist *clp, int count)
 {
-	register int cc;
-	int s;
+	int cc;
 
-	s = spltty();
 	if (count == clp->c_cc) {
 		clp->c_cc = 0;
 		clp->c_cf = clp->c_cl = (u_char *)0;
-		goto out;
+		return;
 	}
 	/* optimize this while loop */
 	while (count > 0 && clp->c_cc > 0) {
@@ -283,22 +263,16 @@ ndflush(clp, count)
 	}
 	if (clp->c_cc == 0)
 		clp->c_cf = clp->c_cl = (u_char *)0;
-out:
-	splx(s);
 }
 
 /*
  * Put a character into the output queue.
  */
 int
-putc(c, clp)
-	int c;
-	struct clist *clp;
+putc(int c, struct clist *clp)
 {
 	register int i;
-	int s;
 
-	s = spltty();
 	if (clp->c_cc == 0) {
 		if (!clp->c_cs) {
 #if DIAGNOSTIC
@@ -306,7 +280,6 @@ putc(c, clp)
 #endif
 			if(clalloc(clp, 1024, 1)) {
 out:
-				splx(s);
 				return -1;
 			}
 		}
@@ -333,7 +306,6 @@ out:
 	clp->c_cl++;
 	if (clp->c_cl == clp->c_ce)
 		clp->c_cl = clp->c_cs;
-	splx(s);
 	return 0;
 }
 
@@ -385,12 +357,10 @@ b_to_q(const u_char *cp, int count, struct clist *clp)
 {
 	int cc;
 	const u_char *p = cp;
-	int s;
 
 	if (count <= 0)
 		return 0;
 
-	s = spltty();
 
 	if (clp->c_cc == 0) {
 		if (!clp->c_cs) {
@@ -429,7 +399,6 @@ b_to_q(const u_char *cp, int count, struct clist *clp)
 			clp->c_cl = clp->c_cs;
 	}
 out:
-	splx(s);
 	return count;
 }
 
@@ -444,12 +413,8 @@ static int cc;
  * masked.
  */
 u_char *
-nextc(clp, cp, c)
-	struct clist *clp;
-	register u_char *cp;
-	int *c;
+nextc(struct clist *clp, u_char *cp, int *c)
 {
-
 	if (clp->c_cf == cp) {
 		/*
 		 * First time initialization.
@@ -486,11 +451,9 @@ nextc(clp, cp, c)
  * *c is set to the NEXT character
  */
 u_char *
-firstc(clp, c)
-	struct clist *clp;
-	int *c;
+firstc(struct clist *clp, int *c)
 {
-	register u_char *cp;
+	u_char *cp;
 
 	cc = clp->c_cc;
 	if (cc == 0)
@@ -513,13 +476,10 @@ firstc(clp, c)
  * Remove the last character in the clist and return it.
  */
 int
-unputc(clp)
-	struct clist *clp;
+unputc(struct clist *clp)
 {
 	unsigned int c = -1;
-	int s;
 
-	s = spltty();
 	if (clp->c_cc == 0)
 		goto out;
 
@@ -542,7 +502,6 @@ unputc(clp)
 	if (clp->c_cc == 0)
 		clp->c_cf = clp->c_cl = (u_char *)0;
 out:
-	splx(s);
 	return c;
 }
 
@@ -550,13 +509,10 @@ out:
  * Put the chars in the from queue on the end of the to queue.
  */
 void
-catq(from, to)
-	struct clist *from, *to;
+catq(struct clist *from, struct clist *to)
 {
 	int c;
 
 	while ((c = getc(from)) != -1)
 		putc(c, to);
 }
-
-#endif /* NeXT */

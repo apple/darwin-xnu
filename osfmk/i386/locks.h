@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #ifndef	_I386_LOCKS_H_
@@ -65,7 +71,7 @@ typedef struct _lck_mtx_ {
 		} lck_mtxd;
 		struct {
 			unsigned int			lck_mtxi_tag;
-			struct _lck_mtx_ext_	*lck_mtxi_ptr;
+			struct _lck_mtx_ext_		*lck_mtxi_ptr;
 			unsigned int			lck_mtxi_pad8;
 		} lck_mtxi;
 	} lck_mtx_sw;
@@ -82,11 +88,17 @@ typedef struct _lck_mtx_ {
 #define	LCK_MTX_TAG_INDIRECT			0x00001007	/* lock marked as Indirect  */
 #define	LCK_MTX_TAG_DESTROYED			0x00002007	/* lock marked as Destroyed */
 
+#define MUTEX_LOCKED_AS_SPIN			0x00004001	/* used to indicate that the mutex */
+                                                                /* was acquired as a spin lock - stored in lck_mtxd_locked */
 /* Adaptive spin before blocking */
 extern unsigned int	MutexSpin;
-extern void		lck_mtx_lock_spin(lck_mtx_t *lck);
+extern void		lck_mtx_lock_spinwait(lck_mtx_t *lck);
 
-extern void		lck_mtx_interlock_spin(lck_mtx_t *lck);
+extern void		lck_mtx_interlock_panic(lck_mtx_t *lck);
+
+extern void		hw_lock_byte_init(uint8_t *lock_byte);
+extern void		hw_lock_byte_lock(uint8_t *lock_byte);
+extern void		hw_lock_byte_unlock(uint8_t *lock_byte);
 
 typedef struct {
 	unsigned int		type;
@@ -105,7 +117,7 @@ typedef struct _lck_mtx_ext_ {
 	struct _lck_grp_	*lck_mtx_grp;
 	unsigned int		lck_mtx_attr;
 	lck_mtx_deb_t		lck_mtx_deb;
-	lck_mtx_stat_t		lck_mtx_stat;
+	uint64_t		lck_mtx_stat;
 } lck_mtx_ext_t;
 
 #define	LCK_MTX_ATTR_DEBUG	0x1
@@ -124,17 +136,25 @@ typedef struct __lck_mtx_t__	lck_mtx_t;
 #endif
 
 #ifdef	MACH_KERNEL_PRIVATE
+#pragma pack(1)		/* Make sure the structure stays as we defined it */
 typedef struct {
-	hw_lock_data_t		interlock;
-	volatile unsigned int
-						read_count:16,	/* No. of accepted readers */
-						want_upgrade:1,	/* Read-to-write upgrade waiting */
-			want_write:1,	/* Writer waiting or locked for write */
-						waiting:1,		/* Someone is sleeping on lock */
-			can_sleep:1,	/* Can attempts to lock go to sleep? */
-			read_priority:1;/* New read takes piority over write */
-	unsigned int		lck_rw_tag;
+	volatile uint16_t	lck_rw_shared_count;	/* No. of accepted readers */
+	uint8_t	lck_rw_interlock; 			/* Interlock byte */
+	volatile uint8_t
+				lck_rw_priv_excl:1,	/* Writers prioritized if set */
+				lck_rw_want_upgrade:1,	/* Read-to-write upgrade waiting */
+				lck_rw_want_write:1,	/* Writer waiting or locked for write */
+				lck_r_waiting:1,	/* Reader is sleeping on lock */
+				lck_w_waiting:1,	/* Writer is sleeping on lock */
+				lck_rw_can_sleep:1,	/* Can attempts to lock go to sleep? */
+				lck_rw_pad6:2; 		/* padding */
+
+	unsigned int		lck_rw_tag; /* This can be obsoleted when stats
+					     * are in
+					     */
+	unsigned int		lck_rw_pad8;
 } lck_rw_t;
+#pragma pack()
 
 #define	LCK_RW_ATTR_DEBUG	0x1
 #define	LCK_RW_ATTR_DEBUGb	0

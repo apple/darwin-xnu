@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -85,8 +91,8 @@ enum vtype	{ VNON, VREG, VDIR, VBLK, VCHR, VLNK, VSOCK, VFIFO, VBAD, VSTR,
 enum vtagtype	{
 	VT_NON, VT_UFS, VT_NFS, VT_MFS, VT_MSDOSFS, VT_LFS, VT_LOFS, VT_FDESC,
 	VT_PORTAL, VT_NULL, VT_UMAP, VT_KERNFS, VT_PROCFS, VT_AFS, VT_ISOFS,
-	VT_UNION, VT_HFS, VT_VOLFS, VT_DEVFS, VT_WEBDAV, VT_UDF, VT_AFP,
-	VT_CDDA, VT_CIFS,VT_OTHER};
+	VT_UNION, VT_HFS, VT_ZFS, VT_DEVFS, VT_WEBDAV, VT_UDF, VT_AFP,
+	VT_CDDA, VT_CIFS, VT_OTHER};
 
 
 /*
@@ -123,6 +129,9 @@ enum vtagtype	{
 #define	IO_NODELOCKED	0x0008		/* underlying node already locked */
 #define	IO_NDELAY	0x0010		/* FNDELAY flag set in file table */
 #define	IO_NOZEROFILL	0x0020		/* F_SETSIZE fcntl uses to prevent zero filling */
+#ifdef XNU_KERNEL_PRIVATE
+#define IO_REVOKE	IO_NOZEROFILL	/* revoked close for tty, will Not be used in conjunction */
+#endif /* XNU_KERNEL_PRIVATE */
 #define	IO_TAILZEROFILL	0x0040		/* zero fills at the tail of write */
 #define	IO_HEADZEROFILL	0x0080		/* zero fills at the head of write */
 #define	IO_NOZEROVALID	0x0100		/* do not zero fill if valid page */
@@ -131,6 +140,11 @@ enum vtagtype	{
 #define IO_NOCACHE	0x0800		/* same effect as VNOCACHE_DATA, but only for this 1 I/O */
 #define IO_RAOFF	0x1000		/* same effect as VRAOFF, but only for this 1 I/O */
 #define IO_DEFWRITE	0x2000		/* defer write if vfs.defwrite is set */
+#define IO_PASSIVE	0x4000		/* this I/O is marked as background I/O so it won't throttle Throttleable I/O */
+#define IO_BACKGROUND IO_PASSIVE /* used for backward compatibility.  to be removed after IO_BACKGROUND is no longer
+								  * used by DiskImages in-kernel mode */
+#define	IO_NOAUTH	0x8000		/* No authorization checks. */
+
 
 /*
  * Component Name: this structure describes the pathname
@@ -177,16 +191,17 @@ struct componentname {
 /*
  * component name operational modifier flags
  */
-#define	FOLLOW		0x0040	/* follow symbolic links */
+#define	FOLLOW		0x00000040 /* follow symbolic links */
+#define NOTRIGGER	0x10000000 /* don't trigger automounts */
 
 /*
  * component name parameter descriptors.
  */
-#define	ISDOTDOT	0x002000 /* current component name is .. */
-#define	MAKEENTRY	0x004000 /* entry is to be added to name cache */
-#define	ISLASTCN	0x008000 /* this is last component of pathname */
-#define	ISWHITEOUT	0x020000 /* found whiteout */
-#define	DOWHITEOUT	0x040000 /* do whiteouts */
+#define	ISDOTDOT	0x00002000 /* current component name is .. */
+#define	MAKEENTRY	0x00004000 /* entry is to be added to name cache */
+#define	ISLASTCN	0x00008000 /* this is last component of pathname */
+#define	ISWHITEOUT	0x00020000 /* found whiteout */
+#define	DOWHITEOUT	0x00040000 /* do whiteouts */
 
 
 
@@ -208,6 +223,7 @@ struct vnode_fsparam {
 
 #define	VNFS_NOCACHE	0x01	/* do not add to name cache at this time */
 #define	VNFS_CANTCACHE	0x02	/* never add this instance to the name cache */
+#define	VNFS_ADDFSREF	0x04	/* take fs (named) reference */
 
 #define VNCREATE_FLAVOR	0
 #define VCREATESIZE sizeof(struct vnode_fsparam)
@@ -270,6 +286,7 @@ struct vnode_fsparam {
 #define VNODE_ATTR_va_uuuid		(1LL<<26)	/* 04000000 */
 #define VNODE_ATTR_va_guuid		(1LL<<27)	/* 08000000 */
 #define VNODE_ATTR_va_nchildren		(1LL<<28)       /* 10000000 */
+#define VNODE_ATTR_va_dirlinkcount	(1LL<<29)       /* 20000000 */
 
 #define VNODE_ATTR_BIT(n)	(VNODE_ATTR_ ## n)
 /*
@@ -289,7 +306,8 @@ struct vnode_fsparam {
 				VNODE_ATTR_BIT(va_gen) |		\
 				VNODE_ATTR_BIT(va_name) |		\
 				VNODE_ATTR_BIT(va_type) |		\
-				VNODE_ATTR_BIT(va_nchildren))
+				VNODE_ATTR_BIT(va_nchildren) |		\
+				VNODE_ATTR_BIT(va_dirlinkcount))
 /*
  * Attributes that can be applied to a new file object.
  */
@@ -357,8 +375,9 @@ struct vnode_attr {
 	guid_t		va_uuuid;	/* file owner UUID */
 	guid_t		va_guuid;	/* file group UUID */
 	
-	uint64_t	va_nchildren;	/* Number of items in a directory */
-					/* Meaningful for directories only */
+	/* Meaningful for directories only */
+	uint64_t	va_nchildren;     /* Number of items in a directory */
+	uint64_t	va_dirlinkcount;  /* Real references to dir (i.e. excluding "." and ".." refs) */
 
 	/* add new fields here only */
 };
@@ -476,9 +495,9 @@ int	vnode_removefsref(vnode_t);
 
 int	vnode_hasdirtyblks(vnode_t);
 int	vnode_hascleanblks(vnode_t);
-#define	VNODE_ASYNC_THROTTLE	18
+#define	VNODE_ASYNC_THROTTLE	15
 /* timeout is in 10 msecs and not hz tick based */
-int	vnode_waitforwrites(vnode_t, int, int, int, char *);
+int	vnode_waitforwrites(vnode_t, int, int, int, const char *);
 void	vnode_startwrite(vnode_t);
 void	vnode_writedone(vnode_t);
 
@@ -486,12 +505,15 @@ enum vtype	vnode_vtype(vnode_t);
 uint32_t	vnode_vid(vnode_t);
 mount_t	vnode_mountedhere(vnode_t vp);
 mount_t	vnode_mount(vnode_t);
+errno_t vfs_mountref(mount_t);
+errno_t vfs_mountrele(mount_t);
 dev_t	vnode_specrdev(vnode_t);
 void *	vnode_fsnode(vnode_t);
 void	vnode_clearfsnode(vnode_t);
 
 int	vnode_isvroot(vnode_t);
 int	vnode_issystem(vnode_t);
+int	vnode_isswap(vnode_t vp);
 int	vnode_ismount(vnode_t);
 int	vnode_isreg(vnode_t);
 int	vnode_isdir(vnode_t);
@@ -500,21 +522,47 @@ int	vnode_isfifo(vnode_t);
 int	vnode_isblk(vnode_t);
 int	vnode_ischr(vnode_t);
 
+#ifdef __APPLE_API_UNSTABLE
+int	vnode_isnamedstream(vnode_t);
+#endif
+
+enum vtype	vnode_iftovt(int);
+int	vnode_vttoif(enum vtype);
+int	vnode_makeimode(int, int);
+
 int	vnode_ismountedon(vnode_t);
 void	vnode_setmountedon(vnode_t);
 void	vnode_clearmountedon(vnode_t);
 
+int	vnode_isrecycled(vnode_t);
 int	vnode_isnocache(vnode_t);
 void	vnode_setnocache(vnode_t);
 void	vnode_clearnocache(vnode_t);
 int	vnode_isnoreadahead(vnode_t);
+int	vnode_isstandard(vnode_t);
 void	vnode_setnoreadahead(vnode_t);
 void	vnode_clearnoreadahead(vnode_t);
+
+int	vnode_is_openevt(vnode_t);
+void	vnode_set_openevt(vnode_t);
+void	vnode_clear_openevt(vnode_t);
+
 /* left only for compat reasons as User code depends on this from getattrlist, for ex */
 void	vnode_settag(vnode_t, int);
 int	vnode_tag(vnode_t);
 int	vnode_getattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx);
 int	vnode_setattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx);
+
+vnode_t vfs_rootvnode(void);
+uint32_t vnode_vfsvisflags(vnode_t);
+uint32_t vnode_vfscmdflags(vnode_t);
+struct vfsstatfs *vnode_vfsstatfs(vnode_t);
+void	*vnode_vfsfsprivate(vnode_t);
+vnode_t	current_workingdir(void);
+vnode_t	current_rootdir(void);
+
+void	vnode_uncache_credentials(vnode_t vp);
+void	vnode_setmultipath(vnode_t vp);
 
 #ifdef BSD_KERNEL_PRIVATE
 
@@ -523,15 +571,16 @@ int	vnode_setattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx);
  * VNOP_LOOKUP on this vnode.  Volfs will always ask for it's parent
  * object ID (instead of using the v_parent pointer).
  */
-void	vnode_set_hard_link(vnode_t vp);
 
 vnode_t vnode_parent(vnode_t);
 void vnode_setparent(vnode_t, vnode_t);
-char * vnode_name(vnode_t);
+const char * vnode_name(vnode_t);
 void vnode_setname(vnode_t, char *);
 int vnode_isnoflush(vnode_t);
 void vnode_setnoflush(vnode_t);
 void vnode_clearnoflush(vnode_t);
+/* XXX temporary until we can arrive at a KPI for NFS, Seatbelt */
+thread_t vfs_context_thread(vfs_context_t);
 #endif
 
 uint32_t  vnode_vfsmaxsymlen(vnode_t);
@@ -540,8 +589,11 @@ int	vnode_vfstypenum(vnode_t);
 void	vnode_vfsname(vnode_t, char *);
 int 	vnode_vfs64bitready(vnode_t);
 
+int	vfs_context_get_special_port(vfs_context_t, int, ipc_port_t *);
+int	vfs_context_set_special_port(vfs_context_t, int, ipc_port_t);
 proc_t	vfs_context_proc(vfs_context_t);
-ucred_t	vfs_context_ucred(vfs_context_t);
+vnode_t vfs_context_cwd(vfs_context_t);
+kauth_cred_t	vfs_context_ucred(vfs_context_t);
 int	vfs_context_issuser(vfs_context_t);
 int	vfs_context_pid(vfs_context_t);
 int	vfs_context_issignal(vfs_context_t, sigset_t);
@@ -549,6 +601,10 @@ int	vfs_context_suser(vfs_context_t);
 int	vfs_context_is64bit(vfs_context_t);
 vfs_context_t vfs_context_create(vfs_context_t);
 int vfs_context_rele(vfs_context_t);
+vfs_context_t vfs_context_current(void);	/* get from current uthread */
+#ifdef __APPLE_API_UNSTABLE
+vfs_context_t vfs_context_kernel(void);		/* get from 1st kernel thread */
+#endif
 
 
 int	vflush(struct mount *mp, struct vnode *skipvp, int flags);
@@ -566,7 +622,7 @@ void	vnode_reclaim(vnode_t);
 #define	VNODE_UPDATE_PARENT	0x01
 #define	VNODE_UPDATE_NAME	0x02
 #define	VNODE_UPDATE_CACHE	0x04
-void	vnode_update_identity(vnode_t vp, vnode_t dvp, char *name, int name_len, int name_hashval, int flags);
+void	vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, int name_hashval, int flags);
 
 int	vn_bwrite(struct vnop_bwrite_args *ap);
 
@@ -576,6 +632,7 @@ int	vnode_authattr_new(vnode_t /*dvp*/, struct vnode_attr *, int /*noauth*/, vfs
 errno_t vnode_close(vnode_t, int, vfs_context_t);
 
 int vn_getpath(struct vnode *vp, char *pathbuf, int *len);
+int vn_getcdhash(struct vnode *vp, off_t offset, unsigned char *cdhash);
 
 /*
  * Flags for the vnode_lookup and vnode_open
@@ -615,13 +672,16 @@ int	vnode_iterate(struct mount *, int, int (*)(struct vnode *, void *), void *);
 #define VNODE_CLAIMED_DONE	3	/* don't drop reference, terminate iteration */
 
 
+#ifdef BSD_KERNEL_PRIVATE
+/* Not in export list so can be private */
 struct stat;
-int	vn_stat(struct vnode *vp, struct stat *sb, kauth_filesec_t *xsec, vfs_context_t ctx);
-int	vn_stat_noauth(struct vnode *vp, struct stat *sb, kauth_filesec_t *xsec, vfs_context_t ctx);
-int	vn_revoke(vnode_t vp, int flags, vfs_context_t);
-/* XXX BOGUS */
+int	vn_stat(struct vnode *vp, void * sb, kauth_filesec_t *xsec, int isstat64, vfs_context_t ctx);
+int	vn_stat_noauth(struct vnode *vp, void * sb, kauth_filesec_t *xsec, int isstat64, vfs_context_t ctx);
 int	vaccess(mode_t file_mode, uid_t uid, gid_t gid,
-	  		mode_t acc_mode, struct ucred *cred);
+	  		mode_t acc_mode, kauth_cred_t cred);
+#endif /* BSD_KERNEL_PRIVATE */
+
+int	vn_revoke(vnode_t vp, int flags, vfs_context_t);
 
 
 /* namecache function prototypes */
@@ -635,8 +695,11 @@ void	cache_purge_negatives(vnode_t vp);
  * if you don't know it (add_name() will then compute the hash).
  * There are no flags for now but maybe someday.
  */
-char *vfs_addname(const char *name, size_t len, u_int nc_hash, u_int flags);
+const char *vfs_addname(const char *name, size_t len, u_int nc_hash, u_int flags);
 int   vfs_removename(const char *name);
+
+int	check_mountedon(dev_t dev, enum vtype type, int  *errorp);
+int	vcount(vnode_t vp);
 
 __END_DECLS
 

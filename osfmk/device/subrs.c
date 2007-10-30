@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -89,12 +95,48 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+
+/*
+ * Copyright (c) 1998 Todd C. Miller <Todd.Miller@courtesan.com>
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. The name of the author may not be used to endorse or promote products
+ *    derived from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+ * AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL
+ * THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+/*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 /*
  * Random device subroutines and stubs.
  */
 
 #include <vm/vm_kern.h>
 #include <kern/misc_protos.h>
+#include <libsa/stdlib.h>
+#include <sys/malloc.h>
 
 /* String routines, from CMU */
 #ifdef	strcpy
@@ -115,14 +157,16 @@
  *      It returns < 0 if the first differing character is smaller
  *      in s1 than in s2 or if s1 is shorter than s2 and the
  *      contents are identical upto the length of s1.
+ * Deprecation Warning:
+ *	strcmp() is being deprecated. Please use strncmp() instead.
  */
 
 int
 strcmp(
-        register const char *s1,
-        register const char *s2)
+        const char *s1,
+        const char *s2)
 {
-        register unsigned int a, b;
+        unsigned int a, b;
 
         do {
                 a = *s1++;
@@ -145,11 +189,11 @@ strcmp(
 
 int
 strncmp(
-        register const char *s1,
-        register const char *s2,
+        const char *s1,
+        const char *s2,
         size_t n)
 {
-        register unsigned int a, b;
+        unsigned int a, b;
 
         while (n != 0) {
                 a = *s1++;
@@ -214,14 +258,16 @@ strncasecmp(const char *s1, const char *s2, size_t n)
  *      strcpy copies the contents of the string "from" including
  *      the null terminator to the string "to". A pointer to "to"
  *      is returned.
+ * Deprecation Warning: 
+ *	strcpy() is being deprecated. Please use strlcpy() instead.
  */
 
 char *
 strcpy(
-        register char *to,
-        register const char *from)
+        char *to,
+        const char *from)
 {
-        register char *ret = to;
+        char *ret = to;
 
         while ((*to++ = *from++) != '\0')
                 continue;
@@ -267,8 +313,7 @@ strncpy(
  */
 
 int
-atoi(
-	u_char  *cp)
+atoi(const char *cp)
 {
         int     number;
 
@@ -295,8 +340,8 @@ atoi_term(
 	char	*p,	/* IN */
 	char	**t)	/* OUT */
 {
-        register int n;
-        register int f;
+        int n;
+        int f;
 
         n = 0;
         f = 0;
@@ -328,10 +373,10 @@ atoi_term(
  * Taken from archive/kern-stuff/sbf_machine.c in 
  * seatbelt. 
  * inputs:
- *     s       string whose length is to be measured
- *     max     maximum length of string to search for null
+ * 	s	string whose length is to be measured
+ *	max	maximum length of string to search for null
  * outputs:
- *     length of s or max; whichever is smaller
+ *	length of s or max; whichever is smaller
  */
 size_t 
 strnlen(const char *s, size_t max) {
@@ -341,8 +386,6 @@ strnlen(const char *s, size_t max) {
 
 	return p - s;
 }
-
-
 
 /*
  * convert an integer to an ASCII string.
@@ -360,8 +403,8 @@ itoa(
 	char	*str)
 {
         char    digits[11];
-        register char *dp;
-        register char *cp = str;
+        char *dp;
+        char *cp = str;
 
         if (num == 0) {
             *cp++ = '0';
@@ -381,17 +424,143 @@ itoa(
 	return str;
 }
 
+/* 
+ * Deprecation Warning:
+ *	strcat() is being deprecated. Please use strlcat() instead.
+ */
 char *
 strcat(
-	register char *dest,
-	register const char *src)
+	char *dest,
+	const char *src)
 {
 	char *old = dest;
 
 	while (*dest)
 		++dest;
-	while (*dest++ = *src++)
+	while ((*dest++ = *src++))
 		;
 	return (old);
+}
+
+/*
+ * Appends src to string dst of size siz (unlike strncat, siz is the
+ * full size of dst, not space left).  At most siz-1 characters
+ * will be copied.  Always NUL terminates (unless siz <= strlen(dst)).
+ * Returns strlen(src) + MIN(siz, strlen(initial dst)).
+ * If retval >= siz, truncation occurred.
+ */
+size_t
+strlcat(char *dst, const char *src, size_t siz)
+{
+	char *d = dst;
+	const char *s = src;
+	size_t n = siz;
+	size_t dlen;
+
+	/* Find the end of dst and adjust bytes left but don't go past end */
+	while (n-- != 0 && *d != '\0')
+		d++;
+	dlen = d - dst;
+	n = siz - dlen;
+
+	if (n == 0)
+		return(dlen + strlen(s));
+	while (*s != '\0') {
+		if (n != 1) {
+			*d++ = *s;
+			n--;
+		}
+		s++;
+	}
+	*d = '\0';
+
+	return(dlen + (s - src));       /* count does not include NUL */
+}
+
+/*
+ * Copy src to string dst of size siz.  At most siz-1 characters
+ * will be copied.  Always NUL terminates (unless siz == 0).
+ * Returns strlen(src); if retval >= siz, truncation occurred.
+ */
+size_t
+strlcpy(char *dst, const char *src, size_t siz)
+{
+	char *d = dst;
+	const char *s = src;
+	size_t n = siz;
+
+	/* Copy as many bytes as will fit */
+	if (n != 0 && --n != 0) {
+		do {
+			if ((*d++ = *s++) == 0)
+				break;
+		} while (--n != 0);
+	}
+
+	/* Not enough room in dst, add NUL and traverse rest of src */
+	if (n == 0) {
+		if (siz != 0)
+			*d = '\0';		/* NUL-terminate dst */
+		while (*s++)
+			;
+	}
+
+	return(s - src - 1);	/* count does not include NUL */
+}
+
+/*
+ * STRDUP
+ *
+ * Description: The STRDUP function allocates sufficient memory for a copy
+ *              of the string "string", does the copy, and returns a pointer
+ *              it. The pointer may subsequently be used as an argument to
+ *              the macro FREE().
+ *
+ * Parameters:  string		String to be duplicated
+ *              type		type of memory to be allocated (normally
+ *              		M_TEMP)
+ *
+ * Returns:     char *          A pointer to the newly allocated string with
+ *                              duplicated contents in it.
+ *
+ *              NULL		If MALLOC() fails.
+ *
+ * Note:        This function can *not* be called from interrupt context as
+ *              it calls MALLOC with M_WAITOK.  In fact, you really
+ *              shouldn't be doing string manipulation in interrupt context
+ *              ever.
+ *
+ *              This function name violates the kernel style(9) guide
+ *              by being all caps.  This was done on purpose to emphasize
+ *              one should use FREE() with the allocated buffer.
+ *
+ */
+inline char *
+STRDUP(const char *string, int type)
+{
+	size_t len;
+	char *copy;   
+
+	len = strlen(string) + 1;
+	MALLOC(copy, char *, len, type, M_WAITOK);
+	if (copy == NULL)
+		return (NULL);
+	bcopy(string, copy, len);
+	return (copy); 
+}
+
+/*
+ * Return TRUE(1) if string 2 is a prefix of string 1.
+ */     
+int       
+strprefix(register const char *s1, register const char *s2)
+{               
+        register int    c;
+                
+        while ((c = *s2++) != '\0') {
+            if (c != *s1++) 
+                return (0);
+        }       
+        return (1);
 }
 

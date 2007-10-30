@@ -1,29 +1,39 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
- *	Copyright (c) 1999 Apple Computer, Inc. 
- *
  *	Data Link Inteface Layer
  *	Author: Ted Walker
+ */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
  */
 
 #include <sys/param.h>
@@ -34,6 +44,7 @@
 #include <sys/socket.h>
 #include <sys/domain.h>
 #include <sys/user.h>
+#include <sys/random.h>
 #include <net/if_dl.h>
 #include <net/if.h>
 #include <net/route.h>
@@ -48,6 +59,7 @@
 #include <kern/thread.h>
 #include <kern/sched_prim.h>
 #include <kern/locks.h>
+#include <net/kpi_protocol.h>
 
 #include <net/if_types.h>
 #include <net/kpi_interfacefilter.h>
@@ -56,31 +68,33 @@
 
 #include <machine/machine_routines.h>
 
-#define DBG_LAYER_BEG		DLILDBG_CODE(DBG_DLIL_STATIC, 0)
-#define DBG_LAYER_END		DLILDBG_CODE(DBG_DLIL_STATIC, 2)
+#include <mach/thread_act.h>
+
+#if CONFIG_MACF_NET
+#include <security/mac_framework.h>
+#endif /* MAC_NET */
+
+#define DBG_LAYER_BEG			DLILDBG_CODE(DBG_DLIL_STATIC, 0)
+#define DBG_LAYER_END			DLILDBG_CODE(DBG_DLIL_STATIC, 2)
 #define DBG_FNC_DLIL_INPUT      DLILDBG_CODE(DBG_DLIL_STATIC, (1 << 8))
 #define DBG_FNC_DLIL_OUTPUT     DLILDBG_CODE(DBG_DLIL_STATIC, (2 << 8))
 #define DBG_FNC_DLIL_IFOUT      DLILDBG_CODE(DBG_DLIL_STATIC, (3 << 8))
 
 
-#define MAX_DL_TAGS 		16
-#define MAX_DLIL_FILTERS 	16
 #define MAX_FRAME_TYPE_SIZE 4 /* LONGWORDS */
 #define MAX_LINKADDR	    4 /* LONGWORDS */
 #define M_NKE M_IFADDR
 
-#define PFILT(x) ((struct dlil_filterq_entry *) (x))->variants.pr_filter
-#define IFILT(x) ((struct dlil_filterq_entry *) (x))->variants.if_filter
-
-#if 0
+#if 1
 #define DLIL_PRINTF	printf
 #else
 #define DLIL_PRINTF	kprintf
 #endif
 
+
 enum {
-	kProtoKPI_DLIL	= 0,
-	kProtoKPI_v1	= 1
+	kProtoKPI_v1	= 1,
+	kProtoKPI_v2	= 2
 };
 
 struct if_proto {
@@ -92,14 +106,6 @@ struct if_proto {
     protocol_family_t		protocol_family;
     int						proto_kpi;
     union {
-    	struct {
-			dl_input_func			 dl_input;
-			dl_pre_output_func		 dl_pre_output;
-			dl_event_func			 dl_event;
-			dl_offer_func			 dl_offer;
-			dl_ioctl_func			 dl_ioctl;
-			dl_detached_func		 dl_detached;
-		} dlil;
 		struct {
 			proto_media_input			input;
 			proto_media_preout			pre_output;
@@ -109,6 +115,15 @@ struct if_proto {
 			proto_media_resolve_multi	resolve_multi;
 			proto_media_send_arp		send_arp;
 		} v1;
+		struct {
+			proto_media_input_v2		input;
+			proto_media_preout			pre_output;
+			proto_media_event			event;
+			proto_media_ioctl			ioctl;
+			proto_media_detached		detached;
+			proto_media_resolve_multi	resolve_multi;
+			proto_media_send_arp		send_arp;
+		} v2;
 	} kpi;
 };
 
@@ -143,46 +158,13 @@ struct ifnet_filter {
     iff_detached_func			filt_detached;
 };
 
-struct if_family_str {
-    TAILQ_ENTRY(if_family_str) if_fam_next;
-    u_long	if_family;
-    int		refcnt;
-    int		flags;
-
-#define DLIL_SHUTDOWN 1
-
-    int (*add_if)(struct ifnet *ifp);
-    int (*del_if)(struct ifnet *ifp);
-    int (*init_if)(struct ifnet *ifp);
-    int (*add_proto)(struct ifnet *ifp, u_long protocol_family, struct ddesc_head_str *demux_desc_head);
-	ifnet_del_proto_func	del_proto;
-    ifnet_ioctl_func		ifmod_ioctl;
-    int (*shutdown)(void);
-};
-
-struct proto_family_str {
-	TAILQ_ENTRY(proto_family_str) proto_fam_next;
-	u_long	proto_family;
-	u_long	if_family;
-	int		usecnt;
-
-	int (*attach_proto)(struct ifnet *ifp, u_long protocol_family);
-	int (*detach_proto)(struct ifnet *ifp, u_long protocol_family);
-};
-
-enum {
-	kIfNetUseCount_MayBeZero = 0,
-	kIfNetUseCount_MustNotBeZero = 1
-};
+struct proto_input_entry;
 
 static TAILQ_HEAD(, dlil_ifnet) dlil_ifnet_head;
-static TAILQ_HEAD(, if_family_str) if_family_head;
-static TAILQ_HEAD(, proto_family_str) proto_family_head;
 static lck_grp_t *dlil_lock_group;
 static lck_grp_t *ifnet_lock_group;
 static lck_grp_t *ifnet_head_lock_group;
 static lck_attr_t *ifnet_lock_attr;
-static lck_mtx_t *proto_family_mutex;
 static lck_rw_t *ifnet_head_mutex;
 static lck_mtx_t *dlil_ifnet_mutex;
 static lck_mtx_t *dlil_mutex;
@@ -190,39 +172,40 @@ static unsigned long dlil_read_count = 0;
 static unsigned long dlil_detach_waiting = 0;
 extern u_int32_t	ipv4_ll_arp_aware;
 
-int dlil_initialized = 0;
-lck_spin_t *dlil_input_lock;
-__private_extern__ thread_t	dlil_input_thread_ptr = 0;
-int dlil_input_thread_wakeup = 0;
-__private_extern__ int dlil_output_thread_wakeup = 0;
-static struct mbuf *dlil_input_mbuf_head = NULL;
-static struct mbuf *dlil_input_mbuf_tail = NULL;
-#if NLOOP > 1
-#error dlil_input() needs to be revised to support more than on loopback interface
-#endif
-static struct mbuf *dlil_input_loop_head = NULL;
-static struct mbuf *dlil_input_loop_tail = NULL;
+static struct dlil_threading_info dlil_lo_thread;
+__private_extern__  struct dlil_threading_info *dlil_lo_thread_ptr = &dlil_lo_thread;
 
-static void dlil_input_thread(void);
+static struct mbuf *dlil_lo_input_mbuf_head = NULL;
+static struct mbuf *dlil_lo_input_mbuf_tail = NULL;
+
+#if IFNET_INPUT_SANITY_CHK
+static int dlil_lo_input_mbuf_count = 0;
+int dlil_input_sanity_check = 0;	/* sanity checking of input packet lists received */
+#endif
+int dlil_multithreaded_input = 1;
+static int cur_dlil_input_threads = 0; 
+
 static int dlil_event_internal(struct ifnet *ifp, struct kev_msg *msg);
-struct ifnet *ifbyfamily(u_long family, short unit);
 static int dlil_detach_filter_internal(interface_filter_t filter, int detached);
 static void dlil_call_delayed_detach_thread(void);
 
 static void	dlil_read_begin(void);
-static void	dlil_read_end(void);
+static __inline__ void	dlil_read_end(void);
 static int	dlil_write_begin(void);
 static void	dlil_write_end(void);
 
-static int ifp_use(struct ifnet *ifp, int handle_zero);
-static int ifp_unuse(struct ifnet *ifp);
-static void ifp_use_reached_zero(struct ifnet *ifp);
+unsigned int net_affinity = 1;
+static kern_return_t dlil_affinity_set(struct thread *, u_int32_t);
 
 extern void bpfdetach(struct ifnet*);
 extern void proto_input_run(void); // new run_netisr
 
-
-int dlil_input_packet(struct ifnet  *ifp, struct mbuf *m, char *frame_header);
+void dlil_input_packet_list(struct ifnet  *ifp, struct mbuf *m);
+static void dlil_input_thread_func(struct dlil_threading_info *inpthread); 
+__private_extern__ int dlil_create_input_thread(
+		ifnet_t, struct dlil_threading_info *);
+__private_extern__ void dlil_terminate_input_thread(
+		struct dlil_threading_info *);
 
 __private_extern__ void link_rtrequest(int, struct rtentry *, struct sockaddr *);
 
@@ -231,8 +214,11 @@ int dlil_expand_mcl;
 extern u_int32_t	inject_buckets;
 
 static const u_int32_t dlil_writer_waiting = 0x80000000;
+static	lck_grp_attr_t	*dlil_grp_attributes = NULL;
+static	lck_attr_t	*dlil_lck_attributes = NULL;
+static	lck_grp_t	*dlil_input_lock_grp = NULL;
 
-static __inline__ void*
+static inline void*
 _cast_non_const(const void * ptr) {
 	union {
 		const void*		cval;
@@ -275,7 +261,7 @@ dlil_read_end(void)
 {
 	struct uthread *uth = get_bsdthread_info(current_thread());
 	
-	OSDecrementAtomic((UInt32*)&dlil_read_count);
+	OSDecrementAtomic((SInt32*)&dlil_read_count);
 	uth->dlil_incremented_read--;
 	if (dlil_read_count == dlil_writer_waiting)
 		wakeup(_cast_non_const(&dlil_writer_waiting));
@@ -338,34 +324,6 @@ proto_hash_value(u_long protocol_family)
 	}
 }
 
-static 
-struct if_family_str *find_family_module(u_long if_family)
-{
-    struct if_family_str  *mod = NULL;
-
-    TAILQ_FOREACH(mod, &if_family_head, if_fam_next) {
-	if (mod->if_family == (if_family & 0xffff)) 
-	    break;
-    }
-
-    return mod;
-}
-
-static 
-struct proto_family_str*
-find_proto_module(u_long proto_family, u_long if_family)
-{
-	struct proto_family_str  *mod = NULL;
-
-	TAILQ_FOREACH(mod, &proto_family_head, proto_fam_next) {
-		if ((mod->proto_family == (proto_family & 0xffff)) 
-			&& (mod->if_family == (if_family & 0xffff))) 
-			break;
-		}
-
-	return mod;
-}
-
 static struct if_proto*
 find_attached_proto(struct ifnet *ifp, u_long protocol_family)
 {
@@ -385,13 +343,13 @@ find_attached_proto(struct ifnet *ifp, u_long protocol_family)
 static void
 if_proto_ref(struct if_proto *proto)
 {
-	OSAddAtomic(1, (UInt32*)&proto->refcount);
+	OSAddAtomic(1, (SInt32*)&proto->refcount);
 }
 
 static void
 if_proto_free(struct if_proto *proto)
 {
-	int oldval = OSAddAtomic(-1, (UInt32*)&proto->refcount);
+	int oldval = OSAddAtomic(-1, (SInt32*)&proto->refcount);
 	
 	if (oldval == 1) { /* This was the last reference */
 		FREE(proto, M_IFADDR);
@@ -452,37 +410,21 @@ ifnet_lock_done(
 }
 
 __private_extern__ void
-ifnet_head_lock_shared()
+ifnet_head_lock_shared(void)
 {
 	lck_rw_lock_shared(ifnet_head_mutex);
 }
 
 __private_extern__ void
-ifnet_head_lock_exclusive()
+ifnet_head_lock_exclusive(void)
 {
 	lck_rw_lock_exclusive(ifnet_head_mutex);
 }
 
 __private_extern__ void
-ifnet_head_done()
+ifnet_head_done(void)
 {
 	lck_rw_done(ifnet_head_mutex);
-}
-
-/*
- * Public functions.
- */
-struct ifnet *ifbyfamily(u_long family, short unit)
-{
-	struct ifnet *ifp;
-
-	ifnet_head_lock_shared();
-	TAILQ_FOREACH(ifp, &ifnet_head, if_link)
-		if ((family == ifp->if_family) && (ifp->if_unit == unit))
-			break;
-	ifnet_head_done();
-
-	return ifp;
 }
 
 static int dlil_ifp_proto_count(struct ifnet * ifp) 
@@ -510,7 +452,7 @@ dlil_post_msg(struct ifnet *ifp, u_long event_subclass, u_long event_code,
 	struct kev_msg  		ev_msg;
 	
 	/* 
-	 * a net event always start with a net_event_data structure
+	 * a net event always starts with a net_event_data structure
 	 * but the caller can generate a simple net event or
 	 * provide a longer event structure to post
 	 */
@@ -536,57 +478,122 @@ dlil_post_msg(struct ifnet *ifp, u_long event_subclass, u_long event_code,
 	dlil_event_internal(ifp, &ev_msg);
 }
 
-void dlil_init(void);
+__private_extern__ int
+dlil_create_input_thread(
+	ifnet_t ifp, struct dlil_threading_info *inputthread)
+{
+	int error;
+
+	bzero(inputthread, sizeof(*inputthread));
+	// loopback ifp may not be configured at dlil_init time.
+	if (ifp == lo_ifp)
+		strlcat(inputthread->input_name, "dlil_input_main_thread_mtx", 32);
+	else
+		snprintf(inputthread->input_name, 32, "dlil_input_%s%d_mtx", ifp->if_name, ifp->if_unit);	
+
+	inputthread->lck_grp = lck_grp_alloc_init(inputthread->input_name, dlil_grp_attributes);
+	inputthread->input_lck  = lck_mtx_alloc_init(inputthread->lck_grp, dlil_lck_attributes);
+
+	error= kernel_thread_start((thread_continue_t)dlil_input_thread_func, inputthread, &inputthread->input_thread);
+	if (error == 0) {
+       		ml_thread_policy(inputthread->input_thread, MACHINE_GROUP,
+				 (MACHINE_NETWORK_GROUP|MACHINE_NETWORK_NETISR));
+		/*
+		 * Except for the loopback dlil input thread, we create
+		 * an affinity set so that the matching workloop thread
+		 * can be scheduled on the same processor set.
+		 */
+		if (net_affinity && inputthread != dlil_lo_thread_ptr) {
+			struct thread *tp = inputthread->input_thread;
+			u_int32_t tag;
+			/*
+			 * Randomize to reduce the probability
+			 * of affinity tag namespace collision.
+			 */
+			read_random(&tag, sizeof (tag));
+			if (dlil_affinity_set(tp, tag) == KERN_SUCCESS) {
+				thread_reference(tp);
+				inputthread->tag = tag;
+				inputthread->net_affinity = TRUE;
+			}
+		}
+	} else {
+		panic("dlil_create_input_thread: couldn't create thread\n");
+	}
+	OSAddAtomic(1, (SInt32*)&cur_dlil_input_threads);
+#if DLIL_DEBUG
+	printf("dlil_create_input_thread: threadinfo: %p input_thread=%p threads: cur=%d max=%d\n", 
+		inputthread, inputthread->input_thread, dlil_multithreaded_input, cur_dlil_input_threads);
+#endif
+	return error;
+}
+__private_extern__ void
+dlil_terminate_input_thread(
+	struct dlil_threading_info *inputthread)
+{
+	OSAddAtomic(-1, (SInt32*)&cur_dlil_input_threads);
+
+	lck_mtx_unlock(inputthread->input_lck);
+	lck_mtx_free(inputthread->input_lck, inputthread->lck_grp);
+	lck_grp_free(inputthread->lck_grp);
+
+	FREE(inputthread, M_NKE);
+
+	/* For the extra reference count from kernel_thread_start() */
+	thread_deallocate(current_thread());
+
+	thread_terminate(current_thread());
+}
+
+static kern_return_t
+dlil_affinity_set(struct thread *tp, u_int32_t tag)
+{
+	thread_affinity_policy_data_t policy;
+
+	bzero(&policy, sizeof (policy));
+	policy.affinity_tag = tag;
+	return (thread_policy_set(tp, THREAD_AFFINITY_POLICY,
+	    (thread_policy_t)&policy, THREAD_AFFINITY_POLICY_COUNT));
+}
+
 void
 dlil_init(void)
 {
-	lck_grp_attr_t	*grp_attributes = 0;
-	lck_attr_t		*lck_attributes = 0;
-	lck_grp_t		*input_lock_grp = 0;
+	PE_parse_boot_arg("net_affinity", &net_affinity);
 	
 	TAILQ_INIT(&dlil_ifnet_head);
-	TAILQ_INIT(&if_family_head);
-	TAILQ_INIT(&proto_family_head);
 	TAILQ_INIT(&ifnet_head);
 	
 	/* Setup the lock groups we will use */
-	grp_attributes = lck_grp_attr_alloc_init();
+	dlil_grp_attributes = lck_grp_attr_alloc_init();
 
-	dlil_lock_group = lck_grp_alloc_init("dlil internal locks", grp_attributes);
-#if IFNET_RW_LOCK
-	ifnet_lock_group = lck_grp_alloc_init("ifnet locks", grp_attributes);
-#else
-	ifnet_lock_group = lck_grp_alloc_init("ifnet locks", grp_attributes);
-#endif
-	ifnet_head_lock_group = lck_grp_alloc_init("ifnet head lock", grp_attributes);
-	input_lock_grp = lck_grp_alloc_init("dlil input lock", grp_attributes);
-	lck_grp_attr_free(grp_attributes);
-	grp_attributes = 0;
+	dlil_lock_group = lck_grp_alloc_init("dlil internal locks", dlil_grp_attributes);
+	ifnet_lock_group = lck_grp_alloc_init("ifnet locks", dlil_grp_attributes);
+	ifnet_head_lock_group = lck_grp_alloc_init("ifnet head lock", dlil_grp_attributes);
+	dlil_input_lock_grp = lck_grp_alloc_init("dlil input lock", dlil_grp_attributes);
 	
 	/* Setup the lock attributes we will use */
-	lck_attributes = lck_attr_alloc_init();
+	dlil_lck_attributes = lck_attr_alloc_init();
 	
 	ifnet_lock_attr = lck_attr_alloc_init();
 	
-	dlil_input_lock = lck_spin_alloc_init(input_lock_grp, lck_attributes);
-	input_lock_grp = 0;
 	
-	ifnet_head_mutex = lck_rw_alloc_init(ifnet_head_lock_group, lck_attributes);
-	proto_family_mutex = lck_mtx_alloc_init(dlil_lock_group, lck_attributes);
-	dlil_ifnet_mutex = lck_mtx_alloc_init(dlil_lock_group, lck_attributes);
-	dlil_mutex = lck_mtx_alloc_init(dlil_lock_group, lck_attributes);
+	ifnet_head_mutex = lck_rw_alloc_init(ifnet_head_lock_group, dlil_lck_attributes);
+	dlil_ifnet_mutex = lck_mtx_alloc_init(dlil_lock_group, dlil_lck_attributes);
+	dlil_mutex = lck_mtx_alloc_init(dlil_lock_group, dlil_lck_attributes);
 	
-	lck_attr_free(lck_attributes);
-	lck_attributes = 0;
+	lck_attr_free(dlil_lck_attributes);
+	dlil_lck_attributes = NULL;
 	
 	/*
-	 * Start up the dlil input thread once everything is initialized
+	 * Create and start up the first dlil input thread once everything is initialized
 	 */
-	(void) kernel_thread(kernel_task, dlil_input_thread);
+	dlil_create_input_thread(0, dlil_lo_thread_ptr);
+
 	(void) kernel_thread(kernel_task, dlil_call_delayed_detach_thread);
 }
 
-int
+__private_extern__ int
 dlil_attach_filter(
 	struct ifnet			*ifp,
 	const struct iff_filter	*if_filter,
@@ -623,7 +630,9 @@ dlil_attach_filter(
 }
 
 static int
-dlil_detach_filter_internal(interface_filter_t filter, int detached)
+dlil_detach_filter_internal(
+	interface_filter_t	filter,
+	int					detached)
 {
 	int retval = 0;
 	
@@ -685,7 +694,7 @@ dlil_detach_filter_internal(interface_filter_t filter, int detached)
 	return retval;
 }
 
-void
+__private_extern__ void
 dlil_detach_filter(interface_filter_t filter)
 {
 	if (filter == NULL)
@@ -694,97 +703,226 @@ dlil_detach_filter(interface_filter_t filter)
 }
 
 static void
-dlil_input_thread_continue(
-	__unused void*			foo,
-	__unused wait_result_t	wait)
+dlil_input_thread_func(
+	struct dlil_threading_info *inputthread)
 {
 	while (1) {
-		struct mbuf *m, *m_loop;
+		struct mbuf *m = NULL, *m_loop = NULL;
+#if IFNET_INPUT_SANITY_CHK
+		int		loop_cnt = 0, mbuf_cnt;
+		int		count;
+		struct mbuf *m1;
+#endif /* IFNET_INPUT_SANITY_CHK */
 		
-		lck_spin_lock(dlil_input_lock);
-		m = dlil_input_mbuf_head;
-		dlil_input_mbuf_head = NULL;
-		dlil_input_mbuf_tail = NULL;
-		m_loop = dlil_input_loop_head;
-		dlil_input_loop_head = NULL;
-		dlil_input_loop_tail = NULL;
-		lck_spin_unlock(dlil_input_lock);
+		lck_mtx_lock(inputthread->input_lck);
 		
+		/* Wait until there is work to be done */
+		while ((inputthread->input_waiting & ~DLIL_INPUT_RUNNING) == 0) {
+			inputthread->input_waiting &= ~DLIL_INPUT_RUNNING;
+			msleep(&inputthread->input_waiting, inputthread->input_lck, 0, inputthread->input_name, 0);
+		}
+
+	
+		lck_mtx_assert(inputthread->input_lck, LCK_MTX_ASSERT_OWNED);
+
+		m = inputthread->mbuf_head;
+		inputthread->mbuf_head = NULL;
+		inputthread->mbuf_tail = NULL;
+
+		if (inputthread->input_waiting & DLIL_INPUT_TERMINATE) {
+				if (m)
+					mbuf_freem_list(m);
+				/* this is the end */
+				dlil_terminate_input_thread(inputthread);
+				return;
+		}
+
+		inputthread->input_waiting |= DLIL_INPUT_RUNNING;
+		inputthread->input_waiting &= ~DLIL_INPUT_WAITING;
+
+		if (inputthread == dlil_lo_thread_ptr) {
+			m_loop = dlil_lo_input_mbuf_head;
+			dlil_lo_input_mbuf_head = NULL;
+			dlil_lo_input_mbuf_tail = NULL;
+		}
+
+#if IFNET_INPUT_SANITY_CHK
+		if (dlil_input_sanity_check != 0) {
+			mbuf_cnt = inputthread->mbuf_count;
+			inputthread->mbuf_count = 0;
+			if (inputthread == dlil_lo_thread_ptr) {
+				loop_cnt = dlil_lo_input_mbuf_count;
+				dlil_lo_input_mbuf_count = 0;
+			}
+		
+			lck_mtx_unlock(inputthread->input_lck);
+		
+			for (m1 = m, count = 0; m1; m1 = mbuf_nextpkt(m1)) {
+				count++;
+			}
+			if (count != mbuf_cnt) {
+				panic("dlil_input_func - thread=%p reg. loop queue has %d packets, should have %d\n",
+					  inputthread, count, mbuf_cnt);
+			}
+	
+			if (inputthread == dlil_lo_thread_ptr) {
+				for (m1 = m_loop, count = 0; m1; m1 = mbuf_nextpkt(m1)) {
+					count++;
+				}
+				if (count != loop_cnt) {
+					panic("dlil_input_func - thread=%p loop queue has %d packets, should have %d\n",
+					  inputthread, count, loop_cnt);
+				}
+			}
+		} else 
+#endif /* IFNET_INPUT_SANITY_CHK */
+		{
+			lck_mtx_unlock(inputthread->input_lck);
+		}
+
+
 		/*
 		* NOTE warning %%% attention !!!!
 		* We should think about putting some thread starvation safeguards if 
 		* we deal with long chains of packets.
 		*/
-		while (m) {
-			struct mbuf *m0 = m->m_nextpkt;
-			void *header = m->m_pkthdr.header;
-			
-			m->m_nextpkt = NULL;
-			m->m_pkthdr.header = NULL;
-			(void) dlil_input_packet(m->m_pkthdr.rcvif, m, header);
-			m = m0;
+		if (m_loop) {
+			if (inputthread == dlil_lo_thread_ptr)
+				dlil_input_packet_list(lo_ifp, m_loop);
+#if IFNET_INPUT_SANITY_CHK
+			else
+				panic("dlil_input_func - thread=%p loop queue has %d packets, should have none!\n",
+				  inputthread, loop_cnt);
+#endif /* IFNET_INPUT_SANITY_CHK */
 		}
-		m = m_loop;
-		while (m) {
-			struct mbuf *m0 = m->m_nextpkt;
-			void *header = m->m_pkthdr.header;
-			struct ifnet *ifp = &loif[0];
-			
-			m->m_nextpkt = NULL;
-			m->m_pkthdr.header = NULL;
-			(void) dlil_input_packet(ifp, m, header);
-			m = m0;
-		}
-		
-		proto_input_run();
-		
-		if (dlil_input_mbuf_head == NULL && 
-			dlil_input_loop_head == NULL && inject_buckets == 0) {
-			assert_wait(&dlil_input_thread_wakeup, THREAD_UNINT);
-			(void) thread_block(dlil_input_thread_continue);
-			/* NOTREACHED */
-		}
+
+
+		if (m)
+			dlil_input_packet_list(0, m);
+
+
+		lck_mtx_lock(inputthread->input_lck);
+
+		if ((inputthread->input_waiting & (DLIL_PROTO_WAITING | DLIL_PROTO_REGISTER)) != 0)  {
+			lck_mtx_unlock(inputthread->input_lck);
+			proto_input_run();
+		}	
+		else	
+			lck_mtx_unlock(inputthread->input_lck);
 	}
 }
 
-void dlil_input_thread(void)
+errno_t
+ifnet_input(
+	ifnet_t									ifp,
+	mbuf_t									m_head,
+	const struct ifnet_stat_increment_param	*stats)
 {
-	register thread_t self = current_thread();
-	
-	ml_thread_policy(self, MACHINE_GROUP,
-					 (MACHINE_NETWORK_GROUP|MACHINE_NETWORK_NETISR));
-	
-	dlil_initialized = 1;
-	dlil_input_thread_ptr = current_thread();
-	dlil_input_thread_continue(NULL, THREAD_RESTART);
-}
+	struct thread *tp = current_thread();
+	mbuf_t		m_tail;
+	struct dlil_threading_info *inp;
+#if IFNET_INPUT_SANITY_CHK
+	u_int32_t	pkt_count = 0;
+#endif /* IFNET_INPUT_SANITY_CHK */
 
-int
-dlil_input_with_stats(
-	struct ifnet *ifp,
-	struct mbuf *m_head,
-	struct mbuf *m_tail,
-	const struct ifnet_stat_increment_param *stats)
-{
-	/* WARNING
+	if (ifp == NULL || m_head == NULL) {
+		if (m_head)
+			mbuf_freem_list(m_head);
+		return EINVAL;
+	}
+
+	m_tail = m_head;
+	while (1) {
+#if IFNET_INPUT_SANITY_CHK
+		if (dlil_input_sanity_check != 0) {
+			ifnet_t	rcvif;
+		
+			rcvif = mbuf_pkthdr_rcvif(m_tail);
+			pkt_count++;
+		
+			if (rcvif == NULL ||
+				(ifp->if_type != IFT_LOOP && rcvif != ifp) ||
+				(mbuf_flags(m_head) & MBUF_PKTHDR) == 0) {
+				panic("ifnet_input - invalid mbuf %p\n", m_tail);
+			}
+		}
+#endif /* IFNET_INPUT_SANITY_CHK */
+		if (mbuf_nextpkt(m_tail) == NULL)
+			break;
+		m_tail = mbuf_nextpkt(m_tail);
+	}
+
+	inp = ifp->if_input_thread;
+
+	if (dlil_multithreaded_input == 0 || inp == NULL) 
+		inp = dlil_lo_thread_ptr;
+
+	/*
+	 * If there is a matching dlil input thread associated with an
+	 * affinity set, associate this workloop thread with the same set.
+	 * We will only do this once.
+	 */
+	lck_mtx_lock(inp->input_lck);
+	if (inp->net_affinity && inp->workloop_thread == NULL) {
+		u_int32_t tag = inp->tag;
+		inp->workloop_thread = tp;
+		lck_mtx_unlock(inp->input_lck);
+
+		/* Associated the current thread with the new affinity tag */
+		(void) dlil_affinity_set(tp, tag);
+
+		/*
+		 * Take a reference on the workloop (current) thread; during
+		 * detach, we will need to refer to it in order ot tear down
+		 * its affinity.
+		 */
+		thread_reference(tp);
+		lck_mtx_lock(inp->input_lck);
+	}
+
+        /* WARNING
 	 * Because of loopbacked multicast we cannot stuff the ifp in
 	 * the rcvif of the packet header: loopback has its own dlil
 	 * input queue
 	 */
-	
-	lck_spin_lock(dlil_input_lock);
-	if (ifp->if_type != IFT_LOOP) {
-		if (dlil_input_mbuf_head == NULL)
-			dlil_input_mbuf_head = m_head;
-		else if (dlil_input_mbuf_tail != NULL)
-			dlil_input_mbuf_tail->m_nextpkt = m_head;
-		dlil_input_mbuf_tail = m_tail ? m_tail : m_head;
-	} else {
-		if (dlil_input_loop_head == NULL)
-			dlil_input_loop_head = m_head;
-		else if (dlil_input_loop_tail != NULL)
-			dlil_input_loop_tail->m_nextpkt = m_head;
-		dlil_input_loop_tail = m_tail ? m_tail : m_head;
+
+	if (inp == dlil_lo_thread_ptr && ifp->if_type == IFT_LOOP) {
+		if (dlil_lo_input_mbuf_head == NULL)
+			dlil_lo_input_mbuf_head = m_head;
+		else if (dlil_lo_input_mbuf_tail != NULL)
+			dlil_lo_input_mbuf_tail->m_nextpkt = m_head;
+		dlil_lo_input_mbuf_tail = m_tail;
+#if IFNET_INPUT_SANITY_CHK
+		if (dlil_input_sanity_check != 0) {
+			dlil_lo_input_mbuf_count += pkt_count;
+			inp->input_mbuf_cnt += pkt_count;
+			inp->input_wake_cnt++;
+
+			lck_mtx_assert(inp->input_lck, LCK_MTX_ASSERT_OWNED);
+		}
+#endif
+	}
+	else {
+		if (inp->mbuf_head == NULL)
+			inp->mbuf_head = m_head;
+		else if (inp->mbuf_tail != NULL)
+			inp->mbuf_tail->m_nextpkt = m_head;
+		inp->mbuf_tail = m_tail;
+#if IFNET_INPUT_SANITY_CHK
+		if (dlil_input_sanity_check != 0) {
+			inp->mbuf_count += pkt_count;
+			inp->input_mbuf_cnt += pkt_count;
+			inp->input_wake_cnt++;
+
+			lck_mtx_assert(inp->input_lck, LCK_MTX_ASSERT_OWNED);
+		}
+#endif
+	}
+
+
+	inp->input_waiting |= DLIL_INPUT_WAITING;
+	if ((inp->input_waiting & DLIL_INPUT_RUNNING) == 0) {
+		wakeup((caddr_t)&inp->input_waiting);
 	}
 	if (stats) {
 		ifp->if_data.ifi_ipackets += stats->packets_in;
@@ -798,131 +936,191 @@ dlil_input_with_stats(
 		ifp->if_data.ifi_collisions += stats->collisions;
 		ifp->if_data.ifi_iqdrops += stats->dropped;
 	}
-	lck_spin_unlock(dlil_input_lock);
-	
-	wakeup((caddr_t)&dlil_input_thread_wakeup);
+
+	lck_mtx_unlock(inp->input_lck);
 	
 	return 0; 
 }
 
-int
-dlil_input(struct ifnet  *ifp, struct mbuf *m_head, struct mbuf *m_tail)
+static int
+dlil_interface_filters_input(struct ifnet * ifp, struct mbuf * * m_p,
+			     char * * frame_header_p,
+			     protocol_family_t protocol_family)
 {
-	return dlil_input_with_stats(ifp, m_head, m_tail, NULL);
-}
+	struct ifnet_filter * 		filter;
 
-int
-dlil_input_packet(struct ifnet  *ifp, struct mbuf *m,
-	   char *frame_header)
-{
-    int				 retval;
-    struct if_proto		 *ifproto = 0;
-    protocol_family_t	protocol_family;
-    struct ifnet_filter	*filter;
+	TAILQ_FOREACH(filter, &ifp->if_flt_head, filt_next) {
+		int result;
 
-
-    KERNEL_DEBUG(DBG_FNC_DLIL_INPUT | DBG_FUNC_START,0,0,0,0,0);
-
-	/*
-	 * Lock the interface while we run through
-	 * the filters and the demux. This lock
-	 * protects the filter list and the demux list.
-	 */
-	dlil_read_begin();
-
-	/*
-	 * Call family demux module. If the demux module finds a match
-	 * for the frame it will fill-in the ifproto pointer.
-	 */
-
-	retval = ifp->if_demux(ifp, m, frame_header, &protocol_family);
-	if (retval != 0)
-		protocol_family = 0;
-	if (retval == EJUSTRETURN) {
-		dlil_read_end();
-		return 0;
-	}
-
-	/* DANGER!!! */
-	if (m->m_flags & (M_BCAST|M_MCAST))
-		ifp->if_imcasts++;
-
-	/*
-	 * Run interface filters
-	 */
-	
-	/* Do not pass VLAN tagged packets to filters PR-3586856 */
-	if ((m->m_pkthdr.csum_flags & CSUM_VLAN_TAG_VALID) == 0) {
-		TAILQ_FOREACH(filter, &ifp->if_flt_head, filt_next) {
-			int	filter_result;
-			if (filter->filt_input && (filter->filt_protocol == 0 ||
-				 filter->filt_protocol == protocol_family)) {
-				filter_result = filter->filt_input(filter->filt_cookie, ifp, protocol_family, &m, &frame_header);
-				
-				if (filter_result) {
-					dlil_read_end();
-					if (filter_result == EJUSTRETURN) {
-						filter_result = 0;
-					}
-					else {
-						m_freem(m);
-					}
-					
-					return filter_result;
-				}
+		if (filter->filt_input 
+		    && (filter->filt_protocol == 0
+			|| filter->filt_protocol == protocol_family)) {
+			result = (*filter->filt_input)(filter->filt_cookie,
+						       ifp, protocol_family,
+						       m_p, frame_header_p);
+			if (result != 0) {
+				return (result);
 			}
 		}
 	}
+	return (0);
+}
 
-	/* Demux is done, interface filters have been processed, unlock the mutex */
-	if (retval || ((m->m_flags & M_PROMISC) != 0) ) {
-		dlil_read_end();
-		if (retval != EJUSTRETURN) {
-			m_freem(m);
-			return retval;
+static void
+dlil_ifproto_input(struct if_proto * ifproto, mbuf_t m)
+{
+	int error;
+
+	if (ifproto->proto_kpi == kProtoKPI_v1) {
+		/* Version 1 protocols get one packet at a time */
+		while (m != NULL) {
+			char *	frame_header;
+			mbuf_t	next_packet;
+			
+			next_packet = m->m_nextpkt;
+			m->m_nextpkt = NULL;
+			frame_header = m->m_pkthdr.header;
+			m->m_pkthdr.header = NULL;
+			error = (*ifproto->kpi.v1.input)(ifproto->ifp, 
+							 ifproto->protocol_family,
+							 m, frame_header);
+			if (error != 0 && error != EJUSTRETURN)
+				m_freem(m);
+			m = next_packet;
 		}
-		else
-			return 0;
 	}
-	
-	ifproto = find_attached_proto(ifp, protocol_family);
-	
-	if (ifproto == 0) {
-		dlil_read_end();
-		DLIL_PRINTF("ERROR - dlil_input - if_demux didn't return an if_proto pointer\n");
-		m_freem(m);
-		return 0;
+	else if (ifproto->proto_kpi == kProtoKPI_v2) {
+		/* Version 2 protocols support packet lists */
+		error = (*ifproto->kpi.v2.input)(ifproto->ifp,
+						 ifproto->protocol_family,
+						 m);
+		if (error != 0 && error != EJUSTRETURN)
+			m_freem_list(m);
 	}
-	
-	/*
-	 * Hand the packet off to the protocol.
-	 */
+	return;
+}
 
-	if (ifproto->dl_domain && (ifproto->dl_domain->dom_flags & DOM_REENTRANT) == 0) {
-		lck_mtx_lock(ifproto->dl_domain->dom_mtx);
-	}
+__private_extern__ void
+dlil_input_packet_list(struct ifnet * ifp_param, struct mbuf *m)
+{
+	int				error = 0;
+	int				locked = 0;
+	protocol_family_t		protocol_family;
+	mbuf_t				next_packet;
+	ifnet_t				ifp = ifp_param;
+	char *				frame_header;
+	struct if_proto	*		last_ifproto = NULL;
+	mbuf_t				pkt_first = NULL;
+	mbuf_t *			pkt_next = NULL;
 
-	if (ifproto->proto_kpi == kProtoKPI_DLIL)
-		retval = (*ifproto->kpi.dlil.dl_input)(m, frame_header, 
-					  ifp, ifproto->protocol_family, 
-					  TRUE);
-	else
-		retval = ifproto->kpi.v1.input(ifp, ifproto->protocol_family, m, frame_header);
+	KERNEL_DEBUG(DBG_FNC_DLIL_INPUT | DBG_FUNC_START,0,0,0,0,0);
 
-	if (ifproto->dl_domain && (ifproto->dl_domain->dom_flags & DOM_REENTRANT) == 0) {
-		lck_mtx_unlock(ifproto->dl_domain->dom_mtx);
-	}
+	while (m != NULL) {
+		struct if_proto *	ifproto = NULL;
 
-	dlil_read_end();
+		next_packet = m->m_nextpkt;
+		m->m_nextpkt = NULL;
+		if (ifp_param == NULL)
+			ifp = m->m_pkthdr.rcvif;
+		frame_header = m->m_pkthdr.header;
+		m->m_pkthdr.header = NULL;
 
-	if (retval == EJUSTRETURN)
-		retval = 0;
-	else 
-		if (retval)
+		if (locked == 0) {
+			/* dlil lock protects the demux and interface filters */
+			locked = 1;
+			dlil_read_begin();
+		}
+		/* find which protocol family this packet is for */
+		error = (*ifp->if_demux)(ifp, m, frame_header,
+					 &protocol_family);
+		if (error != 0) {
+			if (error == EJUSTRETURN) {
+				goto next;
+			}
+			protocol_family = 0;
+		}
+		
+		/* DANGER!!! */
+		if (m->m_flags & (M_BCAST|M_MCAST))
+			ifp->if_imcasts++;
+
+		/* run interface filters, exclude VLAN packets PR-3586856 */
+		if ((m->m_pkthdr.csum_flags & CSUM_VLAN_TAG_VALID) == 0) {
+			int	filter_result;
+
+			filter_result = dlil_interface_filters_input(ifp, &m, 
+							  &frame_header,
+							  protocol_family);
+			if (filter_result != 0) {
+				if (filter_result != EJUSTRETURN) {
+					m_freem(m);
+				}
+				goto next;
+			}
+		}
+		if (error != 0 || ((m->m_flags & M_PROMISC) != 0) ) {
 			m_freem(m);
+			goto next;
+		}
+		
+		/* Lookup the protocol attachment to this interface */
+		if (protocol_family == 0) {
+			ifproto = NULL;
+		}
+		else if (last_ifproto != NULL
+			 && last_ifproto->ifp == ifp
+			 && (last_ifproto->protocol_family
+			     == protocol_family)) {
+			ifproto = last_ifproto;
+		}
+		else {
+			ifproto	= find_attached_proto(ifp, protocol_family);
+		}
+		if (ifproto == NULL) {
+			/* no protocol for this packet, discard */
+			m_freem(m);
+			goto next;
+		}
+		if (ifproto != last_ifproto) {
+			/* make sure ifproto can't go away during input */
+			if_proto_ref(ifproto);
+			if (last_ifproto != NULL) {
+				/* pass up the list for the previous protocol */
+				dlil_read_end();
+				
+				dlil_ifproto_input(last_ifproto, pkt_first);
+				pkt_first = NULL;
+				if_proto_free(last_ifproto);
+				dlil_read_begin();
+			}
+			last_ifproto = ifproto;
+		}
+		/* extend the list */
+		m->m_pkthdr.header = frame_header;
+		if (pkt_first == NULL) {
+			pkt_first = m;
+		} else {
+			*pkt_next = m;
+		}
+		pkt_next = &m->m_nextpkt;
 
+	next:
+		if (next_packet == NULL && last_ifproto != NULL) {
+			/* pass up the last list of packets */
+			dlil_read_end();
+
+			dlil_ifproto_input(last_ifproto, pkt_first);
+			if_proto_free(last_ifproto);
+			locked = 0;
+		}
+		m = next_packet;
+
+	}
+	if (locked != 0) {
+		dlil_read_end();
+	}
 	KERNEL_DEBUG(DBG_FNC_DLIL_INPUT | DBG_FUNC_END,0,0,0,0,0);
-	return retval;
+	return;
 }
 
 static int
@@ -946,15 +1144,11 @@ dlil_event_internal(struct ifnet *ifp, struct kev_msg *event)
 				struct if_proto *proto;
 				
 				SLIST_FOREACH(proto, &ifp->if_proto_hash[i], next_hash) {
-					/* Pass the event to the protocol */
-					if (proto->proto_kpi == kProtoKPI_DLIL) {
-						if (proto->kpi.dlil.dl_event)
-							proto->kpi.dlil.dl_event(ifp, event);
-					}
-					else {
-						if (proto->kpi.v1.event)
-							proto->kpi.v1.event(ifp, proto->protocol_family, event);
-					}
+					proto_media_event eventp = proto->proto_kpi == kProtoKPI_v1
+						 ? proto->kpi.v1.event : proto->kpi.v2.event;
+					
+					if (eventp)
+						eventp(ifp, proto->protocol_family, event);
 				}
 			}
 		}
@@ -972,12 +1166,15 @@ dlil_event_internal(struct ifnet *ifp, struct kev_msg *event)
 	return kev_post_msg(event);
 }
 
-int
-dlil_event(struct ifnet *ifp, struct kern_event_msg *event)
+errno_t
+ifnet_event(
+	ifnet_t					ifp,
+	struct kern_event_msg	*event)
 {
-    int result = 0;
-
 	struct kev_msg               kev_msg;
+	int result = 0;
+
+	if (ifp == NULL || event == NULL) return EINVAL;
 
 	kev_msg.vendor_code    = event->vendor_code;
 	kev_msg.kev_class      = event->kev_class;
@@ -987,13 +1184,53 @@ dlil_event(struct ifnet *ifp, struct kern_event_msg *event)
 	kev_msg.dv[0].data_length = event->total_size - KEV_MSG_HEADER_SIZE;
 	kev_msg.dv[1].data_length = 0;
 	
-
 	result = dlil_event_internal(ifp, &kev_msg);
-
 
 	return result;
 }
 
+#if CONFIG_MACF_NET
+#include <netinet/ip6.h>
+#include <netinet/ip.h>
+static int dlil_get_socket_type(struct mbuf **mp, int family, int raw)
+{
+	struct mbuf *m;
+	struct ip *ip;
+	struct ip6_hdr *ip6;
+	int type = SOCK_RAW;
+
+	if (!raw) {
+		switch (family) {
+		case PF_INET:
+			m = m_pullup(*mp, sizeof(struct ip));
+			if (m == NULL)
+				break;
+			*mp = m;
+			ip = mtod(m, struct ip *);
+			if (ip->ip_p == IPPROTO_TCP)
+				type = SOCK_STREAM;
+			else if (ip->ip_p == IPPROTO_UDP)
+				type = SOCK_DGRAM;
+			break;
+		case PF_INET6:
+			m = m_pullup(*mp, sizeof(struct ip6_hdr));
+			if (m == NULL)
+				break;
+			*mp = m;
+			ip6 = mtod(m, struct ip6_hdr *);
+			if (ip6->ip6_nxt == IPPROTO_TCP)
+				type = SOCK_STREAM;
+			else if (ip6->ip6_nxt == IPPROTO_UDP)
+				type = SOCK_DGRAM;
+			break;
+		}
+	}
+
+	return (type);
+}
+#endif
+
+#if 0
 int
 dlil_output_list(
 	struct ifnet* ifp,
@@ -1001,81 +1238,100 @@ dlil_output_list(
 	struct mbuf		*packetlist,
 	caddr_t		route,
 	const struct sockaddr	*dest,
-	int			raw)
+	int						raw)
 {
-	char			*frame_type = 0;
-	char			*dst_linkaddr = 0;
-	int			error, retval = 0;
+	char			*frame_type = NULL;
+	char			*dst_linkaddr = NULL;
+	int				retval = 0;
 	char			frame_type_buffer[MAX_FRAME_TYPE_SIZE * 4];
 	char			dst_linkaddr_buffer[MAX_LINKADDR * 4];
 	struct ifnet_filter *filter;
 	struct if_proto	*proto = 0;
-	struct mbuf *m;
+	mbuf_t	m;
+	mbuf_t	send_head = NULL;
+	mbuf_t	*send_tail = &send_head;
 	
 	KERNEL_DEBUG(DBG_FNC_DLIL_OUTPUT | DBG_FUNC_START,0,0,0,0,0);
-#if BRIDGE
-	if ((raw != 0) || proto_family != PF_INET || do_brige) {
-#else
-	if ((raw != 0) || proto_family != PF_INET) {
-#endif
-		while (packetlist) {
-			m = packetlist;
-			packetlist = packetlist->m_nextpkt;
-			m->m_nextpkt = NULL;
-			error = dlil_output(ifp, proto_family, m, route, dest, raw);
-			if (error) {
-				if (packetlist)
-					m_freem_list(packetlist);
-				return (error);
-			}
-		}
-		return (0);
-	}
 	
 	dlil_read_begin();
 	
 	frame_type	   = frame_type_buffer;
 	dst_linkaddr   = dst_linkaddr_buffer;
+	
+	if (raw == 0) {
+		proto = find_attached_proto(ifp, proto_family);
+		if (proto == NULL) {
+			retval = ENXIO;
+			goto cleanup;
+		}
+	}
+	
+preout_again:
+	if (packetlist == NULL)
+		goto cleanup;
 	m = packetlist;
 	packetlist = packetlist->m_nextpkt;
 	m->m_nextpkt = NULL;
 	
-	proto = find_attached_proto(ifp, proto_family);
-	if (proto == NULL) {
-		retval = ENXIO;
-		goto cleanup;
-	}
-
-	retval = 0;
-	if (proto->proto_kpi == kProtoKPI_DLIL) {
-		if (proto->kpi.dlil.dl_pre_output)
-		retval = proto->kpi.dlil.dl_pre_output(ifp, proto_family, &m, dest, route, frame_type, dst_linkaddr);
-	}
-	else {
-		if (proto->kpi.v1.pre_output)
-		retval = proto->kpi.v1.pre_output(ifp, proto_family, &m, dest, route, frame_type, dst_linkaddr);
-	}
-
-	if (retval) {
-		if (retval != EJUSTRETURN)  {
+	if (raw == 0) {
+		proto_media_preout preoutp = proto->proto_kpi == kProtoKPI_v1
+			 ? proto->kpi.v1.pre_output : proto->kpi.v2.pre_output;
+		retval = 0;
+		if (preoutp)
+			retval = preoutp(ifp, proto_family, &m, dest, route, frame_type, dst_linkaddr);
+	
+		if (retval) {
+			if (retval == EJUSTRETURN) {
+				goto preout_again;
+			}
+			
 			m_freem(m);
+			goto cleanup;
 		}
-		goto cleanup;
 	}
 
 	do {
-		
+#if CONFIG_MACF_NET
+		retval = mac_ifnet_check_transmit(ifp, m, proto_family,
+		    dlil_get_socket_type(&m, proto_family, raw));
+		if (retval) {
+			m_freem(m);
+			goto cleanup;
+		}
+#endif
 	
-		if (ifp->if_framer) {
+		if (raw == 0 && ifp->if_framer) {
 			retval = ifp->if_framer(ifp, &m, dest, dst_linkaddr, frame_type); 
 			if (retval) {
 				if (retval != EJUSTRETURN) {
 					m_freem(m);
 				}
-				goto cleanup;
+				goto next;
 			}
 		}
 	
+#if BRIDGE
+		/* !!!LOCKING!!!
+		 *
+		 * Need to consider how to handle this.
+		 * Also note that return should be a goto cleanup
+		 */
+		broken-locking
+		if (do_bridge) {
+			struct mbuf *m0 = m;
+			struct ether_header *eh = mtod(m, struct ether_header *);
+			
+			if (m->m_pkthdr.rcvif)
+				m->m_pkthdr.rcvif = NULL;
+			ifp = bridge_dst_lookup(eh);
+			bdg_forward(&m0, ifp);
+			if (m0)
+				m_freem(m0);
+			
+			return 0 - should be goto cleanup?
+		}
+#endif
+
 		/* 
 		 * Let interface filters (if any) do their thing ...
 		 */
@@ -1093,17 +1349,25 @@ dlil_output_list(
 				}
 			}
 		}
+		
 		/*
-		* Finally, call the driver.
-		*/
+		 * Finally, call the driver.
+		 */
 	
-		KERNEL_DEBUG(DBG_FNC_DLIL_IFOUT | DBG_FUNC_START, 0,0,0,0,0);
-		retval = ifp->if_output(ifp, m);
-		if (retval) {
-			printf("dlil_output_list: output error retval = %x\n", retval);
-			goto cleanup;
+		if ((ifp->if_eflags & IFEF_SENDLIST) != 0) {
+			*send_tail = m;
+			send_tail = &m->m_nextpkt;
+		}
+		else {
+			KERNEL_DEBUG(DBG_FNC_DLIL_IFOUT | DBG_FUNC_START, 0,0,0,0,0);
+			retval = ifp->if_output(ifp, m);
+			if (retval) {
+				printf("dlil_output: output error retval = %x\n", retval);
+			}
+			KERNEL_DEBUG(DBG_FNC_DLIL_IFOUT | DBG_FUNC_END, 0,0,0,0,0);
 		}
 		KERNEL_DEBUG(DBG_FNC_DLIL_IFOUT | DBG_FUNC_END, 0,0,0,0,0);
+
 next:
 		m = packetlist;
 		if (m) {
@@ -1112,17 +1376,26 @@ next:
 		}
 	} while (m);
 
+	if (send_head) {
+		KERNEL_DEBUG(DBG_FNC_DLIL_IFOUT | DBG_FUNC_START, 0,0,0,0,0);
+		retval = ifp->if_output(ifp, send_head);
+		if (retval) {
+			printf("dlil_output: output error retval = %x\n", retval);
+		}
+		KERNEL_DEBUG(DBG_FNC_DLIL_IFOUT | DBG_FUNC_END, 0,0,0,0,0);
+	}
 	
 	KERNEL_DEBUG(DBG_FNC_DLIL_OUTPUT | DBG_FUNC_END,0,0,0,0,0);
 
 cleanup:
 	dlil_read_end();
 	if (packetlist) /* if any packet left, clean up */
-		m_freem_list(packetlist);
+		mbuf_freem_list(packetlist);
 	if (retval == EJUSTRETURN)
 		retval = 0;
 	return retval;
 }
+#endif
 
 /*
  * dlil_output
@@ -1137,21 +1410,25 @@ cleanup:
  * because a protocol is likely to interact with an ifp while it
  * is under the protocol lock.
  */
-int
+__private_extern__ errno_t
 dlil_output(
-	struct ifnet* ifp,
-	u_long proto_family,
-	struct mbuf		*m,
-	caddr_t		route,
+	ifnet_t					ifp,
+	protocol_family_t		proto_family,
+	mbuf_t					packetlist,
+	void					*route,
 	const struct sockaddr	*dest,
-	int			raw)
+	int						raw)
 {
-	char			*frame_type = 0;
-	char			*dst_linkaddr = 0;
+	char			*frame_type = NULL;
+	char			*dst_linkaddr = NULL;
 	int				retval = 0;
 	char			frame_type_buffer[MAX_FRAME_TYPE_SIZE * 4];
 	char			dst_linkaddr_buffer[MAX_LINKADDR * 4];
 	struct ifnet_filter *filter;
+	struct if_proto	*proto = 0;
+	mbuf_t	m;
+	mbuf_t	send_head = NULL;
+	mbuf_t	*send_tail = &send_head;
 	
 	KERNEL_DEBUG(DBG_FNC_DLIL_OUTPUT | DBG_FUNC_START,0,0,0,0,0);
 	
@@ -1161,115 +1438,170 @@ dlil_output(
 	dst_linkaddr   = dst_linkaddr_buffer;
 	
 	if (raw == 0) {
-		struct if_proto	*proto = 0;
-		
 		proto = find_attached_proto(ifp, proto_family);
 		if (proto == NULL) {
-			m_freem(m);
 			retval = ENXIO;
 			goto cleanup;
 		}
-		
+	}
+	
+preout_again:
+	if (packetlist == NULL)
+		goto cleanup;
+	m = packetlist;
+	packetlist = packetlist->m_nextpkt;
+	m->m_nextpkt = NULL;
+	
+	if (raw == 0) {
+		proto_media_preout preoutp = proto->proto_kpi == kProtoKPI_v1
+			 ? proto->kpi.v1.pre_output : proto->kpi.v2.pre_output;
 		retval = 0;
-		if (proto->proto_kpi == kProtoKPI_DLIL) {
-			if (proto->kpi.dlil.dl_pre_output)
-				retval = proto->kpi.dlil.dl_pre_output(ifp, proto_family, &m, dest, route, frame_type, dst_linkaddr);
-		}
-		else {
-			if (proto->kpi.v1.pre_output)
-				retval = proto->kpi.v1.pre_output(ifp, proto_family, &m, dest, route, frame_type, dst_linkaddr);
-		}
-		
+		if (preoutp)
+			retval = preoutp(ifp, proto_family, &m, dest, route, frame_type, dst_linkaddr);
+	
 		if (retval) {
-			if (retval != EJUSTRETURN) {
-				m_freem(m);
+			if (retval == EJUSTRETURN) {
+				goto preout_again;
 			}
+			
+			m_freem(m);
 			goto cleanup;
 		}
 	}
-	
-	/*
-	 * Call framing module 
-	 */
-	if ((raw == 0) && (ifp->if_framer)) {
-		retval = ifp->if_framer(ifp, &m, dest, dst_linkaddr, frame_type); 
-		if (retval) {
-			if (retval != EJUSTRETURN) {
-				m_freem(m);
-			}
-			goto cleanup;
-		}
-	}
-	
-#if BRIDGE
-	/* !!!LOCKING!!!
-	 *
-	 * Need to consider how to handle this.
-	 */
-	broken-locking
-	if (do_bridge) {
-		struct mbuf *m0 = m;
-		struct ether_header *eh = mtod(m, struct ether_header *);
-		
-		if (m->m_pkthdr.rcvif)
-			m->m_pkthdr.rcvif = NULL;
-		ifp = bridge_dst_lookup(eh);
-		bdg_forward(&m0, ifp);
-		if (m0)
-			m_freem(m0);
-		
-		return 0;
+
+#if CONFIG_MACF_NET
+	retval = mac_ifnet_check_transmit(ifp, m, proto_family,
+	    dlil_get_socket_type(&m, proto_family, raw));
+	if (retval) {
+		m_freem(m);
+		goto cleanup;
 	}
 #endif
+
+	do {
+		if (raw == 0 && ifp->if_framer) {
+			retval = ifp->if_framer(ifp, &m, dest, dst_linkaddr, frame_type); 
+			if (retval) {
+				if (retval != EJUSTRETURN) {
+					m_freem(m);
+				}
+				goto next;
+			}
+		}
 	
-	
-	/* 
-	 * Let interface filters (if any) do their thing ...
-	 */
-	
-	/* Do not pass VLAN tagged packets to filters PR-3586856 */
-	if ((m->m_pkthdr.csum_flags & CSUM_VLAN_TAG_VALID) == 0) {
-		TAILQ_FOREACH(filter, &ifp->if_flt_head, filt_next) {
-			if ((filter->filt_protocol == 0 || (filter->filt_protocol == proto_family)) &&
-				filter->filt_output) {
-				retval = filter->filt_output(filter->filt_cookie, ifp, proto_family, &m);
-				if (retval) {
-					if (retval != EJUSTRETURN)
-						m_freem(m);
-					goto cleanup;
+#if BRIDGE
+		/* !!!LOCKING!!!
+		 *
+		 * Need to consider how to handle this.
+		 * Also note that return should be a goto cleanup
+		 */
+		broken-locking
+		if (do_bridge) {
+			struct mbuf *m0 = m;
+			struct ether_header *eh = mtod(m, struct ether_header *);
+			
+			if (m->m_pkthdr.rcvif)
+				m->m_pkthdr.rcvif = NULL;
+			ifp = bridge_dst_lookup(eh);
+			bdg_forward(&m0, ifp);
+			if (m0)
+				m_freem(m0);
+			
+			return 0 - should be goto cleanup?
+		}
+#endif
+
+		/* 
+		 * Let interface filters (if any) do their thing ...
+		 */
+		/* Do not pass VLAN tagged packets to filters PR-3586856 */
+		if ((m->m_pkthdr.csum_flags & CSUM_VLAN_TAG_VALID) == 0) {
+			TAILQ_FOREACH(filter, &ifp->if_flt_head, filt_next) {
+				if ((filter->filt_protocol == 0 || (filter->filt_protocol == proto_family)) &&
+					filter->filt_output) {
+					retval = filter->filt_output(filter->filt_cookie, ifp, proto_family, &m);
+					if (retval) {
+						if (retval != EJUSTRETURN)
+							m_freem(m);
+						goto next;
+					}
 				}
 			}
 		}
+
+		/*
+		 * If the underlying interface is not capable of handling a
+		 * packet whose data portion spans across physically disjoint
+		 * pages, we need to "normalize" the packet so that we pass
+		 * down a chain of mbufs where each mbuf points to a span that
+		 * resides in the system page boundary.  If the packet does
+		 * not cross page(s), the following is a no-op.
+		 */
+		if (!(ifp->if_hwassist & IFNET_MULTIPAGES)) {
+			if ((m = m_normalize(m)) == NULL)
+				goto next;
+		}
+
+		/*
+		 * Finally, call the driver.
+		 */
+	
+		if ((ifp->if_eflags & IFEF_SENDLIST) != 0) {
+			*send_tail = m;
+			send_tail = &m->m_nextpkt;
+		}
+		else {
+			KERNEL_DEBUG(DBG_FNC_DLIL_IFOUT | DBG_FUNC_START, 0,0,0,0,0);
+			retval = ifp->if_output(ifp, m);
+			if (retval) {
+				printf("dlil_output: output error retval = %x\n", retval);
+			}
+			KERNEL_DEBUG(DBG_FNC_DLIL_IFOUT | DBG_FUNC_END, 0,0,0,0,0);
+		}
+		KERNEL_DEBUG(DBG_FNC_DLIL_IFOUT | DBG_FUNC_END, 0,0,0,0,0);
+
+next:
+		m = packetlist;
+		if (m) {
+			packetlist = packetlist->m_nextpkt;
+			m->m_nextpkt = NULL;
+		}
+	} while (m);
+
+	if (send_head) {
+		KERNEL_DEBUG(DBG_FNC_DLIL_IFOUT | DBG_FUNC_START, 0,0,0,0,0);
+		retval = ifp->if_output(ifp, send_head);
+		if (retval) {
+			printf("dlil_output: output error retval = %x\n", retval);
+		}
+		KERNEL_DEBUG(DBG_FNC_DLIL_IFOUT | DBG_FUNC_END, 0,0,0,0,0);
 	}
-	
-	/*
-	* Finally, call the driver.
-	*/
-	
-	KERNEL_DEBUG(DBG_FNC_DLIL_IFOUT | DBG_FUNC_START, 0,0,0,0,0);
-	retval = ifp->if_output(ifp, m);
-	KERNEL_DEBUG(DBG_FNC_DLIL_IFOUT | DBG_FUNC_END, 0,0,0,0,0);
 	
 	KERNEL_DEBUG(DBG_FNC_DLIL_OUTPUT | DBG_FUNC_END,0,0,0,0,0);
 
 cleanup:
 	dlil_read_end();
+	if (packetlist) /* if any packet left, clean up */
+		mbuf_freem_list(packetlist);
 	if (retval == EJUSTRETURN)
 		retval = 0;
 	return retval;
 }
 
-int
-dlil_ioctl(u_long	proto_fam,
-	   struct ifnet *ifp,
-	   u_long	ioctl_code,
-	   caddr_t	ioctl_arg)
+errno_t
+ifnet_ioctl(
+	ifnet_t				ifp,
+	protocol_family_t	proto_fam,
+	u_int32_t			ioctl_code,
+	void				*ioctl_arg)
 {
 	struct ifnet_filter		*filter;
 	int						retval = EOPNOTSUPP;
 	int						result = 0;
-	struct if_family_str	*if_family;
 	int						holding_read = 0;
+	
+	if (ifp == NULL || ioctl_code == 0)
+		return EINVAL;
 	
 	/* Attempt to increment the use count. If it's zero, bail out, the ifp is invalid */
 	result = ifp_use(ifp, kIfNetUseCount_MustNotBeZero);
@@ -1304,15 +1636,11 @@ dlil_ioctl(u_long	proto_fam,
 		struct if_proto	*proto = find_attached_proto(ifp, proto_fam);
 		
 		if (proto != 0) {
+			proto_media_ioctl ioctlp = proto->proto_kpi == kProtoKPI_v1
+				 ? proto->kpi.v1.ioctl : proto->kpi.v2.ioctl;
 			result = EOPNOTSUPP;
-			if (proto->proto_kpi == kProtoKPI_DLIL) {
-				if (proto->kpi.dlil.dl_ioctl)
-					result = proto->kpi.dlil.dl_ioctl(proto_fam, ifp, ioctl_code, ioctl_arg);
-			}
-			else {
-				if (proto->kpi.v1.ioctl)
-					result = proto->kpi.v1.ioctl(ifp, proto_fam, ioctl_code, ioctl_arg);
-			}
+			if (ioctlp)
+				result = ioctlp(ifp, proto_fam, ioctl_code, ioctl_arg);
 			
 			/* Only update retval if no one has handled the ioctl */
 			if (retval == EOPNOTSUPP || result == EJUSTRETURN) {
@@ -1337,26 +1665,6 @@ dlil_ioctl(u_long	proto_fam,
 	holding_read = 0;
 	
 	/* retval is either 0 or EOPNOTSUPP */
-	
-	/*
-	 * Let the family handle this ioctl.
-	 * If it returns something non-zero and not EOPNOTSUPP, we're done.
-	 * If it returns zero, the ioctl was handled, so set retval to zero.
-	 */
-	if_family = find_family_module(ifp->if_family);
-	if ((if_family) && (if_family->ifmod_ioctl)) {
-		result = (*if_family->ifmod_ioctl)(ifp, ioctl_code, ioctl_arg);
-		
-		/* Only update retval if no one has handled the ioctl */
-		if (retval == EOPNOTSUPP || result == EJUSTRETURN) {
-			if (result == ENOTSUP)
-				result = EOPNOTSUPP;
-			retval = result;
-			if (retval && retval != EOPNOTSUPP) {
-				goto cleanup;
-			}
-		}
-	}
 	
 	/*
 	 * Let the interface handle this ioctl.
@@ -1403,7 +1711,7 @@ dlil_set_bpf_tap(
 	return error;
 }
 
-__private_extern__ errno_t
+errno_t
 dlil_resolve_multi(
 	struct ifnet *ifp,
 	const struct sockaddr *proto_addr,
@@ -1413,6 +1721,7 @@ dlil_resolve_multi(
 	errno_t	result = EOPNOTSUPP;
 	struct if_proto *proto;
 	const struct sockaddr *verify;
+	proto_media_resolve_multi resolvep;
 	
 	dlil_read_begin();
 	
@@ -1420,10 +1729,12 @@ dlil_resolve_multi(
 	
 	/* Call the protocol first */
 	proto = find_attached_proto(ifp, proto_addr->sa_family);
-	if (proto != NULL && proto->proto_kpi != kProtoKPI_DLIL &&
-		proto->kpi.v1.resolve_multi != NULL) {
-		result = proto->kpi.v1.resolve_multi(ifp, proto_addr,
-										(struct sockaddr_dl*)ll_addr, ll_len);
+	if (proto != NULL) {
+		resolvep = proto->proto_kpi == kProtoKPI_v1
+			 ? proto->kpi.v1.resolve_multi : proto->kpi.v2.resolve_multi;
+		if (resolvep != NULL)
+			result = resolvep(ifp, proto_addr,(struct sockaddr_dl*)ll_addr,
+							  ll_len);
 	}
 	
 	/* Let the interface verify the multicast address */
@@ -1455,18 +1766,33 @@ dlil_send_arp_internal(
 	dlil_read_begin();
 	
 	proto = find_attached_proto(ifp, target_proto->sa_family);
-	if (proto == NULL || proto->proto_kpi == kProtoKPI_DLIL ||
-		proto->kpi.v1.send_arp == NULL) {
+	if (proto == NULL) {
 		result = ENOTSUP;
 	}
 	else {
-		result = proto->kpi.v1.send_arp(ifp, arpop, sender_hw, sender_proto,
-										target_hw, target_proto);
+		proto_media_send_arp	arpp;
+		arpp = proto->proto_kpi == kProtoKPI_v1
+			 ? proto->kpi.v1.send_arp : proto->kpi.v2.send_arp;
+		if (arpp == NULL)
+			result = ENOTSUP;
+		else
+			result = arpp(ifp, arpop, sender_hw, sender_proto, target_hw,
+						  target_proto);
 	}
 	
 	dlil_read_end();
 	
 	return result;
+}
+
+static __inline__ int
+_is_announcement(const struct sockaddr_in * sender_sin,
+		     const struct sockaddr_in * target_sin)
+{
+	if (sender_sin == NULL) {
+		return FALSE;
+	}
+	return (sender_sin->sin_addr.s_addr == target_sin->sin_addr.s_addr);
 }
 
 __private_extern__ errno_t
@@ -1479,6 +1805,8 @@ dlil_send_arp(
 	const struct sockaddr* target_proto)
 {
 	errno_t	result = 0;
+	const struct sockaddr_in * sender_sin;
+	const struct sockaddr_in * target_sin;
 	
 	if (target_proto == NULL || (sender_proto &&
 		sender_proto->sa_family != target_proto->sa_family))
@@ -1486,11 +1814,17 @@ dlil_send_arp(
 	
 	/*
 	 * If this is an ARP request and the target IP is IPv4LL,
-	 * send the request on all interfaces.
+	 * send the request on all interfaces.  The exception is
+	 * an announcement, which must only appear on the specific
+	 * interface.
 	 */
-	if (IN_LINKLOCAL(((const struct sockaddr_in*)target_proto)->sin_addr.s_addr)
-		 && ipv4_ll_arp_aware != 0 && target_proto->sa_family == AF_INET &&
-		arpop == ARPOP_REQUEST) {
+	sender_sin = (const struct sockaddr_in *)sender_proto;
+	target_sin = (const struct sockaddr_in *)target_proto;
+	if (target_proto->sa_family == AF_INET
+	    && IN_LINKLOCAL(ntohl(target_sin->sin_addr.s_addr))
+	    && ipv4_ll_arp_aware != 0
+	    && arpop == ARPOP_REQUEST
+	    && !_is_announcement(target_sin, sender_sin)) {
 		ifnet_t		*ifp_list;
 		u_int32_t	count;
 		u_int32_t	ifp_on;
@@ -1558,7 +1892,7 @@ dlil_send_arp(
 	return result;
 }
 
-static int
+__private_extern__ int
 ifp_use(
 	struct ifnet *ifp,
 	int	handle_zero)
@@ -1586,11 +1920,10 @@ ifp_use(
  * returns a non-zero value. The caller must call ifp_use_reached_zero
  * after the caller has called dlil_write_end.
  */
-static void
+__private_extern__ void
 ifp_use_reached_zero(
 	struct ifnet *ifp)
 {
-	struct if_family_str *if_family;
 	ifnet_detached_func	free_func;
 	
 	dlil_read_begin();
@@ -1598,15 +1931,12 @@ ifp_use_reached_zero(
 	if (ifp->if_usecnt != 0)
 		panic("ifp_use_reached_zero: ifp->if_usecnt != 0");
 	
-	/* Let BPF know we're detaching */
-	bpfdetach(ifp);
-	
 	ifnet_head_lock_exclusive();
 	ifnet_lock_exclusive(ifp);
 	
 	/* Remove ourselves from the list */
 	TAILQ_REMOVE(&ifnet_head, ifp, if_link);
-	ifnet_addrs[ifp->if_index - 1] = 0;
+	ifnet_addrs[ifp->if_index - 1] = NULL;
 	
 	/* ifp should be removed from the interface list */
 	while (ifp->if_multiaddrs.lh_first) {
@@ -1627,35 +1957,22 @@ ifp_use_reached_zero(
 	ifp->if_eflags &= ~IFEF_DETACHING; // clear the detaching flag
 	ifnet_lock_done(ifp);
 
-	if_family = find_family_module(ifp->if_family);
-	if (if_family && if_family->del_if)
-		if_family->del_if(ifp);
-#if 0
-	if (--if_family->if_usecnt == 0) {
-		if (if_family->shutdown)
-			(*if_family->shutdown)();
-		
-		TAILQ_REMOVE(&if_family_head, if_family, if_fam_next);
-		FREE(if_family, M_IFADDR);
-	}
-#endif
-
-	dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_IF_DETACHED, 0, 0);
 	free_func = ifp->if_free;
 	dlil_read_end();
+	dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_IF_DETACHED, NULL, 0);
 	
 	if (free_func)
 		free_func(ifp);
 }
 
-static int
+__private_extern__ int
 ifp_unuse(
 	struct ifnet *ifp)
 {
 	int	oldval;
-	oldval = OSDecrementAtomic((UInt32*)&ifp->if_usecnt);
+	oldval = OSDecrementAtomic((SInt32*)&ifp->if_usecnt);
 	if (oldval == 0)
-		panic("ifp_unuse: ifp(%s%n)->if_usecnt was zero\n", ifp->if_name, ifp->if_unit);
+		panic("ifp_unuse: ifp(%s%d)->if_usecnt was zero\n", ifp->if_name, ifp->if_unit);
  	
 	if (oldval > 1)
 		return 0;
@@ -1666,46 +1983,24 @@ ifp_unuse(
  	return 1; /* caller must call ifp_use_reached_zero */
 }
 
-void
-ifp_reference(
-	struct ifnet *ifp)
-{
-	int	oldval;
-	oldval = OSIncrementAtomic(&ifp->if_refcnt);
-}
-
-void
-ifp_release(
-	struct ifnet *ifp)
-{
-	int	oldval;
-	oldval = OSDecrementAtomic((UInt32*)&ifp->if_refcnt);
-	if (oldval == 0)
-		panic("dlil_if_reference - refcount decremented past zero!");
-}
-
 extern lck_mtx_t 	*domain_proto_mtx;
 
-static int
+static errno_t
 dlil_attach_protocol_internal(
 	struct if_proto	*proto,
-	const struct ddesc_head_str *demux,
 	const struct ifnet_demux_desc *demux_list,
 	u_int32_t	demux_count)
 {
-	struct ddesc_head_str temp_head;
 	struct kev_dl_proto_data	ev_pr_data;
 	struct ifnet *ifp = proto->ifp;
 	int retval = 0;
 	u_long hash_value = proto_hash_value(proto->protocol_family);
-	int	if_using_kpi = (ifp->if_eflags & IFEF_USEKPI) != 0;
-	void* free_me = NULL;
     
     /* setup some of the common values */
-	
 	{
+		struct domain *dp;
 		lck_mtx_lock(domain_proto_mtx);
-		struct domain *dp = domains;
+		dp = domains;
 		while (dp && (protocol_family_t)dp->dom_family != proto->protocol_family)
 			dp = dp->dom_next;
 		proto->dl_domain = dp;
@@ -1713,84 +2008,24 @@ dlil_attach_protocol_internal(
 	}
 	
 	/*
-	 * Convert the demux descriptors to a type the interface
-	 * will understand. Checking e_flags should be safe, this
-	 * flag won't change.
-	 */
-	if (if_using_kpi && demux) {
-		/* Convert the demux linked list to a demux_list */
-		struct dlil_demux_desc	*demux_entry;
-		struct ifnet_demux_desc *temp_list = NULL;
-		u_int32_t i = 0;
-		
-		TAILQ_FOREACH(demux_entry, demux, next) {
-			i++;
-		}
-		
-		temp_list = _MALLOC(sizeof(struct ifnet_demux_desc) * i, M_TEMP, M_WAITOK);
-		free_me = temp_list;
-		
-		if (temp_list == NULL)
-			return ENOMEM;
-		
-		i = 0;
-		TAILQ_FOREACH(demux_entry, demux, next) {
-			/* dlil_demux_desc types 1, 2, and 3 are obsolete and can not be translated */
-			if (demux_entry->type == 1 ||
-				demux_entry->type == 2 ||
-				demux_entry->type == 3) {
-				FREE(free_me, M_TEMP);
-				return ENOTSUP;
-			}
-			
-			temp_list[i].type = demux_entry->type;
-			temp_list[i].data = demux_entry->native_type;
-			temp_list[i].datalen = demux_entry->variants.native_type_length;
-			i++;
-		}
-		demux_count = i;
-		demux_list = temp_list;
-	}
-	else if (!if_using_kpi && demux_list != NULL) {
-		struct dlil_demux_desc *demux_entry;
-		u_int32_t i = 0;
-		
-		demux_entry = _MALLOC(sizeof(struct dlil_demux_desc) * demux_count, M_TEMP, M_WAITOK);
-		free_me = demux_entry;
-		if (demux_entry == NULL)
-			return ENOMEM;
-		
-		TAILQ_INIT(&temp_head);
-		
-		for (i = 0; i < demux_count; i++) {
-			demux_entry[i].type = demux_list[i].type;
-			demux_entry[i].native_type = demux_list[i].data;
-			demux_entry[i].variants.native_type_length = demux_list[i].datalen;
-			TAILQ_INSERT_TAIL(&temp_head, &demux_entry[i], next);
-		}
-		demux = &temp_head;
-	}
-	
-	/*
 	 * Take the write lock to protect readers and exclude other writers.
 	 */
-	dlil_write_begin();
+	if ((retval = dlil_write_begin()) != 0) {
+		printf("dlil_attach_protocol_internal - dlil_write_begin returned %d\n", retval);
+		return retval;
+	}
 	
 	/* Check that the interface isn't currently detaching */
 	ifnet_lock_shared(ifp);
 	if ((ifp->if_eflags & IFEF_DETACHING) != 0) {
 		ifnet_lock_done(ifp);
 		dlil_write_end();
-		if (free_me)
-			FREE(free_me, M_TEMP);
 		return ENXIO;
 	}
 	ifnet_lock_done(ifp);
 	
 	if (find_attached_proto(ifp, proto->protocol_family) != NULL) {
 		dlil_write_end();
-		if (free_me)
-			FREE(free_me, M_TEMP);
 		return EEXIST;
 	}
 	
@@ -1798,16 +2033,9 @@ dlil_attach_protocol_internal(
 	 * Call family module add_proto routine so it can refine the
 	 * demux descriptors as it wishes.
 	 */
-	if (if_using_kpi)
-		retval = ifp->if_add_proto_u.kpi(ifp, proto->protocol_family, demux_list, demux_count);
-	else {
-		retval = ifp->if_add_proto_u.original(ifp, proto->protocol_family,
-											  _cast_non_const(demux));
-	}
+	retval = ifp->if_add_proto(ifp, proto->protocol_family, demux_list, demux_count);
 	if (retval) {
 		dlil_write_end();
-		if (free_me)
-			FREE(free_me, M_TEMP);
 		return retval;
 	}
 	
@@ -1834,8 +2062,6 @@ dlil_attach_protocol_internal(
 	 * Add to if_proto list for this interface
 	 */
 	if_proto_ref(proto);
-	if (proto->proto_kpi == kProtoKPI_DLIL && proto->kpi.dlil.dl_offer)
-		ifp->offercnt++;
 	dlil_write_end();
 	
 	/* the reserved field carries the number of protocol still attached (subject to change) */
@@ -1844,24 +2070,26 @@ dlil_attach_protocol_internal(
 	dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_PROTO_ATTACHED, 
 				  (struct net_event_data *)&ev_pr_data, 
 				  sizeof(struct kev_dl_proto_data));
-	
-	DLIL_PRINTF("Attached protocol %d to %s%d - %d\n", proto->protocol_family,
+#if 0	
+	DLIL_PRINTF("dlil. Attached protocol %d to %s%d - %d\n", proto->protocol_family,
 			 ifp->if_name, ifp->if_unit, retval);
-	if (free_me)
-		FREE(free_me, M_TEMP);
+#endif
 	return retval;
 }
 
-__private_extern__ int
-dlil_attach_protocol_kpi(ifnet_t ifp, protocol_family_t protocol,
+errno_t
+ifnet_attach_protocol(ifnet_t ifp, protocol_family_t protocol,
 	const struct ifnet_attach_proto_param *proto_details)
 {
 	int retval = 0;
 	struct if_proto  *ifproto = NULL;
 	
+	if (ifp == NULL || protocol == 0 || proto_details == NULL)
+		return EINVAL;
+	
 	ifproto = _MALLOC(sizeof(struct if_proto), M_IFADDR, M_WAITOK);
 	if (ifproto == 0) {
-		DLIL_PRINTF("ERROR - DLIL failed if_proto allocation\n");
+		DLIL_PRINTF("ERROR - dlil failed if_proto allocation\n");
 		retval = ENOMEM;
 		goto end;
 	}
@@ -1878,7 +2106,7 @@ dlil_attach_protocol_kpi(ifnet_t ifp, protocol_family_t protocol,
 	ifproto->kpi.v1.resolve_multi = proto_details->resolve;
 	ifproto->kpi.v1.send_arp = proto_details->send_arp;
 	
-	retval = dlil_attach_protocol_internal(ifproto, NULL,
+	retval = dlil_attach_protocol_internal(ifproto,
 				proto_details->demux_list, proto_details->demux_count);
 	
 end:
@@ -1887,53 +2115,37 @@ end:
 	return retval;
 }
 
-int
-dlil_attach_protocol(struct dlil_proto_reg_str	 *proto)
+errno_t
+ifnet_attach_protocol_v2(ifnet_t ifp, protocol_family_t protocol,
+	const struct ifnet_attach_proto_param_v2 *proto_details)
 {
-	struct ifnet     *ifp = NULL;
+	int retval = 0;
 	struct if_proto  *ifproto = NULL;
-	int	retval = 0;
-
-	/*
-	 * Do everything we can before taking the write lock
-	 */
 	
-	if ((proto->protocol_family == 0) || (proto->interface_family == 0))
+	if (ifp == NULL || protocol == 0 || proto_details == NULL)
 		return EINVAL;
-
-	/*
-	 * Allocate and init a new if_proto structure
-	 */
+	
 	ifproto = _MALLOC(sizeof(struct if_proto), M_IFADDR, M_WAITOK);
-	if (!ifproto) {
-		DLIL_PRINTF("ERROR - DLIL failed if_proto allocation\n");
+	if (ifproto == 0) {
+		DLIL_PRINTF("ERROR - dlil failed if_proto allocation\n");
 		retval = ENOMEM;
 		goto end;
 	}
+	bzero(ifproto, sizeof(*ifproto));
 	
-
-	/* ifbyfamily returns us an ifp with an incremented if_usecnt */
-	ifp = ifbyfamily(proto->interface_family, proto->unit_number);
-	if (!ifp) {
-		DLIL_PRINTF("dlil_attach_protocol -- no such interface %d unit %d\n", 
-				proto->interface_family, proto->unit_number);
-		retval = ENXIO;
-		goto end;
-	}
-
-    bzero(ifproto, sizeof(struct if_proto));
+	ifproto->ifp = ifp;
+	ifproto->protocol_family = protocol;
+	ifproto->proto_kpi = kProtoKPI_v2;
+	ifproto->kpi.v2.input = proto_details->input;
+	ifproto->kpi.v2.pre_output = proto_details->pre_output;
+	ifproto->kpi.v2.event = proto_details->event;
+	ifproto->kpi.v2.ioctl = proto_details->ioctl;
+	ifproto->kpi.v2.detached = proto_details->detached;
+	ifproto->kpi.v2.resolve_multi = proto_details->resolve;
+	ifproto->kpi.v2.send_arp = proto_details->send_arp;
 	
-	ifproto->ifp			= ifp;
-	ifproto->protocol_family = proto->protocol_family;
-	ifproto->proto_kpi = kProtoKPI_DLIL;
-	ifproto->kpi.dlil.dl_input		= proto->input;
-	ifproto->kpi.dlil.dl_pre_output	= proto->pre_output;
-	ifproto->kpi.dlil.dl_event		= proto->event;
-	ifproto->kpi.dlil.dl_offer		= proto->offer;
-	ifproto->kpi.dlil.dl_ioctl		= proto->ioctl;
-	ifproto->kpi.dlil.dl_detached 	= proto->detached;
-	
-	retval = dlil_attach_protocol_internal(ifproto, &proto->demux_desc_head, NULL, 0);
+	retval = dlil_attach_protocol_internal(ifproto,
+				proto_details->demux_list, proto_details->demux_count);
 	
 end:
 	if (retval && ifproto)
@@ -1951,13 +2163,13 @@ dlil_detach_protocol_internal(
 	u_long proto_family = proto->protocol_family;
 	struct kev_dl_proto_data	ev_pr_data;
 	
-	if (proto->proto_kpi == kProtoKPI_DLIL) {
-		if (proto->kpi.dlil.dl_detached)
-			proto->kpi.dlil.dl_detached(proto->protocol_family, ifp);
-	}
-	else {
+	if (proto->proto_kpi == kProtoKPI_v1) {
 		if (proto->kpi.v1.detached)
 			proto->kpi.v1.detached(ifp, proto->protocol_family);
+	}
+	if (proto->proto_kpi == kProtoKPI_v2) {
+		if (proto->kpi.v2.detached)
+			proto->kpi.v2.detached(ifp, proto->protocol_family);
 	}
 	if_proto_free(proto);
     
@@ -1976,13 +2188,14 @@ dlil_detach_protocol_internal(
 	return 0;
 }
 
-int
-dlil_detach_protocol(struct ifnet *ifp, u_long proto_family)
+errno_t
+ifnet_detach_protocol(ifnet_t ifp, protocol_family_t proto_family)
 {
 	struct if_proto *proto = NULL;
 	int	retval = 0;
 	int use_reached_zero = 0;
 	
+	if (ifp == NULL || proto_family == 0) return EINVAL;
 
 	if ((retval = dlil_write_begin()) != 0) {
 		if (retval == EDEADLK) {
@@ -2016,9 +2229,6 @@ dlil_detach_protocol(struct ifnet *ifp, u_long proto_family)
 	
 	if (ifp->if_del_proto)
 		ifp->if_del_proto(ifp, proto->protocol_family);
-
-	if (proto->proto_kpi == kProtoKPI_DLIL && proto->kpi.dlil.dl_offer)
-		ifp->offercnt--;
 
 	SLIST_REMOVE(&ifp->if_proto_hash[proto_hash_value(proto_family)], proto, if_proto, next_hash);
 	
@@ -2104,8 +2314,6 @@ dlil_delayed_detach_thread(__unused void* foo, __unused wait_result_t wait)
 						if (proto->detaching) {
 							if (ifp->if_del_proto)
 								ifp->if_del_proto(ifp, proto->protocol_family);
-							if (proto->proto_kpi == kProtoKPI_DLIL && proto->kpi.dlil.dl_offer)
-								ifp->offercnt--;
 							*prev_nextptr = SLIST_NEXT(proto, next_hash);
 							SLIST_INSERT_HEAD(&detached_protos, proto, next_hash);
 							reached_zero = ifp_unuse(ifp);
@@ -2183,18 +2391,25 @@ dlil_call_delayed_detach_thread(void) {
 
 extern int if_next_index(void);
 
-__private_extern__ int
-dlil_if_attach_with_address(
-	struct ifnet		*ifp,
+errno_t
+ifnet_attach(
+	ifnet_t						ifp,
 	const struct sockaddr_dl	*ll_addr)
 {
-	u_long		    interface_family = ifp->if_family;
-	struct if_family_str    *if_family = NULL;
-	int			    stat;
+	u_long		    interface_family;
 	struct ifnet *tmp_if;
 	struct proto_hash_entry *new_proto_list = NULL;
 	int locked = 0;
 	
+	if (ifp == NULL) return EINVAL;
+	if (ll_addr && ifp->if_addrlen == 0) {
+		ifp->if_addrlen = ll_addr->sdl_alen;
+	}
+	else if (ll_addr && ll_addr->sdl_alen != ifp->if_addrlen) {
+		return EINVAL;
+	}
+	
+	interface_family = ifp->if_family;
 	
 	ifnet_head_lock_shared();
 
@@ -2219,19 +2434,13 @@ dlil_if_attach_with_address(
 		return ENOMEM;
 	}
 
-	// Only use family if this is not a KPI interface
-	if ((ifp->if_eflags & IFEF_USEKPI) == 0) {
-		if_family = find_family_module(interface_family);
-	}
-
 	/*
 	 * Allow interfaces withouth protocol families to attach
 	 * only if they have the necessary fields filled out.
 	 */
 	
-	if ((if_family == 0) &&
-		(ifp->if_add_proto == 0 || ifp->if_del_proto == 0)) {
-		DLIL_PRINTF("Attempt to attach interface without family module - %d\n", 
+	if (ifp->if_add_proto == 0 || ifp->if_del_proto == 0) {
+		DLIL_PRINTF("dlil Attempt to attach interface without family module - %ld\n", 
 				interface_family);
 		return ENODEV;
 	}
@@ -2248,36 +2457,20 @@ dlil_if_attach_with_address(
 	dlil_write_begin();
 	locked = 1;
 
-	/*
-	 * Call the family module to fill in the appropriate fields in the
-	 * ifnet structure.
-	 */
-	
-	if (if_family) {
-		stat = if_family->add_if(ifp);
-		if (stat) {
-			DLIL_PRINTF("dlil_if_attach -- add_if failed with %d\n", stat);
-			dlil_write_end();
-			return stat;
-		}
-		ifp->if_add_proto_u.original = if_family->add_proto;
-		ifp->if_del_proto = if_family->del_proto;
-		if_family->refcnt++;
-	}
-	
-	ifp->offercnt = 0;
 	TAILQ_INIT(&ifp->if_flt_head);
 	
 		
 	if (new_proto_list) {
 		bzero(new_proto_list, (PROTO_HASH_SLOTS * sizeof(struct proto_hash_entry)));
 		ifp->if_proto_hash = new_proto_list;
-		new_proto_list = 0;
+		new_proto_list = NULL;
 	}
 	
 	/* old_if_attach */
 	{
-		struct ifaddr *ifa = 0;
+		char workbuf[64];
+		int namelen, masklen, socksize, ifasize;
+		struct ifaddr *ifa = NULL;
 		
 		if (ifp->if_snd.ifq_maxlen == 0)
 			ifp->if_snd.ifq_maxlen = ifqmaxlen;
@@ -2292,53 +2485,56 @@ dlil_if_attach_with_address(
 		ifnet_head_lock_exclusive();
 		ifnet_lock_exclusive(ifp);
 		
-		if ((ifp->if_eflags & IFEF_REUSE) == 0 || ifp->if_index == 0) {
-			char workbuf[64];
-			int namelen, masklen, socksize, ifasize;
-			
+		if ((ifp->if_eflags & IFEF_REUSE) == 0 || ifp->if_index == 0)
 			ifp->if_index = if_next_index();
-			
-			namelen = snprintf(workbuf, sizeof(workbuf), "%s%d", ifp->if_name, ifp->if_unit);
+		else
+			ifa = TAILQ_FIRST(&ifp->if_addrhead);
+		
+		namelen = snprintf(workbuf, sizeof(workbuf), "%s%d", ifp->if_name, ifp->if_unit);
 #define _offsetof(t, m) ((int)((caddr_t)&((t *)0)->m))
-			masklen = _offsetof(struct sockaddr_dl, sdl_data[0]) + namelen;
-			socksize = masklen + ifp->if_addrlen;
+		masklen = _offsetof(struct sockaddr_dl, sdl_data[0]) + namelen;
+		socksize = masklen + ifp->if_addrlen;
 #define ROUNDUP(a) (1 + (((a) - 1) | (sizeof(long) - 1)))
-			if ((u_long)socksize < sizeof(struct sockaddr_dl))
-				socksize = sizeof(struct sockaddr_dl);
-			socksize = ROUNDUP(socksize);
-			ifasize = sizeof(struct ifaddr) + 2 * socksize;
+		if ((u_long)socksize < sizeof(struct sockaddr_dl))
+			socksize = sizeof(struct sockaddr_dl);
+		socksize = ROUNDUP(socksize);
+		ifasize = sizeof(struct ifaddr) + 2 * socksize;
+		
+		/*
+		 * Allocate a new ifa if we don't have one
+		 * or the old one is too small.
+		 */
+		if (ifa == NULL || socksize > ifa->ifa_addr->sa_len) {
+			if (ifa)
+				if_detach_ifa(ifp, ifa);
 			ifa = (struct ifaddr*)_MALLOC(ifasize, M_IFADDR, M_WAITOK);
-			if (ifa) {
-				struct sockaddr_dl *sdl = (struct sockaddr_dl *)(ifa + 1);
-				ifnet_addrs[ifp->if_index - 1] = ifa;
-				bzero(ifa, ifasize);
-				sdl->sdl_len = socksize;
-				sdl->sdl_family = AF_LINK;
-				bcopy(workbuf, sdl->sdl_data, namelen);
-				sdl->sdl_nlen = namelen;
-				sdl->sdl_index = ifp->if_index;
-				sdl->sdl_type = ifp->if_type;
-				if (ll_addr) {
-					sdl->sdl_alen = ll_addr->sdl_alen;
-					if (ll_addr->sdl_alen != ifp->if_addrlen)
-						panic("dlil_if_attach - ll_addr->sdl_alen != ifp->if_addrlen");
-					bcopy(CONST_LLADDR(ll_addr), LLADDR(sdl), sdl->sdl_alen);
-				}
-				ifa->ifa_ifp = ifp;
-				ifa->ifa_rtrequest = link_rtrequest;
-				ifa->ifa_addr = (struct sockaddr*)sdl;
-				sdl = (struct sockaddr_dl*)(socksize + (caddr_t)sdl);
-				ifa->ifa_netmask = (struct sockaddr*)sdl;
-				sdl->sdl_len = masklen;
-				while (namelen != 0)
-					sdl->sdl_data[--namelen] = 0xff;
-			}
-		}
-		else {
-			/* preserve the first ifaddr */
-			ifnet_addrs[ifp->if_index - 1] = TAILQ_FIRST(&ifp->if_addrhead);
 		}
 		
+		if (ifa) {
+			struct sockaddr_dl *sdl = (struct sockaddr_dl *)(ifa + 1);
+			ifnet_addrs[ifp->if_index - 1] = ifa;
+			bzero(ifa, ifasize);
+			sdl->sdl_len = socksize;
+			sdl->sdl_family = AF_LINK;
+			bcopy(workbuf, sdl->sdl_data, namelen);
+			sdl->sdl_nlen = namelen;
+			sdl->sdl_index = ifp->if_index;
+			sdl->sdl_type = ifp->if_type;
+			if (ll_addr) {
+				sdl->sdl_alen = ll_addr->sdl_alen;
+				if (ll_addr->sdl_alen != ifp->if_addrlen)
+					panic("ifnet_attach - ll_addr->sdl_alen != ifp->if_addrlen");
+				bcopy(CONST_LLADDR(ll_addr), LLADDR(sdl), sdl->sdl_alen);
+			}
+			ifa->ifa_ifp = ifp;
+			ifa->ifa_rtrequest = link_rtrequest;
+			ifa->ifa_addr = (struct sockaddr*)sdl;
+			sdl = (struct sockaddr_dl*)(socksize + (caddr_t)sdl);
+			ifa->ifa_netmask = (struct sockaddr*)sdl;
+			sdl->sdl_len = masklen;
+			while (namelen != 0)
+				sdl->sdl_data[--namelen] = 0xff;
+		}
 
 		TAILQ_INIT(&ifp->if_addrhead);
 		ifa = ifnet_addrs[ifp->if_index - 1];
@@ -2352,43 +2548,58 @@ dlil_if_attach_with_address(
 			ifa->ifa_debug |= IFA_ATTACHED;
 			TAILQ_INSERT_HEAD(&ifp->if_addrhead, ifa, ifa_link);
 		}
+#if CONFIG_MACF_NET
+		mac_ifnet_label_associate(ifp);
+#endif
 		
 		TAILQ_INSERT_TAIL(&ifnet_head, ifp, if_link);
 		ifindex2ifnet[ifp->if_index] = ifp;
 		
 		ifnet_head_done();
 	}
-    dlil_write_end();
-		
-	if (if_family && if_family->init_if) {
-		stat = if_family->init_if(ifp);
-		if (stat) {
-			DLIL_PRINTF("dlil_if_attach -- init_if failed with %d\n", stat);
+
+	/* 
+	 * A specific dlil input thread is created per Ethernet interface.
+	 * pseudo interfaces or other types of interfaces use the main ("loopback") thread.
+	 * If the sysctl "net.link.generic.system.multi_threaded_input" is set to zero, all packets will
+	 * be handled by the main loopback thread, reverting to 10.4.x behaviour.
+	 * 
+	 */
+
+	if (ifp->if_type == IFT_ETHER) {
+		int err;
+
+		if (dlil_multithreaded_input > 0) {
+			ifp->if_input_thread = _MALLOC(sizeof(struct dlil_threading_info), M_NKE, M_WAITOK);
+			if (ifp->if_input_thread == NULL)
+				panic("ifnet_attach ifp=%p couldn't alloc threading\n", ifp);
+			if ((err = dlil_create_input_thread(ifp, ifp->if_input_thread)) != 0)
+				panic("ifnet_attach ifp=%p couldn't get a thread. err=%x\n", ifp, err);
+#ifdef DLIL_DEBUG
+			printf("ifnet_attach: dlil thread for ifp=%p if_index=%x\n", ifp, ifp->if_index);
+#endif
 		}
 	}
-    
+    	dlil_write_end();
 	ifnet_lock_done(ifp);
-    dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_IF_ATTACHED, 0, 0);
+	
+	dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_IF_ATTACHED, NULL, 0);
 
     return 0;
 }
 
-int
-dlil_if_attach(struct ifnet	*ifp)
-{
-	dlil_if_attach_with_address(ifp, NULL);
-}
-
-
-int
-dlil_if_detach(struct ifnet *ifp)
+errno_t
+ifnet_detach(
+	ifnet_t	ifp)
 {
 	struct ifnet_filter *filter;
 	struct ifnet_filter	*filter_next;
 	int zeroed = 0;
 	int retval = 0;
 	struct ifnet_filter_head fhead;
+	struct dlil_threading_info *inputthread;
 	
+	if (ifp == NULL) return EINVAL;
 	
 	ifnet_lock_exclusive(ifp);
 	
@@ -2408,11 +2619,14 @@ dlil_if_detach(struct ifnet *ifp)
 	ifp->if_eflags |= IFEF_DETACHING;
 	ifnet_lock_done(ifp);
 	
-	dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_IF_DETACHING, 0, 0);
+	dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_IF_DETACHING, NULL, 0);
+	
+	/* Let BPF know we're detaching */
+	bpfdetach(ifp);
 	
 	if ((retval = dlil_write_begin()) != 0) {
 		if (retval == EDEADLK) {
-			retval = DLIL_WAIT_FOR_FREE;
+			retval = 0;
 			
 			/* We need to perform a delayed detach */
 			ifp->if_delayed_detach = 1;
@@ -2425,10 +2639,62 @@ dlil_if_detach(struct ifnet *ifp)
 	/* Steal the list of interface filters */
 	fhead = ifp->if_flt_head;
 	TAILQ_INIT(&ifp->if_flt_head);
-	
+
 	/* unuse the interface */
 	zeroed = ifp_unuse(ifp);
-	
+
+	/*
+	 * If thread affinity was set for the workloop thread, we will need
+	 * to tear down the affinity and release the extra reference count
+	 * taken at attach time;
+	 */
+	if ((inputthread = ifp->if_input_thread) != NULL) {
+		if (inputthread->net_affinity) {
+			struct thread *tp;
+
+			if (inputthread == dlil_lo_thread_ptr)
+				panic("Thread affinity should not be enabled "
+				    "on the loopback dlil input thread\n");
+
+			lck_mtx_lock(inputthread->input_lck);
+			tp = inputthread->workloop_thread;
+			inputthread->workloop_thread = NULL;
+			inputthread->tag = 0;
+			inputthread->net_affinity = FALSE;
+			lck_mtx_unlock(inputthread->input_lck);
+
+			/* Tear down workloop thread affinity */
+			if (tp != NULL) {
+				(void) dlil_affinity_set(tp,
+				    THREAD_AFFINITY_TAG_NULL);
+				thread_deallocate(tp);
+			}
+
+			/* Tear down dlil input thread affinity */
+			tp = inputthread->input_thread;
+			(void) dlil_affinity_set(tp, THREAD_AFFINITY_TAG_NULL);
+			thread_deallocate(tp);
+		}
+
+		/* cleanup ifp dlil input thread, if any */
+		ifp->if_input_thread = NULL;
+
+		if (inputthread != dlil_lo_thread_ptr) {
+#ifdef DLIL_DEBUG
+			printf("ifnet_detach: wakeup thread threadinfo: %p "
+			    "input_thread=%p threads: cur=%d max=%d\n",
+			    inputthread, inputthread->input_thread,
+			    dlil_multithreaded_input, cur_dlil_input_threads);
+#endif
+			lck_mtx_lock(inputthread->input_lck);
+
+			inputthread->input_waiting |= DLIL_INPUT_TERMINATE;
+			if ((inputthread->input_waiting & DLIL_INPUT_RUNNING) == 0) {
+				wakeup((caddr_t)&inputthread->input_waiting);
+			}
+			lck_mtx_unlock(inputthread->input_lck);
+		}
+	}
 	dlil_write_end();
 	
 	for (filter = TAILQ_FIRST(&fhead); filter; filter = filter_next) {
@@ -2436,196 +2702,11 @@ dlil_if_detach(struct ifnet *ifp)
 		dlil_detach_filter_internal(filter, 1);
 	}
 	
-	if (zeroed == 0) {
-		retval = DLIL_WAIT_FOR_FREE;
-	}
-	else
-	{
+	if (zeroed != 0) {
 		ifp_use_reached_zero(ifp);
 	}
 	
 	return retval;
-}
-
-
-int
-dlil_reg_if_modules(u_long  interface_family, 
-		    struct dlil_ifmod_reg_str  *ifmod)
-{
-    struct if_family_str *if_family;
-
-
-    if (find_family_module(interface_family))  {
-	DLIL_PRINTF("Attempt to register dlil family module more than once - %d\n", 
-	       interface_family);
-	return EEXIST;
-    }
-
-    if ((!ifmod->add_if) || (!ifmod->del_if) ||
-	(!ifmod->add_proto) || (!ifmod->del_proto)) {
-	DLIL_PRINTF("dlil_reg_if_modules passed at least one null pointer\n");
-	return EINVAL;
-    }
-    
-    /*
-     * The following is a gross hack to keep from breaking
-     * Vicomsoft's internet gateway on Jaguar. Vicomsoft
-     * does not zero the reserved fields in dlil_ifmod_reg_str.
-     * As a result, we have to zero any function that used to
-     * be reserved fields at the time Vicomsoft built their
-     * kext. Radar #2974305
-     */
-    if (ifmod->reserved[0] != 0 || ifmod->reserved[1] != 0 || ifmod->reserved[2]) {
-    	if (interface_family == 123) {	/* Vicom */
-			ifmod->init_if = 0;
-		} else {
-			return EINVAL;
-		}
-    }
-
-    if_family = (struct if_family_str *) _MALLOC(sizeof(struct if_family_str), M_IFADDR, M_WAITOK);
-    if (!if_family) {
-	DLIL_PRINTF("dlil_reg_if_modules failed allocation\n");
-	return ENOMEM;
-    }
-    
-    bzero(if_family, sizeof(struct if_family_str));
-
-    if_family->if_family	= interface_family & 0xffff;
-    if_family->shutdown		= ifmod->shutdown;
-    if_family->add_if		= ifmod->add_if;
-    if_family->del_if		= ifmod->del_if;
-    if_family->init_if		= ifmod->init_if;
-    if_family->add_proto	= ifmod->add_proto;
-    if_family->del_proto	= ifmod->del_proto;
-    if_family->ifmod_ioctl	= ifmod->ifmod_ioctl;
-    if_family->refcnt		= 1;
-    if_family->flags		= 0;
-
-    TAILQ_INSERT_TAIL(&if_family_head, if_family, if_fam_next);
-    return 0;
-}
-
-int dlil_dereg_if_modules(u_long interface_family)
-{
-    struct if_family_str  *if_family;
-    int ret = 0;
-
-
-    if_family = find_family_module(interface_family);
-    if (if_family == 0) {
-	return ENXIO;
-    }
-
-    if (--if_family->refcnt == 0) {
-	if (if_family->shutdown)
-	    (*if_family->shutdown)();
-	
-	TAILQ_REMOVE(&if_family_head, if_family, if_fam_next);
-	FREE(if_family, M_IFADDR);
-    }	
-    else {
-	if_family->flags |= DLIL_SHUTDOWN;
-        ret = DLIL_WAIT_FOR_FREE;
-    }
-
-    return ret;
-}
-					    
-	    
-
-int
-dlil_reg_proto_module(
-	u_long protocol_family,
-	u_long  interface_family, 
-	int (*attach)(struct ifnet *ifp, u_long protocol_family),
-	int (*detach)(struct ifnet *ifp, u_long protocol_family))
-{
-	struct proto_family_str *proto_family;
-
-	if (attach == NULL) return EINVAL;
-
-	lck_mtx_lock(proto_family_mutex);
-	
-	TAILQ_FOREACH(proto_family, &proto_family_head, proto_fam_next) {
-		if (proto_family->proto_family == protocol_family &&
-			proto_family->if_family == interface_family) {
-			lck_mtx_unlock(proto_family_mutex);
-			return EEXIST;
-		}
-	}
-
-	proto_family = (struct proto_family_str *) _MALLOC(sizeof(struct proto_family_str), M_IFADDR, M_WAITOK);
-	if (!proto_family) {
-		lck_mtx_unlock(proto_family_mutex);
-		return ENOMEM;
-	}
-
-	bzero(proto_family, sizeof(struct proto_family_str));
-	proto_family->proto_family	= protocol_family;
-	proto_family->if_family		= interface_family & 0xffff;
-	proto_family->attach_proto	= attach;
-	proto_family->detach_proto	= detach;
-
-	TAILQ_INSERT_TAIL(&proto_family_head, proto_family, proto_fam_next);
-	lck_mtx_unlock(proto_family_mutex);
-	return 0;
-}
-
-int dlil_dereg_proto_module(u_long protocol_family, u_long interface_family)
-{
-	struct proto_family_str  *proto_family;
-	int ret = 0;
-
-	lck_mtx_lock(proto_family_mutex);
-
-	proto_family = find_proto_module(protocol_family, interface_family);
-	if (proto_family == 0) {
-		lck_mtx_unlock(proto_family_mutex);
-		return ENXIO;
-	}
-
-	TAILQ_REMOVE(&proto_family_head, proto_family, proto_fam_next);
-	FREE(proto_family, M_IFADDR);
-	
-	lck_mtx_unlock(proto_family_mutex);
-	return ret;
-}
-
-int dlil_plumb_protocol(u_long protocol_family, struct ifnet *ifp)
-{
-	struct proto_family_str  *proto_family;
-	int ret = 0;
-
-	lck_mtx_lock(proto_family_mutex);
-	proto_family = find_proto_module(protocol_family, ifp->if_family);
-	if (proto_family == 0) {
-		lck_mtx_unlock(proto_family_mutex);
-		return ENXIO;
-	}
-
-	ret = proto_family->attach_proto(ifp, protocol_family);
-
-	lck_mtx_unlock(proto_family_mutex);
-   	return ret;
-}
-
-
-int dlil_unplumb_protocol(u_long protocol_family, struct ifnet *ifp)
-{
-	struct proto_family_str  *proto_family;
-	int ret = 0;
-
-	lck_mtx_lock(proto_family_mutex);
-
-	proto_family = find_proto_module(protocol_family, ifp->if_family);
-	if (proto_family && proto_family->detach_proto)
-		ret = proto_family->detach_proto(ifp, protocol_family);
-	else
-		ret = dlil_detach_protocol(ifp, protocol_family);
-    
-	lck_mtx_unlock(proto_family_mutex);
-	return ret;
 }
 
 static errno_t
@@ -2662,6 +2743,7 @@ dlil_recycle_set_bpf_tap(
     return 0;
 }
 
+__private_extern__
 int dlil_if_acquire(
 	u_long family,
 	const void *uniqueid,
@@ -2726,6 +2808,9 @@ int dlil_if_acquire(
     ifp1 = (struct ifnet *)dlifp1;
     ifp1->if_eflags |= IFEF_INUSE;
     ifp1->if_name = dlifp1->if_namestorage;
+#if CONFIG_MACF_NET
+    mac_ifnet_label_init(ifp1);
+#endif
 
     TAILQ_INSERT_TAIL(&dlil_ifnet_head, dlifp1, dl_if_link);
      
@@ -2737,10 +2822,11 @@ end:
     return ret;
 }
 
-void dlil_if_release(struct ifnet *ifp)
+__private_extern__ void
+dlil_if_release(
+	ifnet_t	ifp)
 {
     struct dlil_ifnet	*dlifp = (struct dlil_ifnet *)ifp;
-
     
     /* Interface does not have a lock until it is attached - radar 3713951 */
     if (ifp->if_lock)
@@ -2753,6 +2839,15 @@ void dlil_if_release(struct ifnet *ifp)
 
     strncpy(dlifp->if_namestorage, ifp->if_name, IFNAMSIZ);
     ifp->if_name = dlifp->if_namestorage;
+#if CONFIG_MACF_NET
+    /*
+     * We can either recycle the MAC label here or in dlil_if_acquire().
+     * It seems logical to do it here but this means that anything that
+     * still has a handle on ifp will now see it as unlabeled.
+     * Since the interface is "dead" that may be OK.  Revisit later.
+     */
+    mac_ifnet_label_recycle(ifp);
+#endif
     if (ifp->if_lock)
 		ifnet_lock_done(ifp);
     

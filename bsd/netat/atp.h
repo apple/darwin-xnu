@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *
@@ -299,6 +305,9 @@ struct atp_socket {
  *	transaction control block (local context at requester end)
  */
 
+struct atp_trans;
+typedef void (*atp_tmo_func)(struct atp_trans *);
+
 struct atp_trans {
 	struct atp_trans_q	tr_list;		/* trans list */
 	struct atp_state	*tr_queue;		/* state data structure */
@@ -320,7 +329,7 @@ struct atp_trans {
 	at_net			tr_local_net;
 	gbuf_t                  *tr_bdsp;               /* bds structure pointer */
 	unsigned int		tr_tmo_delta;
-	void 				(*tr_tmo_func)();
+	atp_tmo_func		tr_tmo_func;
 	struct atp_trans	*tr_tmo_next;
 	struct atp_trans	*tr_tmo_prev;
 	atlock_t tr_lock;
@@ -428,14 +437,13 @@ extern struct atp_rcb* atp_rcb_data;
 extern struct atp_state* atp_state_data;
 extern struct atp_trans_qhead atp_trans_abort;		/* aborting trans list */
 
-extern void atp_req_timeout();
-extern void atp_rcb_timer();
-extern void atp_x_done();
-extern struct atp_rcb *atp_rcb_alloc();
-extern struct atp_trans *atp_trans_alloc();
 #endif /* ATP_DECLARE */
 
 /* prototypes */
+void atp_rcb_timer(struct atp_trans *);
+struct atp_rcb *atp_rcb_alloc(struct  atp_state *);
+struct atp_trans *atp_trans_alloc(struct  atp_state *);
+
 void atp_send_req(gref_t *, gbuf_t *);
 void atp_drop_req(gref_t *, gbuf_t *);
 void atp_send_rsp(gref_t *, gbuf_t *, int);
@@ -458,13 +466,18 @@ void atp_reply(struct atp_rcb *);
 void atp_rcb_free(struct atp_rcb *);
 void atp_send_replies(struct atp_state *, struct atp_rcb *);
 void atp_dequeue_atp(struct atp_state *);
-int atp_iocack(struct atp_state *, gbuf_t *);
+void atp_iocack(struct atp_state *, gbuf_t *);
 void atp_req_ind(struct atp_state *, gbuf_t *);
-int atp_iocnak(struct atp_state *, gbuf_t *, int);
+void atp_iocnak(struct atp_state *, gbuf_t *, int);
 void atp_trp_timer(void *, int);
-void atp_timout(void (*func)(), struct atp_trans *, int);
-void atp_untimout(void (*func)(), struct atp_trans *);
+void atp_timout(atp_tmo_func, struct atp_trans *, int);
+void atp_untimout(atp_tmo_func, struct atp_trans *);
 int atp_tid(struct atp_state *);
+void atp_init(void);
+void atp_link(void);
+void atp_unlink(void);
+int atp_input(gbuf_t *);
+void atp_delete_free_clusters(void *);
 
 #endif /* KERNEL_PRIVATE */
 #endif /* __APPLE_API_OBSOLETE */

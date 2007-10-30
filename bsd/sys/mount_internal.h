@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -54,6 +60,12 @@
  *
  *	@(#)mount.h	8.21 (Berkeley) 5/20/95
  */
+/*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 #ifndef _SYS_MOUNT_INTERNAL_H_
 #define	_SYS_MOUNT_INTERNAL_H_
@@ -72,6 +84,8 @@
 #include <sys/vfs_context.h>		/* XXX for AF_MAX */
 #include <sys/mount.h>
 #include <sys/cdefs.h>
+
+struct label;
 
 /*
  * Structure per mounted file system.  Each mounted file system has an
@@ -103,7 +117,9 @@ struct mount {
 	u_int32_t	mnt_segwritecnt;	/* Max. segment count for write */
 	u_int32_t	mnt_maxsegreadsize;	/* Max. segment read size  */
 	u_int32_t	mnt_maxsegwritesize;	/* Max. segment write size */
+        u_int32_t	mnt_alignmentmask;	/* Mask of bits that aren't addressable via DMA */
 	u_int32_t	mnt_devblocksize;	/* the underlying device block size */
+	u_int32_t	mnt_ioflags;		/* flags for  underlying device */
 	lck_rw_t	mnt_rwlock;		/* mutex readwrite lock */
         lck_mtx_t	mnt_renamelock;		/* mutex that serializes renames that change shape of tree */
 	vnode_t		mnt_devvp;		/* the device mounted on for local file systems */
@@ -113,7 +129,66 @@ struct mount {
  	/* XXX 3762912 hack to support HFS filesystem 'owner' */
  	uid_t		mnt_fsowner;
  	gid_t		mnt_fsgroup;
+
+	struct label	*mnt_mntlabel;		/* MAC mount label */
+	struct label	*mnt_fslabel;		/* MAC default fs label */
+
+	/*
+	 * cache the rootvp of the last mount point
+	 * in the chain in the mount struct pointed
+	 * to by the vnode sitting in '/'
+	 * this cache is used to shortcircuit the
+	 * mount chain traversal and allows us
+	 * to traverse to the true underlying rootvp
+	 * in 1 easy step inside of 'cache_lookup_path'
+	 *
+	 * make sure to validate against the cached vid
+	 * in case the rootvp gets stolen away since
+	 * we don't take an explicit long term reference
+	 * on it when we mount it
+	 */
+	vnode_t		mnt_realrootvp;
+        int		mnt_realrootvp_vid;
+	/*
+	 * bumped each time a mount or unmount
+	 * occurs... its used to invalidate
+	 * 'mnt_realrootvp' from the cache
+	 */
+        int             mnt_generation;
+        /*
+	 * if 'MNTK_AUTH_CACHE_TIMEOUT' is 
+	 * set, then 'mnt_authcache_ttl' is
+	 * the time-to-live for the per-vnode authentication cache
+	 * on this mount... if zero, no cache is maintained...
+	 * if 'MNTK_AUTH_CACHE_TIMEOUT' isn't set, its the
+	 * time-to-live for the cached lookup right for
+	 * volumes marked 'MNTK_AUTH_OPAQUE'.
+	 */
+	int		mnt_authcache_ttl;
+	/*
+	 * The proc structure pointer and process ID form a
+	 * sufficiently unique duple identifying the process
+	 * hosting this mount point. Set by vfs_markdependency()
+	 * and utilized in new_vnode() to avoid reclaiming vnodes
+	 * with this dependency (radar 5192010).
+	 */
+	pid_t		mnt_dependent_pid;
+	void		*mnt_dependent_process;
+
+	struct timeval	last_normal_IO_timestamp;
 };
+
+/*
+ * default number of seconds to keep cached lookup
+ * rights valid on mounts marked MNTK_AUTH_OPAQUE
+ */
+#define CACHED_LOOKUP_RIGHT_TTL		2
+
+/*
+ * ioflags
+ */
+#define MNT_IOFLAGS_FUA_SUPPORTED	0x00000001
+
   
 /* XXX 3762912 hack to support HFS filesystem 'owner' */
 #define vfs_setowner(_mp, _uid, _gid)	do {(_mp)->mnt_fsowner = (_uid); (_mp)->mnt_fsgroup = (_gid); } while (0)
@@ -133,6 +208,11 @@ extern struct mount * dead_mountp;
  *		because the bits here were broken out from the high bits
  *		of the mount flags.
  */
+#define MNTK_AUTH_CACHE_TTL	0x00008000      /* rights cache has TTL - TTL of 0 disables cache */
+#define	MNTK_PATH_FROM_ID	0x00010000	/* mounted file system supports id-to-path lookups */
+#define	MNTK_UNMOUNT_PREFLIGHT	0x00020000	/* mounted file system wants preflight check during unmount */
+#define	MNTK_NAMED_STREAMS	0x00040000	/* mounted file system supports Named Streams VNOPs */
+#define	MNTK_EXTENDED_ATTRS	0x00080000	/* mounted file system supports Extended Attributes VNOPs */
 #define	MNTK_LOCK_LOCAL		0x00100000	/* advisory locking is done above the VFS itself */
 #define MNTK_VIRTUALDEV 	0x00200000      /* mounted on a virtual device i.e. a disk image */
 #define MNTK_ROOTDEV    	0x00400000      /* this filesystem resides on the same device as the root */
@@ -161,7 +241,9 @@ extern struct mount * dead_mountp;
 /*
  * Generic file handle
  */
-#define	NFS_MAX_FH_SIZE		64
+#define	NFS_MAX_FH_SIZE		NFSV4_MAX_FH_SIZE
+#define	NFSV4_MAX_FH_SIZE	128
+#define	NFSV3_MAX_FH_SIZE	64
 #define	NFSV2_MAX_FH_SIZE	32
 struct fhandle {
 	int		fh_len;				/* length of file handle */
@@ -194,10 +276,14 @@ struct vfstable {
 	int 		vfc_64bitready;	/* The file system is ready for 64bit */
 };
 
+/* vfc_vfsflags: */
 #define VFC_VFSLOCALARGS	0x02
 #define	VFC_VFSGENERICARGS	0x04
 #define	VFC_VFSNATIVEXATTR	0x10
-
+#define	VFC_VFSDIRLINKS		0x20
+#define	VFC_VFSPREFLIGHT	0x40
+#define	VFC_VFSREADDIR_EXTENDED	0x80
+#define	VFC_VFSNOMACLABEL	0x1000
 
 extern int maxvfsconf;		/* highest defined filesystem type */
 extern struct vfstable  *vfsconf;	/* head of list of filesystem types */
@@ -256,6 +342,7 @@ struct user_statfs {
 
 __BEGIN_DECLS
 
+extern int mount_generation;
 extern TAILQ_HEAD(mntlist, mount) mountlist;
 void mount_list_lock(void);
 void mount_list_unlock(void);
@@ -267,6 +354,7 @@ void mount_lock_renames(mount_t);
 void mount_unlock_renames(mount_t);
 void mount_ref(mount_t, int);
 void mount_drop(mount_t, int);
+int  mount_refdrain(mount_t);
 
 /* vfs_rootmountalloc should be kept as a private api */
 errno_t vfs_rootmountalloc(const char *, const char *, mount_t *mpp);
@@ -274,14 +362,15 @@ errno_t	vfs_init_io_attributes(vnode_t, mount_t);
 
 int	vfs_mountroot(void);
 void	vfs_unmountall(void);
-int	safedounmount(struct mount *, int, struct proc *);
-int	dounmount(struct mount *, int, int *, int, struct proc *);
+int	safedounmount(struct mount *, int, vfs_context_t);
+int	dounmount(struct mount *, int, int, vfs_context_t);
 
 /* xnuy internal api */
 void  mount_dropcrossref(mount_t, vnode_t, int);
-int validfsnode(mount_t);
 mount_t mount_lookupby_volfsid(int, int);
 mount_t mount_list_lookupby_fsid(fsid_t *, int, int);
+void mount_list_add(mount_t);
+void mount_list_remove(mount_t);
 int  mount_iterref(mount_t, int);
 int  mount_isdrained(mount_t, int);
 void mount_iterdrop(mount_t);

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2005-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 
@@ -27,8 +33,6 @@
 
 /*#include <sys/kernel.h> */
 extern int hz;			/* system clock's frequency */
-extern void*   dsmos_blobs[];
-extern int     dsmos_blob_count;
 
 /* #include <sys/proc.h> */
 extern int	tsleep(void *chan, int pri, const char *wmesg, int timo);
@@ -44,27 +48,23 @@ int
 _dsmos_wait_for_callback(const void* from, void *to)
 {
 /*	printf("%s\n", __FUNCTION__); */
-	while ( (dsmos_hook == NULL) || (dsmos_hook == _dsmos_wait_for_callback) )
+	while (dsmos_hook == NULL || dsmos_hook == _dsmos_wait_for_callback)
 		tsleep(&dsmos_hook, PZERO, "dsmos", hz / 10);
 
 	return (*dsmos_hook) (from, to);
 }
 
 void
-dsmos_page_transform_hook(dsmos_page_transform_hook_t hook,
-			  void (*commpage_setup_dsmos_blob)(void**, int))
+dsmos_page_transform_hook(dsmos_page_transform_hook_t hook)
 {
-#ifdef i386
-	/* finish initializing the commpage here */
-	(*commpage_setup_dsmos_blob)(dsmos_blobs, dsmos_blob_count);
-#endif
+/*	printf("%s\n", __FUNCTION__); */
 
 	/* set the hook now - new callers will run with it */
 	dsmos_hook = hook;
 }
 
 int
-dsmos_page_transform(const void* from, void* to)
+dsmos_page_transform(const void* from, void *to)
 {
 /*	printf("%s\n", __FUNCTION__); */
 	if (dsmos_hook == NULL)

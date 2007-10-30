@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <kern/kalloc.h>
@@ -30,11 +36,11 @@
 #include <mach/mach_types.h>
 #include <default_pager/default_pager_internal.h>
 #include <IOKit/IOPlatformExpert.h>
-#define KERNEL
 
 #include <IOKit/IOHibernatePrivate.h>
 #include <vm/vm_page.h>
 #include <vm/vm_pageout.h>
+#include <vm/vm_purgeable_internal.h>
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -67,7 +73,7 @@ hibernate_page_list_zero(hibernate_page_list_t *list)
 static boolean_t 
 consider_discard(vm_page_t m)
 {
-    register vm_object_t object = 0;
+    vm_object_t object = NULL;
     int                  refmod_state;
     boolean_t            discard = FALSE;
 
@@ -101,6 +107,9 @@ consider_discard(vm_page_t m)
         if (m->cleaning)
             break;
 
+	if (m->laundry || m->list_req_pending)
+            break;
+
         if (!m->dirty)
         {
             refmod_state = pmap_get_refmod(m->phys_page);
@@ -112,9 +121,12 @@ consider_discard(vm_page_t m)
         }
    
         /*
-         * If it's clean we can discard the page on wakeup.
+         * If it's clean or purgeable we can discard the page on wakeup.
+	 * JMM - consider purgeable (volatile or empty) objects here as well.
          */
-        discard = !m->dirty;
+        discard = (!m->dirty) 
+		    || (VM_PURGABLE_VOLATILE == object->purgable)
+		    || (VM_PURGABLE_EMPTY    == m->object->purgable);
     }
     while (FALSE);
 
@@ -134,24 +146,31 @@ discard_page(vm_page_t m)
         */
         return;
 
-    if (!m->no_isync) 
+    if (m->pmapped == TRUE) 
     {
-        int refmod_state = pmap_disconnect(m->phys_page);
-
-        if (refmod_state & VM_MEM_REFERENCED)
-            m->reference = TRUE;
-        if (refmod_state & VM_MEM_MODIFIED)
-            m->dirty = TRUE;
+        __unused int refmod_state = pmap_disconnect(m->phys_page);
     }
 
-    if (m->dirty)
-        panic("discard_page(%p) dirty", m);
     if (m->laundry)
         panic("discard_page(%p) laundry", m);
     if (m->private)
         panic("discard_page(%p) private", m);
     if (m->fictitious)
         panic("discard_page(%p) fictitious", m);
+
+    if (VM_PURGABLE_VOLATILE == m->object->purgable)
+	{
+		assert(m->object->objq.next != NULL && m->object->objq.prev != NULL); /* object should be on a queue */
+		purgeable_q_t old_queue=vm_purgeable_object_remove(m->object);
+		assert(old_queue);
+		/* No need to lock page queue for token delete, hibernate_vm_unlock() 
+			makes sure these locks are uncontended before sleep */
+		vm_purgeable_token_delete_first(old_queue);
+		m->object->purgable = VM_PURGABLE_EMPTY;
+	}
+	
+    if (m->tabled)
+	vm_page_remove(m);
 
     vm_page_free(m);
 }
@@ -161,7 +180,6 @@ discard_page(vm_page_t m)
  pages known to VM to not need saving are subtracted.
  Wired pages to be saved are present in page_list_wired, pageable in page_list.
 */
-extern vm_page_t vm_lopage_queue_free;
 
 void
 hibernate_page_list_setall(hibernate_page_list_t * page_list,
@@ -171,10 +189,16 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
     uint64_t start, end, nsec;
     vm_page_t m;
     uint32_t pages = page_list->page_count;
-    uint32_t count_zf = 0, count_inactive = 0, count_active = 0;
+    uint32_t count_zf = 0, count_throttled = 0, count_inactive = 0, count_active = 0;
     uint32_t count_wire = pages;
-    uint32_t count_discard_active = 0, count_discard_inactive = 0;
+    uint32_t count_discard_active    = 0;
+    uint32_t count_discard_inactive  = 0;
+    uint32_t count_discard_purgeable = 0;
     uint32_t i;
+    uint32_t             bank;
+    hibernate_bitmap_t * bitmap;
+    hibernate_bitmap_t * bitmap_wired;
+
 
     HIBLOG("hibernate_page_list_setall start\n");
 
@@ -193,24 +217,46 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
 	m = (vm_page_t) m->pageq.next;
     }
 
-    m = (vm_page_t) vm_page_queue_free;
-    while(m)
+    for( i = 0; i < vm_colors; i++ )
     {
-	pages--;
-	count_wire--;
-	hibernate_page_bitset(page_list,       TRUE, m->phys_page);
-	hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
-	m = (vm_page_t) m->pageq.next;
+	queue_iterate(&vm_page_queue_free[i],
+		      m,
+		      vm_page_t,
+		      pageq)
+	{
+	    pages--;
+	    count_wire--;
+	    hibernate_page_bitset(page_list,       TRUE, m->phys_page);
+	    hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
+	}
     }
 
-    m = (vm_page_t) vm_lopage_queue_free;
-    while(m)
+    queue_iterate(&vm_lopage_queue_free,
+		  m,
+		  vm_page_t,
+		  pageq)
     {
 	pages--;
 	count_wire--;
 	hibernate_page_bitset(page_list,       TRUE, m->phys_page);
 	hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
-	m = (vm_page_t) m->pageq.next;
+    }
+
+    queue_iterate( &vm_page_queue_throttled,
+                    m,
+                    vm_page_t,
+                    pageq )
+    {
+        if ((kIOHibernateModeDiscardCleanInactive & gIOHibernateMode) 
+         && consider_discard(m))
+        {
+            hibernate_page_bitset(page_list, TRUE, m->phys_page);
+            count_discard_inactive++;
+        }
+        else
+            count_throttled++;
+	count_wire--;
+	hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
     }
 
     queue_iterate( &vm_page_queue_zf,
@@ -222,7 +268,10 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
          && consider_discard(m))
         {
             hibernate_page_bitset(page_list, TRUE, m->phys_page);
-            count_discard_inactive++;
+	    if (m->dirty)
+		count_discard_purgeable++;
+	    else
+		count_discard_inactive++;
         }
         else
             count_zf++;
@@ -239,7 +288,10 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
          && consider_discard(m))
         {
             hibernate_page_bitset(page_list, TRUE, m->phys_page);
-            count_discard_inactive++;
+	    if (m->dirty)
+		count_discard_purgeable++;
+	    else
+		count_discard_inactive++;
         }
         else
             count_inactive++;
@@ -256,7 +308,10 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
          && consider_discard(m))
         {
             hibernate_page_bitset(page_list, TRUE, m->phys_page);
-            count_discard_active++;
+	    if (m->dirty)
+		count_discard_purgeable++;
+	    else
+		count_discard_active++;
         }
         else
             count_active++;
@@ -265,10 +320,6 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
     }
 
     // pull wired from hibernate_bitmap
-
-    uint32_t             bank;
-    hibernate_bitmap_t * bitmap;
-    hibernate_bitmap_t * bitmap_wired;
 
     bitmap = &page_list->bank_bitmap[0];
     bitmap_wired = &page_list_wired->bank_bitmap[0];
@@ -287,11 +338,11 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
     absolutetime_to_nanoseconds(end - start, &nsec);
     HIBLOG("hibernate_page_list_setall time: %qd ms\n", nsec / 1000000ULL);
 
-    HIBLOG("pages %d, wire %d, act %d, inact %d, zf %d, could discard act %d inact %d\n", 
-                pages, count_wire, count_active, count_inactive, count_zf,
-                count_discard_active, count_discard_inactive);
+    HIBLOG("pages %d, wire %d, act %d, inact %d, zf %d, throt %d, could discard act %d inact %d purgeable %d\n", 
+                pages, count_wire, count_active, count_inactive, count_zf, count_throttled,
+                count_discard_active, count_discard_inactive, count_discard_purgeable);
 
-    *pagesOut = pages;
+    *pagesOut = pages - count_discard_active - count_discard_inactive - count_discard_purgeable;
 }
 
 void
@@ -300,7 +351,9 @@ hibernate_page_list_discard(hibernate_page_list_t * page_list)
     uint64_t  start, end, nsec;
     vm_page_t m;
     vm_page_t next;
-    uint32_t  count_discard_active = 0, count_discard_inactive = 0;
+    uint32_t  count_discard_active    = 0;
+    uint32_t  count_discard_inactive  = 0;
+    uint32_t  count_discard_purgeable = 0;
 
     clock_get_uptime(&start);
 
@@ -310,8 +363,11 @@ hibernate_page_list_discard(hibernate_page_list_t * page_list)
         next = (vm_page_t) m->pageq.next;
         if (hibernate_page_bittst(page_list, m->phys_page))
         {
+	    if (m->dirty)
+		count_discard_purgeable++;
+	    else
+		count_discard_inactive++;
             discard_page(m);
-            count_discard_inactive++;
         }
         m = next;
     }
@@ -322,8 +378,11 @@ hibernate_page_list_discard(hibernate_page_list_t * page_list)
         next = (vm_page_t) m->pageq.next;
         if (hibernate_page_bittst(page_list, m->phys_page))
         {
+	    if (m->dirty)
+		count_discard_purgeable++;
+	    else
+		count_discard_inactive++;
             discard_page(m);
-            count_discard_inactive++;
         }
         m = next;
     }
@@ -334,17 +393,20 @@ hibernate_page_list_discard(hibernate_page_list_t * page_list)
         next = (vm_page_t) m->pageq.next;
         if (hibernate_page_bittst(page_list, m->phys_page))
         {
+	    if (m->dirty)
+		count_discard_purgeable++;
+	    else
+		count_discard_active++;
             discard_page(m);
-            count_discard_active++;
         }
         m = next;
     }
 
     clock_get_uptime(&end);
     absolutetime_to_nanoseconds(end - start, &nsec);
-    HIBLOG("hibernate_page_list_discard time: %qd ms, discarded act %d inact %d\n",
+    HIBLOG("hibernate_page_list_discard time: %qd ms, discarded act %d inact %d purgeable %d\n",
                 nsec / 1000000ULL,
-                count_discard_active, count_discard_inactive);
+                count_discard_active, count_discard_inactive, count_discard_purgeable);
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -385,7 +447,7 @@ hibernate_setup(IOHibernateImageHeader * header,
 
     hibernate_processor_setup(header);
 
-    HIBLOG("hibernate_alloc_pages flags %08lx, gobbling %d pages\n", 
+    HIBLOG("hibernate_alloc_pages flags %08x, gobbling %d pages\n", 
 	    header->processorFlags, gobble_count);
 
     if (gobble_count)

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <mach_assert.h>
@@ -25,6 +31,37 @@
 #include <ppc/asm.h>
 #include <ppc/proc_reg.h>
 #include <assym.s>
+
+
+#include <config_dtrace.h>
+#if	CONFIG_DTRACE
+	#define	LOCKSTAT_LABEL(lab) \
+	.data		__ASMNL__	\
+	.globl	lab	__ASMNL__	\
+	lab:		__ASMNL__	\
+	.long 9f	__ASMNL__	\
+	.text		__ASMNL__	\
+	9:		__ASMNL__	\
+
+	.globl	_dtrace_probe, _lockstat_probemap
+#define		LOCKSTAT_RECORD(id)			\
+			lis	r6,hi16(_lockstat_probemap)		__ASMNL__	\
+			ori	r6,r6,lo16(_lockstat_probemap)		__ASMNL__	\
+			lwz	r5,4*id(r6)				__ASMNL__	\
+			mr.	r5,r5					__ASMNL__	\
+			beqlr--						__ASMNL__	\
+			mr	r4,r3					__ASMNL__	\
+			mr	r3,r5					__ASMNL__	\
+			li	r5,0					__ASMNL__	\
+			li	r6,0					__ASMNL__	\
+			li	r7,0					__ASMNL__	\
+			li	r8,0					__ASMNL__	\
+			PROLOG(0)					__ASMNL__	\
+			bl	_dtrace_probe				__ASMNL__	\
+			EPILOG
+#endif
+			
+
 
 #define	STRING	ascii
 
@@ -579,9 +616,9 @@ subtry:		lwarx	r3,0,r6							; Grab the area value
  */
 			.align	5
 			.globl	EXT(hw_atomic_or)
-
 LEXT(hw_atomic_or)
-
+			.globl	EXT(hw_atomic_or_noret)
+LEXT(hw_atomic_or_noret)
 			mr		r6,r3							; Save the area 		
 
 ortry:		lwarx	r3,0,r6							; Grab the area value
@@ -600,9 +637,9 @@ ortry:		lwarx	r3,0,r6							; Grab the area value
  */
 			.align	5
 			.globl	EXT(hw_atomic_and)
-
 LEXT(hw_atomic_and)
-
+			.globl	EXT(hw_atomic_and_noret)
+LEXT(hw_atomic_and_noret)
 			mr		r6,r3							; Save the area 		
 
 andtry:		lwarx	r3,0,r6							; Grab the area value
@@ -971,6 +1008,8 @@ mlcktry:
 LEXT(mlckPatch_isync)
 			isync									; stop prefeteching
 			blr
+; Need to debug making blr above a patch point and record:
+;			LOCKSTAT_RECORD(LS_LCK_MTX_LOCK_ACQUIRE)
 
 mlckspin00:
 			cmpli	cr0,r5,MUTEX_IND				; Is it a mutex indirect 
@@ -1041,11 +1080,11 @@ mlStatSkip:
 			lwz		r2,ACT_MACT_SPF(r10)			; Get the special flags
 			rlwinm. r2,r2,0,OnProcbit,OnProcbit 	; Is OnProcbit set?
 			beq		mlckslow0						; Lock owner isn't running
-			lis		r2,hi16(TH_OPT_DELAYIDLE)		; Get DelayedIdle Option
-			ori		r2,r2,lo16(TH_OPT_DELAYIDLE)	; Get DelayedIdle Option
-			lwz		r10,THREAD_OPTIONS(r10)			; Get the thread options
-			and.	r10,r10,r2						; Is DelayedIdle set?
-			bne		mlckslow0						; Lock owner is in delay idle
+			lis		r2,hi16(TH_IDLE)				; Get thread idle state
+			ori		r2,r2,lo16(TH_IDLE)				; Get thread idle state
+			lwz		r10,THREAD_STATE(r10)			; Get the thread state
+			and.	r10,r10,r2						; Is idle set?
+			bne		mlckslow0						; Lock owner is idling
 
 			mftb	r10								; Time stamp us now
 			sub		r10,r10,r8						; Get the elapsed time
@@ -1473,7 +1512,15 @@ mluLoop:
 			bne--	mluSlowX
 			stwcx.	r5,MUTEX_DATA,r3
 			bne--	mluLoop
+#if	CONFIG_DTRACE
+/* lock released - LS_LCK_MTX_UNLOCK_RELEASE */
+			LOCKSTAT_LABEL(_lck_mtx_unlock_lockstat_patch_point)
 			blr
+
+			LOCKSTAT_RECORD(LS_LCK_MTX_UNLOCK_RELEASE)
+#endif
+			blr
+
 
 mluSlow0:
 			cmpli	cr0,r5,MUTEX_IND				; Is it a mutex indirect 
@@ -1893,108 +1940,6 @@ LEXT(ppc_usimple_unlock_rwmb)
 			b		epStart							; Go enable preemption...
 
 /*
- *		void enter_funnel_section(funnel_t *)
- *
- */
-			.align	5
-			.globl	EXT(enter_funnel_section)
-
-LEXT(enter_funnel_section)
-
-#if	!MACH_LDEBUG
-			lis		r10,hi16(EXT(kdebug_enable))
-			ori		r10,r10,lo16(EXT(kdebug_enable))
-			lwz		r10,0(r10)
-			lis		r11,hi16(EXT(split_funnel_off))
-			ori		r11,r11,lo16(EXT(split_funnel_off))
-			lwz		r11,0(r11)
-			or.		r10,r11,r10						; Check kdebug_enable or split_funnel_off
-			bne-	L_enter_funnel_section_slow		; If set, call the slow path
-			mfsprg	r6,1							; Get the current activation
-			lwz		r7,LOCK_FNL_MUTEX(r3)
-
-			lwz		r5,0(r7)						; Get lock quickly
-			mr.		r5,r5							; Locked?
-			bne--	L_enter_funnel_section_slow		; Yup...
-
-L_enter_funnel_section_loop:
-			lwarx	r5,0,r7							; Load the mutex lock
-			mr.		r5,r5
-			bne--	L_enter_funnel_section_slowX	; Go to the slow path
-			stwcx.	r6,0,r7							; Grab the lock
-			bne--	L_enter_funnel_section_loop		; Loop back if failed
-			.globl	EXT(entfsectPatch_isync)     
-LEXT(entfsectPatch_isync)
-			isync									; Stop prefeteching
-			li		r7,TH_FN_OWNED
-			stw		r3,THREAD_FUNNEL_LOCK(r6)		; Set the funnel lock reference
-			stw		r7,THREAD_FUNNEL_STATE(r6)		; Set the funnel state
-			blr
-
-L_enter_funnel_section_slowX:
-			li		r4,lgKillResv					; Killing field
-			stwcx.	r4,0,r4							; Kill reservation
-
-L_enter_funnel_section_slow:
-#endif
-			li		r4,TRUE
-			b		EXT(thread_funnel_set)
-
-/*
- *		void exit_funnel_section(void)
- *
- */
-			.align	5
-			.globl	EXT(exit_funnel_section)
-
-LEXT(exit_funnel_section)
-
-			mfsprg	r6,1							; Get the current activation
-			lwz		r3,THREAD_FUNNEL_LOCK(r6)		; Get the funnel lock
-			mr.		r3,r3							; Check on funnel held
-			beq-	L_exit_funnel_section_ret		; 
-#if	!MACH_LDEBUG
-			lis		r10,hi16(EXT(kdebug_enable))
-			ori		r10,r10,lo16(EXT(kdebug_enable))
-			lwz		r10,0(r10)
-			mr.		r10,r10
-			bne-	L_exit_funnel_section_slow		; If set, call the slow path
-			lwz		r7,LOCK_FNL_MUTEX(r3)			; Get the funnel mutex lock
-			.globl	EXT(retfsectPatch_isync)     
-LEXT(retfsectPatch_isync)
-			isync
-			.globl	EXT(retfsectPatch_eieio)     
-LEXT(retfsectPatch_eieio)
-			eieio
-
-			lwz		r5,0(r7)						; Get lock
-			rlwinm.	r4,r5,0,30,31					; Quick check for bail if pending waiter or interlock set 
-			bne--	L_exit_funnel_section_slow		; No can get...
-
-L_exit_funnel_section_loop:
-			lwarx	r5,0,r7
-			rlwinm.	r4,r5,0,30,31					; Bail if pending waiter or interlock set 
-			li		r5,0							; Clear the mutexlock 
-			bne--	L_exit_funnel_section_slowX
-			stwcx.	r5,0,r7							; Release the funnel mutexlock
-			bne--	L_exit_funnel_section_loop
-			li		r7,0
-			stw		r7,THREAD_FUNNEL_STATE(r6)		; Clear the funnel state
-			stw		r7,THREAD_FUNNEL_LOCK(r6)		; Clear the funnel lock reference
-			blr										; Return
-
-L_exit_funnel_section_slowX:
-			li		r4,lgKillResv					; Killing field
-			stwcx.	r4,0,r4							; Kill it
-
-L_exit_funnel_section_slow:
-#endif
-			li		r4,FALSE
-			b		EXT(thread_funnel_set)
-L_exit_funnel_section_ret:
-			blr
-
-/*
  *		void lck_rw_lock_exclusive(lck_rw_t*)
  *
  */
@@ -2090,7 +2035,7 @@ rwlseloop:	lwarx	r5,RW_DATA,r3					; Grab the lock value
 			.globl  EXT(rwlsePatch_isync)
 LEXT(rwlsePatch_isync)
 			isync
-			li		r3,0							; Succeed, return FALSE...
+			li		r3,1							; Succeed, return TRUE...
 			blr
 rwlsespin:
 			li		r4,lgKillResv					; Killing field

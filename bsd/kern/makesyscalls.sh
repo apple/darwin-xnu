@@ -2,25 +2,26 @@
 #	@(#)makesyscalls.sh	8.1 (Berkeley) 6/10/93
 # $FreeBSD: src/sys/kern/makesyscalls.sh,v 1.60 2003/04/01 01:12:24 jeff Exp $
 #
-# Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+# Copyright (c) 2004-2007 Apple Inc. All rights reserved.
 #
-# @APPLE_LICENSE_HEADER_START@
+# @APPLE_OSREFERENCE_LICENSE_HEADER_START@
 # 
-# The contents of this file constitute Original Code as defined in and
-# are subject to the Apple Public Source License Version 1.1 (the
-# "License").  You may not use this file except in compliance with the
-# License.  Please obtain a copy of the License at
-# http://www.apple.com/publicsource and read it before using this file.
+# This file contains Original Code and/or Modifications of Original Code
+# as defined in and that are subject to the Apple Public Source License
+# Version 2.0 (the 'License'). You may not use this file except in
+# compliance with the License. Please obtain a copy of the License at
+# http://www.opensource.apple.com/apsl/ and read it before using this
+# file.
 # 
-# This Original Code and all software distributed under the License are
-# distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+# The Original Code and all software distributed under the License are
+# distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
 # EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
 # INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
-# License for the specific language governing rights and limitations
-# under the License.
+# FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+# Please see the License for the specific language governing rights and
+# limitations under the License.
 # 
-# @APPLE_LICENSE_HEADER_END@
+# @APPLE_OSREFERENCE_LICENSE_HEADER_END@
 #
 
 set -e
@@ -69,7 +70,7 @@ s/\$//g
 	b join
 	}
 2,${
-	/^#/!s/\([{}()*,]\)/ \1 /g
+	/^#/!s/\([{}()*,;]\)/ \1 /g
 }
 ' < $1 | awk "
 	BEGIN {
@@ -93,25 +94,31 @@ s/\$//g
 		"'
 
 		printf "/*\n" > syslegal
-		printf " * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.\n" > syslegal
+		printf " * Copyright (c) 2004-2007 Apple Inc. All rights reserved.\n" > syslegal
 		printf " * \n" > syslegal
-		printf " * @APPLE_LICENSE_HEADER_START@ \n" > syslegal
+		printf " * @APPLE_OSREFERENCE_LICENSE_HEADER_START@\n" > syslegal
 		printf " * \n" > syslegal
-		printf " * The contents of this file constitute Original Code as defined in and \n" > syslegal
-		printf " * are subject to the Apple Public Source License Version 1.1 (the \n" > syslegal
-		printf " * \"License\").  You may not use this file except in compliance with the \n" > syslegal
-		printf " * License.  Please obtain a copy of the License at \n" > syslegal
-		printf " * http://www.apple.com/publicsource and read it before using this file. \n" > syslegal
+		printf " * This file contains Original Code and/or Modifications of Original Code\n" > syslegal
+		printf " * as defined in and that are subject to the Apple Public Source License\n" > syslegal
+		printf " * Version 2.0 (the \047License\047). You may not use this file except in\n" > syslegal
+		printf " * compliance with the License. The rights granted to you under the License\n" > syslegal
+		printf " * may not be used to create, or enable the creation or redistribution of,\n" > syslegal
+		printf " * unlawful or unlicensed copies of an Apple operating system, or to\n" > syslegal
+		printf " * circumvent, violate, or enable the circumvention or violation of, any\n" > syslegal
+		printf " * terms of an Apple operating system software license agreement.\n" > syslegal
 		printf " * \n" > syslegal
-		printf " * This Original Code and all software distributed under the License are \n" > syslegal
-		printf " * distributed on an \"AS IS\" basis, WITHOUT WARRANTY OF ANY KIND, EITHER \n" > syslegal
-		printf " * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, \n" > syslegal
-		printf " * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, \n" > syslegal
-		printf " * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the \n" > syslegal
-		printf " * License for the specific language governing rights and limitations \n" > syslegal
-		printf " * under the License. \n" > syslegal
+		printf " * Please obtain a copy of the License at\n" > syslegal
+		printf " * http://www.opensource.apple.com/apsl/ and read it before using this file.\n" > syslegal
 		printf " * \n" > syslegal
-		printf " * @APPLE_LICENSE_HEADER_END@ \n" > syslegal
+		printf " * The Original Code and all software distributed under the License are\n" > syslegal
+		printf " * distributed on an \047AS IS\047 basis, WITHOUT WARRANTY OF ANY KIND, EITHER\n" > syslegal
+		printf " * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,\n" > syslegal
+		printf " * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,\n" > syslegal
+		printf " * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.\n" > syslegal
+		printf " * Please see the License for the specific language governing rights and\n" > syslegal
+		printf " * limitations under the License.\n" > syslegal
+		printf " * \n" > syslegal
+		printf " * @APPLE_OSREFERENCE_LICENSE_HEADER_END@\n" > syslegal
 		printf " * \n" > syslegal
 		printf " * \n" > syslegal
 		printf " * System call switch table.\n *\n" > syslegal
@@ -135,11 +142,16 @@ s/\$//g
 		printf "#include <sys/sem_internal.h>\n" > sysarg
 		printf "#include <sys/semaphore.h>\n" > sysarg
 		printf "#include <sys/wait.h>\n" > sysarg
-		printf "#include <mach/shared_memory_server.h>\n" > sysarg
+		printf "#include <mach/shared_region.h>\n" > sysarg
 		printf "\n#ifdef KERNEL\n" > sysarg
 		printf "#ifdef __APPLE_API_PRIVATE\n" > sysarg
+		printf "#ifndef __arm__\n" > sysarg
 		printf "#define\tPAD_(t)\t(sizeof(uint64_t) <= sizeof(t) \\\n " > sysarg
 		printf "\t\t? 0 : sizeof(uint64_t) - sizeof(t))\n" > sysarg
+		printf "#else\n" > sysarg
+		printf "#define\tPAD_(t)\t(sizeof(register_t) <= sizeof(t) \\\n" > sysarg
+		printf " 		? 0 : sizeof(register_t) - sizeof(t))\n" > sysarg
+		printf "#endif\n" > sysarg
 		printf "#if BYTE_ORDER == LITTLE_ENDIAN\n"> sysarg
 		printf "#define\tPADL_(t)\t0\n" > sysarg
 		printf "#define\tPADR_(t)\tPAD_(t)\n" > sysarg
@@ -150,6 +162,7 @@ s/\$//g
 		printf "\n__BEGIN_DECLS\n" > sysarg
 		printf "#ifndef __MUNGE_ONCE\n" > sysarg
 		printf "#define __MUNGE_ONCE\n" > sysarg
+		printf "#ifndef __arm__\n" > sysarg
 		printf "void munge_w(const void *, void *);  \n" > sysarg
 		printf "void munge_ww(const void *, void *);  \n" > sysarg
 		printf "void munge_www(const void *, void *);  \n" > sysarg
@@ -161,12 +174,33 @@ s/\$//g
 		printf "void munge_wl(const void *, void *);  \n" > sysarg
 		printf "void munge_wlw(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwl(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwlww(const void *, void *); \n" > sysarg
+		printf "void munge_wwwlww(const void *, void *);  \n" > sysarg
+		printf "void munge_wwlwww(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwwl(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwwwl(const void *, void *);  \n" > sysarg
 		printf "void munge_wsw(const void *, void *);  \n" > sysarg
 		printf "void munge_wws(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwsw(const void *, void *);  \n" > sysarg
+		printf "#else \n" > sysarg
+		printf "#define munge_w  NULL \n" > sysarg
+		printf "#define munge_ww  NULL \n" > sysarg
+		printf "#define munge_www  NULL \n" > sysarg
+		printf "#define munge_wwww  NULL \n" > sysarg
+		printf "#define munge_wwwww  NULL \n" > sysarg
+		printf "#define munge_wwwwww  NULL \n" > sysarg
+		printf "#define munge_wwwwwww  NULL \n" > sysarg
+		printf "#define munge_wwwwwwww  NULL \n" > sysarg
+		printf "#define munge_wl  NULL \n" > sysarg
+		printf "#define munge_wlw  NULL \n" > sysarg
+		printf "#define munge_wwwl  NULL \n" > sysarg
+		printf "#define munge_wwwlww  NULL\n" > sysarg
+		printf "#define munge_wwlwww  NULL \n" > sysarg
+		printf "#define munge_wwwwl  NULL \n" > sysarg
+		printf "#define munge_wwwwwl  NULL \n" > sysarg
+		printf "#define munge_wsw  NULL \n" > sysarg
+		printf "#define munge_wws  NULL \n" > sysarg
+		printf "#define munge_wwwsw  NULL \n" > sysarg
+		printf "#endif // ! __arm__\n" > sysarg
 		printf "#ifdef __ppc__\n" > sysarg
 		printf "void munge_d(const void *, void *);  \n" > sysarg
 		printf "void munge_dd(const void *, void *);  \n" > sysarg
@@ -204,31 +238,31 @@ s/\$//g
 		print > sysent
 		print > sysarg
 		print > syscallnamestempfile
-		print > syshdrtempfile
 		print > sysprotoend
-		savesyscall = syscall
+		savesyscall = syscall_num
+		skip_for_header = 0
 		next
 	}
 	$1 ~ /^#[ 	]*else/ {
 		print > sysent
 		print > sysarg
 		print > syscallnamestempfile
-		print > syshdrtempfile
 		print > sysprotoend
-		syscall = savesyscall
+		syscall_num = savesyscall
+		skip_for_header = 1
 		next
 	}
 	$1 ~ /^#/ {
 		print > sysent
 		print > sysarg
 		print > syscallnamestempfile
-		print > syshdrtempfile
 		print > sysprotoend
+		skip_for_header = 0
 		next
 	}
-	syscall != $1 {
+	syscall_num != $1 {
 		printf "%s: line %d: syscall number out of sync at %d\n",
-		    infile, NR, syscall
+		    infile, NR, syscall_num
 		printf "line is:\n"
 		print
 		exit 1
@@ -248,7 +282,7 @@ s/\$//g
 	
 	function parseline() {
 		funcname = ""
-		current_field = 5
+		current_field = 3
 		args_start = 0
 		args_end = 0
 		comments_start = 0
@@ -299,6 +333,11 @@ s/\$//g
 		if ($args_end != ";")
 			parserr($args_end, ";")
 		args_end--
+
+		# skip any NO_SYSCALL_STUB qualifier
+		if ($args_end == "NO_SYSCALL_STUB")
+			args_end--
+
 		if ($args_end != ")")
 			parserr($args_end, ")")
 		args_end--
@@ -367,70 +406,46 @@ s/\$//g
 		add_sysproto_entry = 1
 		add_64bit_unsafe = 0
 		add_64bit_fakesafe = 0
-		add_cancel_enable = "0"
+		add_resv = "0"
+		my_flags = "0"
 
-		if ($2 == "NONE") {
-			add_cancel_enable = "_SYSCALL_CANCEL_NONE"
-		}
-		else if ($2 == "PRE") {
-			add_cancel_enable = "_SYSCALL_CANCEL_PRE"
-		}
-		else if ($2 == "POST") {
-			add_cancel_enable = "_SYSCALL_CANCEL_POST"
-		} 
-		else {
-			printf "%s: line %d: unrecognized keyword %s\n", infile, NR, $2
-			exit 1
 
-		}
-
-		if ($3 == "KERN") {
-			my_funnel = "KERNEL_FUNNEL"
-		}
-		else if ($3 == "NONE") {
-			my_funnel = "NO_FUNNEL"
-		}
-		else {
-			printf "%s: line %d: unrecognized keyword %s\n", infile, NR, $3
-			exit 1
-		}
-		
-		if ($4 != "ALL" && $4 != "UALL") {
+		if ($2 != "ALL" && $2 != "UALL") {
 			files_keyword_OK = 0
 			add_sysent_entry = 0
 			add_sysnames_entry = 0
 			add_sysheader_entry = 0
 			add_sysproto_entry = 0
 			
-			if (match($4, "[T]") != 0) {
+			if (match($2, "[T]") != 0) {
 				add_sysent_entry = 1
 				files_keyword_OK = 1
 			}
-			if (match($4, "[N]") != 0) {
+			if (match($2, "[N]") != 0) {
 				add_sysnames_entry = 1
 				files_keyword_OK = 1
 			}
-			if (match($4, "[H]") != 0) {
+			if (match($2, "[H]") != 0) {
 				add_sysheader_entry = 1
 				files_keyword_OK = 1
 			}
-			if (match($4, "[P]") != 0) {
+			if (match($2, "[P]") != 0) {
 				add_sysproto_entry = 1
 				files_keyword_OK = 1
 			}
-			if (match($4, "[U]") != 0) {
+			if (match($2, "[U]") != 0) {
 				add_64bit_unsafe = 1
 			}
-			if (match($4, "[F]") != 0) {
+			if (match($2, "[F]") != 0) {
 				add_64bit_fakesafe = 1
 			}
 			
 			if (files_keyword_OK == 0) {
-				printf "%s: line %d: unrecognized keyword %s\n", infile, NR, $4
+				printf "%s: line %d: unrecognized keyword %s\n", infile, NR, $2
 				exit 1
 			}
 		}
-		else if ($4 == "UALL") {
+		else if ($2 == "UALL") {
 			add_64bit_unsafe = 1;
 		}
 		
@@ -441,7 +456,9 @@ s/\$//g
 		# name of the appropriate argument mungers
 		munge32 = "NULL"
 		munge64 = "NULL"
-		if (funcname != "nosys" || (syscall == 0 && funcname == "nosys")) {
+		size32 = 0
+
+		if ((funcname != "nosys" && funcname != "enosys") || (syscall_num == 0 && funcname == "nosys")) {
 			if (argc != 0) {
 				if (add_sysproto_entry == 1) {
 					printf("struct %s {\n", argalias) > sysarg
@@ -459,33 +476,39 @@ s/\$//g
 							ext_argtype[i] = "user_long_t";
 						munge32 = munge32 "s"
 						munge64 = munge64 "d"
+						size32 += 4
 					}
 					else if (argtype[i] == "u_long") {
 						if (add_64bit_unsafe == 0)
 							ext_argtype[i] = "user_ulong_t";
 						munge32 = munge32 "w"
 						munge64 = munge64 "d"
+						size32 += 4
 					}
 					else if (argtype[i] == "size_t") {
 						if (add_64bit_unsafe == 0)
 							ext_argtype[i] = "user_size_t";
 						munge32 = munge32 "w"
 						munge64 = munge64 "d"
+						size32 += 4
 					}
 					else if (argtype[i] == "ssize_t") {
 						if (add_64bit_unsafe == 0)
 							ext_argtype[i] = "user_ssize_t";
 						munge32 = munge32 "s"
 						munge64 = munge64 "d"
+						size32 += 4
 					}
 					else if (argtype[i] == "user_ssize_t" || argtype[i] == "user_long_t") {
 						munge32 = munge32 "s"
 						munge64 = munge64 "d"
+						size32 += 4
 					}
 					else if (argtype[i] == "user_addr_t" || argtype[i] == "user_size_t" ||
 						argtype[i] == "user_ulong_t") {
 						munge32 = munge32 "w"
 						munge64 = munge64 "d"
+						size32 += 4
 					}
 					else if (argtype[i] == "caddr_t" || argtype[i] == "semun_t" ||
   						match(argtype[i], "[\*]") != 0) {
@@ -493,6 +516,7 @@ s/\$//g
 							ext_argtype[i] = "user_addr_t";
 						munge32 = munge32 "w"
 						munge64 = munge64 "d"
+						size32 += 4
 					}
 					else if (argtype[i] == "int" || argtype[i] == "u_int" ||
 							 argtype[i] == "uid_t" || argtype[i] == "pid_t" ||
@@ -502,10 +526,12 @@ s/\$//g
 							 argtype[i] == "mode_t" || argtype[i] == "key_t" || argtype[i] == "time_t") {
 						munge32 = munge32 "w"
 						munge64 = munge64 "d"
+						size32 += 4
 					}
 					else if (argtype[i] == "off_t" || argtype[i] == "int64_t" || argtype[i] == "uint64_t") {
 						munge32 = munge32 "l"
 						munge64 = munge64 "d"
+						size32 += 8
 					}
 					else {
 						printf "%s: line %d: invalid type \"%s\" \n", 
@@ -538,7 +564,9 @@ s/\$//g
 			munge32 = "NULL"
 			munge64 = "NULL"
 			munge_ret = "_SYSCALL_RET_NONE"
-			tempname = "nosys"
+			if (tempname != "enosys") {
+				tempname = "nosys"
+			}
 		}
 		else {
 			# figure out which return value type to munge
@@ -573,56 +601,56 @@ s/\$//g
 		}
 
 		if (add_64bit_unsafe == 1  && add_64bit_fakesafe == 0)
-			my_funnel = my_funnel "|UNSAFE_64BIT";
+			my_flags = "UNSAFE_64BIT";
 
-		printf("\t{%s, %s, %s, \(sy_call_t *\)%s, %s, %s, %s},", 
-				argssize, add_cancel_enable, my_funnel, tempname, munge32, munge64, munge_ret) > sysent
-		linesize = length(argssize) + length(add_cancel_enable) + length(my_funnel) + length(tempname) + \
+		printf("\t{%s, %s, %s, \(sy_call_t *\)%s, %s, %s, %s, %s},", 
+				argssize, add_resv, my_flags, tempname, munge32, munge64, munge_ret, size32) > sysent
+		linesize = length(argssize) + length(add_resv) + length(my_flags) + length(tempname) + \
 				length(munge32) + length(munge64) + length(munge_ret) + 28
 		align_comment(linesize, 88, sysent)
-		printf("/* %d = %s%s*/\n", syscall, funcname, additional_comments) > sysent
+		printf("/* %d = %s%s*/\n", syscall_num, funcname, additional_comments) > sysent
 		
 		# output to syscalls.c
 		if (add_sysnames_entry == 1) {
 			tempname = funcname
-			if (funcname == "nosys") {
-				if (syscall == 0)
+			if (funcname == "nosys" || funcname == "enosys") {
+				if (syscall_num == 0)
 					tempname = "syscall"
 				else
-					tempname = "#" syscall
+					tempname = "#" syscall_num
 			}
 			printf("\t\"%s\", ", tempname) > syscallnamestempfile
 			linesize = length(tempname) + 8
 			align_comment(linesize, 25, syscallnamestempfile)
 			if (substr(tempname,1,1) == "#") {
-				printf("/* %d =%s*/\n", syscall, additional_comments) > syscallnamestempfile
+				printf("/* %d =%s*/\n", syscall_num, additional_comments) > syscallnamestempfile
 			}
 			else {
-				printf("/* %d = %s%s*/\n", syscall, tempname, additional_comments) > syscallnamestempfile
+				printf("/* %d = %s%s*/\n", syscall_num, tempname, additional_comments) > syscallnamestempfile
 			}
 		}
 
 		# output to syscalls.h
 		if (add_sysheader_entry == 1) {
 			tempname = funcname
-			if (syscall == 0) {
+			if (syscall_num == 0) {
 				tempname = "syscall"
 			}
-			if (tempname != "nosys") {
+			if (tempname != "nosys" && tempname != "enosys") {
 				printf("#define\t%s%s", syscallprefix, tempname) > syshdrtempfile
 				linesize = length(syscallprefix) + length(tempname) + 12
 				align_comment(linesize, 30, syshdrtempfile)
-				printf("%d\n", syscall) > syshdrtempfile
+				printf("%d\n", syscall_num) > syshdrtempfile
 				# special case for gettimeofday on ppc - cctools project uses old name
 				if (tempname == "ppc_gettimeofday") {
 					printf("#define\t%s%s", syscallprefix, "gettimeofday") > syshdrtempfile
 					linesize = length(syscallprefix) + length(tempname) + 12
 					align_comment(linesize, 30, syshdrtempfile)
-					printf("%d\n", syscall) > syshdrtempfile
+					printf("%d\n", syscall_num) > syshdrtempfile
 				}
 			}
-			else {
-				printf("\t\t\t/* %d %s*/\n", syscall, additional_comments) > syshdrtempfile
+			else if (skip_for_header == 0) {
+				printf("\t\t\t/* %d %s*/\n", syscall_num, additional_comments) > syshdrtempfile
 			}
 		}
 		
@@ -632,18 +660,18 @@ s/\$//g
 				printf("void %s(struct proc *, struct %s *, int *);\n", 
 						funcname, argalias) > sysprotoend
 			}
-			else if (funcname != "nosys" || (syscall == 0 && funcname == "nosys")) {
+			else if ((funcname != "nosys" && funcname != "enosys") || (syscall_num == 0 && funcname == "nosys")) {
 				printf("int %s(struct proc *, struct %s *, %s *);\n", 
 						funcname, argalias, returntype) > sysprotoend
 			}
 		}
 		
-		syscall++
+		syscall_num++
 		next
 	}
 
 	END {
-		printf "#define AC(name) (sizeof(struct name) / sizeof(uint64_t))\n" > sysinc
+		printf "#define AC(name) (sizeof(struct name) / sizeof(syscall_arg_t))\n" > sysinc
 		printf "\n" > sysinc
 
 		printf("\n__END_DECLS\n") > sysprotoend
@@ -656,15 +684,21 @@ s/\$//g
 
 		printf("};\n") > sysent
 		printf("int	nsysent = sizeof(sysent) / sizeof(sysent[0]);\n") > sysent
+		printf("/* Verify that NUM_SYSENT reflects the latest syscall count */\n") > sysent
+		printf("int	nsysent_size_check[((sizeof(sysent) / sizeof(sysent[0])) == NUM_SYSENT) ? 1 : -1] __unused;\n") > sysent
 
 		printf("};\n") > syscallnamestempfile
-		printf("#define\t%sMAXSYSCALL\t%d\n", syscallprefix, syscall) \
+		printf("#define\t%sMAXSYSCALL\t%d\n", syscallprefix, syscall_num) \
 		    > syshdrtempfile
 		printf("\n#endif /* __APPLE_API_PRIVATE */\n") > syshdrtempfile
 		printf("#endif /* !%s */\n", syscall_h) > syshdrtempfile
 	} '
 
-cat $syslegal $sysinc $sysent > $syscalltablefile
+# define value in syscall table file to permit redifintion because of the way
+# __private_extern__ (doesn't) work.
+cat $syslegal > $syscalltablefile
+printf "#define __INIT_SYSENT_C__ 1\n" >> $syscalltablefile
+cat $sysinc $sysent >> $syscalltablefile
 cat $syslegal $sysarg $sysprotoend > $sysprotofile
 cat $syslegal $syscallnamestempfile > $syscallnamesfile
 cat $syslegal $syshdrtempfile > $syshdrfile

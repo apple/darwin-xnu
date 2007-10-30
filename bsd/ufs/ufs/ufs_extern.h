@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*-
@@ -69,7 +75,11 @@ struct mbuf;
 struct mount;
 struct nameidata;
 struct proc;
+#ifndef _KAUTH_CRED_T
+#define	_KAUTH_CRED_T
 struct ucred;
+typedef struct ucred *kauth_cred_t;
+#endif	/* !_KAUTH_CRED_T */
 struct ufs_args;
 struct uio;
 struct vnode_attr;
@@ -78,11 +88,11 @@ struct vnode;
 
 __BEGIN_DECLS
 int	ufs_remove_internal(vnode_t, vnode_t, struct componentname *, int);
-int	ufs_access_internal(vnode_t, mode_t, ucred_t);
+int	ufs_access_internal(vnode_t, mode_t, kauth_cred_t);
 
 int	ffs_read_internal(vnode_t, struct uio *, int);
-int	ffs_write_internal(vnode_t, struct uio *, int, ucred_t);
-int	ffs_truncate_internal(vnode_t, off_t, int, ucred_t);
+int	ffs_write_internal(vnode_t, struct uio *, int, kauth_cred_t);
+int	ffs_truncate_internal(vnode_t, off_t, int, kauth_cred_t);
 
 void	 diskerr
 	   (struct buf *, char *, char *, int, int, struct disklabel *);
@@ -93,12 +103,12 @@ int	 setdisklabel(struct disklabel *, struct disklabel *, u_long);
 int	 writedisklabel(dev_t, int (*)(), struct disklabel *);
 
 int	 ufs_access(struct vnop_access_args *);
-int	 ufs_checkpath(struct inode *, struct inode *, struct ucred *);
+int	 ufs_checkpath(struct inode *, struct inode *, kauth_cred_t);
 int	 ufs_close(struct vnop_close_args *);
 int	 ufs_create(struct vnop_create_args *);
 void	 ufs_dirbad(struct inode *, doff_t, const char *);
 int	 ufs_dirbadentry(struct vnode *, struct direct *, int);
-int	 ufs_dirempty(struct inode *, ino_t, struct ucred *);
+int	 ufs_dirempty(struct inode *, ino_t, kauth_cred_t);
 int	 ufs_direnter(struct inode *, struct vnode *,struct componentname *);
 int	 ufs_dirremove(struct vnode *, struct componentname*);
 int	 ufs_dirrewrite

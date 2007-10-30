@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -47,13 +53,11 @@
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
-/*
- */
-
 #ifndef	_I386_SEG_H_
 #define	_I386_SEG_H_
 
 #include <mach_kdb.h>
+#ifndef ASSEMBLER
 #include <stdint.h>
 #include <mach/vm_types.h>
 #include <architecture/i386/sel.h>
@@ -89,7 +93,8 @@ selector_to_sel(uint16_t selector)
 }
 
 #define LDTSZ		8192		/* size of the kernel ldt in entries */
-#define	LDTSZ_MIN	17		/* kernel ldt entries used by the system */
+#define	LDTSZ_MIN	SEL_TO_INDEX(USER_SETTABLE)
+					/* kernel ldt entries */
 
 #if	MACH_KDB
 #define	GDTSZ		19
@@ -101,8 +106,6 @@ selector_to_sel(uint16_t selector)
  * Interrupt table is always 256 entries long.
  */
 #define	IDTSZ		256
-
-#ifndef	__ASSEMBLER__
 
 #include <sys/cdefs.h>
 
@@ -311,6 +314,7 @@ __END_DECLS
 #define	DEBUG_TSS	0x90		/* debug TSS (uniprocessor) */
 #endif
 
+#ifndef __ASSEMBLER__
 struct __gdt_desc_struct {
   unsigned short size;
   unsigned long address __attribute__((packed));
@@ -322,6 +326,6 @@ struct __idt_desc_struct {
   unsigned long address __attribute__((packed));
   unsigned short pad;
 } __attribute__ ((packed));
-
+#endif /* __ASSEMBLER__ */
 
 #endif	/* _I386_SEG_H_ */

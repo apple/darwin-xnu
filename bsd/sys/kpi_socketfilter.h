@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2002 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*!
 	@header kpi_socketfilter.h
@@ -54,16 +60,19 @@ struct sockaddr;
 /*!
 	@enum sflt_flags
 	@abstract Constants defining mbuf flags. Only the flags listed below
-		can be set or retreieved.
+		can be set or retrieved.
 	@constant SFLT_GLOBAL Indicates this socket filter should be
 		attached to all new sockets when they're created.
 	@constant SFLT_PROG Indicates this socket filter should be attached
 		only when request by the application using the SO_NKE socket
 		option.
+	@constant SFLT_EXTENDED	Indicates that this socket filter utilizes
+		the extended fields within the sflt_filter structure.
 */
 enum {
 	SFLT_GLOBAL		= 0x01,
-	SFLT_PROG		= 0x02
+	SFLT_PROG		= 0x02,
+	SFLT_EXTENDED		= 0x04
 };
 typedef	u_int32_t	sflt_flags;
 
@@ -77,7 +86,7 @@ typedef	u_int32_t	sflt_handle;
 /*!
 	@enum sflt_event_t
 	@abstract Events notify a filter of state changes and other various
-		events related to the socket. These events can not be prevented
+		events related to the socket. These events cannot be prevented
 		or intercepted, only observed.
 	@constant sock_evt_connected Indicates this socket has moved to the
 		connected state.
@@ -89,22 +98,25 @@ typedef	u_int32_t	sflt_handle;
 		connection have been shutdown. The param will point to an
 		integer that indicates the direction that has been shutdown. See
 		'man 2 shutdown' for more information.
-	@constant sock_evt_cantrecvmore Indicates the socket can not receive
+	@constant sock_evt_cantrecvmore Indicates the socket cannot receive
 		more data.
-	@constant sock_evt_cantsendmore Indicates the socket can not send
+	@constant sock_evt_cantsendmore Indicates the socket cannot send
 		more data.
 	@constant sock_evt_closing Indicates the socket is closing.
+	@constant sock_evt_bound Indicates this socket has moved to the
+		bound state (only for PF_INET/PF_INET6 domain).
 */
 enum {
 	sock_evt_connecting		= 1,
 	sock_evt_connected		= 2,
-	sock_evt_disconnecting	= 3,
-	sock_evt_disconnected	= 4,
+	sock_evt_disconnecting		= 3,
+	sock_evt_disconnected		= 4,
 	sock_evt_flush_read		= 5,
 	sock_evt_shutdown		= 6, /* param points to an integer specifying how (read, write, or both) see man 2 shutdown */
-	sock_evt_cantrecvmore	= 7,
-	sock_evt_cantsendmore	= 8,
-	sock_evt_closing		= 9
+	sock_evt_cantrecvmore		= 7,
+	sock_evt_cantsendmore		= 8,
+	sock_evt_closing		= 9,
+	sock_evt_bound			= 10
 };
 typedef	u_int32_t	sflt_event_t;
 
@@ -123,6 +135,8 @@ enum {
 	sock_data_filt_flag_record	= 2
 };
 typedef	u_int32_t	sflt_data_flag_t;
+
+__BEGIN_DECLS
 
 /*!
 	@typedef sf_unregistered_func
@@ -385,6 +399,10 @@ typedef	errno_t	(*sf_listen_func)(void *cookie, socket_t so);
 	
 	@discussion sf_ioctl_func is called before performing an ioctl
 		on a socket.
+
+		All undefined ioctls are reserved for future use by Apple. If
+		you need to communicate with your kext using an ioctl, please
+		use SIOCSIFKPI and SIOCGIFKPI.
 	@param cookie Cookie value specified when the filter attach was
 		called.
 	@param so The socket the filter is attached to.
@@ -398,6 +416,39 @@ typedef	errno_t	(*sf_ioctl_func)(void *cookie, socket_t so,
 					u_int32_t request, const char* argp);
 
 /*!
+	@typedef sf_accept_func
+
+	@discussion sf_accept_func is called after a socket is dequeued
+		off the completed (incoming) connection list and before
+		the file descriptor is associated with it.  A filter can
+		utilize this callback to intercept the accepted socket
+		in order to examine it, prior to returning the socket to
+		the caller of accept.  Such a filter may also choose to
+		discard the accepted socket if it wishes to do so.
+	@param cookie Cookie value specified when the filter attach was called.
+	@param so_listen The listening socket.
+	@param so The socket that is about to be accepted.
+	@param local The local address of the about to be accepted socket.
+	@param remote The remote address of the about to be accepted socket.
+	@result Return:
+		0 - The caller will continue with normal processing of accept.
+		EJUSTRETURN - The to be accepted socket will be disconnected
+		    prior to being returned to the caller of accept.  No further
+		    control or data operations on the socket will be allowed.
+		    This is the recommended return value as it has the least
+		    amount of impact, especially to applications which don't
+		    check the error value returned by accept.
+		Anything Else - The to be accepted socket will be closed and
+		    the error will be returned to the caller of accept.
+		    Note that socket filter developers are advised to exercise
+		    caution when returning non-zero values to the caller,
+		    since some applications don't check the error value
+		    returned by accept and therefore risk breakage.
+ */
+typedef errno_t (*sf_accept_func)(void *cookie, socket_t so_listen, socket_t so,
+    const struct sockaddr *local, const struct sockaddr *remote);
+
+/*!
 	@struct sflt_filter
 	@discussion This structure is used to define a socket filter.
 	@field sf_handle A value used to find socket filters by
@@ -406,7 +457,9 @@ typedef	errno_t	(*sf_ioctl_func)(void *cookie, socket_t so,
 		option.
 	@field sf_flags Indicate whether this filter should be attached to
 		all new sockets or just those that request the filter be
-		attached using the SO_NKE socket option.
+		attached using the SO_NKE socket option. If this filter
+		utilizes the socket filter extension fields, it must also
+		set SFLT_EXTENDED.
 	@field sf_name A name used for debug purposes.
 	@field sf_unregistered Your function for being notified when your
 		filter has been unregistered.
@@ -419,23 +472,31 @@ typedef	errno_t	(*sf_ioctl_func)(void *cookie, socket_t so,
 		null.
 	@field sf_connect_in Your function for handling inbound
 		connections. May be null.
-	@field sf_connect_in Your function for handling outbound
+	@field sf_connect_out Your function for handling outbound
 		connections. May be null.
 	@field sf_bind Your function for handling binds. May be null.
 	@field sf_setoption Your function for handling setsockopt. May be null.
 	@field sf_getoption Your function for handling getsockopt. May be null.
 	@field sf_listen Your function for handling listen. May be null.
 	@field sf_ioctl Your function for handling ioctls. May be null.
+	@field sf_len Length of socket filter extension structure; developers
+		must initialize this to sizeof sflt_filter_ext structure.
+		This field and all fields following it will only be valid
+		if SFLT_EXTENDED flag is set in sf_flags field.
+	@field sf_ext_accept Your function for handling inbound connections
+		at accept time.  May be null.
+	@field sf_ext_rsvd Reserved for future use; you must initialize
+		the reserved fields with zeroes.
 */
 struct sflt_filter {
-	sflt_handle				sf_handle;
-	int						sf_flags;
-	char*					sf_name;
-	
-	sf_unregistered_func	sf_unregistered;
+	sflt_handle			sf_handle;
+	int				sf_flags;
+	char				*sf_name;
+
+	sf_unregistered_func		sf_unregistered;
 	sf_attach_func			sf_attach;
 	sf_detach_func			sf_detach;
-	
+
 	sf_notify_func			sf_notify;
 	sf_getpeername_func		sf_getpeername;
 	sf_getsockname_func		sf_getsockname;
@@ -448,6 +509,18 @@ struct sflt_filter {
 	sf_getoption_func		sf_getoption;
 	sf_listen_func			sf_listen;
 	sf_ioctl_func			sf_ioctl;
+	/*
+	 * The following are valid only if SFLT_EXTENDED flag is set.
+	 * Initialize sf_ext_len to sizeof sflt_filter_ext structure.
+	 * Filters must also initialize reserved fields with zeroes.
+	 */
+	struct sflt_filter_ext {
+		unsigned int		sf_ext_len;
+		sf_accept_func		sf_ext_accept;
+		void			*sf_ext_rsvd[5];	/* Reserved */
+	} sf_ext;
+#define	sf_len		sf_ext.sf_ext_len
+#define	sf_accept	sf_ext.sf_ext_accept
 };
 
 /*!
@@ -482,7 +555,7 @@ errno_t sflt_unregister(sflt_handle handle);
 	@param handle The handle of the registered filter to be attached.
 	@result 0 on success otherwise the errno error.
  */
-errno_t	sflt_attach(socket_t socket, sflt_handle);
+errno_t	sflt_attach(socket_t so, sflt_handle);
 
 /*!
 	@function sflt_detach
@@ -491,7 +564,7 @@ errno_t	sflt_attach(socket_t socket, sflt_handle);
 	@param handle The handle of the registered filter to be detached.
 	@result 0 on success otherwise the errno error.
  */
-errno_t	sflt_detach(socket_t socket, sflt_handle);
+errno_t	sflt_detach(socket_t so, sflt_handle);
 
 /* Functions for manipulating sockets */
 /*
@@ -550,7 +623,7 @@ typedef u_int8_t sockopt_dir;
 
 /*!
 	@function sockopt_direction
-	@discussion Retreives the direction of the socket option (Get or
+	@discussion Retrieves the direction of the socket option (Get or
 		Set).
 	@param sopt The socket option.
 	@result sock_opt_get or sock_opt_set.
@@ -559,7 +632,7 @@ sockopt_dir	sockopt_direction(sockopt_t sopt);
 
 /*!
 	@function sockopt_level
-	@discussion Retreives the socket option level. (SOL_SOCKET, etc).
+	@discussion Retrieves the socket option level. (SOL_SOCKET, etc).
 	@param sopt The socket option.
 	@result The socket option level. See man 2 setsockopt
  */
@@ -567,7 +640,7 @@ int	sockopt_level(sockopt_t sopt);
 
 /*!
 	@function sockopt_name
-	@discussion Retreives the socket option name. (SO_SNDBUF, etc).
+	@discussion Retrieves the socket option name. (SO_SNDBUF, etc).
 	@param sopt The socket option.
 	@result The socket option name. See man 2 setsockopt
  */
@@ -575,7 +648,7 @@ int	sockopt_name(sockopt_t sopt);
 
 /*!
 	@function sockopt_valsize
-	@discussion Retreives the size of the socket option data.
+	@discussion Retrieves the size of the socket option data.
 	@param sopt The socket option.
 	@result The length, in bytes, of the data.
  */
@@ -601,3 +674,5 @@ errno_t	sockopt_copyin(sockopt_t sopt, void *data, size_t length);
  */
 errno_t	sockopt_copyout(sockopt_t sopt, void *data, size_t length);
 
+__END_DECLS
+#endif

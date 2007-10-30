@@ -16,8 +16,6 @@
 typedef int errno_t;
 typedef int64_t daddr64_t;
 
-typedef	int64_t	ino64_t;
-
 #ifndef BSD_BUILD
 struct buf;
 typedef struct buf * buf_t;

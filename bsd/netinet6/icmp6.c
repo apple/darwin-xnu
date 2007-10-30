@@ -103,16 +103,14 @@
 extern int ipsec_bypass;
 #endif
 
-#include "faith.h"
-#if defined(NFAITH) && 0 < NFAITH
-#include <net/if_faith.h>
-#endif
-
 #include <net/net_osdep.h>
 
 extern struct domain inet6domain;
 extern struct ip6protosw inet6sw[];
 extern struct ip6protosw *ip6_protox[];
+
+extern u_long rip_sendspace;
+extern u_long rip_recvspace;
 
 struct icmp6stat icmp6stat;
 
@@ -535,7 +533,7 @@ icmp6_input(mp, offp)
 				m_freem(n0);
 				break;
 			}
-			MGETHDR(n, M_DONTWAIT, n0->m_type);
+			MGETHDR(n, M_DONTWAIT, n0->m_type);	/* MAC-OK */
 			if (n && maxlen >= MHLEN) {
 				MCLGET(n, M_DONTWAIT);
 				if ((n->m_flags & M_EXT) == 0) {
@@ -569,7 +567,8 @@ icmp6_input(mp, offp)
 			n0->m_flags &= ~M_PKTHDR;
 		} else {
 			nip6 = mtod(n, struct ip6_hdr *);
-			nicmp6 = (struct icmp6_hdr *)((caddr_t)nip6 + off);
+			IP6_EXTHDR_GET(nicmp6, struct icmp6_hdr *, n, off,
+				sizeof(*nicmp6));
 			noff = off;
 		}
 		nicmp6->icmp6_type = ICMP6_ECHO_REPLY;
@@ -617,7 +616,7 @@ icmp6_input(mp, offp)
 		/* XXX: per-interface statistics? */
 		break;		/* just pass it to applications */
 
-	case ICMP6_FQDN_QUERY:
+	case ICMP6_NI_QUERY:
 		if (!icmp6_nodeinfo)
 			break;
 
@@ -1051,8 +1050,7 @@ icmp6_mtudisc_update(ip6cp, validated)
 		    htons(m->m_pkthdr.rcvif->if_index);
 	}
 	/* sin6.sin6_scope_id = XXX: should be set if DST is a scoped addr */
-	rt = rtalloc1((struct sockaddr *)&sin6, 0,
-		      RTF_CLONING | RTF_PRCLONING);
+	rt = rtalloc1((struct sockaddr *)&sin6, 0, RTF_CLONING | RTF_PRCLONING);
 
 	if (rt && (rt->rt_flags & RTF_HOST)
 	    && !(rt->rt_rmx.rmx_locks & RTV_MTU)) {
@@ -1303,7 +1301,7 @@ ni6_input(m, off)
 	}
 
 	/* allocate an mbuf to reply. */
-	MGETHDR(n, M_DONTWAIT, m->m_type);
+	MGETHDR(n, M_DONTWAIT, m->m_type);	/* MAC-OK */
 	if (n == NULL) {
 		m_freem(m);
 		return(NULL);
@@ -2394,7 +2392,7 @@ icmp6_redirect_output(m0, rt)
 #if IPV6_MMTU >= MCLBYTES
 # error assumption failed about IPV6_MMTU and MCLBYTES
 #endif
-	MGETHDR(m, M_DONTWAIT, MT_HEADER);
+	MGETHDR(m, M_DONTWAIT, MT_HEADER);	/* MAC-OK */
 	if (m && IPV6_MMTU >= MHLEN)
 		MCLGET(m, M_DONTWAIT);
 	if (!m)
@@ -2710,6 +2708,157 @@ icmp6_ctloutput(so, sopt)
 #undef in6p_icmp6filt
 #endif
 
+/*
+ * ICMPv6 socket datagram option processing.
+ */
+int
+icmp6_dgram_ctloutput(struct socket *so, struct sockopt *sopt)
+{
+	if (so->so_uid == 0)
+		return icmp6_ctloutput(so, sopt);
+
+	if (sopt->sopt_level == IPPROTO_ICMPV6) {
+		switch (sopt->sopt_name) {
+			case ICMP6_FILTER:
+				return icmp6_ctloutput(so, sopt);
+			default:
+				return EPERM;
+		}
+	}
+	
+	if (sopt->sopt_level != IPPROTO_IPV6)
+		return EINVAL;
+		
+	switch (sopt->sopt_name) {
+		case IPV6_PKTOPTIONS:
+		case IPV6_UNICAST_HOPS:
+		case IPV6_CHECKSUM:
+		case IPV6_FAITH:
+		case IPV6_V6ONLY:
+		case IPV6_PKTINFO:
+		case IPV6_HOPLIMIT:
+		case IPV6_HOPOPTS:
+		case IPV6_DSTOPTS:
+		case IPV6_RTHDR:
+		case IPV6_MULTICAST_IF:
+		case IPV6_MULTICAST_HOPS:
+		case IPV6_MULTICAST_LOOP:
+		case IPV6_JOIN_GROUP:
+		case IPV6_LEAVE_GROUP:
+		case IPV6_PORTRANGE:
+		case IPV6_IPSEC_POLICY:
+			return ip6_ctloutput(so, sopt);
+		
+		default:
+			return EPERM;
+			
+		
+	}
+}
+
+__private_extern__ int
+icmp6_dgram_send(struct socket *so, __unused int flags, struct mbuf *m, struct sockaddr *nam,
+         struct mbuf *control, __unused struct proc *p)
+{
+	int error = 0;
+	struct inpcb *inp = sotoinpcb(so);
+	struct sockaddr_in6 tmp;
+	struct sockaddr_in6 *dst;
+	struct icmp6_hdr *icmp6;
+
+	if (so->so_uid == 0)
+		return rip6_output(m, so, (struct sockaddr_in6 *) nam, control);
+
+	/* always copy sockaddr to avoid overwrites */
+	if (so->so_state & SS_ISCONNECTED) {
+		if (nam) {
+				m_freem(m);
+				return EISCONN;
+		}
+		/* XXX */
+		bzero(&tmp, sizeof(tmp));
+		tmp.sin6_family = AF_INET6;
+		tmp.sin6_len = sizeof(struct sockaddr_in6);
+		bcopy(&inp->in6p_faddr, &tmp.sin6_addr,
+			  sizeof(struct in6_addr));
+		dst = &tmp;
+	} else {
+		if (nam == NULL) {
+				m_freem(m);
+				return ENOTCONN;
+		}
+		tmp = *(struct sockaddr_in6 *)nam;
+		dst = &tmp;
+	}
+
+	/*
+	 * For an ICMPv6 packet, we should know its type and code
+	 */
+	if (so->so_proto->pr_protocol == IPPROTO_ICMPV6) {
+		if (m->m_len < sizeof(struct icmp6_hdr) &&
+			(m = m_pullup(m, sizeof(struct icmp6_hdr))) == NULL) {
+				error = ENOBUFS;
+				goto bad;
+		}
+		icmp6 = mtod(m, struct icmp6_hdr *);
+	
+		/*
+		 * Allow only to send echo request type 128 with code 0
+		 * See RFC 2463 for Echo Request Message format
+		 */
+		if (icmp6->icmp6_type != 128 || icmp6->icmp6_code != 0) {
+			error = EPERM;
+			goto bad;
+		}
+	}
+
+#if ENABLE_DEFAULT_SCOPE
+	if (dst->sin6_scope_id == 0) {  /* not change if specified  */
+			dst->sin6_scope_id = scope6_addr2default(&dst->sin6_addr);
+	}
+#endif
+
+	return rip6_output(m, so, (struct sockaddr_in6 *) nam, control);
+bad:
+	m_freem(m);
+	return error;
+}
+
+/* Like rip6_attach but without root privilege enforcement */
+__private_extern__ int
+icmp6_dgram_attach(struct socket *so, int proto, struct proc *p)
+{
+        struct inpcb *inp;
+        int error;
+
+        inp = sotoinpcb(so);
+        if (inp)
+                panic("icmp6_dgram_attach");
+		
+		if (proto != IPPROTO_ICMPV6)
+			return EINVAL;
+			
+        error = soreserve(so, rip_sendspace, rip_recvspace);
+        if (error)
+                return error;
+        error = in_pcballoc(so, &ripcbinfo, p);
+        if (error)
+                return error;
+        inp = (struct inpcb *)so->so_pcb;
+        inp->inp_vflag |= INP_IPV6;
+        inp->in6p_ip6_nxt = IPPROTO_ICMPV6;
+        inp->in6p_hops = -1;    /* use kernel default */
+        inp->in6p_cksum = -1;
+        MALLOC(inp->in6p_icmp6filt, struct icmp6_filter *,
+               sizeof(struct icmp6_filter), M_PCB, M_WAITOK);
+        if (inp->in6p_icmp6filt == NULL)
+                return (ENOMEM);
+        ICMP6_FILTER_SETPASSALL(inp->in6p_icmp6filt);
+        return 0;
+}
+
+
+
 #ifndef HAVE_PPSRATECHECK
 #ifndef timersub
 #define	timersub(tvp, uvp, vvp)						\
@@ -2733,11 +2882,9 @@ ppsratecheck(lasttime, curpps, maxpps)
 	int maxpps;	/* maximum pps allowed */
 {
 	struct timeval tv, delta;
-	int s, rv;
+	int rv;
 
-	s = splclock(); 
 	microtime(&tv);
-	splx(s);
 
 	timersub(&tv, lasttime, &delta);
 
@@ -2789,10 +2936,10 @@ ppsratecheck(lasttime, curpps, maxpps)
  * XXX per-destination/type check necessary?
  */
 static int
-icmp6_ratelimit(dst, type, code)
-	const struct in6_addr *dst;	/* not used at this moment */
-	const int type;			/* not used at this moment */
-	const int code;			/* not used at this moment */
+icmp6_ratelimit(
+	__unused const struct in6_addr *dst,	/* not used at this moment */
+	__unused const int type,			/* not used at this moment */
+	__unused const int code)			/* not used at this moment */
 {
 	int ret;
 
@@ -2807,3 +2954,4 @@ icmp6_ratelimit(dst, type, code)
 
 	return ret;
 }
+

@@ -1,27 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1996-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
- */
-/*
- *	Copyright (c) 1996-1998 Apple Computer, Inc.
- *	All Rights Reserved.
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 /*    Modified for MP, 1996 by Tuyen Nguyen
@@ -44,6 +46,7 @@
 #include <sys/malloc.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
+#include <sys/file.h>
 
 #include <net/if.h>
 
@@ -57,18 +60,13 @@
 #include <netat/at_pat.h>
 #include <netat/debug.h>
 
-static int loop_cnt; /* for debugging loops */
-#define CHK_LOOP(str) { \
-  if (loop_cnt++ > 100) { \
-     kprintf("%s", str); \
-     break; \
-  } \
-}
+
+int asp_pack_bdsp(struct atp_trans *, gbuf_t **);
 
 static int atp_pack_bdsp(struct atp_trans *, struct atpBDS *);
 static int atp_unpack_bdsp(struct atp_state *, gbuf_t *, struct atp_rcb *, 
 			   int, int);
-void atp_trp_clock(), asp_clock(), asp_clock_locked(), atp_trp_clock_locked();;
+void atp_trp_clock(void *arg), atp_trp_clock_locked(void *arg);
 
 extern struct atp_rcb_qhead atp_need_rel;
 extern int atp_inited;
@@ -92,7 +90,7 @@ struct atp_trans *trp_tmo_rcb;
 
 #define atpBDSsize (sizeof(struct atpBDS)*ATP_TRESP_MAX)
 
-void atp_link()
+void atp_link(void)
 {
 	trp_tmo_list = 0;
 	trp_tmo_rcb = atp_trans_alloc(0);
@@ -197,7 +195,6 @@ atp_wput(gref, m)
 		case AT_ATP_ISSUE_REQUEST_DEF:
 		case AT_ATP_ISSUE_REQUEST_DEF_NOTE: {
 			gbuf_t *bds, *tmp, *m2;
-			struct atp_rcb *rcbp;
 			at_ddp_t *ddp;
 			at_atp_t *athp;
 
@@ -441,13 +438,14 @@ void atp_send_replies(atp, rcbp)
      register struct atp_rcb   *rcbp;
 {       register gbuf_t *m;
 	register int     i, len;
-	int              s_gen, cnt, err, offset, space;
-	unsigned char *m0_rptr = NULL, *m0_wptr = NULL;
+	int              cnt, offset, space;
 	register at_atp_t *athp;
 	register struct atpBDS *bdsp;
-	register gbuf_t *m2, *m1, *m0, *mhdr;
-	caddr_t lastPage;
-	gbuf_t *mprev, *mlist = 0;
+	register gbuf_t *m1, *m0, *mhdr;
+#if DEBUG
+	gbuf_t *m2 = NULL;
+#endif /* DEBUG */
+	gbuf_t *mprev = 0, *mlist = 0;
 	at_socket src_socket = (at_socket)atp->atp_socket_no;
 	gbuf_t *rc_xmt[ATP_TRESP_MAX];
 	struct   ddp_atp {
@@ -663,7 +661,6 @@ atp_unpack_bdsp(atp, m, rcbp, cnt, wait)
 {
 	register struct atpBDS *bdsp;
 	register	 gbuf_t        *m2, *m1, *m0, *mhdr;
-	caddr_t 	lastPage;
     at_atp_t    *athp;
 	int  		i, len;
 	at_socket 	src_socket;
@@ -671,10 +668,9 @@ atp_unpack_bdsp(atp, m, rcbp, cnt, wait)
 	struct ddp_atp {
 	         char    ddp_atp_hdr[TOTAL_ATP_HDR_SIZE];
 	};
-	gbuf_t 			*mprev, *mlist = 0;
+	gbuf_t 			*mprev = 0, *mlist = 0;
 	gbuf_t 			*rc_xmt[ATP_TRESP_MAX];
-	unsigned char 	*m0_rptr, *m0_wptr;
-	int				err, offset, space;
+	int				offset, space = 0;
 	struct timeval timenow;
 
 	/*
@@ -826,16 +822,16 @@ l_send:
 #define ATP_SOCKET_LAST  (DDP_SOCKET_LAST-6)
 #define ATP_SOCKET_FIRST (DDP_SOCKET_1st_DYNAMIC)
 static unsigned int sNext = 0;
+extern unsigned char asp_inpC[];
+extern asp_scb_t *asp_scbQ[];
 
 int atp_bind(gref, sVal, flag)
 	gref_t *gref;
 	unsigned int sVal;
 	unsigned char *flag;
 {
-	extern unsigned char asp_inpC[];
-	extern asp_scb_t *asp_scbQ[];
 	unsigned char inpC, sNextUsed = 0;
-	unsigned int sMin, sMax, sSav;
+	unsigned int sMin, sMax, sSav = 0;
 	struct atp_state *atp;
 
 	atp = (struct atp_state *)gref->info;
@@ -1006,7 +1002,7 @@ atp_dequeue_atp(atp)
 
 void
 atp_timout(func, trp, ticks)
-	void (*func)();
+	atp_tmo_func func;
 	struct atp_trans *trp;
 	int ticks;
 {
@@ -1058,9 +1054,9 @@ atp_timout(func, trp, ticks)
 }
 
 void
-atp_untimout(func, trp)
-	void (*func)();
-	struct atp_trans *trp;
+atp_untimout(
+	__unused atp_tmo_func func,
+	struct atp_trans *trp)
 {
 
 	if (trp->tr_tmo_func == 0)
@@ -1094,7 +1090,7 @@ atp_trp_clock(arg)
 	void *arg;
 {
 	struct atp_trans *trp;
-	void (*tr_tmo_func)();
+	atp_tmo_func tr_tmo_func;
 
 	if (trp_tmo_list)
 		trp_tmo_list->tr_tmo_delta--;
@@ -1303,7 +1299,7 @@ int asp_pack_bdsp(trp, xm)
 	register struct atpBDS *bdsp;
 	register gbuf_t        *m, *m2;
 	register int           i;
-	gbuf_t        *m_prev, *m_head = 0;
+	gbuf_t        *m_prev = 0, *m_head = 0;
 
 	dPrintf(D_M_ATP, D_L_INFO, ("asp_pack_bdsp: socket=%d\n",
 		trp->tr_queue->atp_socket_no));
@@ -1617,15 +1613,12 @@ _ATPsndrsp(fd, respbuff, resplen, datalen, err, proc)
 	void *proc;
 {
 	gref_t 		*gref;
-	int 		s, rc;
 	long 		bufaddr;
 	gbuf_t 		*m, *mdata;
 	short 		space;
 	int 		size;
 	struct atp_state *atp;
 	struct atpBDS *bdsp;
-	u_int16_t	*bufsz;
-	char 		*buf;
 	int			bds_cnt, count, len;
 	caddr_t		dataptr;
 
@@ -1720,7 +1713,7 @@ _ATPsndrsp(fd, respbuff, resplen, datalen, err, proc)
 				if (!(mdata->m_flags & M_EXT)) {
 					m_freem(m);
 					file_drop(fd);
-					return(NULL);
+					return(0);
 				}
 				dataptr = mtod(mdata, caddr_t);
 				space = MCLBYTES;

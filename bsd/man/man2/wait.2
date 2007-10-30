@@ -38,35 +38,47 @@
 .Os BSD 4
 .Sh NAME
 .Nm wait ,
-.Nm waitpid ,
+.Nm wait3 ,
 .Nm wait4 ,
-.Nm wait3
+.Nm waitpid
 .Nd wait for process termination
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
 .Fd #include <sys/wait.h>
 .Ft pid_t
-.Fn wait "int *status"
+.Fo wait
+.Fa "int *stat_loc"
+.Fc
 .Ft pid_t
-.Fn waitpid "pid_t wpid" "int *status" "int options"
-.Fd #include <sys/time.h>
-.Fd #include <sys/resource.h>
+.Fo wait3
+.Fa "int *stat_loc"
+.Fa "int options"
+.Fa "struct rusage *rusage"
+.Fc
 .Ft pid_t
-.Fn wait3 "int *status" "int options" "struct rusage *rusage"
+.Fo wait4
+.Fa "pid_t pid"
+.Fa "int *stat_loc"
+.Fa "int options"
+.Fa "struct rusage *rusage"
+.Fc
 .Ft pid_t
-.Fn wait4 "pid_t wpid" "int *status" "int options" "struct rusage *rusage"
+.Fo waitpid
+.Fa "pid_t pid"
+.Fa "int *stat_loc"
+.Fa "int options"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn wait
 function suspends execution of its calling process until
-.Fa status
+.Fa stat_loc
 information is available for a terminated child process,
 or a signal is received.
 On return from a successful 
 .Fn wait
 call, 
 the
-.Fa status
+.Fa stat_loc
 area contains termination information about the process that exited
 as defined below.
 .Pp
@@ -80,27 +92,27 @@ The other wait functions are implemented using
 .Fn wait4 .
 .Pp
 The
-.Fa wpid
+.Fa pid
 parameter specifies the set of child processes for which to wait.
 If
-.Fa wpid
+.Fa pid
 is -1, the call waits for any child process.
 If
-.Fa wpid
+.Fa pid
 is 0,
 the call waits for any child process in the process group of the caller.
 If
-.Fa wpid
+.Fa pid
 is greater than zero, the call waits for the process with process id
-.Fa wpid .
+.Fa pid .
 If
-.Fa wpid
+.Fa pid
 is less than -1, the call waits for any process whose process group id
 equals the absolute value of
-.Fa wpid .
+.Fa pid .
 .Pp
 The
-.Fa status
+.Fa stat_loc
 parameter is defined below.  The
 .Fa options
 parameter contains the bitwise OR of any of the following options.
@@ -148,7 +160,7 @@ The older
 call is the same as
 .Fn wait4
 with a
-.Fa wpid
+.Fa pid
 value of -1.
 .Pp
 The following macros may be used to test the manner of exit of the process.
@@ -230,8 +242,8 @@ is returned and
 is set to indicate the error.
 .Pp
 If
+.Fn wait3 ,
 .Fn wait4 ,
-.Fn wait3
 or
 .Fn waitpid
 returns due to a stopped
@@ -253,28 +265,62 @@ is returned and
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
-.Fn Wait
-will fail and return immediately if:
+The
+.Fn wait
+system call will fail and return immediately if:
 .Bl -tag -width Er
+.\" ===========
 .It Bq Er ECHILD
-The calling process has no existing unwaited-for
-child processes.
+The calling process has no existing unwaited-for child processes.
+.\" ===========
 .It Bq Er EFAULT
 The
 .Fa status
 or
 .Fa rusage
-arguments point to an illegal address.
-(May not be detected before exit of a child process.)
-.It Bq Er EINTR
-The call was interrupted by a caught signal,
-or the signal did not have the
-.Dv SA_RESTART
-flag set.
+argument points to an illegal address
+(may not be detected before the exit of a child process).
+.\" ===========
 .It Bq Er EINVAL
-Invalid or underfined flags were passed in the
+Invalid or undefined flags are passed in the
 .Fa options
 argument.
+.El
+.Pp
+The
+.Fn wait3
+and
+.Fn waitpid
+calls will fail and return immediately if:
+.Bl -tag -width Er
+.\" ===========
+.It Bq Er ECHILD
+The process specified by
+.Fa pid
+does not exist or is not a child of the calling process,
+or the process group specified by
+.Fa pid
+does not exist or does not have any member process
+that is a child of the calling process.
+.El
+.Pp
+The
+.Fn waitpid
+call will fail and return immediately if:
+.Bl -tag -width Er
+.\" ===========
+.It Bq Er EINVAL
+The options argument is not valid.
+.El
+.Pp
+Any of these calls will fail and return immediately if:
+.Bl -tag -width Er
+.\" ===========
+.It Bq Er EINTR
+The call is interrupted by a caught signal
+or the signal does not have the
+.Dv SA_RESTART
+flag set.
 .El
 .Sh STANDARDS
 The
@@ -282,9 +328,9 @@ The
 and
 .Fn waitpid
 functions are defined by POSIX;
-.Fn wait4
-and
 .Fn wait3
+and
+.Fn wait4
 are not specified by POSIX.
 The
 .Fn WCOREDUMP
@@ -292,9 +338,17 @@ macro
 and the ability to restart a pending
 .Fn wait
 call are extensions to the POSIX interface.
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/wait.h>
+.Pp
+The include file
+.In sys/types.h
+is necessary.
 .Sh SEE ALSO
+.Xr sigaction 2 ,
 .Xr exit 3 ,
-.Xr sigaction 2
+.Xr compat 5
 .Sh HISTORY
 A
 .Fn wait

@@ -1,28 +1,31 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
- *	Copyright (c) 1987, 1988, 1989 Apple Computer, Inc. 
- *
- *
  *    Modified for MP, 1996 by Tuyen Nguyen
  *    Added AURP support, April 8, 1996 by Tuyen Nguyen
  *   Modified, March 17, 1997 by Tuyen Nguyen for MacOSX.
@@ -51,13 +54,13 @@
 
 #include <netat/sysglue.h>
 #include <netat/appletalk.h>
+#include <netat/at_pcb.h>
 #include <netat/at_var.h>
 #include <netat/ddp.h>
 #include <netat/ep.h>
 #include <netat/nbp.h>
 #include <netat/rtmp.h>
 #include <netat/zip.h>
-#include <netat/at_pcb.h>
 #include <netat/routing_tables.h>
 #include <netat/at_snmp.h>
 #include <netat/aurp.h>
@@ -66,13 +69,16 @@
 #include <netat/at_aarp.h>
 #include <netat/adsp.h>
 #include <netat/adsp_internal.h>
+#include <netat/at_pat.h>
+#include <netat/atp.h>
+
+#include <net/kpi_protocol.h>
 
 /* globals */
 
 /* Queue of LAP interfaces which have registered themselves with DDP */
 struct at_ifQueueHd at_ifQueueHd;
 
-extern at_state_t at_state;
 extern TAILQ_HEAD(name_registry, _nve_) name_registry;
 
 snmpStats_t snmpStats;		/* snmp ddp & echo stats */
@@ -84,35 +90,35 @@ extern aarp_amt_array *aarp_table[];
 extern at_ifaddr_t at_interfaces[];
 
 /* routing mode special */
-void (*ddp_AURPsendx)();
+void (*ddp_AURPsendx)(void) = NULL;
 at_ifaddr_t *aurp_ifID = 0;
-extern pktsIn,pktsOut;
-int pktsDropped,pktsHome;
+
+int pktsIn = 0;
+int pktsOut = 0;
+int pktsDropped = 0;
+int pktsHome = 0;
 
 extern int *atp_pidM;
 extern int *adsp_pidM;
 extern struct atpcb *atp_inputQ[];
 extern CCB *adsp_inputQ[];
 
-at_ifaddr_t *forUs(at_ddp_t *);
+static void fillin_pkt_chain(gbuf_t *);
+static int ot_ddp_check_socket(unsigned char ,int pid);
 
-void ddp_input(), ddp_notify_nbp();
-
-extern void routing_needed();
-extern void ddp_brt_sweep();
 
 struct {
-	void (*func)();
+	ddp_handler_func func;
 } ddp_handler[256];
 
-void init_ddp_handler()
+void init_ddp_handler(void)
 {
 	bzero(ddp_handler, sizeof(ddp_handler));
 }
 
 void add_ddp_handler(ddp_socket, input_func)
      u_char ddp_socket;
-     void (*input_func)();
+     ddp_handler_func input_func;
 {
 	ddp_handler[ddp_socket].func = input_func;
 }
@@ -384,10 +390,8 @@ void  ddp_rem_if(ifID)
 		ifa->ifa_addr = NULL;
 		ifnet_lock_done(ifID->aa_ifp);
 	}
-	if (ifID->at_dl_tag) {
-/*		dlil_detach_protocol(ifID->at_dl_tag); */
-		ether_detach_at(ifID->aa_ifp);
-		ifID->at_dl_tag = 0;
+	if (ifID->at_was_attached == 0 && ifID->aa_ifp != NULL) {
+		(void)proto_unplumb(PF_APPLETALK, ifID->aa_ifp);
 	}
 
 	/* un-do processing done in ddp_add_if() */
@@ -420,7 +424,7 @@ void  ddp_rem_if(ifID)
  */
 
 /* *** Do we still need to do this? *** */
-int ot_ddp_check_socket(socket, pid)
+static int ot_ddp_check_socket(socket, pid)
      unsigned char socket;
      int pid;
 {
@@ -440,12 +444,11 @@ int ot_ddp_check_socket(socket, pid)
 	return(cnt);
 }
 
-void ddp_notify_nbp(socket, pid, ddptype)
-     unsigned char socket;
-     int pid;
-     unsigned char ddptype; /* not used */
+void ddp_notify_nbp(
+     unsigned char socket,
+     int pid,
+     __unused unsigned char ddptype)
 {
-	extern int nve_lock;
 	nve_entry_t *nve_entry, *nve_next;
 
 	if (at_state.flags & AT_ST_STARTED) {
@@ -519,7 +522,7 @@ int ddp_output(mp, src_socket, src_addr_included)
 {
 	register at_ifaddr_t	*ifID = ifID_home, *ifIDTmp = NULL;
 	register at_ddp_t	*ddp;
-	register ddp_brt_t	*brt;
+	register ddp_brt_t	*brt = NULL;
 	register at_net_al	dst_net;
 	register int 		len;
 	struct	 atalk_addr	at_dest;
@@ -527,7 +530,7 @@ int ddp_output(mp, src_socket, src_addr_included)
 	int loop = 0;
 	int error = 0;
 	int addr_type;
-	u_char	addr_flag;
+	u_char	addr_flag = 0;
 	char	*addr = NULL;
 	register gbuf_t	*m;
 
@@ -779,7 +782,8 @@ int ddp_output(mp, src_socket, src_addr_included)
 	{ /* begin block */
 	struct	etalk_addr	dest_addr;
 	struct	atalk_addr	dest_at_addr;
-	int		loop = TRUE;		/* flag to aarp to loopback (default) */
+	
+	loop = TRUE;		/* flag to aarp to loopback (default) */
 
 	m = *mp;
 
@@ -852,7 +856,7 @@ int ddp_output(mp, src_socket, src_addr_included)
 	    aarp_send_data(m,ifID, &dest_at_addr, loop);
 	    break;
 	case ET_ADDR :
-	    pat_output(ifID, m, &dest_addr, 0);
+	    pat_output(ifID, m, (unsigned char *)&dest_addr, 0);
 	    break;
         }
 	} /* end block */
@@ -935,7 +939,7 @@ void ddp_input(mp, ifID)
 	len = DDPLEN_VALUE(ddp);
 
 	if (msgsize != len) {
-	        if ((unsigned) msgsize > len) {
+	        if (msgsize > len) {
 		        if (len < DDP_X_HDR_SIZE) {
 			        dPrintf(D_M_DDP, D_L_ERROR,
 				       ("Length problems, ddp length %d, buffer length %d",
@@ -1005,7 +1009,7 @@ void ddp_input(mp, ifID)
 	   for packets of this type on a raw DDP socket *** */
 	if (ddp_handler[socket].func) {
 		dPrintf(D_M_DDP,D_L_INPUT,
-			("ddp_input: skt %d hdnlr:0x%x\n",
+			("ddp_input: skt %u hdnlr:0x%p\n",
 			 (u_int) socket, ddp_handler[socket].func));
 		pktsHome++;
 		snmpStats.dd_inLocal++;
@@ -1132,7 +1136,7 @@ int ddp_router_output(mp, ifID, addr_type, router_net, router_node, enet_addr)
 {
 	register at_ddp_t	*ddp;
 	struct	 atalk_addr	at_dest;
-	int		addr_flag;
+	int		addr_flag = 0;
 	char	*addr = NULL;
 	register gbuf_t	*m;
 
@@ -1292,7 +1296,7 @@ int ddp_router_output(mp, ifID, addr_type, router_net, router_node, enet_addr)
 	      aarp_send_data(m,ifID,&dest_at_addr, loop);
 	      break;
 	    case ET_ADDR :
-	      pat_output(ifID, m, &dest_addr, 0);
+	      pat_output(ifID, m, (unsigned char *)&dest_addr, 0);
 	      break;
 	    }
 	} /* end block */
@@ -1302,12 +1306,13 @@ int ddp_router_output(mp, ifID, addr_type, router_net, router_node, enet_addr)
 
 /*****************************************/
 
+#ifdef AURP_SUPPORT
+
 void rt_delete(NetStop, NetStart)
 	unsigned short NetStop;
 	unsigned short NetStart;
 {
 	RT_entry *found;
-	int s;
 
 	if ((found = rt_bdelete(NetStop, NetStart)) != 0) {
 		bzero(found, sizeof(RT_entry));
@@ -1316,14 +1321,11 @@ void rt_delete(NetStop, NetStart)
 	}
 }
 
-#ifdef AURP_SUPPORT
 int ddp_AURPfuncx(code, param, node)
 	int code;
 	void *param;
 	unsigned char node;
 {
-	extern void rtmp_timeout();
-	extern void rtmp_send_port();
 	at_ifaddr_t *ifID;
 	int k;
 

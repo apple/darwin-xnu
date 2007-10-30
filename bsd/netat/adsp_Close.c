@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *	Copyright (c) 1990, 1995-1998 Apple Computer, Inc.
@@ -119,7 +125,7 @@ int  CompleteQueue(qhead, code)	/* (DSPPBPtr FPTR qhead, OSErr code) */
     register struct adspcmd *p;
     register struct adspcmd *n;
     register gref_t *gref;
-    register int    total = 0;
+    register int    _total = 0;
     CCBPtr sp = 0;
 
     n = *qhead;			/* Get first item */
@@ -132,16 +138,16 @@ int  CompleteQueue(qhead, code)	/* (DSPPBPtr FPTR qhead, OSErr code) */
 	    }
     }
 
-    while (p = n) {		/* while items left */
+    while ((p = n)) {		/* while items left */
 	n = (struct adspcmd *)(p->qLink); /* Save next guy */
 	p->ioResult = code;
 	if (sp) {
 	    completepb(sp, p); 	/* complete the copy of the request */
-	    total++;
+	    _total++;
 	} else
 	    gbuf_freem(p->mp);
     }				/* while */
-    return(total);
+    return(_total);
 }
 
 /*
@@ -156,6 +162,7 @@ int  CompleteQueue(qhead, code)	/* (DSPPBPtr FPTR qhead, OSErr code) */
  * OUTPUTS:
  * 		none
  */
+void RemoveCCB(CCBPtr, struct adspcmd *);
 
 void RemoveCCB(sp, pb)		/* (CCBPtr sp, DSPPBPtr pb) */
     CCBPtr sp;
@@ -173,7 +180,7 @@ void RemoveCCB(sp, pb)		/* (CCBPtr sp, DSPPBPtr pb) */
     if (pb) {
 	pb->ioResult = 0;
 	if (pb->ioc)		/* is this a current or queued request */
-	    adspioc_ack(0, pb->ioc, pb->gref);	/* current */
+	    adspioc_ack(0, (gbuf_t *)pb->ioc, pb->gref);	/* current */
 	else {
 	    completepb(sp, pb);	/* queued */
 	}
@@ -206,18 +213,20 @@ void RemoveCCB(sp, pb)		/* (CCBPtr sp, DSPPBPtr pb) */
 				 * to release our resources too */
 }
 
+int  AbortIO(CCBPtr, short);
+
 int  AbortIO(sp, err)
     CCBPtr sp;
     short err;
 {
-    register int    total;
+    register int    _total;
 
 	if (sp->gref == 0)
 		return 0;
     /*
      * Complete all outstanding transactions.  
      */
-    total = CompleteQueue(&sp->sapb, err); /* Abort outstanding send attentions */
+    _total = CompleteQueue(&sp->sapb, err); /* Abort outstanding send attentions */
     CompleteQueue(&sp->frpb, err); /* Abort outstanding forward resets */
 
     if (sp->sbuf_mb) { /* clear the send queue */
@@ -231,7 +240,7 @@ int  AbortIO(sp, err)
     }
     sp->sData = 0;
     
-    return(total);
+    return(_total);
 }
 
 /*
@@ -251,6 +260,7 @@ int  AbortIO(sp, err)
 void DoClose(sp, err, force_abort)	/* (CCBPtr sp, OSErr err) */
     register CCBPtr sp;
     int err;
+	int force_abort;
 {
     register struct adspcmd *pb, *np;
     register gbuf_t *mp;
@@ -275,7 +285,7 @@ void DoClose(sp, err, force_abort)	/* (CCBPtr sp, OSErr err) */
     np = sp->opb;		/* Get list of close/removes to complete */
     sp->opb = 0;		/* set this list null */
 	
-    while (pb = np) {		/* Handle all of the close/remove param blks */
+    while ((pb = np)) {		/* Handle all of the close/remove param blks */
 	np = (struct adspcmd *)pb->qLink; /* Get next guy (if any) */
 	pb->qLink = 0;
 	pb->ioResult = err;
@@ -308,7 +318,7 @@ void DoClose(sp, err, force_abort)	/* (CCBPtr sp, OSErr err) */
 	/* then fake a read completion to force the notification */
 
 	if (force_abort && aborted_count == 0) {
-	    if (mp = gbuf_alloc(sizeof(struct adspcmd), PRI_HI)) {
+	    if ((mp = gbuf_alloc(sizeof(struct adspcmd), PRI_HI))) {
 	        pb = (struct adspcmd *)gbuf_rptr(mp);
 		gbuf_wset(mp,sizeof(struct adspcmd));
 
@@ -402,13 +412,13 @@ int adspClose(sp, pb)		/* (DSPPBPtr pb) */
 	    sp->state = sClosed;
 	    DoClose(sp, errAborted, 0);
 	    pb->ioResult = 0;
-	    adspioc_ack(0, pb->ioc, pb->gref);
+	    adspioc_ack(0, (gbuf_t *)pb->ioc, pb->gref);
 	    return 0;
 	}
 		
 	if (sp->state == (word)sClosed)	{ /* Ok to close a closed connection */
 	    pb->ioResult = 0;
-	    adspioc_ack(0, pb->ioc, pb->gref);
+	    adspioc_ack(0, (gbuf_t *)pb->ioc, pb->gref);
 	    return 0;
 	}
 	if ((sp->state != (word)sOpen) && (sp->state != (word)sClosing)) {
@@ -442,14 +452,14 @@ int adspClose(sp, pb)		/* (DSPPBPtr pb) */
 
     pb->ioResult = 1;
     if ( (mp = gbuf_copym(pb->mp)) ) {	/* duplicate user request */
-	    adspioc_ack(0, pb->ioc, pb->gref); /* release user */
+	    adspioc_ack(0, (gbuf_t *)pb->ioc, pb->gref); /* release user */
 	    pb = (struct adspcmd *)gbuf_rptr(mp); /* get new parameter block */
 	    pb->ioc = 0;
 	    pb->mp = mp;
-	    qAddToEnd(&sp->opb, pb);	/* and save it */
+	    qAddToEnd((struct qlink **)&sp->opb, (struct qlink *)pb);	/* and save it */
     } else {
 	    pb->ioResult = 0;
-	    adspioc_ack(0, pb->ioc, pb->gref); /* release user, and keep no copy
+	    adspioc_ack(0, (gbuf_t *)pb->ioc, pb->gref); /* release user, and keep no copy
 					     * for kernel bookkeeping, yetch!
 					     */
     }

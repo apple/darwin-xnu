@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -48,6 +54,12 @@
  * the rights to redistribute these changes.
  */
 /*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
+/*
  */
 
 /*
@@ -57,7 +69,6 @@
 #include <debug.h>
 #include <xpr_debug.h>
 #include <mach_kdp.h>
-#include <mach_host.h>
 #include <norma_vm.h>
 
 #include <mach/boolean.h>
@@ -82,16 +93,20 @@
 #include <kern/zalloc.h>
 #include <kern/locks.h>
 #include <console/serial_protos.h>
-#include <vm/vm_shared_memory_server.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_init.h>
 #include <vm/vm_map.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
 #include <vm/vm_pageout.h>
+#include <vm/vm_shared_region.h>
 #include <machine/pmap.h>
 #include <machine/commpage.h>
 #include <libkern/version.h>
+
+#if CONFIG_MACF
+#include <security/mac_mach_internal.h>
+#endif
 
 #ifdef __ppc__
 #include <ppc/Firmware.h>
@@ -102,11 +117,14 @@ static void		kernel_bootstrap_thread(void);
 
 static void		load_context(
 					thread_t	thread);
-
 #ifdef i386
-extern void	cpu_window_init(int);
+extern void cpu_userwindow_init(int);
+extern void cpu_physwindow_init(int);
 #endif
 
+#ifdef CONFIG_JETTISON_KERNEL_LINKER
+extern void	jettison_kernel_linker(void);
+#endif
 
 /*
  *	Running in virtual memory, on the interrupt stack.
@@ -118,23 +136,47 @@ kernel_bootstrap(void)
 	kern_return_t	result;
 	thread_t		thread;
 
+	printf("%s\n", version); /* log kernel version */
+
+#define kernel_bootstrap_kprintf(x...) /* kprintf("kernel_bootstrap: " x) */
+
+	kernel_bootstrap_kprintf("calling lck_mod_init\n");
 	lck_mod_init();
+
+	kernel_bootstrap_kprintf("calling sched_init\n");
 	sched_init();
+
+	kernel_bootstrap_kprintf("calling vm_mem_bootstrap\n");
 	vm_mem_bootstrap();
+
+	kernel_bootstrap_kprintf("calling ipc_bootstrap\n");
 	ipc_bootstrap();
+
+	kernel_bootstrap_kprintf("calling vm_mem_init\n");
 	vm_mem_init();
+
+	kernel_bootstrap_kprintf("calling kmod_init\n");
+	kmod_init();
+#if CONFIG_MACF
+	mac_policy_init();
+#endif
+	kernel_bootstrap_kprintf("calling ipc_init\n");
 	ipc_init();
 
 	/*
 	 * As soon as the virtual memory system is up, we record
 	 * that this CPU is using the kernel pmap.
 	 */
+	kernel_bootstrap_kprintf("calling PMAP_ACTIVATE_KERNEL\n");
 	PMAP_ACTIVATE_KERNEL(master_cpu);
 
+	kernel_bootstrap_kprintf("calling mapping_free_prime\n");
 	mapping_free_prime();						/* Load up with temporary mapping blocks */
 
+	kernel_bootstrap_kprintf("calling machine_init\n");
 	machine_init();
-	kmod_init();
+
+	kernel_bootstrap_kprintf("calling clock_init\n");
 	clock_init();
 
 	machine_info.memory_size = mem_size;
@@ -145,13 +187,19 @@ kernel_bootstrap(void)
 	/*
 	 *	Initialize the IPC, task, and thread subsystems.
 	 */
+	kernel_bootstrap_kprintf("calling ledger_init\n");
 	ledger_init();
+
+	kernel_bootstrap_kprintf("calling task_init\n");
 	task_init();
+
+	kernel_bootstrap_kprintf("calling thread_init\n");
 	thread_init();
 	
 	/*
 	 *	Create a kernel thread to execute the kernel bootstrap.
 	 */
+	kernel_bootstrap_kprintf("calling kernel_thread_create\n");
 	result = kernel_thread_create((thread_continue_t)kernel_bootstrap_thread, NULL, MAXPRI_KERNEL, &thread);
 
 	if (result != KERN_SUCCESS) panic("kernel_bootstrap: result = %08X\n", result);
@@ -159,9 +207,12 @@ kernel_bootstrap(void)
 	thread->state = TH_RUN;
 	thread_deallocate(thread);
 
+	kernel_bootstrap_kprintf("calling load_context - done\n");
 	load_context(thread);
 	/*NOTREACHED*/
 }
+
+int kth_started = 0;
 
 /*
  * Now running in a thread.  Kick off other services,
@@ -171,8 +222,9 @@ static void
 kernel_bootstrap_thread(void)
 {
 	processor_t		processor = current_processor();
-	thread_t		self = current_thread();
 
+#define kernel_bootstrap_thread_kprintf(x...) /* kprintf("kernel_bootstrap_thread: " x) */
+	kernel_bootstrap_thread_kprintf("calling idle_thread_create\n");
 	/*
 	 * Create the idle processor thread.
 	 */
@@ -184,22 +236,26 @@ kernel_bootstrap_thread(void)
 	 *
 	 * Start up the scheduler services.
 	 */
+	kernel_bootstrap_thread_kprintf("calling sched_startup\n");
 	sched_startup();
 
 	/*
 	 * Remain on current processor as
 	 * additional processors come online.
 	 */
-	thread_bind(self, processor);
+	kernel_bootstrap_thread_kprintf("calling thread_bind\n");
+	thread_bind(processor);
 
 	/*
 	 * Kick off memory mapping adjustments.
 	 */
+	kernel_bootstrap_thread_kprintf("calling mapping_adjust\n");
 	mapping_adjust();
 
 	/*
 	 *	Create the clock service.
 	 */
+	kernel_bootstrap_thread_kprintf("calling clock_service_create\n");
 	clock_service_create();
 
 	/*
@@ -207,41 +263,58 @@ kernel_bootstrap_thread(void)
 	 */
 	device_service_create();
 
-	shared_file_boot_time_init(ENV_DEFAULT_ROOT, cpu_type());
+	kth_started = 1;
+
+#ifdef i386
+	/*
+	 * Create and initialize the physical copy window for processor 0
+	 * This is required before starting kicking off  IOKit.
+	 */
+	cpu_physwindow_init(0);
+#endif
 
 #ifdef	IOKIT
-	{
-		PE_init_iokit();
-	}
+	PE_init_iokit();
 #endif
 	
 	(void) spllo();		/* Allow interruptions */
 
-	/*
-	 *	Fill in the comm area (mapped into every task address space.)
-	 */
-	commpage_populate();
-
 #ifdef i386
 	/*
-	 *	create and initialize a copy window
-	 * 	for processor 0
+	 * Create and initialize the copy window for processor 0
+	 * This also allocates window space for all other processors.
+	 * However, this is dependent on the number of processors - so this call
+	 * must be after IOKit has been started because IOKit performs processor
+	 * discovery.
 	 */
-	cpu_window_init(0);
+	cpu_userwindow_init(0);
+#endif
+
+	/*
+	 *	Initialize the shared region module.
+	 */
+	vm_shared_region_init();
+	vm_commpage_init();
+
+#if CONFIG_MACF
+	mac_policy_initmach();
 #endif
 
 	/*
 	 *	Start the user bootstrap.
 	 */
 #ifdef	MACH_BSD
-	{ 
-		bsd_init();
-	}
+	bsd_init();
+#endif
+
+#ifdef CONFIG_JETTISON_KERNEL_LINKER
+	/* We do not run kextd, so get rid of the kernel linker now */
+	jettison_kernel_linker();
 #endif
 
 	serial_keyboard_init();		/* Start serial keyboard if wanted */
 
-	thread_bind(self, PROCESSOR_NULL);
+	thread_bind(PROCESSOR_NULL);
 
 	/*
 	 *	Become the pageout daemon.
@@ -316,7 +389,13 @@ load_context(
 {
 	processor_t		processor = current_processor();
 
+
+#define load_context_kprintf(x...) /* kprintf("load_context: " x) */
+
+	load_context_kprintf("calling machine_set_current_thread\n");
 	machine_set_current_thread(thread);
+
+	load_context_kprintf("calling processor_up\n");
 	processor_up(processor);
 
 	PMAP_ACTIVATE_KERNEL(PROCESSOR_DATA(processor, slot_num));
@@ -326,7 +405,10 @@ load_context(
 	 * should never occur since the thread is expected
 	 * to have reserved stack.
 	 */
+	load_context_kprintf("stack %x, stackptr %x\n", 
+			      thread->kernel_stack, thread->machine.kstackptr);
 	if (!thread->kernel_stack) {
+		load_context_kprintf("calling stack_alloc_try\n");
 		if (!stack_alloc_try(thread))
 			panic("load_context");
 	}
@@ -336,7 +418,7 @@ load_context(
 	 * running for load calculations.
 	 */
 	if (!(thread->state & TH_IDLE))
-		pset_run_incr(thread->processor_set);
+		sched_run_incr();
 
 	processor->active_thread = thread;
 	processor->current_pri = thread->sched_pri;
@@ -344,11 +426,15 @@ load_context(
 	thread->last_processor = processor;
 
 	processor->last_dispatch = mach_absolute_time();
-	timer_switch((uint32_t)processor->last_dispatch,
-							&PROCESSOR_DATA(processor, offline_timer));
+	timer_start(&thread->system_timer, processor->last_dispatch);
+	PROCESSOR_DATA(processor, thread_timer) = PROCESSOR_DATA(processor, kernel_timer) = &thread->system_timer;
+
+	timer_start(&PROCESSOR_DATA(processor, system_state), processor->last_dispatch);
+	PROCESSOR_DATA(processor, current_state) = &PROCESSOR_DATA(processor, system_state);
 
 	PMAP_ACTIVATE_USER(thread, PROCESSOR_DATA(processor, slot_num));
 
+	load_context_kprintf("calling machine_load_context\n");
 	machine_load_context(thread);
 	/*NOTREACHED*/
 }

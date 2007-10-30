@@ -87,6 +87,9 @@ them (based on the destination address).
 Incoming packets are received with the
 .Tn IP
 header and options intact.
+Note that the ip_off and ip_len fields are in host byte order.
+For more information about the IP header structure, see 
+.Xr ip 4 .
 .Ss "Non-privileged ICMP"
 .Pp
 .Tn ICMP
@@ -95,13 +98,6 @@ sockets can be opened with the
 socket type without requiring root privileges. The synopsis is the following:
 .Pp
 .Fn socket AF_INET SOCK_DGRAM IPPROTO_ICMP
-.Pp
-This can be used by non root privileged processes to send 
-.Tn ICMP
-echo requests to gauge the quality of the connectivity to a host, to receive 
-.Tn ICMP
-destination unreachable message for path MTU discovery, or to receveive 
-time exceeded message for traceroute.
 .Pp
 Datagram oriented
 .Tn ICMP
@@ -115,6 +111,16 @@ The code field must be the value zero (0).
 The minimal length of an 
 .Tn ICMP 
 message request is eight (8) octets.
+.Pp
+The advantage of using datagram oriented
+.Tn ICMP
+sockets is that even a non-privileged process can use 
+.Tn ICMP
+echo requests to gauge the quality of the connectivity to a host, 
+or to receive 
+.Tn ICMP
+destination unreachable message for path MTU discovery, or to receive 
+time exceeded messages for traceroute. 
 .Pp
 The following 
 .Tn IP
@@ -195,10 +201,10 @@ or
 header.
 .El
 .Sh SEE ALSO
-.Xr send 2 ,
 .Xr recv 2 ,
-.Xr intro 4 ,
+.Xr send 2 ,
 .Xr inet 4 ,
+.Xr intro 4 ,
 .Xr ip 4
 .Sh HISTORY
 The

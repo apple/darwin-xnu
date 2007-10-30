@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000,2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*	$FreeBSD: src/sys/netinet/ip_encap.c,v 1.1.2.2 2001/07/03 11:01:46 ume Exp $	*/
 /*	$KAME: ip_encap.c,v 1.41 2001/03/15 08:35:08 itojun Exp $	*/
@@ -345,9 +351,7 @@ encap_attach(af, proto, sp, sm, dp, dm, psw, arg)
 {
 	struct encaptab *ep;
 	int error;
-	int s;
 
-	s = splnet();
 	/* sanity check on args */
 	if (sp->sa_len > sizeof(ep->src) || dp->sa_len > sizeof(ep->dst)) {
 		error = EINVAL;
@@ -400,11 +404,9 @@ encap_attach(af, proto, sp, sm, dp, dm, psw, arg)
 	encap_add(ep);
 
 	error = 0;
-	splx(s);
 	return ep;
 
 fail:
-	splx(s);
 	return NULL;
 }
 
@@ -418,9 +420,7 @@ encap_attach_func(af, proto, func, psw, arg)
 {
 	struct encaptab *ep;
 	int error;
-	int s;
 
-	s = splnet();
 	/* sanity check on args */
 	if (!func) {
 		error = EINVAL;
@@ -443,11 +443,9 @@ encap_attach_func(af, proto, func, psw, arg)
 	encap_add(ep);
 
 	error = 0;
-	splx(s);
 	return ep;
 
 fail:
-	splx(s);
 	return NULL;
 }
 
@@ -522,43 +520,42 @@ mask_match(ep, sp, dp)
 		return 0;
 }
 
-static void
-encap_fillarg(m, ep)
-	struct mbuf *m;
-	const struct encaptab *ep;
-{
-#if 0
-	m->m_pkthdr.aux = ep->arg;
-#else
-	struct mbuf *n;
+struct encaptabtag {
+	void*			*arg;
+};
 
-	n = m_aux_add(m, AF_INET, IPPROTO_IPV4);
-	if (n) {
-		*mtod(n, void **) = ep->arg;
-		n->m_len = sizeof(void *);
+static void
+encap_fillarg(
+	struct mbuf *m,
+	const struct encaptab *ep)
+{
+	struct m_tag	*tag;
+	struct encaptabtag *et;
+	
+	tag = m_tag_alloc(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_ENCAP,
+					  sizeof(struct encaptabtag), M_WAITOK);
+	
+	if (tag != NULL) {
+		et = (struct encaptabtag*)(tag + 1);
+		et->arg = ep->arg;
+		m_tag_prepend(m, tag);
 	}
-#endif
 }
 
 void *
 encap_getarg(m)
 	struct mbuf *m;
 {
-	void *p;
-#if 0
-	p = m->m_pkthdr.aux;
-	m->m_pkthdr.aux = NULL;
-	return p;
-#else
-	struct mbuf *n;
-
-	p = NULL;
-	n = m_aux_find(m, AF_INET, IPPROTO_IPV4);
-	if (n) {
-		if (n->m_len == sizeof(void *))
-			p = *mtod(n, void **);
-		m_aux_delete(m, n);
+	struct m_tag	*tag;
+	struct encaptabtag *et;
+	void *p = NULL;
+	
+	tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_ENCAP, NULL);
+	if (tag) {
+		et = (struct encaptabtag*)(tag + 1);
+		p = et->arg;
+		m_tag_delete(m, tag);
 	}
+	
 	return p;
-#endif
 }

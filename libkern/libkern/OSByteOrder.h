@@ -1,50 +1,41 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #ifndef _OS_OSBYTEORDER_H
 #define _OS_OSBYTEORDER_H
 
 #include <stdint.h>
+#include <libkern/_OSByteOrder.h>
 
 /* Macros for swapping constant values in the preprocessing stage. */
-#define OSSwapConstInt16(x) \
-    ((uint16_t)((((uint16_t)(x) & 0xff00) >> 8) | \
-                (((uint16_t)(x) & 0x00ff) << 8)))
-
-#define OSSwapConstInt32(x) \
-    ((uint32_t)((((uint32_t)(x) & 0xff000000) >> 24) | \
-                (((uint32_t)(x) & 0x00ff0000) >>  8) | \
-                (((uint32_t)(x) & 0x0000ff00) <<  8) | \
-                (((uint32_t)(x) & 0x000000ff) << 24)))
-
-#define OSSwapConstInt64(x) \
-    ((uint64_t)((((uint64_t)(x) & 0xff00000000000000ULL) >> 56) | \
-                (((uint64_t)(x) & 0x00ff000000000000ULL) >> 40) | \
-                (((uint64_t)(x) & 0x0000ff0000000000ULL) >> 24) | \
-                (((uint64_t)(x) & 0x000000ff00000000ULL) >>  8) | \
-                (((uint64_t)(x) & 0x00000000ff000000ULL) <<  8) | \
-                (((uint64_t)(x) & 0x0000000000ff0000ULL) << 24) | \
-                (((uint64_t)(x) & 0x000000000000ff00ULL) << 40) | \
-                (((uint64_t)(x) & 0x00000000000000ffULL) << 56)))
+#define OSSwapConstInt16(x)	__DARWIN_OSSwapConstInt16(x)
+#define OSSwapConstInt32(x)	__DARWIN_OSSwapConstInt32(x)
+#define OSSwapConstInt64(x)	__DARWIN_OSSwapConstInt64(x)
 
 #if defined(__GNUC__)
 
@@ -52,30 +43,21 @@
 #include <libkern/ppc/OSByteOrder.h>
 #elif (defined(__i386__) || defined(__x86_64__))
 #include <libkern/i386/OSByteOrder.h>
+#elif defined(__arm__)
+#include <libkern/arm/OSByteOrder.h>
 #else
 #include <libkern/machine/OSByteOrder.h>
 #endif
-
-#define OSSwapInt16(x) \
-    (__builtin_constant_p(x) ? OSSwapConstInt16(x) : _OSSwapInt16(x))
-
-#define OSSwapInt32(x) \
-    (__builtin_constant_p(x) ? OSSwapConstInt32(x) : _OSSwapInt32(x))
-
-#define OSSwapInt64(x) \
-    (__builtin_constant_p(x) ? OSSwapConstInt64(x) : _OSSwapInt64(x))
 
 #else /* ! __GNUC__ */
 
 #include <libkern/machine/OSByteOrder.h>
 
-#define OSSwapInt16(x) OSSwapConstInt16(x)
-
-#define OSSwapInt32(x) OSSwapConstInt32(x)
-
-#define OSSwapInt64(x) OSSwapConstInt64(x)
-
 #endif /* __GNUC__ */
+
+#define OSSwapInt16(x)	__DARWIN_OSSwapInt16(x)
+#define OSSwapInt32(x)	__DARWIN_OSSwapInt32(x)
+#define OSSwapInt64(x)	__DARWIN_OSSwapInt64(x)
 
 enum {
     OSUnknownByteOrder,

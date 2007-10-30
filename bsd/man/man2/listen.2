@@ -43,15 +43,18 @@
 .Sh SYNOPSIS
 .Fd #include <sys/socket.h>
 .Ft int
-.Fn listen "int s" "int backlog"
+.Fo listen
+.Fa "int socket"
+.Fa "int backlog"
+.Fc
 .Sh DESCRIPTION
-To accept connections, a socket
-is first created with
-.Xr socket 2 ,
-a willingness to accept incoming connections and
+Creation of socket-based connections requires several operations.
+First, a socket is created with
+.Xr socket 2 .
+Next, a willingness to accept incoming connections and
 a queue limit for incoming connections are specified with
-.Fn listen ,
-and then the connections are
+.Fn listen .
+Finally, the connections are
 accepted with
 .Xr accept 2 .
 The
@@ -63,28 +66,42 @@ or
 .Pp
 The
 .Fa backlog
-parameter defines the maximum length the queue of
-pending connections may grow to.
+parameter defines the maximum length
+for the queue of pending connections.
 If a connection
-request arrives with the queue full the client may
-receive an error with an indication of
-.Er ECONNREFUSED ,
-or, if the underlying protocol supports retransmission,
+request arrives with the queue full,
+the client may receive an error with an indication of
+.Er ECONNREFUSED .
+Alternatively, if the underlying protocol supports retransmission,
 the request may be ignored so that retries may succeed.
 .Sh RETURN VALUES
-A 0 return value indicates success; -1 indicates an error.
+.Rv -std listen
 .Sh ERRORS
 .Fn Listen
 will fail if:
 .Bl -tag -width Er
+.\" ==========
+.It Bq Er EACCES
+The current process has insufficient privileges.
+.\" ==========
 .It Bq Er EBADF
 The argument
-.Fa s
-is not a valid descriptor.
+.Fa socket
+is not a valid file descriptor.
+.\" ==========
+.It Bq Er EDESTADDRREQ
+The socket is not bound to a local address
+and the protocol does not support listening on an unbound socket.
+.\" ==========
+.It Bq Er EINVAL
+.Fa socket
+is already connected.
+.\" ==========
 .It Bq Er ENOTSOCK
 The argument
-.Fa s
-is not a socket.
+.Fa socket
+does not reference a socket.
+.\" ==========
 .It Bq Er EOPNOTSUPP
 The socket is not of a type that supports the operation
 .Fn listen .

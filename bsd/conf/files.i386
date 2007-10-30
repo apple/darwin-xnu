@@ -15,8 +15,18 @@ bsd/dev/i386/lock_stubs.c	standard
 bsd/dev/i386/sysctl.c           standard
 bsd/dev/i386/unix_signal.c	standard
 bsd/dev/i386/munge.s		standard
+bsd/crypto/aes/i386/aes_x86_v2.s		optional crypto
+bsd/crypto/aes/i386/aes_modes.c			optional crypto
 
+
+bsd/dev/i386/dtrace_isa.c	optional config_dtrace
+bsd/dev/i386/dtrace_subr_x86.c	optional config_dtrace
+bsd/dev/i386/fbt_x86.c		optional config_dtrace
+bsd/dev/i386/sdt_x86.c		optional config_dtrace
+bsd/dev/i386/fasttrap_isa.c	optional config_dtrace
+bsd/dev/i386/instr_size.c	optional config_dtrace
+bsd/dev/i386/dis_tables.c	optional config_dtrace
 
 bsd/kern/bsd_stubs.c		standard
-bsd/netinet/in_cksum.c		standard
+bsd/netinet/in_cksum.c		optional inet
 

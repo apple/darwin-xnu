@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*-
@@ -66,6 +72,16 @@
 
 #include <sys/_types.h>
 #include <sys/cdefs.h>
+#ifdef KERNEL
+#include <machine/types.h>
+#endif /* KERNEL */
+
+/* [XSI] The timespec structure may be defined as described in <time.h> */
+#define __need_struct_timespec
+#ifdef KERNEL
+#define __need_struct_user_timespec
+#endif /* KERNEL */
+#include <sys/_structs.h>
 
 /*
  * [XSI] The blkcnt_t, blksize_t, dev_t, ino_t, mode_t, nlink_t, uid_t,
@@ -91,6 +107,13 @@ typedef	__darwin_dev_t		dev_t;		/* device number */
 typedef	__darwin_ino_t		ino_t;		/* inode number */
 #define _INO_T
 #endif
+
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+#ifndef	_INO64_T
+typedef	__darwin_ino64_t	ino64_t;	/* 64bit inode number */
+#define _INO64_T
+#endif
+#endif /* !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE) */
 
 #ifndef	_MODE_T
 typedef	__darwin_mode_t		mode_t;
@@ -123,29 +146,7 @@ typedef	__darwin_time_t		time_t;
 #endif
 
 
-/* [XSI] The timespec structure may be defined as described in <time.h> */
-#ifndef _TIMESPEC
-#define _TIMESPEC
-struct timespec {
-	time_t	tv_sec;		/* seconds */
-	long	tv_nsec;	/* and nanoseconds */
-};
-
-// LP64todo - should this move?
-#ifdef KERNEL
-/* LP64 version of struct timespec.  time_t is a long and must grow when 
- * we're dealing with a 64-bit process.
- * WARNING - keep in sync with struct timespec
- */
-struct user_timespec {
-	user_time_t	tv_sec;		/* seconds */
-	int32_t	tv_nsec __attribute((aligned(8)));	/* and nanoseconds */
-};
-#endif // KERNEL
-#endif	/* _TIMESPEC */
-
-
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /*
  * XXX So deprecated, it would make your head spin
  *
@@ -171,12 +172,65 @@ struct ostat {
 	__uint32_t	st_flags;	/* user defined flags for file */
 	__uint32_t	st_gen;		/* file generation number */
 };
-#endif /* !_POSIX_C_SOURCE */
+
+#define __DARWIN_STRUCT_STAT64_TIMES \
+	struct timespec st_atimespec;		/* time of last access */ \
+	struct timespec st_mtimespec;		/* time of last data modification */ \
+	struct timespec st_ctimespec;		/* time of last status change */ \
+	struct timespec st_birthtimespec;	/* time of file creation(birth) */
+
+#else /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
+
+#define __DARWIN_STRUCT_STAT64_TIMES \
+	time_t		st_atime;		/* [XSI] Time of last access */ \
+	long		st_atimensec;		/* nsec of last access */ \
+	time_t		st_mtime;		/* [XSI] Last data modification time */ \
+	long		st_mtimensec;		/* last data modification nsec */ \
+	time_t		st_ctime;		/* [XSI] Time of last status change */ \
+	long		st_ctimensec;		/* nsec of last status change */ \
+	time_t		st_birthtime;		/*  File creation time(birth)  */ \
+	long		st_birthtimensec;	/* nsec of File creation time */
+
+#endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
+
+/*
+ * This structure is used as the second parameter to the fstat64(),
+ * lstat64(), and stat64() functions, and for struct stat when
+ * __DARWIN_64_BIT_INO_T is set. __DARWIN_STRUCT_STAT64 is defined
+ * above, depending on whether we use struct timespec or the direct
+ * components.
+ *
+ * This is simillar to stat except for 64bit inode number
+ * number instead of 32bit ino_t and the addition of create(birth) time.
+ */
+#define __DARWIN_STRUCT_STAT64 { \
+	dev_t		st_dev;			/* [XSI] ID of device containing file */ \
+	mode_t		st_mode;		/* [XSI] Mode of file (see below) */ \
+	nlink_t		st_nlink;		/* [XSI] Number of hard links */ \
+	__darwin_ino64_t st_ino;		/* [XSI] File serial number */ \
+	uid_t		st_uid;			/* [XSI] User ID of the file */ \
+	gid_t		st_gid;			/* [XSI] Group ID of the file */ \
+	dev_t		st_rdev;		/* [XSI] Device ID */ \
+	__DARWIN_STRUCT_STAT64_TIMES \
+	off_t		st_size;		/* [XSI] file size, in bytes */ \
+	blkcnt_t	st_blocks;		/* [XSI] blocks allocated for file */ \
+	blksize_t	st_blksize;		/* [XSI] optimal blocksize for I/O */ \
+	__uint32_t	st_flags;		/* user defined flags for file */ \
+	__uint32_t	st_gen;			/* file generation number */ \
+	__int32_t	st_lspare;		/* RESERVED: DO NOT USE! */ \
+	__int64_t	st_qspare[2];		/* RESERVED: DO NOT USE! */ \
+}
 
 /*
  * [XSI] This structure is used as the second parameter to the fstat(),
  * lstat(), and stat() functions.
  */
+#if __DARWIN_64_BIT_INO_T
+
+struct stat __DARWIN_STRUCT_STAT64;
+
+#else /* !__DARWIN_64_BIT_INO_T */
+
 struct stat {
 	dev_t	 	st_dev;		/* [XSI] ID of device containing file */
 	ino_t	  	st_ino;		/* [XSI] File serial number */
@@ -185,7 +239,7 @@ struct stat {
 	uid_t		st_uid;		/* [XSI] User ID of the file */
 	gid_t		st_gid;		/* [XSI] Group ID of the file */
 	dev_t		st_rdev;	/* [XSI] Device ID */
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 	struct	timespec st_atimespec;	/* time of last access */
 	struct	timespec st_mtimespec;	/* time of last data modification */
 	struct	timespec st_ctimespec;	/* time of last status change */
@@ -206,10 +260,16 @@ struct stat {
 	__int64_t	st_qspare[2];	/* RESERVED: DO NOT USE! */
 };
 
-// LP64todo - should this move?
-#ifdef KERNEL
-#include <machine/types.h>
+#endif /* __DARWIN_64_BIT_INO_T */
 
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+
+struct stat64 __DARWIN_STRUCT_STAT64;
+
+#endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
+
+
+#ifdef KERNEL
 /* LP64 version of struct stat.  time_t (see timespec) is a long and must 
  * grow when we're dealing with a 64-bit process.
  * WARNING - keep in sync with struct stat
@@ -223,7 +283,7 @@ struct user_stat {
 	uid_t		st_uid;		/* [XSI] User ID of the file */
 	gid_t		st_gid;		/* [XSI] Group ID of the file */
 	dev_t		st_rdev;	/* [XSI] Device ID */
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 	struct	user_timespec st_atimespec; /* time of last access */
 	struct	user_timespec st_mtimespec; /* time of last data modification */
 	struct	user_timespec st_ctimespec; /* time of last status change */
@@ -246,14 +306,50 @@ struct user_stat {
 
 extern void munge_stat(struct stat *sbp, struct user_stat *usbp);
 
+
+struct user_stat64 {
+	dev_t		st_dev;					/* [XSI] ID of device containing file */
+	mode_t		st_mode;				/* [XSI] Mode of file (see below) */
+	nlink_t		st_nlink;				/* [XSI] Number of hard links */
+	ino64_t		st_ino;					/* [XSI] File serial number */
+	uid_t		st_uid;					/* [XSI] User ID of the file */
+	gid_t		st_gid;					/* [XSI] Group ID of the file */
+	dev_t		st_rdev;				/* [XSI] Device ID */
+#ifndef _POSIX_C_SOURCE
+	struct user_timespec st_atimespec;		/* time of last access */
+	struct user_timespec st_mtimespec;		/* time of last data modification */
+	struct user_timespec st_ctimespec;		/* time of last status change */
+	struct user_timespec st_birthtimespec;	/* time of file creation(birth) */
+#else
+	user_time_t	st_atime;				/* [XSI] Time of last access */
+	__int64_t	st_atimensec;			/* nsec of last access */
+	user_time_t	st_mtime;				/* [XSI] Last data modification time */
+	__int64_t	st_mtimensec;			/* last data modification nsec */
+	user_time_t	st_ctime;				/* [XSI] Time of last status change */
+	__int64_t	st_ctimensec;			/* nsec of last status change */
+	user_time_t	st_birthtime;			/*  File creation time(birth)  */
+	__int64_t	st_birthtimensec;		/* nsec of File creation time */
+#endif
+	off_t		st_size;				/* [XSI] file size, in bytes */
+	blkcnt_t	st_blocks;				/* [XSI] blocks allocated for file */
+	blksize_t	st_blksize;				/* [XSI] optimal blocksize for I/O */
+	__uint32_t	st_flags;				/* user defined flags for file */
+	__uint32_t	st_gen;					/* file generation number */
+	__uint32_t	st_lspare;				/* RESERVED: DO NOT USE! */
+	__int64_t	st_qspare[2];			/* RESERVED: DO NOT USE! */
+};
+
+extern void munge_stat64(struct stat64 *sbp, struct user_stat64 *usbp);
+
 #endif // KERNEL
 
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define st_atime st_atimespec.tv_sec
 #define st_mtime st_mtimespec.tv_sec
 #define st_ctime st_ctimespec.tv_sec
-#endif
+#define st_birthtime st_birthtimespec.tv_sec
+#endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 /*
  * [XSI] The following are symbolic names for the values of type mode_t.  They
@@ -269,7 +365,7 @@ extern void munge_stat(struct stat *sbp, struct user_stat *usbp);
 #define	S_IFREG		0100000		/* [XSI] regular */
 #define	S_IFLNK		0120000		/* [XSI] symbolic link */
 #define	S_IFSOCK	0140000		/* [XSI] socket */
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	S_IFWHT		0160000		/* whiteout */
 #define S_IFXATTR	0200000		/* extended attribute */
 #endif
@@ -295,7 +391,7 @@ extern void munge_stat(struct stat *sbp, struct user_stat *usbp);
 #define	S_ISGID		0002000		/* [XSI] set group id on execution */
 #define	S_ISVTX		0001000		/* [XSI] directory restrcted delete */
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	S_ISTXT		S_ISVTX		/* sticky bit: not supported */
 #define	S_IREAD		S_IRUSR		/* backward compatability */
 #define	S_IWRITE	S_IWUSR		/* backward compatability */
@@ -316,7 +412,7 @@ extern void munge_stat(struct stat *sbp, struct user_stat *usbp);
 #define	S_ISREG(m)	(((m) & 0170000) == 0100000)	/* regular file */
 #define	S_ISLNK(m)	(((m) & 0170000) == 0120000)	/* symbolic link */
 #define	S_ISSOCK(m)	(((m) & 0170000) == 0140000)	/* socket */
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	S_ISWHT(m)	(((m) & 0170000) == 0160000)	/* whiteout */
 #define S_ISXATTR(m)	(((m) & 0200000) == 0200000)	/* extended attribute */
 #endif
@@ -357,7 +453,7 @@ extern void munge_stat(struct stat *sbp, struct user_stat *usbp);
 #define	S_TYPEISTMO(buf)	(0)	/* Test for a typed memory object */
 
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	ACCESSPERMS	(S_IRWXU|S_IRWXG|S_IRWXO)	/* 0777 */
 							/* 7777 */
 #define	ALLPERMS	(S_ISUID|S_ISGID|S_ISTXT|S_IRWXU|S_IRWXG|S_IRWXO)
@@ -377,12 +473,27 @@ extern void munge_stat(struct stat *sbp, struct user_stat *usbp);
 #define	UF_APPEND	0x00000004	/* writes to file may only append */
 #define UF_OPAQUE	0x00000008	/* directory is opaque wrt. union */
 /*
+ * The following bit is reserved for FreeBSD.  It is not implemented
+ * in Mac OS X.
+ */
+/* #define UF_NOUNLINK	0x00000010 */	/* file may not be removed or renamed */
+/* Bits 0x0020 through 0x4000 are currently undefined. */
+#define UF_HIDDEN	0x00008000	/* hint that this item should not be */
+					/* displayed in a GUI */
+/*
  * Super-user changeable flags.
  */
 #define	SF_SETTABLE	0xffff0000	/* mask of superuser changeable flags */
 #define	SF_ARCHIVED	0x00010000	/* file is archived */
 #define	SF_IMMUTABLE	0x00020000	/* file may not be changed */
 #define	SF_APPEND	0x00040000	/* writes to file may only append */
+/*
+ * The following two bits are reserved for FreeBSD.  They are not
+ * implemented in Mac OS X.
+ */
+/* #define SF_NOUNLINK	0x00100000 */	/* file may not be removed or renamed */
+/* #define SF_SNAPSHOT	0x00200000 */	/* snapshot inode */
+/* NOTE: There is no SF_HIDDEN bit. */
 
 #ifdef KERNEL
 /*
@@ -398,17 +509,17 @@ extern void munge_stat(struct stat *sbp, struct user_stat *usbp);
 
 __BEGIN_DECLS
 /* [XSI] */
-int	chmod(const char *, mode_t);
-int	fchmod(int, mode_t);
-int	fstat(int, struct stat *);
-int	lstat(const char *, struct stat *);
+int	chmod(const char *, mode_t) __DARWIN_ALIAS(chmod);
+int	fchmod(int, mode_t) __DARWIN_ALIAS(fchmod);
+int	fstat(int, struct stat *) __DARWIN_INODE64(fstat);
+int	lstat(const char *, struct stat *) __DARWIN_INODE64(lstat);
 int	mkdir(const char *, mode_t);
 int	mkfifo(const char *, mode_t);
-int	stat(const char *, struct stat *);
+int	stat(const char *, struct stat *) __DARWIN_INODE64(stat);
 int	mknod(const char *, mode_t, dev_t);
 mode_t	umask(mode_t);
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #ifndef _FILESEC_T
 struct _filesec;
 typedef struct _filesec	*filesec_t;
@@ -418,13 +529,23 @@ int	chflags(const char *, __uint32_t);
 int	chmodx_np(const char *, filesec_t);
 int	fchflags(int, __uint32_t);
 int	fchmodx_np(int, filesec_t);
-int	fstatx_np(int, struct stat *, filesec_t);
-int	lstatx_np(const char *, struct stat *, filesec_t);
+int	fstatx_np(int, struct stat *, filesec_t) __DARWIN_INODE64(fstatx_np);
+int	lchflags(const char *, __uint32_t);
+int	lchmod(const char *, mode_t);
+int	lstatx_np(const char *, struct stat *, filesec_t) __DARWIN_INODE64(lstatx_np);
 int	mkdirx_np(const char *, filesec_t);
 int	mkfifox_np(const char *, filesec_t);
-int	statx_np(const char *, struct stat *, filesec_t);
+int	statx_np(const char *, struct stat *, filesec_t) __DARWIN_INODE64(statx_np);
 int	umaskx_np(filesec_t);
-#endif	/* POSIX_C_SOURCE */
+/* The following are simillar  to stat and friends except provide struct stat64 instead of struct stat  */
+int	fstatx64_np(int, struct stat64 *, filesec_t);
+int	lstatx64_np(const char *, struct stat64 *, filesec_t);
+int	statx64_np(const char *, struct stat64 *, filesec_t);
+int	fstat64(int, struct stat64 *);
+int	lstat64(const char *, struct stat64 *);
+int	stat64(const char *, struct stat64 *);
+#endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
+
 __END_DECLS
 #endif
 #endif /* !_SYS_STAT_H_ */

@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 1998-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <IOKit/pwr_mgt/IOPMPowerSource.h>
@@ -126,6 +132,9 @@ void IOPMPowerSource::updateStatus (void)
     OSObject                        *iteratorKey;
     OSObject                        *obj;
 
+    // do nothing if settings haven't changed
+    if(!settingsChangedSinceUpdate) return;
+
     iterator = OSCollectionIterator::withCollection(properties);
     if(!iterator) return;
 
@@ -140,6 +149,8 @@ void IOPMPowerSource::updateStatus (void)
     }
     iterator->release();
 
+    settingsChangedSinceUpdate = false;
+
     // And up goes the flare
     messageClients(kIOPMMessageBatteryStatusHasChanged);
 }
@@ -151,125 +162,140 @@ void IOPMPowerSource::updateStatus (void)
  *
  ******************************************************************************/
  
+void IOPMPowerSource::setPSProperty(const OSSymbol *key, OSObject *val)
+{
+    OSObject    *lastVal;
+    OSNumber    *newNumVal;
+
+    if(!key || !val) return;
+
+    // Compare new setting with existing setting; update 
+    // 'settingsChangedSinceUpdate' if the setting has changed.
+    // If values are OSNumbers, do equality comparison.
+    // Otherwise, just compare pointers.
+    
+    if( (lastVal = properties->getObject(key)) ) {
+        newNumVal = OSDynamicCast(OSNumber, val);
+        if(newNumVal) {
+            if(newNumVal->isEqualTo(lastVal)) {
+                // settings didn't change
+            } else {
+                // num val is not equal to last val
+                settingsChangedSinceUpdate = true;
+            }
+        } else {
+            // pointer compare as last resort
+            if(lastVal != val)
+                settingsChangedSinceUpdate = true;        
+        }
+    } else {
+        // new setting; no last value
+        settingsChangedSinceUpdate = true;
+    }
+    
+    // here's the part where we go crazy.
+    properties->setObject(key, val);
+}
+
+
+ 
 void IOPMPowerSource::setExternalConnected(bool b) {
-    properties->setObject(
-                externalConnectedKey,
-                b ? kOSBooleanTrue:kOSBooleanFalse);    
+    setPSProperty(externalConnectedKey,
+            b ? kOSBooleanTrue : kOSBooleanFalse);    
 }
 
 void IOPMPowerSource::setExternalChargeCapable(bool b) {
-    properties->setObject(
-                externalChargeCapableKey,
-                b ? kOSBooleanTrue:kOSBooleanFalse);    
+    setPSProperty(externalChargeCapableKey,
+            b ? kOSBooleanTrue : kOSBooleanFalse);    
 }
 
 void IOPMPowerSource::setBatteryInstalled(bool b) {
-    properties->setObject(
-                batteryInstalledKey,
-                b ? kOSBooleanTrue:kOSBooleanFalse);    
+    setPSProperty(batteryInstalledKey,
+            b ? kOSBooleanTrue : kOSBooleanFalse);    
 }
 
 void IOPMPowerSource::setIsCharging(bool b) {
-    properties->setObject(
-                chargingKey,
-                b ? kOSBooleanTrue:kOSBooleanFalse);    
+    setPSProperty(chargingKey,
+            b ? kOSBooleanTrue : kOSBooleanFalse);    
 }
 
 void IOPMPowerSource::setAtWarnLevel(bool b) {
-    properties->setObject(
-                warnLevelKey,
-                b ? kOSBooleanTrue:kOSBooleanFalse);    
+    setPSProperty(warnLevelKey,
+            b ? kOSBooleanTrue : kOSBooleanFalse);    
 }
 
 void IOPMPowerSource::setAtCriticalLevel(bool b) {
-    properties->setObject(
-                criticalLevelKey,
-                b ? kOSBooleanTrue:kOSBooleanFalse);    
+    setPSProperty(criticalLevelKey,
+            b ? kOSBooleanTrue : kOSBooleanFalse);    
 }
 
 
 void IOPMPowerSource::setCurrentCapacity(unsigned int val) {
     OSNumber *n = OSNumber::withNumber(val, 32);
-    properties->setObject(
-                currentCapacityKey,
-                n);
+    setPSProperty(currentCapacityKey, n);
     n->release();
 }
 
 void IOPMPowerSource::setMaxCapacity(unsigned int val) {
     OSNumber *n = OSNumber::withNumber(val, 32);
-    properties->setObject(
-                maxCapacityKey,
-                n);
+    setPSProperty(maxCapacityKey, n);
     n->release();
 }
 
 void IOPMPowerSource::setTimeRemaining(int val) {
     OSNumber *n = OSNumber::withNumber(val, 32);
-    properties->setObject(
-                timeRemainingKey,
-                n);
+    setPSProperty(timeRemainingKey, n);
     n->release();
 }
 
 void IOPMPowerSource::setAmperage(int val) {
     OSNumber *n = OSNumber::withNumber(val, 32);
-    properties->setObject(
-                amperageKey,
-                n);
+    setPSProperty(amperageKey, n);
     n->release();
 }
 
 void IOPMPowerSource::setVoltage(unsigned int val) {
     OSNumber *n = OSNumber::withNumber(val, 32);
-    properties->setObject(
-                voltageKey,
-                n);
+    setPSProperty(voltageKey, n);
     n->release();
 }
 
 void IOPMPowerSource::setCycleCount(unsigned int val) {
     OSNumber *n = OSNumber::withNumber(val, 32);
-    properties->setObject(
-                cycleCountKey,
-                n);
+    setPSProperty(cycleCountKey, n);
     n->release();
 }
 
 void IOPMPowerSource::setAdapterInfo(int val) {
     OSNumber *n = OSNumber::withNumber(val, 32);
-    properties->setObject(
-                adapterInfoKey,
-                n);
+    setPSProperty(adapterInfoKey, n);
     n->release();
 }
 
 void IOPMPowerSource::setLocation(int val) {
     OSNumber *n = OSNumber::withNumber(val, 32);
-    properties->setObject(
-                locationKey,
-                n);
+    setPSProperty(locationKey, n);
     n->release();
 }
 
 void IOPMPowerSource::setErrorCondition(OSSymbol *s) {
-    properties->setObject(errorConditionKey, s);
+    setPSProperty(errorConditionKey, s);
 }
 
 void IOPMPowerSource::setManufacturer(OSSymbol *s) {
-    properties->setObject(manufacturerKey, s);
+    setPSProperty(manufacturerKey, s);
 }
 
 void IOPMPowerSource::setModel(OSSymbol *s) {
-    properties->setObject(modelKey, s);
+    setPSProperty(modelKey, s);
 }
 
 void IOPMPowerSource::setSerial(OSSymbol *s) {
-    properties->setObject(serialKey, s);
+    setPSProperty(serialKey, s);
 }
 
 void IOPMPowerSource::setLegacyIOBatteryInfo(OSDictionary *d) {
-    properties->setObject(batteryInfoKey, d);
+    setPSProperty(batteryInfoKey, d);
 }
 
 
@@ -280,6 +306,11 @@ void IOPMPowerSource::setLegacyIOBatteryInfo(OSDictionary *d) {
  * PUBLIC Accessors. All the getters! Boo!
  *
  ******************************************************************************/
+
+OSObject *IOPMPowerSource::getPSProperty(const OSSymbol *symmie) {
+    if(!symmie) return NULL;
+    return properties->getObject(symmie);
+}
 
 bool IOPMPowerSource::externalConnected(void) {
     return (kOSBooleanTrue == properties->getObject(externalConnectedKey));

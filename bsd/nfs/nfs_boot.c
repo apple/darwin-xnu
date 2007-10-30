@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995, 1997 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -121,12 +127,12 @@
 
 #if NETHER == 0
 
-int nfs_boot_init(struct nfs_diskless *nd, proc_t procp)
+int nfs_boot_init(__unused struct nfs_diskless *nd)
 {
 	panic("nfs_boot_init: no ether");
 }
 
-int nfs_boot_getfh(struct nfs_diskless *nd, proc_t procp, int v3, int sotype)
+int nfs_boot_getfh(__unused struct nfs_diskless *nd, __unused int v3, __unused int sotype)
 {
 	panic("nfs_boot_getfh: no ether");
 }
@@ -183,7 +189,7 @@ netboot_rootpath(struct in_addr * server_ip,
  * Called with an empty nfs_diskless struct to be filled in.
  */
 int
-nfs_boot_init(struct nfs_diskless *nd, __unused proc_t procp)
+nfs_boot_init(struct nfs_diskless *nd)
 {
 	struct sockaddr_in 	bp_sin;
 	boolean_t		do_bpwhoami = TRUE;
@@ -193,7 +199,7 @@ nfs_boot_init(struct nfs_diskless *nd, __unused proc_t procp)
 	struct sockaddr_in *	sin_p;
 
 	/* make sure mbuf constants are set up */
-	if (!nfs_mbuf_mlen)
+	if (!nfs_mbuf_mhlen)
 		nfs_mbuf_init();
 
 	/* by this point, networking must already have been configured */
@@ -280,7 +286,7 @@ nfs_boot_init(struct nfs_diskless *nd, __unused proc_t procp)
 			snprintf(check_path, MAXPATHLEN, "%s/private", nd->nd_root.ndm_path);
 			if ((nd->nd_root.ndm_saddr.sin_addr.s_addr 
 			     == nd->nd_private.ndm_saddr.sin_addr.s_addr)
-			    && (strcmp(check_path, nd->nd_private.ndm_path) == 0)) {
+			    && (strncmp(check_path, nd->nd_private.ndm_path, MAXPATHLEN) == 0)) {
 				/* private path is prefix of root path, don't mount */
 				nd->nd_private.ndm_saddr.sin_addr.s_addr = 0;
 			}
@@ -304,7 +310,7 @@ failed:
  * with file handles to be filled in.
  */
 int
-nfs_boot_getfh(struct nfs_diskless *nd, __unused proc_t procp, int v3, int sotype)
+nfs_boot_getfh(struct nfs_diskless *nd, int v3, int sotype)
 {
 	int error = 0;
 
@@ -368,7 +374,7 @@ get_file_handle(ndmntp)
  * initialize the pkthdr length field.
  */
 static int
-mbuf_get_with_len(int msg_len, mbuf_t *m)
+mbuf_get_with_len(size_t msg_len, mbuf_t *m)
 {
 	int error;
 	error = mbuf_gethdr(MBUF_WAITOK, MBUF_TYPE_DATA, m);
@@ -444,8 +450,8 @@ bp_whoami(bpsin, my_ip, gw_ip)
 	struct bp_inaddr *bia;
 	mbuf_t m;
 	struct sockaddr_in sin;
-	int error, msg_len;
-	int cn_len, dn_len;
+	int error;
+	size_t msg_len, cn_len, dn_len;
 	u_char *p;
 	long *lp;
 
@@ -489,20 +495,20 @@ bp_whoami(bpsin, my_ip, gw_ip)
 	lp = mbuf_data(m);
 
 	/* bootparam server port (also grab from address). */
-	if (msg_len < (int)sizeof(*lp))
+	if (msg_len < sizeof(*lp))
 		goto bad;
 	msg_len -= sizeof(*lp);
 	bpsin->sin_port = htons((short)ntohl(*lp++));
 	bpsin->sin_addr.s_addr = sin.sin_addr.s_addr;
 
 	/* length of encapsulated results */
-	if (msg_len < (ntohl(*lp) + (int)sizeof(*lp)))
+	if (msg_len < (ntohl(*lp) + sizeof(*lp)))
 		goto bad;
 	msg_len = ntohl(*lp++);
-	p = (char*)lp;
+	p = (u_char*)lp;
 
 	/* client name */
-	if (msg_len < (int)sizeof(*str))
+	if (msg_len < sizeof(*str))
 		goto bad;
 	str = (struct rpc_string *)p;
 	cn_len = ntohl(str->len);
@@ -517,7 +523,7 @@ bp_whoami(bpsin, my_ip, gw_ip)
 	msg_len -= RPC_STR_SIZE(cn_len);
 
 	/* domain name */
-	if (msg_len < (int)sizeof(*str))
+	if (msg_len < sizeof(*str))
 		goto bad;
 	str = (struct rpc_string *)p;
 	dn_len = ntohl(str->len);
@@ -532,7 +538,7 @@ bp_whoami(bpsin, my_ip, gw_ip)
 	msg_len -= RPC_STR_SIZE(dn_len);
 
 	/* gateway address */
-	if (msg_len < (int)sizeof(*bia))
+	if (msg_len < sizeof(*bia))
 		goto bad;
 	bia = (struct bp_inaddr *)p;
 	if (bia->atype != htonl(1))

@@ -1,23 +1,35 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
  */
 
 #include <sys/param.h>
@@ -57,8 +69,9 @@
 #include <vm/vm_kern.h>
 #include <vm/vnode_pager.h>
 #include <vm/vm_protos.h>
-
-extern thread_t current_act(void);
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
 
 /*
  * temporary support for delayed instantiation
@@ -153,7 +166,6 @@ macx_swapon(
 	int			size = args->size;
 	vnode_t			vp = (vnode_t)NULL; 
 	struct nameidata 	nd, *ndp;
-	struct proc		*p =  current_proc();
 	register int		error;
 	kern_return_t		kr;
 	mach_port_t		backing_store;
@@ -161,10 +173,8 @@ macx_swapon(
 	int			i;
 	boolean_t		funnel_state;
 	off_t			file_size;
-	struct vfs_context	context;
-
-	context.vc_proc = p;
-	context.vc_ucred = kauth_cred_get();
+	vfs_context_t		ctx = vfs_context_current();
+	struct proc		*p =  current_proc();
 
 	AUDIT_MACH_SYSCALL_ENTER(AUE_SWAPON);
 	AUDIT_ARG(value, args->priority);
@@ -185,7 +195,7 @@ macx_swapon(
 	 */
 	NDINIT(ndp, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1,
 	       ((IS_64BIT_PROCESS(p)) ? UIO_USERSPACE64 : UIO_USERSPACE32),
-	       CAST_USER_ADDR_T(args->filename), &context);
+	       CAST_USER_ADDR_T(args->filename), ctx);
 
 	if ((error = namei(ndp)))
 		goto swapon_bailout;
@@ -196,14 +206,20 @@ macx_swapon(
 		error = EINVAL;
 		goto swapon_bailout;
 	}
-	UBCINFOCHECK("macx_swapon", vp);
 
 	/* get file size */
-	if ((error = vnode_size(vp, &file_size, &context)) != 0)
+	if ((error = vnode_size(vp, &file_size, ctx)) != 0)
 		goto swapon_bailout;
+#if CONFIG_MACF
+	vnode_lock(vp);
+	error = mac_system_check_swapon(vfs_context_ucred(ctx), vp);
+	vnode_unlock(vp);
+	if (error)
+		goto swapon_bailout;
+#endif
 
 	/* resize to desired size if it's too small */
-	if ((file_size < (off_t)size) && ((error = vnode_setsize(vp, (off_t)size, 0, &context)) != 0))
+	if ((file_size < (off_t)size) && ((error = vnode_setsize(vp, (off_t)size, 0, ctx)) != 0))
 		goto swapon_bailout;
 
 	/* add new backing store to list */
@@ -305,10 +321,7 @@ macx_swapoff(
 	int			i;
 	int			error;
 	boolean_t		funnel_state;
-	struct vfs_context context;
-
-	context.vc_proc = p;
-	context.vc_ucred = kauth_cred_get();
+	vfs_context_t ctx = vfs_context_current();
 
 	AUDIT_MACH_SYSCALL_ENTER(AUE_SWAPOFF);
 
@@ -324,7 +337,7 @@ macx_swapoff(
 	 */
 	NDINIT(ndp, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1,
 	       ((IS_64BIT_PROCESS(p)) ? UIO_USERSPACE64 : UIO_USERSPACE32),
-	       CAST_USER_ADDR_T(args->filename), &context);
+	       CAST_USER_ADDR_T(args->filename), ctx);
 
 	if ((error = namei(ndp)))
 		goto swapoff_bailout;
@@ -335,6 +348,13 @@ macx_swapoff(
 		error = EINVAL;
 		goto swapoff_bailout;
 	}
+#if CONFIG_MACF
+	vnode_lock(vp);
+	error = mac_system_check_swapoff(vfs_context_ucred(ctx), vp);
+	vnode_unlock(vp);
+	if (error)
+		goto swapoff_bailout;
+#endif
 
 	for(i = 0; i < MAX_BACKING_STORE; i++) {
 		if(bs_port_table[i].vp == vp) {

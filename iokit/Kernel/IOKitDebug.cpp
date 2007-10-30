@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1998 Apple Computer, Inc.  All rights reserved. 
@@ -49,6 +55,7 @@ SYSCTL_QUAD(_debug, OID_AUTO, iokit, CTLFLAG_RW, &gIOKitDebug, "boot_arg io");
 
 int 		debug_malloc_size;
 int		debug_iomalloc_size;
+
 vm_size_t	debug_iomallocpageable_size;
 int 		debug_container_malloc_size;
 // int 		debug_ivars_size; // in OSObject.cpp
@@ -75,7 +82,7 @@ void IOPrintPlane( const IORegistryPlane * plane )
 
     iter->reset();
     while( (next = iter->getNextObjectRecursive())) {
-	sprintf( format + 1, "%ds", 2 * next->getDepth( plane ));
+	snprintf(format + 1, sizeof(format) - 1, "%ds", 2 * next->getDepth( plane ));
 	IOLog( format, "");
 	IOLog( "\033[33m%s", next->getName( plane ));
 	if( (next->getLocation( plane )))
@@ -131,7 +138,7 @@ void db_dumpiojunk( const IORegistryPlane * plane )
 
     iter->reset();
     while( (next = iter->getNextObjectRecursive())) {
-		sprintf( format + 1, "%ds", 2 * next->getDepth( plane ));
+		snprintf(format + 1, sizeof(format) - 1, "%ds", 2 * next->getDepth( plane ));
 		dbugprintf( format, "");
 		dbugprintf( "%s", next->getName( plane ));
 		if( (next->getLocation( plane )))
@@ -196,7 +203,6 @@ void IOKitDiagnostics::updateOffset( OSDictionary * dict,
     dict->setObject( name, off );
     off->release();
 }
-
 
 bool IOKitDiagnostics::serialize(OSSerialize *s) const
 {

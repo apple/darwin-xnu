@@ -42,49 +42,68 @@
 .Sh SYNOPSIS
 .Fd #include <sys/socket.h>
 .Ft int
-.Fn getsockname "int s" "struct sockaddr *name" "socklen_t *namelen"
+.Fo getsockname
+.Fa "int socket"
+.Fa "struct sockaddr *restrict address"
+.Fa "socklen_t *restrict address_len"
+.Fc
 .Sh DESCRIPTION
 .Fn Getsockname
 returns the current 
-.Fa name
+.Fa address
 for the specified socket.  The
-.Fa namelen
+.Fa address_len
 parameter should be initialized to indicate
 the amount of space pointed to by
-.Fa name .
+.Fa address .
 On return it contains the actual size of the name
 returned (in bytes).
-.Sh DIAGNOSTICS
-A 0 is returned if the call succeeds, -1 if it fails.
+.Sh RETURN VALUES
+.Rv -std getsockname
 .Sh ERRORS
-The call succeeds unless:
+The
+.Fn getsockname
+system call will succeed unless:
 .Bl -tag -width Er
+.\" ==========
 .It Bq Er EBADF
 The argument
-.Fa s
-is not a valid descriptor.
-.It Bq Er ENOTSOCK
-The argument
-.Fa s
-is a file, not a socket.
+.Fa socket
+is not a valid file descriptor.
+.\" ==========
+.It Bq Er EFAULT
+The 
+.Fa address
+parameter points to memory not in a valid part of the
+process address space.
+.\" ==========
+.It Bq Er EINVAL
+.Fa socket
+has been shut down.
+.\" ==========
 .It Bq Er ENOBUFS
 Insufficient resources were available in the system
 to perform the operation.
-.It Bq Er EFAULT
-The 
-.Fa name
-parameter points to memory not in a valid part of the
-process address space.
+.\" ==========
+.It Bq Er ENOTSOCK
+The argument
+.Fa socket
+is not a socket (e.g., a plain file).
+.\" ==========
+.It Bq Er EOPNOTSUPP
+.Fn getsockname
+is not supported for the protocol in use by
+.Fa socket .
 .El
 .Sh SEE ALSO
 .Xr bind 2 ,
 .Xr socket 2
 .Sh BUGS
 Names bound to sockets in the UNIX domain are inaccessible;
-.Xr getsockname
-returns a zero length name.
+.Fn getsockname
+returns a zero-length name.
 .Sh HISTORY
 The
 .Fn getsockname
-function call appeared in
+call appeared in
 .Bx 4.2 .

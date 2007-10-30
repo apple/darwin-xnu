@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 
@@ -129,8 +135,8 @@ typedef struct aio_anchor_cb aio_anchor_cb;
  * us sleep channels that currently do not collide with any other kernel routines.
  * At this time, for binary compatibility reasons, we cannot create new proc fields.
  */
-#define AIO_SUSPEND_SLEEP_CHAN  p_estcpu
-#define AIO_CLEANUP_SLEEP_CHAN 	p_pctcpu
+#define AIO_SUSPEND_SLEEP_CHAN  aio_active_count
+#define AIO_CLEANUP_SLEEP_CHAN 	aio_done_count
 
 
 /*
@@ -143,20 +149,20 @@ typedef struct aio_anchor_cb aio_anchor_cb;
 /*
  *  LOCAL PROTOTYPES
  */
-static int			aio_active_requests_for_process( struct proc *procp );
+static int			aio_active_requests_for_process(proc_t procp );
 static boolean_t	aio_delay_fsync_request( aio_workq_entry *entryp );
 static int			aio_free_request( aio_workq_entry *entryp, vm_map_t the_map );
 static int			aio_get_all_queues_count( void );
-static int			aio_get_process_count( struct proc *procp );
+static int			aio_get_process_count(proc_t procp );
 static aio_workq_entry *  aio_get_some_work( void );
 static boolean_t	aio_last_group_io( aio_workq_entry *entryp );
 static void			aio_mark_requests( aio_workq_entry *entryp );
-static int			aio_queue_async_request( struct proc *procp, 
+static int			aio_queue_async_request(proc_t procp, 
 									 		 user_addr_t aiocbp,
 									   		 int kindOfIO );
 static int			aio_validate( aio_workq_entry *entryp );
 static void			aio_work_thread( void );
-static int			do_aio_cancel(	struct proc *p, 
+static int			do_aio_cancel(proc_t p, 
 									int fd, 
 									user_addr_t aiocbp, 
 									boolean_t wait_for_completion,
@@ -166,14 +172,14 @@ static int			do_aio_fsync( aio_workq_entry *entryp );
 static int			do_aio_read( aio_workq_entry *entryp );
 static int			do_aio_write( aio_workq_entry *entryp );
 static void 		do_munge_aiocb( struct aiocb *my_aiocbp, struct user_aiocb *the_user_aiocbp );
-static boolean_t	is_already_queued( 	struct proc *procp, 
+static boolean_t	is_already_queued(proc_t procp, 
 										user_addr_t aiocbp );
-static int			lio_create_async_entry( struct proc *procp, 
+static int			lio_create_async_entry(proc_t procp, 
 											 user_addr_t aiocbp, 
 						 					 user_addr_t sigp, 
 						 					 long group_tag,
 						 					 aio_workq_entry **entrypp );
-static int			lio_create_sync_entry( struct proc *procp, 
+static int			lio_create_sync_entry(proc_t procp, 
 											user_addr_t aiocbp, 
 											long group_tag,
 											aio_workq_entry **entrypp );
@@ -184,10 +190,10 @@ static int			lio_create_sync_entry( struct proc *procp,
  */
 
 /* in ...bsd/kern/sys_generic.c */
-extern int			dofileread( struct proc *p, struct fileproc *fp, int fd, 
+extern int			dofileread(vfs_context_t ctx, struct fileproc *fp,
 								user_addr_t bufp, user_size_t nbyte, 
 								off_t offset, int flags, user_ssize_t *retval );
-extern int			dofilewrite( struct proc *p, struct fileproc *fp, int fd, 
+extern int			dofilewrite(vfs_context_t ctx, struct fileproc *fp,
 								 user_addr_t bufp, user_size_t nbyte, off_t offset, 
 								 int flags, user_ssize_t *retval );
 
@@ -221,7 +227,7 @@ static struct zone  		*aio_workq_zonep;
  */
 
 int
-aio_cancel( struct proc *p, struct aio_cancel_args *uap, int *retval )
+aio_cancel(proc_t p, struct aio_cancel_args *uap, int *retval )
 {
 	struct user_aiocb		my_aiocb;
 	int							result;
@@ -234,7 +240,8 @@ aio_cancel( struct proc *p, struct aio_cancel_args *uap, int *retval )
 	result = aio_get_all_queues_count( );
 	AIO_UNLOCK;
 	if ( result < 1 ) {
-		result = EBADF;
+		result = 0;
+		*retval = AIO_ALLDONE;
 		goto ExitRoutine;
 	}
 	
@@ -289,7 +296,7 @@ ExitRoutine:
  */
 
 __private_extern__ void
-_aio_close( struct proc *p, int fd )
+_aio_close(proc_t p, int fd )
 {
 	int			error, count;
 
@@ -337,7 +344,7 @@ _aio_close( struct proc *p, int fd )
  */
 
 int
-aio_error( struct proc *p, struct aio_error_args *uap, int *retval )
+aio_error(proc_t p, struct aio_error_args *uap, int *retval )
 {
 	aio_workq_entry		 		*entryp;
 	int							error;
@@ -406,7 +413,7 @@ ExitRoutine:
  */
 
 int
-aio_fsync( struct proc *p, struct aio_fsync_args *uap, int *retval )
+aio_fsync(proc_t p, struct aio_fsync_args *uap, int *retval )
 {
 	int			error;
 	int			fsync_kind;
@@ -447,7 +454,7 @@ ExitRoutine:
  */
 
 int
-aio_read( struct proc *p, struct aio_read_args *uap, int *retval )
+aio_read(proc_t p, struct aio_read_args *uap, int *retval )
 {
 	int			error;
 
@@ -477,7 +484,7 @@ aio_read( struct proc *p, struct aio_read_args *uap, int *retval )
  */
 
 int
-aio_return( struct proc *p, struct aio_return_args *uap, user_ssize_t *retval )
+aio_return(proc_t p, struct aio_return_args *uap, user_ssize_t *retval )
 {
 	aio_workq_entry		 		*entryp;
 	int							error;
@@ -566,7 +573,7 @@ ExitRoutine:
  */
 
 __private_extern__ void
-_aio_exec( struct proc *p )
+_aio_exec(proc_t p )
 {
 
 	KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_exec)) | DBG_FUNC_START,
@@ -590,7 +597,7 @@ _aio_exec( struct proc *p )
  */
 
 __private_extern__ void
-_aio_exit( struct proc *p )
+_aio_exit(proc_t p )
 {
 	int						error, count;
 	aio_workq_entry 		*entryp;
@@ -684,7 +691,7 @@ _aio_exit( struct proc *p )
  */
 
 static int
-do_aio_cancel( 	struct proc *p, int fd, user_addr_t aiocbp, 
+do_aio_cancel(proc_t p, int fd, user_addr_t aiocbp, 
 				boolean_t wait_for_completion, boolean_t disable_notification )
 {
 	aio_workq_entry		 	*entryp;
@@ -853,9 +860,16 @@ do_aio_cancel( 	struct proc *p, int fd, user_addr_t aiocbp,
  * set appropriately - EAGAIN if timeout elapses or EINTR if an interrupt
  * woke us up.
  */
+int
+aio_suspend(proc_t p, struct aio_suspend_args *uap, int *retval )
+{
+	__pthread_testcancel(1);
+	return(aio_suspend_nocancel(p, (struct aio_suspend_nocancel_args *)uap, retval));
+}
+
 
 int
-aio_suspend( struct proc *p, struct aio_suspend_args *uap, int *retval )
+aio_suspend_nocancel(proc_t p, struct aio_suspend_nocancel_args *uap, int *retval )
 {
 	int					error;
 	int					i, count;
@@ -902,7 +916,7 @@ aio_suspend( struct proc *p, struct aio_suspend_args *uap, int *retval )
 			goto ExitThisRoutine;
 		}
 			
-		if ( ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000 ) {
+		if ( ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000 ) {
 			error = EINVAL;
 			goto ExitThisRoutine;
 		}
@@ -940,6 +954,7 @@ aio_suspend( struct proc *p, struct aio_suspend_args *uap, int *retval )
 	}
 	
 	/* check list of aio requests to see if any have completed */
+check_for_our_aiocbp:
 	AIO_LOCK;
 	for ( i = 0; i < uap->nent; i++ ) {
 		user_addr_t	aiocbp;  
@@ -975,9 +990,15 @@ aio_suspend( struct proc *p, struct aio_suspend_args *uap, int *retval )
 	error = thread_block( THREAD_CONTINUE_NULL );
 
 	if ( error == THREAD_AWAKENED ) {
-		/* got our wakeup call from aio_work_thread() */
-		*retval = 0;
-		error = 0;
+		/* 
+		 * got our wakeup call from aio_work_thread().
+		 * Since we can get a wakeup on this channel from another thread in the 
+		 * same process we head back up to make sure this is for the correct aiocbp.  
+		 * If it is the correct aiocbp we will return from where we do the check 
+		 * (see entryp->uaiocbp == aiocbp after check_for_our_aiocbp label)
+		 * else we will fall out and just sleep again.  
+		 */
+		goto check_for_our_aiocbp;
 	}
 	else if ( error == THREAD_TIMED_OUT ) {
 		/* our timeout expired */
@@ -1006,7 +1027,7 @@ ExitThisRoutine:
  */
 
 int
-aio_write( struct proc *p, struct aio_write_args *uap, int *retval )
+aio_write(proc_t p, struct aio_write_args *uap, int *retval )
 {
 	int			error;
 	
@@ -1036,7 +1057,7 @@ aio_write( struct proc *p, struct aio_write_args *uap, int *retval )
  */
 
 int
-lio_listio( struct proc *p, struct lio_listio_args *uap, int *retval )
+lio_listio(proc_t p, struct lio_listio_args *uap, int *retval )
 {
 	int							i;
 	int							call_result;
@@ -1442,7 +1463,7 @@ aio_delay_fsync_request( aio_workq_entry *entryp )
  */
 
 static int
-aio_queue_async_request( struct proc *procp, user_addr_t aiocbp, int kindOfIO )
+aio_queue_async_request(proc_t procp, user_addr_t aiocbp, int kindOfIO )
 {
 	aio_workq_entry		 	*entryp;
 	int						result;
@@ -1545,7 +1566,7 @@ error_exit:
  */
 
 static int
-lio_create_async_entry( struct proc *procp, user_addr_t aiocbp, 
+lio_create_async_entry(proc_t procp, user_addr_t aiocbp, 
 						 user_addr_t sigp, long group_tag,
 						 aio_workq_entry **entrypp )
 {
@@ -1681,7 +1702,7 @@ aio_mark_requests( aio_workq_entry *entryp )
  */
 
 static int
-lio_create_sync_entry( struct proc *procp, user_addr_t aiocbp, 
+lio_create_sync_entry(proc_t procp, user_addr_t aiocbp, 
 						long group_tag, aio_workq_entry **entrypp )
 {
 	aio_workq_entry		 		*entryp;
@@ -1850,7 +1871,7 @@ aio_validate( aio_workq_entry *entryp )
  */
 
 static int
-aio_get_process_count( struct proc *procp ) 
+aio_get_process_count(proc_t procp ) 
 {
 	aio_workq_entry		 		*entryp;
 	int							count;
@@ -2018,8 +2039,9 @@ aio_last_group_io( aio_workq_entry *entryp )
 static int
 do_aio_read( aio_workq_entry *entryp )
 {
-	struct fileproc 			*fp;
-	int						error;
+	struct fileproc		*fp;
+	int					error;
+	struct vfs_context	context;
 
 	if ( (error = fp_lookup(entryp->procp, entryp->aiocb.aio_fildes, &fp , 0)) )
 		return(error);
@@ -2027,18 +2049,20 @@ do_aio_read( aio_workq_entry *entryp )
 		fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
 		return(EBADF);
 	}
-	if ( fp != NULL ) {
-		error = dofileread( entryp->procp, fp, entryp->aiocb.aio_fildes, 
-							entryp->aiocb.aio_buf, 
-							entryp->aiocb.aio_nbytes,
-							entryp->aiocb.aio_offset, FOF_OFFSET, 
-							&entryp->returnval );
-		fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
-	}
-	else {
-		fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
-		error = EBADF;
-	}
+
+	/*
+	 * <rdar://4714366>
+	 * Needs vfs_context_t from vfs_context_create() in entryp!
+	 */
+	context.vc_thread = proc_thread(entryp->procp);	/* XXX */
+	context.vc_ucred = fp->f_fglob->fg_cred;
+
+	error = dofileread(&context, fp, 
+				entryp->aiocb.aio_buf, 
+				entryp->aiocb.aio_nbytes,
+				entryp->aiocb.aio_offset, FOF_OFFSET, 
+				&entryp->returnval);
+	fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
 			
 	return( error );
 	
@@ -2053,6 +2077,7 @@ do_aio_write( aio_workq_entry *entryp )
 {
 	struct fileproc 		*fp;
 	int						error;
+	struct vfs_context		context;
 
 	if ( (error = fp_lookup(entryp->procp, entryp->aiocb.aio_fildes, &fp , 0)) )
 		return(error);
@@ -2060,23 +2085,24 @@ do_aio_write( aio_workq_entry *entryp )
 		fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
 		return(EBADF);
 	}
-	if ( fp != NULL ) {
-		/* NB: tell dofilewrite the offset, and to use the proc cred */
-		error = dofilewrite( entryp->procp,
-				     fp,
-				     entryp->aiocb.aio_fildes,
-				     entryp->aiocb.aio_buf,
-				     entryp->aiocb.aio_nbytes,
-				     entryp->aiocb.aio_offset,
-				     FOF_OFFSET | FOF_PCRED,
-				     &entryp->returnval);
-		
-		fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
-	}
-	else {
-		fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
-		error = EBADF;
-	}
+
+	/*
+	 * <rdar://4714366>
+	 * Needs vfs_context_t from vfs_context_create() in entryp!
+	 */
+	context.vc_thread = proc_thread(entryp->procp);	/* XXX */
+	context.vc_ucred = fp->f_fglob->fg_cred;
+
+	/* NB: tell dofilewrite the offset, and to use the proc cred */
+	error = dofilewrite(&context,
+				fp,
+				entryp->aiocb.aio_buf,
+				entryp->aiocb.aio_nbytes,
+				entryp->aiocb.aio_offset,
+				FOF_OFFSET | FOF_PCRED,
+				&entryp->returnval);
+	
+	fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
 
 	return( error );
 
@@ -2090,7 +2116,7 @@ do_aio_write( aio_workq_entry *entryp )
  */
 
 static int
-aio_active_requests_for_process( struct proc *procp )
+aio_active_requests_for_process(proc_t procp )
 {
 				
 	return( procp->aio_active_count );
@@ -2122,7 +2148,7 @@ do_aio_fsync( aio_workq_entry *entryp )
 			entryp->returnval = -1;
 			return(error);
 		}
-		context.vc_proc = entryp->procp;
+		context.vc_thread = current_thread();
 		context.vc_ucred = fp->f_fglob->fg_cred;
 
 		error = VNOP_FSYNC( vp, MNT_WAIT, &context);
@@ -2147,7 +2173,7 @@ do_aio_fsync( aio_workq_entry *entryp )
  */
 
 static boolean_t
-is_already_queued( 	struct proc *procp, 
+is_already_queued(proc_t procp, 
 					user_addr_t aiocbp ) 
 {
 	aio_workq_entry		 	*entryp;

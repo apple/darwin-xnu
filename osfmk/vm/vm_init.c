@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -72,12 +78,15 @@
 
 #include <vm/vm_protos.h>
 
-#define ZONE_MAP_MIN (12 * 1024 * 1024) 
-/* Maximum Zone size is 1G */
-#define ZONE_MAP_MAX (1024 * 1024 * 1024) 
+#define ZONE_MAP_MIN CONFIG_ZONE_MAP_MIN
+
+/* Maximum zone size is 1.5G */
+#define ZONE_MAP_MAX (1024 * 1024 * 1536) 
 
 const vm_offset_t vm_min_kernel_address = VM_MIN_KERNEL_ADDRESS;
 const vm_offset_t vm_max_kernel_address = VM_MAX_KERNEL_ADDRESS;
+
+boolean_t vm_kernel_ready = FALSE;
 
 /*
  *	vm_mem_bootstrap initializes the virtual memory system.
@@ -96,17 +105,30 @@ vm_mem_bootstrap(void)
 	 *	From here on, all physical memory is accounted for,
 	 *	and we use only virtual addresses.
 	 */
+#define vm_mem_bootstrap_kprintf(x)
 
+	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling vm_page_bootstrap\n"));
 	vm_page_bootstrap(&start, &end);
 
 	/*
 	 *	Initialize other VM packages
 	 */
 
+	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling zone_bootstrap\n"));
 	zone_bootstrap();
+
+	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling vm_object_bootstrap\n"));
 	vm_object_bootstrap();
+
+	vm_kernel_ready = TRUE;
+
+	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling vm_map_int\n"));
 	vm_map_init();
+
+	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling kmem_init\n"));
 	kmem_init(start, end);
+
+	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling pmap_init\n"));
 	pmap_init();
 	
 	if (PE_parse_boot_arg("zsize", &zsizearg))
@@ -117,14 +139,31 @@ vm_mem_bootstrap(void)
 
 	if(zsize < ZONE_MAP_MIN) zsize = ZONE_MAP_MIN;	/* Clamp to min */
 	if(zsize > ZONE_MAP_MAX) zsize = ZONE_MAP_MAX;	/* Clamp to max */
+
+	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling zone_init\n"));
 	zone_init(zsize);						/* Allocate address space for zones */
 	
+	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling kalloc_init\n"));
 	kalloc_init();
+
+	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling vm_fault_init\n"));
 	vm_fault_init();
+
+	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling vm_page_module_init\n"));
 	vm_page_module_init();
+
+	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling memory_manager_default_init\n"));
 	memory_manager_default_init();
+
+	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling meory_object_control_bootstrap\n"));
 	memory_object_control_bootstrap();
+
+	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling device_pager_bootstrap\n"));
 	device_pager_bootstrap();
+
+	vm_paging_map_init();
+
+	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: done\n"));
 }
 
 void

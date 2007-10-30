@@ -4,7 +4,8 @@
 #  Standard Apple MacOS X Configurations:
 #  -------- ---- -------- ---------------
 #
-#  RELEASE = [ppc mach libkerncpp]
+#  RELEASE		= [ppc mach libkerncpp config_dtrace]
+#  DEVELOPMENT	= [ RELEASE ]
 #  PROFILE = [RELEASE profile]
 #  DEBUG = [ppc mach libkerncpp debug]
 #  RELEASE_TRACE = [ RELEASE kdebug ]

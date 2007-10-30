@@ -228,6 +228,26 @@ and name
 with a pointer to the
 .Vt icmp6_filter
 structure as the option value.
+.Ss "Non-privileged ICMPv6"
+.Pp
+.Tn ICMPv6
+sockets can be opened with the 
+.Dv SOCK_DGRAM
+socket type without requiring root privileges. The synopsis is the following:
+.Pp
+.Fn socket AF_INET6 SOCK_DGRAM IPPROTO_ICMP6
+.Pp
+This can only be used to send 
+.Tn ICMPv6
+echo requests to gauge the quality of the connectivity to a host, to receive 
+destination unreachable message for path MTU discovery, or to receveive 
+time exceeded message for traceroute. 
+.Pp
+A socket opened with superuser privileges can send any kind of 
+.Tn ICMPv6 
+message and can also use the 
+.Xr ip6 4
+options that require superuser privileges.
 .Sh SEE ALSO
 .Xr getsockopt 2 ,
 .Xr recv 2 ,

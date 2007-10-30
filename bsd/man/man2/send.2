@@ -38,18 +38,33 @@
 .Os BSD 4.2
 .Sh NAME
 .Nm send ,
-.Nm sendto ,
-.Nm sendmsg
+.Nm sendmsg ,
+.Nm sendto
 .Nd send a message from a socket
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
 .Fd #include <sys/socket.h>
 .Ft ssize_t
-.Fn send "int s" "const void *msg" "size_t len" "int flags"
+.Fo send
+.Fa "int socket"
+.Fa "const void *buffer"
+.Fa "size_t length"
+.Fa "int flags"
+.Fc
 .Ft ssize_t
-.Fn sendto "int s" "const void *msg" "size_t len" "int flags" "const struct sockaddr *to" "socklen_t tolen"
+.Fo sendmsg
+.Fa "int socket"
+.Fa "const struct msghdr *buffer"
+.Fa "int flags"
+.Fc
 .Ft ssize_t
-.Fn sendmsg "int s" "const struct msghdr *msg" "int flags"
+.Fo sendto
+.Fa "int socket"
+.Fa "const void *buffer"
+.Fa "size_t length"
+.Fa "int flags"
+.Fa "const struct sockaddr *dest_addr"
+.Fa "socklen_t dest_len"
+.Fc
 .Sh DESCRIPTION
 .Fn Send ,
 .Fn sendto ,
@@ -66,12 +81,12 @@ and
 may be used at any time.
 .Pp
 The address of the target is given by
-.Fa to
+.Fa dest_addr
 with 
-.Fa tolen
+.Fa dest_len
 specifying its size.
 The length of the message is given by
-.Fa len .
+.Fa length .
 If the message is too long to pass atomically through the
 underlying protocol, the error
 .Er EMSGSIZE
@@ -118,49 +133,147 @@ for a description of the
 .Fa msghdr
 structure.
 .Sh RETURN VALUES
-The call returns the number of characters sent, or -1
-if an error occurred.
+Upon successful completion,
+the number of bytes which were sent is returned.
+Otherwise, -1 is returned and the global variable
+.Va errno
+is set to indicate the error.
 .Sh ERRORS
-.Fn Send ,
-.Fn sendto ,
+The
+.Fn send ,
+.Fn sendmsg ,
 and
-.Fn sendmsg
-fail if:
+.Fn sendto
+system calls will fail if:
 .Bl -tag -width Er
+.\" ===========
+.It Bq Er EACCES
+The SO_BROADCAST option is not set on the socket
+and a broadcast address is given as the destination.
+.\" ===========
+.It Bq Er EAGAIN
+The socket is marked non-blocking
+and the requested operation would block.
+.\" ===========
 .It Bq Er EBADF
-An invalid descriptor was specified.
-.It Bq Er ENOTSOCK
-The argument
-.Fa s
-is not a socket.
+An invalid descriptor is specified.
+.\" ===========
+.It Bq Er ECONNRESET
+A connection is forcibly closed by a peer.
+.\" ===========
 .It Bq Er EFAULT
-An invalid user space address was specified for a parameter.
+An invalid user space address is specified for a parameter.
+.\" ===========
+.It Bq Er EHOSTUNREACH
+The destination address specifies an unreachable host.
+.\" ===========
+.It Bq Er EINTR
+A signal interrupts the system call
+before any data is transmitted.
+.\" ===========
 .It Bq Er EMSGSIZE
 The socket requires that message be sent atomically,
-and the size of the message to be sent made this impossible.
-.It Bq Er EAGAIN
-The socket is marked non-blocking and the requested operation
-would block.
+and the size of the message to be sent makes this impossible.
+.\" ===========
+.It Bq Er ENETDOWN
+The local network interface used to reach the destination is down.
+.\" ===========
+.It Bq Er ENETUNREACH
+No route to the network is present.
+.\" ===========
 .It Bq Er ENOBUFS
-The system was unable to allocate an internal buffer.
+The system is unable to allocate an internal buffer.
 The operation may succeed when buffers become available.
+.\" ===========
 .It Bq Er ENOBUFS
-The output queue for a network interface was full.
+The output queue for a network interface is full.
 This generally indicates that the interface has stopped sending,
 but may be caused by transient congestion.
-.It Bq Er EACCES
-The SO_BROADCAST option is not set on the socket, and a broadcast address
-was given as the destination.
-.It Bq Er EHOSTUNREACH
-The destination address specified an unreachable host.
+.\" ===========
+.It Bq Er ENOTSOCK
+The argument
+.Fa socket
+is not a socket.
+.\" ===========
+.It Bq Er EOPNOTSUPP
+.Fa socket
+does not support (some of) the option(s) specified in
+.Fa flags . 
+.\" ===========
+.It Bq Er EPIPE
+The socket is shut down for writing
+or the socket is connection-mode and is no longer connected.
+In the latter case, and if the socket is of type SOCK_STREAM,
+the SIGPIPE signal is generated to the calling thread.
 .El
+.Pp
+The
+.Fn sendmsg
+and
+.Fn sendto
+system calls will fail if:
+.Bl -tag -width Er
+.\" ===========
+.It Bq Er EAFNOSUPPORT
+Addresses in the specified address family cannot be used
+with this socket.
+.\" ===========
+.It Bq Er EDESTADDRREQ
+The socket is not connection-mode and does not have its peer address set,
+and no destination address is specified.
+.\" ===========
+.It Bq Er EISCONN
+A destination address was specified and the socket is already connected.
+.\" ===========
+.It Bq Er ENOENT
+A component of the pathname does not name an existing file
+or the path name is an empty string.
+.\" ===========
+.It Bq Er ENOMEM
+Insufficient memory is available to fulfill the request.
+.\" ===========
+.It Bq Er ENOTCONN
+The socket is connection-mode, but is not connected.
+.\" ===========
+.It Bq Er ENOTDIR
+A component of the path prefix of the pathname in the socket address
+is not a directory.
+.El
+.Pp
+The
+.Fn send
+system call will fail if:
+.Bl -tag -width Er
+.\" ===========
+.It Bq Er EDESTADDRREQ
+The socket is not connection-mode and no peer address is set.
+.\" ===========
+.It Bq Er ENOTCONN
+The socket is not connected or otherwise has not had the peer pre-specified.
+.El
+.Pp
+The
+.Fn sendmsg
+system call will fail if:
+.Bl -tag -width Er
+.\" ===========
+.It Bq Er EINVAL
+The sum of the iov_len values overflows an ssize_t.
+.El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/socket.h>
+.Pp
+The include file
+.In sys/types.h is necessary.
 .Sh SEE ALSO
 .Xr fcntl 2 ,
+.Xr getsockopt 2 ,
 .Xr recv 2 ,
 .Xr select 2 ,
-.Xr getsockopt 2 ,
 .Xr socket 2 ,
-.Xr write 2
+.Xr write 2 ,
+.Xr compat 5
 .Sh HISTORY
 The
 .Fn send

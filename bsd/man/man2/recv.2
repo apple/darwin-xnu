@@ -1,5 +1,3 @@
-.\"	$NetBSD: recv.2,v 1.6 1995/02/27 12:36:08 cgd Exp $
-.\"
 .\" Copyright (c) 1983, 1990, 1991, 1993
 .\"	The Regents of the University of California.  All rights reserved.
 .\"
@@ -33,58 +31,82 @@
 .\"
 .\"     @(#)recv.2	8.3 (Berkeley) 2/21/94
 .\"
-.Dd February 21, 1994
+.Dd May 15, 2006
 .Dt RECV 2
-.Os BSD 4.3r
+.Os
 .Sh NAME
 .Nm recv ,
 .Nm recvfrom ,
 .Nm recvmsg
 .Nd receive a message from a socket
+.Sh LIBRARY
+.Lb libc
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
-.Fd #include <sys/socket.h>
+.In sys/socket.h
 .Ft ssize_t
-.Fn recv "int s" "void *buf" "size_t len" "int flags"
+.Fo recv
+.Fa "int socket"
+.Fa "void *buffer"
+.Fa "size_t length"
+.Fa "int flags"
+.Fc
 .Ft ssize_t
-.Fn recvfrom "int s" "void *buf" "size_t len" "int flags" "struct sockaddr *from" "socklen_t *fromlen"
+.Fo recvfrom
+.Fa "int socket"
+.Fa "void *restrict buffer"
+.Fa "size_t length"
+.Fa "int flags"
+.Fa "struct sockaddr *restrict address"
+.Fa "socklen_t *restrict address_len"
+.Fc
 .Ft ssize_t
-.Fn recvmsg "int s" "struct msghdr *msg" "int flags"
+.Fo recvmsg
+.Fa "int socket"
+.Fa "struct msghdr *message"
+.Fa "int flags"
+.Fc
 .Sh DESCRIPTION
-.Fn Recvfrom
+The
+.Fn recvfrom
 and
 .Fn recvmsg
+system calls
 are used to receive messages from a socket,
 and may be used to receive data on a socket whether or not
 it is connection-oriented.
 .Pp
 If
-.Fa from
-is non-nil, and the socket is not connection-oriented,
+.Fa address
+is not a null pointer
+and the socket is not connection-oriented,
 the source address of the message is filled in.
-.Fa Fromlen
-is a value-result parameter, initialized to the size of
+The
+.Fa address_len
+argument
+is a value-result argument, initialized to the size of
 the buffer associated with
-.Fa from ,
+.Fa address ,
 and modified on return to indicate the actual size of the
 address stored there.
 .Pp
-The 
+The
 .Fn recv
-call is normally used only on a 
+function is normally used only on a
 .Em connected
 socket (see
 .Xr connect 2 )
 and is identical to
 .Fn recvfrom
-with a nil
-.Fa from
-parameter.
+with a
+null pointer passed as its
+.Fa address
+argument.
 As it is redundant, it may not be supported in future releases.
 .Pp
-On successful completion, all three routines return the number of
-message bytes read.  If a message is too long to fit in the supplied
-buffer, excess bytes may be discarded depending on the type of socket
+All three routines return the length of the message on successful
+completion.
+If a message is too long to fit in the supplied buffer,
+excess bytes may be discarded depending on the type of socket
 the message is received from (see
 .Xr socket 2 ) .
 .Pp
@@ -109,11 +131,16 @@ described in
 .Pp
 The
 .Xr select 2
-call may be used to determine when more data arrive.
+system call may be used to determine when more data arrive.
+.Pp
+If no messages are available to be received and the peer has
+performed an orderly shutdown, the value 0 is returned.
 .Pp
 The
 .Fa flags
-argument to a recv call is formed by 
+argument to a
+.Fn recv
+function is formed by
 .Em or Ap ing
 one or more of the values:
 .Bl -column MSG_WAITALL -offset indent
@@ -121,17 +148,22 @@ one or more of the values:
 .It Dv MSG_PEEK Ta peek at incoming message
 .It Dv MSG_WAITALL Ta wait for full request or error
 .El
+.Pp
 The
 .Dv MSG_OOB
 flag requests receipt of out-of-band data
 that would not be received in the normal data stream.
 Some protocols place expedited data at the head of the normal
 data queue, and thus this flag cannot be used with such protocols.
-The MSG_PEEK flag causes the receive operation to return data
+The
+.Dv MSG_PEEK
+flag causes the receive operation to return data
 from the beginning of the receive queue without removing that
 data from the queue.
 Thus, a subsequent receive call will return the same data.
-The MSG_WAITALL flag requests that the operation block until
+The
+.Dv MSG_WAITALL
+flag requests that the operation block until
 the full request is satisfied.
 However, the call may still return less data than requested
 if a signal is caught, an error or disconnect occurs,
@@ -139,21 +171,21 @@ or the next data to be received is of a different type than that returned.
 .Pp
 The
 .Fn recvmsg
-call uses a 
+system call uses a
 .Fa msghdr
-structure to minimize the number of directly supplied parameters.
+structure to minimize the number of directly supplied arguments.
 This structure has the following form, as defined in
-.Ao Pa sys/socket.h Ac :
+.In sys/socket.h :
 .Pp
 .Bd -literal
 struct msghdr {
-	caddr_t		msg_name;	/* optional address */
-	socklen_t	msg_namelen;	/* size of address */
-	struct		iovec *msg_iov;	/* scatter/gather array */
-	u_int		msg_iovlen;	/* # elements in msg_iov */
-	caddr_t		msg_control;	/* ancillary data, see below */
+	void		*msg_name;      /* optional address */
+	socklen_t	msg_namelen;    /* size of address */
+	struct		iovec *msg_iov; /* scatter/gather array */
+	int		msg_iovlen;     /* # elements in msg_iov */
+	void		*msg_control;   /* ancillary data, see below */
 	socklen_t	msg_controllen; /* ancillary data buffer len */
-	int			msg_flags;	/* flags on received message */
+	int		msg_flags;      /* flags on received message */
 };
 .Ed
 .Pp
@@ -161,15 +193,19 @@ Here
 .Fa msg_name
 and
 .Fa msg_namelen
-specify the source address if the socket is unconnected;
+specify the destination address if the socket is unconnected;
 .Fa msg_name
 may be given as a null pointer if no names are desired or required.
-.Fa Msg_iov
+The
+.Fa msg_iov
 and
 .Fa msg_iovlen
+arguments
 describe scatter gather locations, as discussed in
 .Xr read 2 .
-.Fa Msg_control ,
+The
+.Fa msg_control
+argument,
 which has length
 .Fa msg_controllen ,
 points to a buffer for other protocol control related messages
@@ -184,11 +220,14 @@ struct cmsghdr {
 	u_char	cmsg_data[]; */
 };
 .Ed
-As an example, one could use this to learn of changes in the data-stream
-in XNS/SPP, or in ISO, to obtain user-connection-request data by requesting
-a recvmsg with no data buffer provided immediately after an
+.Pp
+As an example, one could use this to learn of changes
+in the data-stream in XNS/SPP,
+or in ISO, to obtain user-connection-request data by requesting a
+.Fn recvmsg
+with no data buffer provided immediately after an
 .Fn accept
-call.
+system call.
 .Pp
 Open file descriptors are now passed as ancillary data for
 .Dv AF_UNIX
@@ -210,55 +249,102 @@ the data returned completed a record (generally used with sockets of type
 .Dv SOCK_SEQPACKET ) .
 .Dv MSG_TRUNC
 indicates that
-the trailing portion of a datagram was discarded because the datagram
-was larger than the buffer supplied.
+the trailing portion of a datagram was discarded
+because the datagram was larger than the buffer supplied.
 .Dv MSG_CTRUNC
-indicates that some
-control data were discarded due to lack of space in the buffer
-for ancillary data.
+indicates that some control data were discarded
+due to lack of space in the buffer for ancillary data.
 .Dv MSG_OOB
 is returned to indicate that expedited or out-of-band data were received.
-.Pp
 .Sh RETURN VALUES
 These calls return the number of bytes received, or -1
 if an error occurred.
+.Pp
+For TCP sockets, the return value 0 means the peer has closed its 
+half side of the connection.
 .Sh ERRORS
 The calls fail if:
 .Bl -tag -width Er
-.It Bq Er EBADF
-The argument
-.Fa s
-is an invalid descriptor.
-.It Bq Er ENOTCONN
-The socket is associated with a connection-oriented protocol
-and has not been connected (see
-.Xr connect 2
-and
-.Xr accept 2 ).
-.It Bq Er ENOTSOCK
-The argument
-.Fa s
-does not refer to a socket.
+.\" ===========
 .It Bq Er EAGAIN
 The socket is marked non-blocking, and the receive operation
 would block, or
 a receive timeout had been set,
 and the timeout expired before data were received.
-.It Bq Er EINTR
-The receive was interrupted by delivery of a signal before
-any data were available.
+.\" ===========
+.It Bq Er EBADF
+The argument
+.Fa socket
+is an invalid descriptor.
+.\" ===========
+.It Bq Er ECONNRESET
+The connection is closed by the peer
+during a receive attempt on a socket.
+.\" ===========
 .It Bq Er EFAULT
 The receive buffer pointer(s) point outside the process's
 address space.
+.\" ===========
+.It Bq Er EINTR
+The receive was interrupted by delivery of a signal before
+any data were available.
+.\" ===========
+.It Bq Er EINVAL
+MSG_OOB is set, but no out-of-band data is available.
+.\" ===========
+.It Bq Er ENOBUFS
+An attempt to allocate a memory buffer fails.
+.\" ===========
+.It Bq Er ENOTCONN
+The socket is associated with a connection-oriented protocol
+and has not been connected (see
+.Xr connect 2
+and
+.Xr accept 2 ) .
+.\" ===========
+.It Bq Er ENOTSOCK
+The argument
+.Fa socket
+does not refer to a socket.
+.\" ===========
+.It Bq Er EOPNOTSUPP
+The type and/or protocol of
+.Fa socket
+do not support the option(s) specified in
+.Fa flags . 
+.\" ===========
+.It Bq Er ETIMEDOUT
+The connection timed out.
+.El
+.Pp
+The
+.Fn recvfrom
+call may also fail if:
+.Bl -tag -width Er
+.\" ===========
+.It Bq Er EINVAL
+The total of the iov_len values overflows a ssize_t.
+.El
+.Pp
+The
+.Fn recvmsg
+call may also fail if:
+.Bl -tag -width Er
+.\" ===========
+.It Bq Er EMSGSIZE
+The requested message size is invalid.
+.\" ===========
+.It Bq Er ENOMEM
+Insufficient memory is available.
 .El
 .Sh SEE ALSO
 .Xr fcntl 2 ,
+.Xr getsockopt 2 ,
 .Xr read 2 ,
 .Xr select 2 ,
-.Xr getsockopt 2 ,
 .Xr socket 2
 .Sh HISTORY
 The
 .Fn recv
-function call appeared in
+function appeared in
 .Bx 4.2 .

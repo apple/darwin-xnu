@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2002-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -51,13 +57,7 @@ static int  hfs_filedone(struct vnode *vp, vfs_context_t context);
 
 static void  hfs_reclaim_cnode(struct cnode *);
 
-static int  hfs_valid_cnode(struct hfsmount *, struct vnode *, struct componentname *, cnid_t);
-
 static int hfs_isordered(struct cnode *, struct cnode *);
-
-int hfs_vnop_inactive(struct vnop_inactive_args *);
-
-int hfs_vnop_reclaim(struct vnop_reclaim_args *);
 
 
 /*
@@ -98,33 +98,38 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
 		return (0);
 	}
 
-	if ((v_type == VREG) &&
-	    (ISSET(cp->c_flag, C_DELETED) || VTOF(vp)->ff_blocks)) {
+	if ((v_type == VREG || v_type == VLNK)) {
 		hfs_lock_truncate(cp, TRUE);
 		took_trunc_lock = 1;
 	}
 
+	(void) hfs_lock(cp, HFS_FORCE_LOCK);
+
 	/*
-	 * We do the ubc_setsize before we take the cnode
-	 * lock and before the hfs_truncate (since we'll
-	 * be inside a transaction).
+	 * We should lock cnode before checking the flags in the 
+	 * condition below and should unlock the cnode before calling 
+	 * ubc_setsize() as cluster code can call other HFS vnops which
+	 * will try to acquire the same cnode lock and cause deadlock.
 	 */
 	if ((v_type == VREG || v_type == VLNK) &&
 	    (cp->c_flag & C_DELETED) &&
 	    (VTOF(vp)->ff_blocks != 0)) {
+	    	hfs_unlock(cp); 
 		ubc_setsize(vp, 0);
+		(void) hfs_lock(cp, HFS_FORCE_LOCK);
 	}
-
-	(void) hfs_lock(cp, HFS_FORCE_LOCK);
 
 	if (v_type == VREG && !ISSET(cp->c_flag, C_DELETED) && VTOF(vp)->ff_blocks) {
 		hfs_filedone(vp, ap->a_context);
 	}
 	/* 
-	 * Remove any directory hints
+	 * Remove any directory hints or cached origins
 	 */
-	if (v_type == VDIR)
+	if (v_type == VDIR) {
 		hfs_reldirhints(cp, 0);
+		if (cp->c_flag & C_HARDLINK)
+			hfs_relorigins(cp);
+	}
 
 	if (cp->c_datafork)
 		++forkcount;
@@ -134,22 +139,6 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
 	/* If needed, get rid of any fork's data for a deleted file */
 	if ((v_type == VREG || v_type == VLNK) && (cp->c_flag & C_DELETED)) {
 		if (VTOF(vp)->ff_blocks != 0) {
-		    // start the transaction out here so that
-		    // the truncate and the removal of the file
-		    // are all in one transaction.  otherwise
-		    // because this cnode is marked for deletion
-		    // the truncate won't cause the catalog entry
-		    // to get updated which means that we could
-		    // free blocks but still keep a reference to
-		    // them in the catalog entry and then double
-		    // free them later.
-		    //
-//		    if (hfs_start_transaction(hfsmp) != 0) {
-//			error = EINVAL;
-//			goto out;
-//		    }
-//		    started_tr = 1;
-		    
 			/*
 			 * Since we're already inside a transaction,
 			 * tell hfs_truncate to skip the ubc_setsize.
@@ -160,6 +149,37 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
 			truncated = 1;
 		}
 		recycle = 1;
+
+		/*
+		 * Check if there's any resource fork blocks that need to
+		 * be reclaimed.  This covers the case where there is a
+		 * resource fork but its not in core.
+		 */
+		if ((cp->c_blocks > 0) && (forkcount == 1) && (vp != cp->c_rsrc_vp)) {
+			struct vnode *rvp = NULLVP;
+
+			error = hfs_vgetrsrc(hfsmp, vp, &rvp, FALSE);
+			if (error)
+				goto out;
+			/*
+			 * Defer the vnode_put and ubc_setsize on rvp until hfs_unlock().
+			 */
+			cp->c_flag |= C_NEED_RVNODE_PUT | C_NEED_RSRC_SETSIZE;
+			error = hfs_truncate(rvp, (off_t)0, IO_NDELAY, 1, ap->a_context);
+			if (error)
+				goto out;
+			vnode_recycle(rvp);  /* all done with this vnode */
+		}
+	}
+
+	// If needed, get rid of any xattrs that this file may have.
+	// Note that this must happen outside of any other transactions
+	// because it starts/ends its own transactions and grabs its
+	// own locks.  This is to prevent a file with a lot of attributes
+	// from creating a transaction that is too large (which panics).
+	//
+	if ((cp->c_attr.ca_recflags & kHFSHasAttributesMask) != 0 && (cp->c_flag & C_DELETED)) {
+		hfs_removeallattr(hfsmp, cp->c_fileid);
 	}
 
 	/*
@@ -171,9 +191,13 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
 		 * Mark cnode in transit so that no one can get this 
 		 * cnode from cnode hash.
 		 */
-	        hfs_chash_mark_in_transit(cp);
+	        // hfs_chash_mark_in_transit(cp);
+	        // XXXdbg - remove the cnode from the hash table since it's deleted
+	        //          otherwise someone could go to sleep on the cnode and not
+	        //          be woken up until this vnode gets recycled which could be
+	        //          a very long time...
+		hfs_chashremove(cp);
 
-		cp->c_flag &= ~C_DELETED;
 		cp->c_flag |= C_NOEXISTS;   // XXXdbg
 		cp->c_rdev = 0;
 
@@ -219,14 +243,12 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
 
   		/* Update HFS Private Data dir */
 		if (error == 0) {
-			hfsmp->hfs_privdir_attr.ca_entries--;
-			(void)cat_update(hfsmp, &hfsmp->hfs_privdir_desc,
-				&hfsmp->hfs_privdir_attr, NULL, NULL);
-		}
-
-		if (error == 0) {
-			/* Delete any attributes, ignore errors */
-			(void) hfs_removeallattr(hfsmp, cp->c_fileid);
+			hfsmp->hfs_private_attr[FILE_HARDLINKS].ca_entries--;
+			if (vnode_isdir(vp)) {
+				DEC_FOLDERCOUNT(hfsmp, hfsmp->hfs_private_attr[FILE_HARDLINKS]);
+			}
+			(void)cat_update(hfsmp, &hfsmp->hfs_private_desc[FILE_HARDLINKS],
+				&hfsmp->hfs_private_attr[FILE_HARDLINKS], NULL, NULL);
 		}
 
 		hfs_systemfile_unlock(hfsmp, lockflags);
@@ -235,16 +257,17 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
 			goto out;
 
 #if QUOTA
-		(void)hfs_chkiq(cp, -1, NOCRED, 0);
+		if (hfsmp->hfs_flags & HFS_QUOTAS)
+			(void)hfs_chkiq(cp, -1, NOCRED, 0);
 #endif /* QUOTA */
 
 		cp->c_mode = 0;
-		cp->c_flag |= C_NOEXISTS;
+		cp->c_flag &= ~C_DELETED;
 		cp->c_touch_chgtime = TRUE;
 		cp->c_touch_modtime = TRUE;
 
 		if (error == 0)
- 			hfs_volupdate(hfsmp, VOL_RMFILE, 0);
+			hfs_volupdate(hfsmp, (v_type == VDIR) ? VOL_RMDIR : VOL_RMFILE, 0);
 	}
 
 	if ((cp->c_flag & C_MODIFIED) ||
@@ -264,7 +287,7 @@ out:
 	hfs_unlock(cp);
 
 	if (took_trunc_lock)
-		hfs_unlock_truncate(cp);
+	    hfs_unlock_truncate(cp, TRUE);
 
 	/*
 	 * If we are done with the vnode, reclaim it
@@ -368,9 +391,11 @@ hfs_vnop_reclaim(struct vnop_reclaim_args *ap)
 	/*
 	 * Keep track of an inactive hot file.
 	 */
-	if (!vnode_isdir(vp) && !vnode_issystem(vp))
+	if (!vnode_isdir(vp) &&
+	    !vnode_issystem(vp) &&
+	    !(cp->c_flag & (C_DELETED | C_NOEXISTS)) ) {
   		(void) hfs_addhotfile(vp);
-
+	}
 	vnode_removefsref(vp);
 
 	/*
@@ -432,7 +457,9 @@ hfs_vnop_reclaim(struct vnop_reclaim_args *ap)
 
 extern int (**hfs_vnodeop_p) (void *);
 extern int (**hfs_specop_p)  (void *);
+#if FIFO
 extern int (**hfs_fifoop_p)  (void *);
+#endif
 
 /*
  * hfs_getnewvnode - get new default vnode
@@ -446,7 +473,7 @@ hfs_getnewvnode(
 	struct vnode *dvp,
 	struct componentname *cnp,
 	struct cat_desc *descp,
-	int wantrsrc,
+	int flags,
 	struct cat_attr *attrp,
 	struct cat_fork *forkp,
 	struct vnode **vpp)
@@ -457,11 +484,14 @@ hfs_getnewvnode(
 	struct vnode *tvp = NULLVP;
 	struct cnode *cp = NULL;
 	struct filefork *fp = NULL;
-	int i;
 	int retval;
 	int issystemfile;
+	int wantrsrc;
 	struct vnode_fsparam vfsp;
 	enum vtype vtype;
+#if QUOTA
+	int i;
+#endif /* QUOTA */
 
 	if (attrp->ca_fileid == 0) {
 		*vpp = NULL;
@@ -473,15 +503,35 @@ hfs_getnewvnode(
 		*vpp = NULL;
 		return (ENOTSUP);
 	}
-#endif
+#endif /* !FIFO */
 	vtype = IFTOVT(attrp->ca_mode);
 	issystemfile = (descp->cd_flags & CD_ISMETA) && (vtype == VREG);
+	wantrsrc = flags & GNV_WANTRSRC;
+
+#ifdef HFS_CHECK_LOCK_ORDER
+	/*
+	 * The only case were its permissible to hold the parent cnode
+	 * lock is during a create operation (hfs_makenode) or when
+	 * we don't need the cnode lock (GNV_SKIPLOCK).
+	 */
+	if ((dvp != NULL) &&
+	    (flags & (GNV_CREATE | GNV_SKIPLOCK)) == 0 &&
+	    VTOC(dvp)->c_lockowner == current_thread()) {
+		panic("hfs_getnewvnode: unexpected hold of parent cnode %p", VTOC(dvp));
+	}
+#endif /* HFS_CHECK_LOCK_ORDER */
 
 	/*
 	 * Get a cnode (new or existing)
-	 * skip getting the cnode lock if we are getting resource fork (wantrsrc == 2)
 	 */
-	cp = hfs_chash_getcnode(hfsmp->hfs_raw_dev, attrp->ca_fileid, vpp, wantrsrc, (wantrsrc == 2));
+	cp = hfs_chash_getcnode(hfsmp->hfs_raw_dev, attrp->ca_fileid, vpp, wantrsrc, (flags & GNV_SKIPLOCK));
+
+	/*
+	 * If the id is no longer valid for lookups we'll get back a NULL cp.
+	 */
+	if (cp == NULL) {
+		return (ENOENT);
+	}
 
 	/* Hardlinks may need an updated catalog descriptor */
 	if ((cp->c_flag & C_HARDLINK) && descp->cd_nameptr && descp->cd_namelen > 0) {
@@ -498,7 +548,8 @@ hfs_getnewvnode(
 		lck_rw_init(&cp->c_truncatelock, hfs_rwlock_group, hfs_lock_attr);
 
 		/* Make sure its still valid (ie exists on disk). */
-		if (!hfs_valid_cnode(hfsmp, dvp, (wantrsrc ? NULL : cnp), cp->c_fileid)) {
+		if (!(flags & GNV_CREATE) &&
+		    !hfs_valid_cnode(hfsmp, dvp, (wantrsrc ? NULL : cnp), cp->c_fileid)) {
 			hfs_chash_abort(cp);
 			hfs_reclaim_cnode(cp);
 			*vpp = NULL;
@@ -513,23 +564,48 @@ hfs_getnewvnode(
 		descp->cd_flags &= ~CD_HASBUF;
 
 		/* Tag hardlinks */
-		if (IFTOVT(cp->c_mode) == VREG &&
-		    (descp->cd_cnid != attrp->ca_fileid)) {
+		if ((vtype == VREG || vtype == VDIR) &&
+		    ((descp->cd_cnid != attrp->ca_fileid) ||
+		     (attrp->ca_recflags & kHFSHasLinkChainMask))) {
 			cp->c_flag |= C_HARDLINK;
 		}
+		/*
+		 * Fix-up dir link counts.
+		 *
+		 * Earlier versions of Leopard used ca_linkcount for posix
+		 * nlink support (effectively the sub-directory count + 2).
+		 * That is now accomplished using the ca_dircount field with
+		 * the corresponding kHFSHasFolderCountMask flag.
+		 *
+		 * For directories the ca_linkcount is the true link count,
+		 * tracking the number of actual hardlinks to a directory.
+		 *
+		 * We only do this if the mount has HFS_FOLDERCOUNT set;
+		 * at the moment, we only set that for HFSX volumes.
+		 */
+		if ((hfsmp->hfs_flags & HFS_FOLDERCOUNT) && 
+		    (vtype == VDIR) &&
+		    !(attrp->ca_recflags & kHFSHasFolderCountMask) &&
+		    (cp->c_attr.ca_linkcount > 1)) {
+			if (cp->c_attr.ca_entries == 0)
+				cp->c_attr.ca_dircount = 0;
+			else
+				cp->c_attr.ca_dircount = cp->c_attr.ca_linkcount - 2;
 
-		/* Take one dev reference for each non-directory cnode */
-		if (IFTOVT(cp->c_mode) != VDIR) {
-			cp->c_devvp = hfsmp->hfs_devvp;
-			vnode_ref(cp->c_devvp);
+			cp->c_attr.ca_linkcount = 1;
+			cp->c_attr.ca_recflags |= kHFSHasFolderCountMask;
+			if ( !(hfsmp->hfs_flags & HFS_READ_ONLY) )
+				cp->c_flag |= C_MODIFIED;
 		}
 #if QUOTA
-		for (i = 0; i < MAXQUOTAS; i++)
-			cp->c_dquot[i] = NODQUOT;
+		if (hfsmp->hfs_flags & HFS_QUOTAS) {
+			for (i = 0; i < MAXQUOTAS; i++)
+				cp->c_dquot[i] = NODQUOT;
+		}
 #endif /* QUOTA */
 	}
 
-	if (IFTOVT(cp->c_mode) == VDIR) {
+	if (vtype == VDIR) {
 	        if (cp->c_vp != NULL)
 		        panic("hfs_getnewvnode: orphaned vnode (data)");
 		cvpp = &cp->c_vp;
@@ -597,12 +673,20 @@ hfs_getnewvnode(
 	vfsp.vnfs_mp = mp;
 	vfsp.vnfs_vtype = vtype;
 	vfsp.vnfs_str = "hfs";
-	vfsp.vnfs_dvp = dvp;
+	if ((cp->c_flag & C_HARDLINK) && (vtype == VDIR)) {
+		vfsp.vnfs_dvp = NULL;  /* no parent for me! */
+		vfsp.vnfs_cnp = NULL;  /* no name for me! */
+	} else {
+		vfsp.vnfs_dvp = dvp;
+		vfsp.vnfs_cnp = cnp;
+	}
 	vfsp.vnfs_fsnode = cp;
-	vfsp.vnfs_cnp = cnp;
+#if FIFO
 	if (vtype == VFIFO )
 		vfsp.vnfs_vops = hfs_fifoop_p;
-	else if (vtype == VBLK || vtype == VCHR)
+	else
+#endif
+	if (vtype == VBLK || vtype == VCHR)
 		vfsp.vnfs_vops = hfs_specop_p;
 	else
 		vfsp.vnfs_vops = hfs_vnodeop_p;
@@ -617,10 +701,9 @@ hfs_getnewvnode(
 	else
 		vfsp.vnfs_filesize = 0;
 
-	if (dvp && cnp && (cnp->cn_flags & MAKEENTRY))
-		vfsp.vnfs_flags = 0;
-	else
-		vfsp.vnfs_flags = VNFS_NOCACHE;
+	vfsp.vnfs_flags = VNFS_ADDFSREF;
+	if (dvp == NULLVP || cnp == NULL || !(cnp->cn_flags & MAKEENTRY))
+		vfsp.vnfs_flags |= VNFS_NOCACHE;
 
 	/* Tag system files */
 	vfsp.vnfs_marksystem = issystemfile;
@@ -655,17 +738,18 @@ hfs_getnewvnode(
 		return (retval);
 	}
 	vp = *cvpp;
-	vnode_addfsref(vp);
 	vnode_settag(vp, VT_HFS);
-	if (cp->c_flag & C_HARDLINK)
-		vnode_set_hard_link(vp);
+	if (cp->c_flag & C_HARDLINK) {
+		vnode_setmultipath(vp);
+	}
 	hfs_chashwakeup(cp, H_ALLOC | H_ATTACH);
 
 	/*
 	 * Stop tracking an active hot file.
 	 */
-	if (!vnode_isdir(vp) && !vnode_issystem(vp))
+	if (!(flags & GNV_CREATE) && (vtype != VDIR) && !issystemfile) {
 		(void) hfs_removehotfile(vp);
+	}
 
 	*vpp = vp;
 	return (0);
@@ -686,20 +770,13 @@ hfs_reclaim_cnode(struct cnode *cp)
 	}
 #endif /* QUOTA */
 
-	if (cp->c_devvp) {
-		struct vnode *tmp_vp = cp->c_devvp;
-
-		cp->c_devvp = NULL;
-		vnode_rele(tmp_vp);
-	}
-
 	/* 
 	 * If the descriptor has a name then release it
 	 */
-	if (cp->c_desc.cd_flags & CD_HASBUF) {
-		char *nameptr;
+	if ((cp->c_desc.cd_flags & CD_HASBUF) && (cp->c_desc.cd_nameptr != 0)) {
+		const char *nameptr;
 
-		nameptr = cp->c_desc.cd_nameptr;
+		nameptr = (const char *) cp->c_desc.cd_nameptr;
 		cp->c_desc.cd_nameptr = 0;
 		cp->c_desc.cd_flags &= ~CD_HASBUF;
 		cp->c_desc.cd_namelen = 0;
@@ -713,7 +790,8 @@ hfs_reclaim_cnode(struct cnode *cp)
 }
 
 
-static int
+__private_extern__
+int
 hfs_valid_cnode(struct hfsmount *hfsmp, struct vnode *dvp, struct componentname *cnp, cnid_t cnid)
 {
 	struct cat_attr attr;
@@ -731,9 +809,9 @@ hfs_valid_cnode(struct hfsmount *hfsmp, struct vnode *dvp, struct componentname 
 
 	if (dvp && cnp) {
 		bzero(&cndesc, sizeof(cndesc));
-		cndesc.cd_nameptr = cnp->cn_nameptr;
+		cndesc.cd_nameptr = (const u_int8_t *)cnp->cn_nameptr;
 		cndesc.cd_namelen = cnp->cn_namelen;
-		cndesc.cd_parentcnid = VTOC(dvp)->c_cnid;
+		cndesc.cd_parentcnid = VTOC(dvp)->c_fileid;
 		cndesc.cd_hint = VTOC(dvp)->c_childhint;
 
 		if ((cat_lookup(hfsmp, &cndesc, 0, NULL, &attr, NULL, NULL) == 0) &&
@@ -741,7 +819,7 @@ hfs_valid_cnode(struct hfsmount *hfsmp, struct vnode *dvp, struct componentname 
 			stillvalid = 1;
 		}
 	} else {
-		if (cat_idlookup(hfsmp, cnid, NULL, NULL, NULL) == 0) {
+		if (cat_idlookup(hfsmp, cnid, 0, NULL, NULL, NULL) == 0) {
 			stillvalid = 1;
 		}
 	}
@@ -761,11 +839,29 @@ __private_extern__
 void
 hfs_touchtimes(struct hfsmount *hfsmp, struct cnode* cp)
 {
+	/* don't modify times if volume is read-only */
+	if (hfsmp->hfs_flags & HFS_READ_ONLY) {
+		cp->c_touch_acctime = FALSE;
+		cp->c_touch_chgtime = FALSE;
+		cp->c_touch_modtime = FALSE;
+	}
+	else if (hfsmp->hfs_flags & HFS_STANDARD) {
 	/* HFS Standard doesn't support access times */
-	if (hfsmp->hfs_flags & HFS_STANDARD) {
 		cp->c_touch_acctime = FALSE;
 	}
 
+	/*
+	 * Skip access time updates if:
+	 *	. MNT_NOATIME is set
+	 *	. a file system freeze is in progress
+	 *	. a file system resize is in progress
+	 */
+	if (cp->c_touch_acctime) {
+		if ((vfs_flags(hfsmp->hfs_mp) & MNT_NOATIME) ||
+		    (hfsmp->hfs_freezing_proc != NULL) ||
+		    (hfsmp->hfs_flags & HFS_RESIZE_IN_PROGRESS))
+			cp->c_touch_acctime = FALSE;
+	}
 	if (cp->c_touch_acctime || cp->c_touch_chgtime || cp->c_touch_modtime) {
 		struct timeval tv;
 		int touchvol = 0;
@@ -808,7 +904,7 @@ hfs_touchtimes(struct hfsmount *hfsmp, struct cnode* cp)
 
 		/* Touch the volume modtime if needed */
 		if (touchvol) {
-			HFSTOVCB(hfsmp)->vcbFlags |= 0xFF00;
+			MarkVCBDirty(hfsmp);
 			HFSTOVCB(hfsmp)->vcbLsMod = tv.tv_sec;
 		}
 	}
@@ -823,35 +919,68 @@ hfs_lock(struct cnode *cp, enum hfslocktype locktype)
 {
 	void * thread = current_thread();
 
-	/* System files need to keep track of owner */
-	if ((cp->c_fileid < kHFSFirstUserCatalogNodeID) &&
-	    (cp->c_fileid > kHFSRootFolderID) &&
-	    (locktype != HFS_SHARED_LOCK)) {
-
+	if (cp->c_lockowner == thread) {
 		/*
-		 * The extents and bitmap file locks support
-		 * recursion and are always taken exclusive.
+		 * Only the extents and bitmap file's support lock recursion.
 		 */
-		if (cp->c_fileid == kHFSExtentsFileID ||
-		    cp->c_fileid == kHFSAllocationFileID) {
-			if (cp->c_lockowner == thread) {
-				cp->c_syslockcount++;
-			} else {
-				lck_rw_lock_exclusive(&cp->c_rwlock);
-				cp->c_lockowner = thread;
-				cp->c_syslockcount = 1;
-			}
+		if ((cp->c_fileid == kHFSExtentsFileID) ||
+		    (cp->c_fileid == kHFSAllocationFileID)) {
+			cp->c_syslockcount++;
 		} else {
-			lck_rw_lock_exclusive(&cp->c_rwlock);
-			cp->c_lockowner = thread;
+			panic("hfs_lock: locking against myself!");
 		}
 	} else if (locktype == HFS_SHARED_LOCK) {
 		lck_rw_lock_shared(&cp->c_rwlock);
 		cp->c_lockowner = HFS_SHARED_OWNER;
-	} else {
+
+	} else /* HFS_EXCLUSIVE_LOCK */ {
 		lck_rw_lock_exclusive(&cp->c_rwlock);
 		cp->c_lockowner = thread;
+
+		/*
+		 * Only the extents and bitmap file's support lock recursion.
+		 */
+		if ((cp->c_fileid == kHFSExtentsFileID) ||
+		    (cp->c_fileid == kHFSAllocationFileID)) {
+			cp->c_syslockcount = 1;
+		}
 	}
+
+#ifdef HFS_CHECK_LOCK_ORDER
+	/*
+	 * Regular cnodes (non-system files) cannot be locked
+	 * while holding the journal lock or a system file lock.
+	 */
+	if (!(cp->c_desc.cd_flags & CD_ISMETA) &&
+            ((cp->c_fileid > kHFSFirstUserCatalogNodeID) || (cp->c_fileid == kHFSRootFolderID))) {
+		vnode_t vp = NULLVP;
+
+		/* Find corresponding vnode. */
+		if (cp->c_vp != NULLVP && VTOC(cp->c_vp) == cp) {
+			vp = cp->c_vp;
+		} else if (cp->c_rsrc_vp != NULLVP && VTOC(cp->c_rsrc_vp) == cp) {
+			vp = cp->c_rsrc_vp;
+		}
+		if (vp != NULLVP) {
+			struct hfsmount *hfsmp = VTOHFS(vp);
+
+			if (hfsmp->jnl && (journal_owner(hfsmp->jnl) == thread)) {
+				/* This will eventually be a panic here. */
+				printf("hfs_lock: bad lock order (cnode after journal)\n");
+			}
+			if (hfsmp->hfs_catalog_cp && hfsmp->hfs_catalog_cp->c_lockowner == thread) {
+				panic("hfs_lock: bad lock order (cnode after catalog)");
+			}
+			if (hfsmp->hfs_attribute_cp && hfsmp->hfs_attribute_cp->c_lockowner == thread) {
+				panic("hfs_lock: bad lock order (cnode after attribute)");
+			}
+			if (hfsmp->hfs_extents_cp && hfsmp->hfs_extents_cp->c_lockowner == thread) {
+				panic("hfs_lock: bad lock order (cnode after extents)");
+			}
+		}
+	}
+#endif /* HFS_CHECK_LOCK_ORDER */
+	
 	/*
 	 * Skip cnodes that no longer exist (were deleted).
 	 */
@@ -882,13 +1011,9 @@ hfs_lockpair(struct cnode *cp1, struct cnode *cp2, enum hfslocktype locktype)
 	}
 
 	/*
-	 * Lock in cnode parent-child order (if there is a relationship);
-	 * otherwise lock in cnode address order.
+	 * Lock in cnode address order.
 	 */
-	if ((IFTOVT(cp1->c_mode) == VDIR) && (cp1->c_fileid == cp2->c_parentcnid)) {
-		first = cp1;
-		last = cp2;
-	} else if (cp1 < cp2) {
+	if (cp1 < cp2) {
 		first = cp1;
 		last = cp2;
 	} else {
@@ -918,18 +1043,15 @@ hfs_isordered(struct cnode *cp1, struct cnode *cp2)
 		return (1);
 	if (cp2 == NULL || cp1 == (struct cnode *)0xffffffff)
 		return (0);
-	if (cp1->c_fileid == cp2->c_parentcnid)
-		return (1);  /* cp1 is the parent and should go first */
-	if (cp2->c_fileid == cp1->c_parentcnid)
-		return (0);  /* cp1 is the child and should go last */
-
-	return (cp1 < cp2);  /* fall-back is to use address order */
+	/*
+	 * Locking order is cnode address order.
+	 */
+	return (cp1 < cp2);
 }
 
 /*
  * Acquire 4 cnode locks.
- *   - locked in cnode parent-child order (if there is a relationship)
- *     otherwise lock in cnode address order (lesser address first).
+ *   - locked in cnode address order (lesser address first).
  *   - all or none of the locks are taken
  *   - only one lock taken per cnode (dup cnodes are skipped)
  *   - some of the cnode pointers may be null
@@ -996,34 +1118,35 @@ hfs_unlock(struct cnode *cp)
 {
         vnode_t rvp = NULLVP;
         vnode_t vp = NULLVP;
-	u_int32_t c_flag;
+        u_int32_t c_flag;
+	void *lockowner;
 
-	/* System files need to keep track of owner */
-	if ((cp->c_fileid < kHFSFirstUserCatalogNodeID) &&
-	    (cp->c_fileid > kHFSRootFolderID) &&
-	    (cp->c_datafork != NULL)) {
-		/*
-		 * The extents and bitmap file locks support
-		 * recursion and are always taken exclusive.
-		 */
-		if (cp->c_fileid == kHFSExtentsFileID ||
-		    cp->c_fileid == kHFSAllocationFileID) {
-			if (--cp->c_syslockcount > 0) {
-				return;
-			}
+	/*
+	 * Only the extents and bitmap file's support lock recursion.
+	 */
+	if ((cp->c_fileid == kHFSExtentsFileID) ||
+	    (cp->c_fileid == kHFSAllocationFileID)) {
+		if (--cp->c_syslockcount > 0) {
+			return;
 		}
 	}
 	c_flag = cp->c_flag;
 	cp->c_flag &= ~(C_NEED_DVNODE_PUT | C_NEED_RVNODE_PUT | C_NEED_DATA_SETSIZE | C_NEED_RSRC_SETSIZE);
+
 	if (c_flag & (C_NEED_DVNODE_PUT | C_NEED_DATA_SETSIZE)) {
-		vp = cp->c_vp;
+	        vp = cp->c_vp;
 	}
 	if (c_flag & (C_NEED_RVNODE_PUT | C_NEED_RSRC_SETSIZE)) {
-                rvp = cp->c_rsrc_vp;
+	        rvp = cp->c_rsrc_vp;
 	}
 
-	cp->c_lockowner = NULL;
-	lck_rw_done(&cp->c_rwlock);
+	lockowner = cp->c_lockowner;
+	if (lockowner == current_thread()) {
+	    cp->c_lockowner = NULL;
+	    lck_rw_unlock_exclusive(&cp->c_rwlock);
+	} else {
+	    lck_rw_unlock_shared(&cp->c_rwlock);
+	}
 
 	/* Perform any vnode post processing after cnode lock is dropped. */
 	if (vp) {
@@ -1036,7 +1159,7 @@ hfs_unlock(struct cnode *cp)
 		if (c_flag & C_NEED_RSRC_SETSIZE)
 			ubc_setsize(rvp, 0);
 		if (c_flag & C_NEED_RVNODE_PUT)
-			vnode_put(rvp);
+	        	vnode_put(rvp);
 	}
 }
 
@@ -1108,8 +1231,10 @@ __private_extern__
 void
 hfs_lock_truncate(struct cnode *cp, int exclusive)
 {
+#ifdef HFS_CHECK_LOCK_ORDER
 	if (cp->c_lockowner == current_thread())
-		panic("hfs_lock_truncate: cnode 0x%08x locked!", cp);
+		panic("hfs_lock_truncate: cnode %p locked!", cp);
+#endif /* HFS_CHECK_LOCK_ORDER */
 
 	if (exclusive)
 		lck_rw_lock_exclusive(&cp->c_truncatelock);
@@ -1119,9 +1244,13 @@ hfs_lock_truncate(struct cnode *cp, int exclusive)
 
 __private_extern__
 void
-hfs_unlock_truncate(struct cnode *cp)
+hfs_unlock_truncate(struct cnode *cp, int exclusive)
 {
-	lck_rw_done(&cp->c_truncatelock);
+    if (exclusive) {
+	lck_rw_unlock_exclusive(&cp->c_truncatelock);
+    } else {
+	lck_rw_unlock_shared(&cp->c_truncatelock);
+    }
 }
 
 

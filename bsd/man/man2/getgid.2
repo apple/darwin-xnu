@@ -37,16 +37,19 @@
 .Dt GETGID 2
 .Os BSD 4.2
 .Sh NAME
-.Nm getgid ,
-.Nm getegid
+.Nm getegid ,
+.Nm getgid
 .Nd get group process identification
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
 .Fd #include <unistd.h>
 .Ft gid_t
-.Fn getgid void
+.Fo getegid
+.Fa void
+.Fc
 .Ft gid_t
-.Fn getegid void
+.Fo getgid
+.Fa void
+.Fc
 .Sh DESCRIPTION
 The
 .Fn getgid
@@ -68,8 +71,15 @@ The
 .Fn getgid
 and
 .Fn getegid
-functions are always successful, and no return value is reserved to
-indicate an error.
+functions are always successful;
+no return value is reserved to indicate an error.
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <unistd.h>
+.Pp
+The include file
+.In sys/types.h
+is necessary.
 .Sh SEE ALSO
 .Xr getuid 2 ,
 .Xr setregid 2 ,

@@ -24,11 +24,13 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 #
-# XXX: CFLAGS
+# XXX: CFLAGS   ARM_TODO: added __MBUF_TRANSITION_ for IONetworkingFamily
 #
-CFLAGS+= -DKERNEL -DDRIVER_PRIVATE				\
+CFLAGS+= -imacros meta_features.h -DKERNEL -DDRIVER_PRIVATE				\
 	-Wall -Wno-four-char-constants -fno-common		\
 	-DIOMATCHDEBUG=1 -DIOALLOCDEBUG=1			\
+	-D__MBUF_TRANSITION_					\
+	-imacros meta_features.h $(CFLAGS_INLINE_CONFIG)
 #-DIOKITDEBUG=-1
 
 CWARNFLAGS   += -Wno-unused-parameter -Wno-redundant-decls -Wno-nested-externs -Wno-write-strings
@@ -85,18 +87,15 @@ ${OBJS}: ${OBJSDEPS}
 LDOBJS = $(OBJS)
 
 $(COMPONENT).o: $(LDOBJS)
-	@echo "creating $(COMPONENT).o"
-
-	$(SEG_HACK) __HIB IOHibernateRestoreKernel.o -o _IOHibernateRestoreKernel.o
-	mv _IOHibernateRestoreKernel.o IOHibernateRestoreKernel.o
-	$(SEG_HACK) __HIB WKdmDecompress.o -o _WKdmDecompress.o
-	mv _WKdmDecompress.o WKdmDecompress.o
-
-	@echo [ updating $(COMPONENT).o ${IOKIT_KERNEL_CONFIG} ]
-	$(LD)  $(LDFLAGS_COMPONENT) -o $(COMPONENT).o ${LDOBJS} 
+	@echo LD $(COMPONENT)
+	$(_v)$(SEG_HACK) __HIB IOHibernateRestoreKernel.o -o _IOHibernateRestoreKernel.o
+	$(_v)mv _IOHibernateRestoreKernel.o IOHibernateRestoreKernel.o
+	$(_v)$(SEG_HACK) __HIB WKdmDecompress.o -o _WKdmDecompress.o
+	$(_v)mv _WKdmDecompress.o WKdmDecompress.o
+	$(_v)$(LD)  $(LDFLAGS_COMPONENT) -o $(COMPONENT).o ${LDOBJS} 
 
 do_depend: do_all
-	${MD} -u Makedep -f -d `ls *.d`
+	$(_v)${MD} -u Makedep -f -d `ls *.d`
 	
 	
 do_all: $(COMPONENT).o
@@ -107,4 +106,3 @@ do_build_all: do_depend
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-

@@ -27,7 +27,9 @@
 # the rights to redistribute these changes.
 #
 
-OPTIONS/dli			optional dli
+OPTIONS/hibernation		optional hibernation
+OPTIONS/crypto			optional crypto
+OPTIONS/dli				optional dli
 OPTIONS/kdebug			optional kdebug
 OPTIONS/mach_assert		optional mach_assert
 OPTIONS/mach_debug		optional mach_debug
@@ -40,7 +42,6 @@ OPTIONS/norma_ether		optional norma_ether
 OPTIONS/norma_scsi		optional norma_scsi
 OPTIONS/mach_cluster_stats	optional mach_cluster_stats
 OPTIONS/mach_counters		optional mach_counters
-OPTIONS/mach_host		optional mach_host
 OPTIONS/mach_ipc_debug		optional mach_ipc_debug
 OPTIONS/mach_ipc_test		optional mach_ipc_test
 OPTIONS/mach_kdb		optional mach_kdb
@@ -50,7 +51,6 @@ OPTIONS/mach_kprof		optional mach_kprof
 OPTIONS/mach_ldebug		optional mach_ldebug
 OPTIONS/mach_mp_debug		optional mach_mp_debug
 OPTIONS/mach_pagemap		optional mach_pagemap
-OPTIONS/mach_prof		optional mach_prof
 OPTIONS/mach_rt			optional mach_rt
 OPTIONS/advisory_pageout	optional advisory_pageout
 #
@@ -68,9 +68,12 @@ OPTIONS/bootstrap_symbols	optional bootstrap_symbols
 OPTIONS/fast_tas		optional fast_tas
 OPTIONS/power_save		optional power_save
 OPTIONS/zone_debug		optional zone_debug
+OPTIONS/zone_alias_addr		optional zone_alias_addr
 OPTIONS/vm_cpm			optional vm_cpm
 OPTIONS/task_swapper		optional task_swapper
 OPTIONS/stack_usage		optional stack_usage
+
+OPTIONS/config_dtrace		optional config_dtrace
 
 # Default pager and system pager files, to be moved to separate component
  
@@ -79,6 +82,16 @@ osfmk/default_pager/dp_backing_store.c	standard
 osfmk/default_pager/dp_memory_object.c	standard
 ./default_pager/default_pager_alerts_user.c	standard
 ./default_pager/default_pager_object_server.c	standard
+
+#
+# gssd files
+#
+./gssd/gssd_mach.c				standard
+
+#
+# lockd files
+#
+./lockd/lockd_mach.c				standard
 
 #
 # UserNotification files
@@ -123,16 +136,17 @@ osfmk/ipc/ipc_right.c			standard
 osfmk/ipc/ipc_space.c			standard
 osfmk/ipc/ipc_splay.c			standard
 osfmk/ipc/ipc_table.c			standard
+osfmk/ipc/ipc_labelh.c			standard
 osfmk/ipc/mach_debug.c		standard
 osfmk/ipc/mach_msg.c			standard
 osfmk/ipc/mach_port.c			standard
 osfmk/ipc/mig_log.c			optional mig_debug
+osfmk/kern/affinity.c			standard
 osfmk/kern/ast.c			standard
 osfmk/kern/clock.c			standard
 osfmk/kern/clock_oldops.c		standard
 osfmk/kern/counters.c			standard
 osfmk/kern/debug.c			standard
-osfmk/kern/etimer.c			standard
 osfmk/kern/exception.c		standard
 osfmk/kern/host.c			standard
 osfmk/kern/host_notify.c		standard
@@ -149,9 +163,7 @@ osfmk/kern/mach_clock.c		standard
 osfmk/kern/machine.c			standard
 osfmk/kern/mk_sp.c			standard
 osfmk/kern/mk_timer.c		standard
-osfmk/kern/pms.c			standard
 osfmk/kern/page_decrypt.c	standard
-osfmk/kern/profile.c			standard
 osfmk/kern/printf.c			standard
 osfmk/kern/priority.c			standard
 osfmk/kern/processor.c		standard
@@ -159,6 +171,7 @@ osfmk/kern/processor_data.c		standard
 osfmk/kern/queue.c			standard
 osfmk/kern/sched_average.c		standard
 osfmk/kern/sched_prim.c		standard
+osfmk/kern/security.c		optional config_macf
 osfmk/kern/stack.c			standard
 osfmk/kern/startup.c			standard
 osfmk/kern/sync_lock.c		standard
@@ -179,7 +192,8 @@ osfmk/kern/wait_queue.c		standard
 osfmk/kern/xpr.c			optional xpr_debug
 osfmk/kern/zalloc.c			standard
 osfmk/kern/bsd_kern.c		optional mach_bsd
-osfmk/kern/hibernate.c		standard
+osfmk/kern/hibernate.c		optional hibernation
+osfmk/kern/symbols.c			standard
 ./mach/clock_server.c			standard
 ./mach/clock_priv_server.c		standard
 ./mach/clock_reply_user.c		standard
@@ -189,6 +203,8 @@ osfmk/kern/hibernate.c		standard
 ./mach/host_security_server.c		standard
 ./mach/ledger_server.c			standard
 ./mach/lock_set_server.c		standard
+./mach/mach_exc_user.c			standard
+./mach/mach_exc_server.c		optional mach_bsd
 ./mach/mach_host_server.c		standard
 ./mach/mach_notify_user.c		standard
 ./mach/mach_port_server.c		standard
@@ -199,6 +215,7 @@ osfmk/kern/hibernate.c		standard
 ./mach/memory_object_name_server.c	standard
 ./mach/upl_server.c			standard
 ./mach/audit_triggers_user.c		standard
+./mach/task_access_user.c          	standard
 #
 # For now, no external pagers
 #
@@ -207,27 +224,29 @@ osfmk/kern/hibernate.c		standard
 #
 ./mach/processor_server.c		standard
 ./mach/processor_set_server.c		standard
-./mach/prof_user.c			optional mach_prof
 ./mach/semaphore_server.c		standard
 ./mach/task_server.c			standard
 ./mach/thread_act_server.c		standard
 ./mach/vm_map_server.c			standard
+./mach/security_server.c		optional config_macf
+
 osfmk/mach-o/mach_header.c		standard
+
 osfmk/vm/device_vm.c			standard
 osfmk/vm/memory_object.c		standard
-osfmk/vm/task_working_set.c		standard
 osfmk/vm/vm_debug.c			standard
-osfmk/vm/vm_external.c                optional mach_pagemap
+osfmk/vm/vm_external.c			optional mach_pagemap
 osfmk/vm/vm_fault.c			standard
 osfmk/vm/vm_init.c			standard
 osfmk/vm/vm_kern.c			standard
 osfmk/vm/vm_map.c			standard
 osfmk/vm/vm_object.c			standard
 osfmk/vm/vm_pageout.c			standard
-osfmk/vm/vm_resident.c		standard
-osfmk/vm/vm_shared_memory_server.c	standard
+osfmk/vm/vm_resident.c			standard
+osfmk/vm/vm_shared_region.c		standard
 osfmk/vm/vm_user.c			standard
 osfmk/vm/bsd_vm.c			optional mach_bsd
+osfmk/vm/vm_purgeable.c			standard
 
 #
 # IOKit files, for a while

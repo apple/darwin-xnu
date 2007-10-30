@@ -16,7 +16,11 @@ INST_SUBDIRS = \
 # Who and where
 #
 BINDIR= 
+ifneq ($(MACHINE_CONFIG), DEFAULT)
+DSTDIR= $(strip $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)_$(MACHINE_CONFIG)/$(COMPONENT)/)
+else
 DSTDIR= $(strip $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/)
+endif
 PROGRAM= $(DSTDIR)doconf
 
 # 
@@ -25,25 +29,19 @@ PROGRAM= $(DSTDIR)doconf
 IFLAGS= -c -m 555
 
 $(PROGRAM): $(DSTDIR)% : $(SOURCE)%.csh
-	@echo "[ $(SOURCE) ] make setup_build_all $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";
-	-$(RM) $(RMFLAGS) $(notdir $(PROGRAM)).VERS 
-	sed -e "s/#PROGRAM.*/#`vers_string $(notdir $(PROGRAM))`/" \
+	@-$(RM) $(RMFLAGS) $(notdir $(PROGRAM)).VERS 
+	@sed -e "s/#PROGRAM.*/#`vers_string $(notdir $(PROGRAM))`/" \
 		< $< >$(notdir $(PROGRAM)).VERS;
-	install $(IFLAGS) $(notdir $(PROGRAM)).VERS $(PROGRAM);
-	-$(RM) $(RMFLAGS) $(notdir $(PROGRAM)).VERS;
+	@install $(IFLAGS) $(notdir $(PROGRAM)).VERS $(PROGRAM);
+	@-$(RM) $(RMFLAGS) $(notdir $(PROGRAM)).VERS;
 
 do_build_setup: $(PROGRAM)
 
 do_build_all:
-	@echo "[ $(SOURCE) ] make do_build_all $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 setup_build_install:
-	@echo "[ $(SOURCE) ] make setup_build_all $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 do_build_install:
-	@echo "[ $(SOURCE) ] make do_build_all $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-
-

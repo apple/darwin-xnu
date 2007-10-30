@@ -51,6 +51,16 @@
 #
 ident		LIBKERN
 
-options		KDEBUG		# kernel tracing		# <kdebug>
-options		GPROF		# kernel profiling		# <profile>
-options		LIBKERNCPP	# C++ implementation		# <libkerncpp>
+options		KDEBUG			# kernel tracing		# <kdebug>
+options		GPROF			# kernel profiling		# <profile>
+options		LIBKERNCPP		# C++ implementation	# <libkerncpp>
+options		NETWORKING		# kernel networking		# <networking>
+options     CONFIG_DTRACE 	# dtrace support		# <config_dtrace>
+options		CRYPTO			# cryptographic routines	# <ipsec,crypto>
+options		ZLIB		# zlib support			# <zlib>
+
+options		CONFIG_NO_PANIC_STRINGS			# <no_panic_str>
+options		CONFIG_NO_PRINTF_STRINGS		# <no_printf_str>
+options		CONFIG_NO_KPRINTF_STRINGS		# <no_kprintf_str>
+
+options		IPSEC			# IP security	# <ipsec>

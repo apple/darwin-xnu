@@ -59,8 +59,6 @@ void
 scope6_ifattach(
 	struct ifnet *ifp)
 {
-	int s = splnet();
-
 	/*
 	 * We have some arrays that should be indexed by if_index.
 	 * since if_index will grow dynamically, they should grow too.
@@ -88,7 +86,6 @@ scope6_ifattach(
 
 	/* don't initialize if called twice */
 	if (SID.s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL]) {
-		splx(s);
 		return;
 	}
 
@@ -103,8 +100,6 @@ scope6_ifattach(
 	SID.s6id_list[IPV6_ADDR_SCOPE_ORGLOCAL] = 1;
 #endif
 #undef SID
-
-	splx(s);
 }
 
 int
@@ -112,7 +107,7 @@ scope6_set(
 	struct ifnet *ifp,
 	u_int32_t *idlist)
 {
-	int i, s;
+	int i;
 	int error = 0;
 
 	if (scope6_ids == NULL)	/* paranoid? */
@@ -128,8 +123,6 @@ scope6_set(
 	 * interface addresses, routing table entries, PCB entries... 
 	 */
 
-	s = splnet();
-
 	for (i = 0; i < 16; i++) {
 		if (idlist[i] &&
 		    idlist[i] != scope6_ids[ifp->if_index].s6id_list[i]) {
@@ -141,7 +134,6 @@ scope6_set(
 				 * IDs, but we check the consistency for
 				 * safety in later use.
 				 */
-				splx(s);
 				return(EINVAL);
 			}
 
@@ -153,7 +145,6 @@ scope6_set(
 			scope6_ids[ifp->if_index].s6id_list[i] = idlist[i];
 		}
 	}
-	splx(s);
 
 	return(error);
 }

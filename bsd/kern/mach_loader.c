@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *	Copyright (C) 1988, 1989,  NeXT, Inc.
@@ -48,11 +54,11 @@
 #include <mach/vm_map.h>	/* vm_allocate() */
 #include <mach/mach_vm.h>	/* mach_vm_allocate() */
 #include <mach/vm_statistics.h>
-#include <mach/shared_memory_server.h>
 #include <mach/task.h>
 #include <mach/thread_act.h>
 
 #include <machine/vmparam.h>
+#include <machine/exec.h>
 
 #include <kern/kern_types.h>
 #include <kern/cpu_number.h>
@@ -69,7 +75,6 @@
 #include <vm/vm_kern.h>
 #include <vm/vm_pager.h>
 #include <vm/vnode_pager.h>
-#include <vm/vm_shared_memory_server.h>
 #include <vm/vm_protos.h> 
 
 /*
@@ -78,7 +83,6 @@
  */
 extern pmap_t	pmap_create(vm_map_size_t size, boolean_t is_64bit);
 extern void	pmap_switch(pmap_t);
-extern void	pmap_map_sharedpage(task_t task, pmap_t pmap);
 
 /*
  * XXX kern/thread.h should not treat these prototypes as MACH_KERNEL_PRIVATE
@@ -98,16 +102,19 @@ extern kern_return_t	thread_userstack(thread_t, int, thread_state_t,
 extern kern_return_t	thread_entrypoint(thread_t, int, thread_state_t,
 				unsigned int, mach_vm_offset_t *);
 
+extern kern_return_t	memory_object_signed(memory_object_control_t control,
+					     boolean_t is_signed);
 
 /* An empty load_result_t */
 static load_result_t load_result_null = {
-	MACH_VM_MIN_ADDRESS,
-	MACH_VM_MIN_ADDRESS,
-	MACH_VM_MIN_ADDRESS,
-	0,
-	0,
-	0,
-	0
+	.mach_header = MACH_VM_MIN_ADDRESS,
+	.entry_point = MACH_VM_MIN_ADDRESS,
+	.user_stack = MACH_VM_MIN_ADDRESS,
+	.thread_count = 0,
+	.unixproc = 0,
+	.dynlinker = 0,
+	.customstack = 0,
+	.csflags = 0
 };
 
 /*
@@ -117,12 +124,10 @@ static load_return_t
 parse_machfile(
 	struct vnode		*vp,
 	vm_map_t		map,
-	thread_t		thr_act,
+	thread_t		thread,
 	struct mach_header	*header,
 	off_t			file_offset,
 	off_t			macho_size,
-	boolean_t		shared_regions,
-	boolean_t		clean_regions,
 	int			depth,
 	load_result_t		*result
 );
@@ -149,17 +154,25 @@ load_segment_64(
 	load_result_t			*result
 );
 
+int load_code_signature(
+	struct linkedit_data_command	*lcp,
+	struct vnode			*vp,
+	off_t				macho_offset,
+	off_t				macho_size,
+	cpu_type_t			cputype,
+	load_result_t			*result);
+	
 static load_return_t
 load_unixthread(
 	struct thread_command	*tcp,
-	thread_t			thr_act,
+	thread_t			thread,
 	load_result_t			*result
 );
 
 static load_return_t
 load_thread(
 	struct thread_command	*tcp,
-	thread_t			thr_act,
+	thread_t			thread,
 	load_result_t			*result
 );
 
@@ -175,7 +188,7 @@ load_threadstack(
 	thread_t		thread,
 	unsigned long	*ts,
 	unsigned long	total_size,
-	mach_vm_offset_t	*user_stack,
+	user_addr_t	*user_stack,
 	int				*customstack
 );
 
@@ -192,10 +205,9 @@ load_dylinker(
 	struct dylinker_command	*lcp,
 	integer_t		archbits,
 	vm_map_t				map,
-	thread_t			thr_act,
+	thread_t			thread,
 	int						depth,
 	load_result_t			*result,
-	boolean_t			clean_regions,
 	boolean_t			is_64bit
 );
 
@@ -213,9 +225,8 @@ load_return_t
 load_machfile(
 	struct image_params	*imgp,
 	struct mach_header	*header,
-	thread_t 		thr_act,
+	thread_t 		thread,
 	vm_map_t 		new_map,
-	boolean_t		clean_regions,
 	load_result_t		*result
 )
 {
@@ -236,12 +247,7 @@ load_machfile(
 
 	if (create_map) {
 		old_map = current_map();
-#ifdef NO_NESTED_PMAP
-		pmap = get_task_pmap(current_task());
-		pmap_reference(pmap);
-#else	/* NO_NESTED_PMAP */
 		pmap = pmap_create((vm_map_size_t) 0, (imgp->ip_flags & IMGPF_IS_64BIT));
-#endif	/* NO_NESTED_PMAP */
 		map = vm_map_create(pmap,
 				0,
 				vm_compute_max_offset((imgp->ip_flags & IMGPF_IS_64BIT)),
@@ -251,15 +257,14 @@ load_machfile(
 
 	if ( (header->flags & MH_ALLOW_STACK_EXECUTION) )
 	        vm_map_disable_NX(map);
-
+		
 	if (!result)
 		result = &myresult;
 
 	*result = load_result_null;
 
-	lret = parse_machfile(vp, map, thr_act, header, file_offset, macho_size,
-			      ((imgp->ip_flags & IMGPF_IS_64BIT) == 0), /* shared regions? */
-			      clean_regions, 0, result);
+	lret = parse_machfile(vp, map, thread, header, file_offset, macho_size,
+			      0, result);
 
 	if (lret != LOAD_SUCCESS) {
 		if (create_map) {
@@ -294,15 +299,11 @@ load_machfile(
 
 		old_map = swap_task_map(current_task(), map);
 		vm_map_clear_4GB_pagezero(old_map);
-#ifndef NO_NESTED_PMAP
 		pmap_switch(pmap);	/* Make sure we are using the new pmap */
-#endif	/* !NO_NESTED_PMAP */
 		vm_map_deallocate(old_map);
 	}
 	return(LOAD_SUCCESS);
 }
-
-int	dylink_test = 1;
 
 /*
  * The file size of a mach-o file is limited to 32 bits; this is because
@@ -318,12 +319,10 @@ load_return_t
 parse_machfile(
 	struct vnode 		*vp,       
 	vm_map_t		map,
-	thread_t		thr_act,
+	thread_t		thread,
 	struct mach_header	*header,
 	off_t			file_offset,
 	off_t			macho_size,
-	boolean_t		shared_regions,
-	boolean_t		clean_regions,
 	int			depth,
 	load_result_t		*result
 )
@@ -340,12 +339,13 @@ parse_machfile(
 	size_t			offset;
 	size_t			oldoffset;	/* for overflow check */
 	int			pass;
-	struct proc *p = current_proc();		/* XXXX */
+	proc_t			p = current_proc();		/* XXXX */
 	int			error;
 	int resid=0;
 	task_t task;
 	size_t			mach_header_sz = sizeof(struct mach_header);
 	boolean_t		abi64;
+	boolean_t		got_code_signatures = FALSE;
 
 	if (header->magic == MH_MAGIC_64 ||
 	    header->magic == MH_CIGAM_64) {
@@ -355,10 +355,11 @@ parse_machfile(
 	/*
 	 *	Break infinite recursion
 	 */
-	if (depth > 6)
+	if (depth > 6) {
 		return(LOAD_FAILURE);
+	}
 
-	task = (task_t)get_threadtask(thr_act);
+	task = (task_t)get_threadtask(thread);
 
 	depth++;
 
@@ -366,7 +367,8 @@ parse_machfile(
 	 *	Check to see if right machine type.
 	 */
 	if (((cpu_type_t)(header->cputype & ~CPU_ARCH_MASK) != cpu_type()) ||
-	    !grade_binary(header->cputype, header->cpusubtype))
+	    !grade_binary(header->cputype, 
+	    	header->cpusubtype & ~CPU_SUBTYPE_MASK))
 		return(LOAD_BADARCH);
 		
 	abi64 = ((header->cputype & CPU_ARCH_ABI64) == CPU_ARCH_ABI64);
@@ -376,19 +378,22 @@ parse_machfile(
 	case MH_OBJECT:
 	case MH_EXECUTE:
 	case MH_PRELOAD:
-		if (depth != 1)
+		if (depth != 1) {
 			return (LOAD_FAILURE);
+		}
 		break;
 		
 	case MH_FVMLIB:
 	case MH_DYLIB:
-		if (depth == 1)
+		if (depth == 1) {
 			return (LOAD_FAILURE);
+		}
 		break;
 
 	case MH_DYLINKER:
-		if (depth != 2)
+		if (depth != 2) {
 			return (LOAD_FAILURE);
+		}
 		break;
 		
 	default:
@@ -398,7 +403,6 @@ parse_machfile(
 	/*
 	 *	Get the pager for the file.
 	 */
-	UBCINFOCHECK("parse_machfile", vp);
 	pager = (void *) ubc_getpager(vp);
 
 	/*
@@ -502,7 +506,7 @@ parse_machfile(
 				if (pass != 2)
 					break;
 				ret = load_thread((struct thread_command *)lcp,
-						   thr_act,
+						   thread,
 						  result);
 				break;
 			case LC_UNIXTHREAD:
@@ -510,7 +514,7 @@ parse_machfile(
 					break;
 				ret = load_unixthread(
 						 (struct thread_command *) lcp,
-						   thr_act,
+						   thread,
 						 result);
 				break;
 			case LC_LOAD_DYLINKER:
@@ -521,6 +525,30 @@ parse_machfile(
 					dlarchbits = (header->cputype & CPU_ARCH_MASK);
 				} else {
 					ret = LOAD_FAILURE;
+				}
+				break;
+			case LC_CODE_SIGNATURE:
+				/* CODE SIGNING */
+				if (pass != 2)
+					break;
+				/* pager -> uip ->
+				   load signatures & store in uip
+				   set VM object "signed_pages"
+				*/
+				ret = load_code_signature(
+					(struct linkedit_data_command *) lcp,
+					vp,
+					file_offset,
+					macho_size,
+					header->cputype,
+					(depth == 1) ? result : NULL);
+				if (ret != LOAD_SUCCESS) {
+					printf("proc %d: load code signature error %d "
+					       "for file \"%s\"\n",
+					       p->p_pid, ret, vp->v_name);
+					ret = LOAD_SUCCESS; /* ignore error */
+				} else {
+					got_code_signatures = TRUE;
 				}
 				break;
 			default:
@@ -535,129 +563,33 @@ parse_machfile(
 			break;
 	}
 	if (ret == LOAD_SUCCESS) { 
+	    if (! got_code_signatures) {
+		    struct cs_blob *blob;
+		    /* no embedded signatures: look for detached ones */
+		    blob = ubc_cs_blob_get(vp, -1, file_offset);
+		    if (blob != NULL) {
+			    /* get flags to be applied to the process */
+			    result->csflags |= blob->csb_flags;
+		    }
+	    }
 
-	    if (shared_regions) {
-		vm_offset_t vmaddr;
-		shared_region_mapping_t shared_region;
-		struct shared_region_task_mappings	map_info;
-		shared_region_mapping_t next;
-
-RedoLookup:
-		vm_get_shared_region(task, &shared_region);
-		map_info.self = (vm_offset_t)shared_region;
-		shared_region_mapping_info(shared_region,
-			&(map_info.text_region),   
-			&(map_info.text_size),
-			&(map_info.data_region),
-			&(map_info.data_size),
-			&(map_info.region_mappings),
-			&(map_info.client_base),
-			&(map_info.alternate_base),
-			&(map_info.alternate_next), 
-			&(map_info.fs_base),
-			&(map_info.system),
-			&(map_info.flags), &next);
-
-		if((map_info.flags & SHARED_REGION_FULL) ||
-			(map_info.flags & SHARED_REGION_STALE)) {
-			shared_region_mapping_t system_region;
-			system_region = lookup_default_shared_region(
-				map_info.fs_base, map_info.system);
-			if((map_info.self != (vm_offset_t)system_region) &&
-				(map_info.flags & SHARED_REGION_SYSTEM)) {
-			   if(system_region == NULL) {
-				shared_file_boot_time_init(
-					map_info.fs_base, map_info.system);
-			   } else {
-			   	vm_set_shared_region(task, system_region);
-			   }
-			   shared_region_mapping_dealloc(
-					(shared_region_mapping_t)map_info.self);
-			   goto RedoLookup;
-			} else if (map_info.flags & SHARED_REGION_SYSTEM) {
-			      shared_region_mapping_dealloc(system_region);
-			      shared_file_boot_time_init(
-					map_info.fs_base, map_info.system);
-			      shared_region_mapping_dealloc(
-				     (shared_region_mapping_t)map_info.self);
-			} else {
-			      shared_region_mapping_dealloc(system_region);
-			}
-		}
-
-		if (dylink_test) {
-			p->p_flag |=  P_NOSHLIB; /* no shlibs in use */
-			vmaddr = map_info.client_base;
-			if(clean_regions) {
-			   vm_map(map, &vmaddr, map_info.text_size, 
-				0, SHARED_LIB_ALIAS|VM_FLAGS_FIXED,
-				map_info.text_region, 0, FALSE,
-				VM_PROT_READ, VM_PROT_READ, VM_INHERIT_SHARE);
-			} else {
-			   vm_map(map, &vmaddr, map_info.text_size, 0, 
-				(VM_MEMORY_SHARED_PMAP << 24) 
-				  | SHARED_LIB_ALIAS | VM_FLAGS_FIXED,
-				map_info.text_region, 0, FALSE,
-				VM_PROT_READ, VM_PROT_READ, VM_INHERIT_SHARE);
-			}
-			vmaddr = map_info.client_base + map_info.text_size;
-			vm_map(map, &vmaddr, map_info.data_size, 
-				0, SHARED_LIB_ALIAS | VM_FLAGS_FIXED,
-				map_info.data_region, 0, TRUE,
-				VM_PROT_READ, VM_PROT_READ, VM_INHERIT_SHARE);
-	
-			while (next) {
-		           /* this should be fleshed out for the general case */
-			   /* but this is not necessary for now.  Indeed we   */
-			   /* are handling the com page inside of the         */
-			   /* shared_region mapping create calls for now for  */
-			   /* simplicities sake.  If more general support is  */
-			   /* needed the code to manipulate the shared range  */
-			   /* chain can be pulled out and moved to the callers*/
-			   shared_region_mapping_info(next,
-				&(map_info.text_region),   
-				&(map_info.text_size),
-				&(map_info.data_region),
-				&(map_info.data_size),
-				&(map_info.region_mappings),
-				&(map_info.client_base),
-				&(map_info.alternate_base),
-				&(map_info.alternate_next), 
-				&(map_info.fs_base),
-				&(map_info.system),
-				&(map_info.flags), &next);
-
-			   vmaddr = map_info.client_base;
-			   vm_map(map, &vmaddr, map_info.text_size, 
-				0, SHARED_LIB_ALIAS | VM_FLAGS_FIXED,
-				map_info.text_region, 0, FALSE,
-				VM_PROT_READ, VM_PROT_READ, VM_INHERIT_SHARE);
-			}
-		}
-            }
 	    if (dlp != 0)
-			ret = load_dylinker(dlp, dlarchbits, map, thr_act, depth, result, clean_regions, abi64);
+			ret = load_dylinker(dlp, dlarchbits, map, thread, depth, result, abi64);
 
 	    if(depth == 1) {
-		if (result->thread_count == 0)
+		if (result->thread_count == 0) {
 			ret = LOAD_FAILURE;
-		else if ( abi64 ) {
+		} else if ( abi64 ) {
+#ifdef __ppc__
 			/* Map in 64-bit commpage */
 			/* LP64todo - make this clean */
-			pmap_map_sharedpage(current_task(), get_map_pmap(map));
-                        vm_map_commpage64(map);
-		} else {
-#ifdef __i386__
 			/*
-			 * On Intel, the comm page doesn't get mapped
-			 * automatically because it goes beyond the current end
-			 * of the VM map in the current 3GB/1GB address space
-			 * model.
-			 * XXX This will probably become unnecessary when we
-			 * switch to the 4GB/4GB address space model.
+			 * PPC51: ppc64 is limited to 51-bit addresses.
+			 * Memory above that limit is handled specially
+			 * at the pmap level.
 			 */
-			vm_map_commpage32(map);
-#endif	/* __i386__ */
+			pmap_map_sharedpage(current_task(), get_map_pmap(map));
+#endif /* __ppc__ */
 		}
 	    }
 	}
@@ -666,14 +598,10 @@ RedoLookup:
 		kfree(kl_addr, kl_size);
 
 	if (ret == LOAD_SUCCESS)
-		(void)ubc_map(vp, PROT_EXEC);
+		(void)ubc_map(vp, PROT_READ | PROT_EXEC);
 		
 	return(ret);
 }
-
-#ifndef SG_PROTECTED_VERSION_1
-#define SG_PROTECTED_VERSION_1 0x8
-#endif /* SG_PROTECTED_VERSION_1 */
 
 #ifdef __i386__
 
@@ -751,6 +679,11 @@ load_segment(
 	 */
 	if (scp->fileoff + scp->filesize > macho_size)
 		return (LOAD_BADMACHO);
+	/*
+	 * Make sure the segment is page-aligned in the file.
+	 */
+	if ((scp->fileoff & PAGE_MASK) != 0)
+		return LOAD_BADMACHO;
 
 	seg_size = round_page(scp->vmsize);
 	if (seg_size == 0)
@@ -881,6 +814,11 @@ load_segment_64(
 	 */
 	if (scp64->fileoff + scp64->filesize > (uint64_t)macho_size)
 		return (LOAD_BADMACHO);
+	/*
+	 * Make sure the segment is page-aligned in the file.
+	 */
+	if ((scp64->fileoff & PAGE_MASK_64) != 0)
+		return LOAD_BADMACHO;
 
 	seg_size = round_page_64(scp64->vmsize);
 	if (seg_size == 0)
@@ -944,7 +882,7 @@ load_segment_64(
 								delta_size)) {
 				(void) vm_deallocate(
 						kernel_map, tmp, delta_size);
-		return (LOAD_FAILURE);
+				return (LOAD_FAILURE);
 			}
 	
 			(void) vm_deallocate(kernel_map, tmp, delta_size);
@@ -1000,7 +938,7 @@ load_thread(
 
 	task = get_threadtask(thread);
 
-	/* if count is 0; same as thr_act */
+	/* if count is 0; same as thread */
 	if (result->thread_count != 0) {
 		kret = thread_create(task, &thread);
 		if (kret != KERN_SUCCESS)
@@ -1062,8 +1000,10 @@ load_unixthread(
 	load_return_t	ret;
 	int customstack =0;
 	
-	if (result->thread_count != 0)
+	if (result->thread_count != 0) {
+printf("load_unixthread: already have a thread!");
 		return (LOAD_FAILURE);
+	}
 	
 	ret = load_threadstack(thread,
 		       (unsigned long *)(((vm_offset_t)tcp) + 
@@ -1113,8 +1053,9 @@ load_threadstate(
 	unsigned long	thread_size;
 
     ret = thread_state_initialize( thread );
-    if (ret != KERN_SUCCESS)
+    if (ret != KERN_SUCCESS) {
         return(LOAD_FAILURE);
+    }
     
 	/*
 	 *	Set the new thread state; iterate through the state flavors in
@@ -1133,8 +1074,9 @@ load_threadstate(
 		 * based on the value of flavor.
 		 */
 		ret = thread_setstatus(thread, flavor, (thread_state_t)ts, size);
-		if (ret != KERN_SUCCESS)
+		if (ret != KERN_SUCCESS) {
 			return(LOAD_FAILURE);
+		}
 		ts += size;	/* ts is a (unsigned long *) */
 	}
 	return(LOAD_SUCCESS);
@@ -1169,8 +1111,9 @@ load_threadstack(
 		 * the value of flavor.
 		 */
 		ret = thread_userstack(thread, flavor, (thread_state_t)ts, size, user_stack, customstack);
-		if (ret != KERN_SUCCESS)
+		if (ret != KERN_SUCCESS) {
 			return(LOAD_FAILURE);
+		}
 		ts += size;	/* ts is a (unsigned long *) */
 	}
 	return(LOAD_SUCCESS);
@@ -1207,8 +1150,9 @@ load_threadentry(
 		 * the value of flavor.
 		 */
 		ret = thread_entrypoint(thread, flavor, (thread_state_t)ts, size, entry_point);
-		if (ret != KERN_SUCCESS)
+		if (ret != KERN_SUCCESS) {
 			return(LOAD_FAILURE);
+		}
 		ts += size;	/* ts is a (unsigned long *) */
 	}
 	return(LOAD_SUCCESS);
@@ -1221,19 +1165,18 @@ load_dylinker(
 	struct dylinker_command	*lcp,
 	integer_t		archbits,
 	vm_map_t		map,
-	thread_t	thr_act,
+	thread_t	thread,
 	int			depth,
 	load_result_t		*result,
-	boolean_t		clean_regions,
 	boolean_t		is_64bit
 )
 {
 	char			*name;
 	char			*p;
-	struct vnode		*vp;
+	struct vnode		*vp = NULLVP;	/* set by get_macho_vnode() */
 	struct mach_header	header;
-	off_t			file_offset;
-	off_t			macho_size;
+	off_t			file_offset = 0; /* set by get_macho_vnode() */
+	off_t			macho_size = 0;	/* set by get_macho_vnode() */
 	vm_map_t		copy_map;
 	load_result_t		myresult;
 	kern_return_t		ret;
@@ -1255,83 +1198,196 @@ load_dylinker(
 	if (ret)
 		return (ret);
 			
-	/*
-	 *	Load the Mach-O.
-	 *	Use a temporary map to do the work.
-	 */
-	copy_map = vm_map_create(pmap_create(vm_map_round_page(macho_size),
-					     is_64bit),
-				 get_map_min(map), get_map_max(map), TRUE);
-	if (VM_MAP_NULL == copy_map) {
-		ret = LOAD_RESOURCE;
-		goto out;
-	}
-
 	myresult = load_result_null;
 
-	ret = parse_machfile(vp, copy_map, thr_act, &header,
-				file_offset, macho_size,
-				FALSE, clean_regions, depth, &myresult);
+	/*
+	 *	First try to map dyld in directly.  This should work most of
+	 *	the time since there shouldn't normally be something already
+	 *	mapped to its address.
+	 */
 
-	if (ret)
-		goto out;
+	ret = parse_machfile(vp, map, thread, &header, file_offset, macho_size,
+				depth, &myresult);
 
-	if (get_map_nentries(copy_map) > 0) {
+	/*
+	 *	If it turned out something was in the way, then we'll take
+	 *	take this longer path to map dyld into a temporary map and
+	 *	copy it into destination map at a different address.
+	 */
 
-		dyl_start = mach_get_vm_start(copy_map);
-		dyl_length = mach_get_vm_end(copy_map) - dyl_start;
+	if (ret == LOAD_NOSPACE) {
 
-		map_addr = dyl_start;
-		ret = mach_vm_allocate(map, &map_addr, dyl_length, VM_FLAGS_FIXED);
-		if (ret != KERN_SUCCESS)  {
+		/*
+		 *	Load the Mach-O.
+		 *	Use a temporary map to do the work.
+		 */
+		copy_map = vm_map_create(pmap_create(vm_map_round_page(macho_size),
+						     is_64bit),
+					 get_map_min(map), get_map_max(map), TRUE);
+		if (VM_MAP_NULL == copy_map) {
+			ret = LOAD_RESOURCE;
+			goto out;
+		}
+	
+		myresult = load_result_null;
+
+		ret = parse_machfile(vp, copy_map, thread, &header,
+					file_offset, macho_size,
+					depth, &myresult);
+	
+		if (ret) {
+			vm_map_deallocate(copy_map);
+			goto out;
+		}
+	
+		if (get_map_nentries(copy_map) > 0) {
+	
+			dyl_start = mach_get_vm_start(copy_map);
+			dyl_length = mach_get_vm_end(copy_map) - dyl_start;
+	
+			map_addr = dyl_start;
 			ret = mach_vm_allocate(map, &map_addr, dyl_length, VM_FLAGS_ANYWHERE);
+	
+			if (ret != KERN_SUCCESS) {
+				vm_map_deallocate(copy_map);
+				ret = LOAD_NOSPACE;
+				goto out;
+			
+			}
+
+			ret = vm_map_copyin(copy_map,
+					    (vm_map_address_t)dyl_start,
+					    (vm_map_size_t)dyl_length,
+					    TRUE, &tmp);
+			if (ret != KERN_SUCCESS) {
+				(void) vm_map_remove(map,
+					     vm_map_trunc_page(map_addr),
+					     vm_map_round_page(map_addr + dyl_length),
+					     VM_MAP_NO_FLAGS);
+				vm_map_deallocate(copy_map);
+				goto out;
+			}
+	
+			ret = vm_map_copy_overwrite(map,
+					     (vm_map_address_t)map_addr,
+					     tmp, FALSE);
+			if (ret != KERN_SUCCESS) {
+				vm_map_copy_discard(tmp);
+				(void) vm_map_remove(map,
+					     vm_map_trunc_page(map_addr),
+					     vm_map_round_page(map_addr + dyl_length),
+					     VM_MAP_NO_FLAGS);
+				vm_map_deallocate(copy_map);
+				goto out;
+			}
+	
+			if (map_addr != dyl_start)
+				myresult.entry_point += (map_addr - dyl_start);
+		} else {
+			ret = LOAD_FAILURE;
 		}
 
-		if (ret != KERN_SUCCESS) {
-			ret = LOAD_NOSPACE;
-			goto out;
-		
-		}
-		ret = vm_map_copyin(copy_map,
-				    (vm_map_address_t)dyl_start,
-				    (vm_map_size_t)dyl_length,
-				    TRUE, &tmp);
-		if (ret != KERN_SUCCESS) {
-			(void) vm_map_remove(map,
-				     vm_map_trunc_page(map_addr),
-				     vm_map_round_page(map_addr + dyl_length),
-				     VM_MAP_NO_FLAGS);
-			goto out;
-		}
-
-		ret = vm_map_copy_overwrite(map,
-				     (vm_map_address_t)map_addr,
-				     tmp, FALSE);
-		if (ret != KERN_SUCCESS) {
-			vm_map_copy_discard(tmp);
-			(void) vm_map_remove(map,
-				     vm_map_trunc_page(map_addr),
-				     vm_map_round_page(map_addr + dyl_length),
-				     VM_MAP_NO_FLAGS);
-			goto out;
-		}
-
-		if (map_addr != dyl_start)
-			myresult.entry_point += (map_addr - dyl_start);
-	} else
-		ret = LOAD_FAILURE;
+		vm_map_deallocate(copy_map);
+	}
 	
 	if (ret == LOAD_SUCCESS) {		
 		result->dynlinker = TRUE;
 		result->entry_point = myresult.entry_point;
-		(void)ubc_map(vp, PROT_EXEC);
+		(void)ubc_map(vp, PROT_READ | PROT_EXEC);
 	}
 out:
-	vm_map_deallocate(copy_map);
-	
 	vnode_put(vp);
 	return (ret);
 
+}
+
+int
+load_code_signature(
+	struct linkedit_data_command	*lcp,
+	struct vnode			*vp,
+	off_t				macho_offset,
+	off_t				macho_size,
+	cpu_type_t			cputype,
+	load_result_t			*result)
+{
+	int		ret;
+	kern_return_t	kr;
+	vm_offset_t	addr;
+	int		resid;
+	struct cs_blob	*blob;
+	int		error;
+
+	addr = 0;
+	blob = NULL;
+
+	if (lcp->cmdsize != sizeof (struct linkedit_data_command) ||
+	    lcp->dataoff + lcp->datasize > macho_size) {
+		ret = LOAD_BADMACHO;
+		goto out;
+	}
+
+	blob = ubc_cs_blob_get(vp, cputype, -1);
+	if (blob != NULL) {
+		/* we already have a blob for this vnode and cputype */
+		if (blob->csb_cpu_type == cputype &&
+		    blob->csb_base_offset == macho_offset &&
+		    blob->csb_mem_size == lcp->datasize) {
+			/* it matches the blob we want here: we're done */
+			ret = LOAD_SUCCESS;
+		} else {
+			/* the blob has changed for this vnode: fail ! */
+			ret = LOAD_BADMACHO;
+		}
+		goto out;
+	}
+
+	kr = kmem_alloc(kernel_map, &addr, round_page(lcp->datasize));
+	if (kr != KERN_SUCCESS) {
+		ret = LOAD_NOSPACE;
+		goto out;
+	}
+	
+	resid = 0;
+	error = vn_rdwr(UIO_READ,
+			vp,
+			(caddr_t) addr,
+			lcp->datasize,
+			macho_offset + lcp->dataoff,
+			UIO_SYSSPACE32,
+			0,
+			kauth_cred_get(),
+			&resid,
+			current_proc());
+	if (error || resid != 0) {
+		ret = LOAD_IOERROR;
+		goto out;
+	}
+
+	if (ubc_cs_blob_add(vp,
+			    cputype,
+			    macho_offset,
+			    addr,
+			    lcp->datasize)) {
+		ret = LOAD_FAILURE;
+		goto out;
+	} else {
+		/* ubc_cs_blob_add() has consumed "addr" */
+		addr = 0;
+	}
+		
+	blob = ubc_cs_blob_get(vp, cputype, -1);
+
+	ret = LOAD_SUCCESS;
+out:
+	if (result && ret == LOAD_SUCCESS) {
+		result->csflags |= blob->csb_flags;
+	}
+	if (addr != 0) {
+		kmem_free(kernel_map, addr, round_page(lcp->datasize));
+		addr = 0;
+	}
+
+	return ret;
 }
 
 /*
@@ -1352,9 +1408,10 @@ get_macho_vnode(
 )
 {
 	struct vnode		*vp;
-	struct vfs_context context;
+	vfs_context_t		ctx = vfs_context_current();
+	proc_t			p = vfs_context_proc(ctx);
+	kauth_cred_t		kerncred;
 	struct nameidata nid, *ndp;
-	struct proc *p = current_proc();		/* XXXX */
 	boolean_t		is_fat;
 	struct fat_arch		fat_arch;
 	int			error = LOAD_SUCCESS;
@@ -1365,22 +1422,29 @@ get_macho_vnode(
 		char	pad[512];
 	} header;
 	off_t fsize = (off_t)0;
-	struct	ucred *cred = kauth_cred_get();
 	int err2;
 	
-	context.vc_proc = p;
-	context.vc_ucred = cred;
+	/*
+	 * Capture the kernel credential for use in the actual read of the
+	 * file, since the user doing the execution may have execute rights
+	 * but not read rights, but to exec something, we have to either map
+	 * or read it into the new process address space, which requires
+	 * read rights.  This is to deal with lack of common credential
+	 * serialization code which would treat NOCRED as "serialize 'root'".
+	 */
+	kerncred = vfs_context_ucred(vfs_context_kernel());
 
 	ndp = &nid;
 	
 	/* init the namei data to point the file user's program name */
-	NDINIT(ndp, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE32, CAST_USER_ADDR_T(path), &context);
+	NDINIT(ndp, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE32, CAST_USER_ADDR_T(path), ctx);
 
 	if ((error = namei(ndp)) != 0) {
-		if (error == ENOENT)
+		if (error == ENOENT) {
 			error = LOAD_ENOENT;
-		else
+		} else {
 			error = LOAD_FAILURE;
+		}
 		return(error);
 	}
 	nameidone(ndp);
@@ -1393,7 +1457,7 @@ get_macho_vnode(
 	}
 
 	/* get size */
-	if ((error = vnode_size(vp, &fsize, &context)) != 0) {
+	if ((error = vnode_size(vp, &fsize, ctx)) != 0) {
 		error = LOAD_FAILURE;
 		goto bad1;
 	}
@@ -1405,19 +1469,19 @@ get_macho_vnode(
 	}
 
 	/* check access */
-	if ((error = vnode_authorize(vp, NULL, KAUTH_VNODE_EXECUTE, &context)) != 0) {
+	if ((error = vnode_authorize(vp, NULL, KAUTH_VNODE_EXECUTE, ctx)) != 0) {
 		error = LOAD_PROTECT;
 		goto bad1;
 	}
 
 	/* try to open it */
-	if ((error = VNOP_OPEN(vp, FREAD, &context)) != 0) {
+	if ((error = VNOP_OPEN(vp, FREAD, ctx)) != 0) {
 		error = LOAD_PROTECT;
 		goto bad1;
 	}
 
 	if ((error = vn_rdwr(UIO_READ, vp, (caddr_t)&header, sizeof(header), 0,
-	    UIO_SYSSPACE32, IO_NODELOCKED, cred, &resid, p)) != 0) {
+	    UIO_SYSSPACE32, IO_NODELOCKED, kerncred, &resid, p)) != 0) {
 		error = LOAD_IOERROR;
 		goto bad2;
 	}
@@ -1442,7 +1506,7 @@ get_macho_vnode(
 		/* Read the Mach-O header out of it */
 		error = vn_rdwr(UIO_READ, vp, (caddr_t)&header.mach_header,
 				sizeof(header.mach_header), fat_arch.offset,
-				UIO_SYSSPACE32, IO_NODELOCKED, cred, &resid, p);
+				UIO_SYSSPACE32, IO_NODELOCKED, kerncred, &resid, p);
 		if (error) {
 			error = LOAD_IOERROR;
 			goto bad2;
@@ -1456,7 +1520,7 @@ get_macho_vnode(
 		}
 
 		*file_offset = fat_arch.offset;
-		*macho_size = fsize = fat_arch.size;
+		*macho_size = fat_arch.size;
 	} else {
 		/*
 		 * Force get_macho_vnode() to fail if the architecture bits
@@ -1483,7 +1547,7 @@ get_macho_vnode(
 	return (error);
 
 bad2:
-	err2 = VNOP_CLOSE(vp, FREAD, &context);
+	err2 = VNOP_CLOSE(vp, FREAD, ctx);
 	vnode_put(vp);
 	return (error);
 

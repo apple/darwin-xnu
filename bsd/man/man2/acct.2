@@ -78,10 +78,10 @@ Accounting is automatically disabled when the file system the
 accounting file resides on runs out of space; it is enabled when
 space once again becomes available.
 .Sh RETURN VALUES
-On error -1 is returned.
+.Rv -std acct
 The file must exist and the call may be exercised only by the super-user.
 .Sh ERRORS
-.Fn Acct
+.Fn acct
 will fail if one of the following is true:
 .Bl -tag -width Er
 .It Bq Er EPERM

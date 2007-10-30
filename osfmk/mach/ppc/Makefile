@@ -13,7 +13,7 @@ DATAFILES = \
 	boolean.h exception.h kern_return.h ndr_def.h \
 	processor_info.h rpc.h thread_state.h thread_status.h \
 	vm_param.h vm_types.h machine_types.defs \
-	syscall_sw.h _types.h
+	syscall_sw.h _structs.h sdt_isa.h
 
 INSTALL_MD_LIST = ${DATAFILES}
 

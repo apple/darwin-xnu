@@ -1,24 +1,30 @@
 
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * This header contains the structures and function prototypes
@@ -40,7 +46,11 @@
 typedef struct block_info {
     off_t       bnum;                // block # on the file system device
     size_t      bsize;               // in bytes
-    struct buf *bp;
+    union {
+	int32_t     cksum;
+	uint32_t    sequence_num;    // only used in block_list_header->binfo[0]
+	struct buf *bp;
+    } b;
 } block_info;
 
 typedef struct block_list_header {
@@ -48,9 +58,12 @@ typedef struct block_list_header {
     u_int16_t   num_blocks;          // number of valid block numbers in block_nums
     int32_t     bytes_used;          // how many bytes of this tbuffer are used
     int32_t     checksum;            // on-disk: checksum of this header and binfo[0]
-    int32_t     pad;                 // pad out to 16 bytes
+    int32_t     flags;               // check-checksums, initial blhdr, etc
     block_info  binfo[1];            // so we can reference them by name
 } block_list_header;
+
+#define BLHDR_CHECK_CHECKSUMS   0x0001
+#define BLHDR_FIRST_HEADER      0x0002
 
 
 struct journal;
@@ -67,6 +80,7 @@ typedef struct transaction {
     off_t               journal_end;   // where in the journal this transaction ends
     struct journal     *jnl;           // ptr back to the journal structure
     struct transaction *next;          // list of tr's (either completed or to be free'd)
+    uint32_t            sequence_num;
 } transaction;
 
 
@@ -83,10 +97,19 @@ typedef struct journal_header {
     int32_t        blhdr_size;    // size in bytes of each block_list_header in the journal
     int32_t        checksum;
     int32_t        jhdr_size;     // block size (in bytes) of the journal header
+    uint32_t       sequence_num;  // NEW FIELD: a monotonically increasing value assigned to all txn's
 } journal_header;
 
 #define JOURNAL_HEADER_MAGIC  0x4a4e4c78   // 'JNLx'
 #define ENDIAN_MAGIC          0x12345678
+
+//
+// we only checksum the original size of the journal_header to remain
+// backwards compatible.  the size of the original journal_heade is
+// everything up to the the sequence_num field, hence we use the
+// offsetof macro to calculate the size.
+//
+#define JOURNAL_HEADER_CKSUM_SIZE  (offsetof(struct journal_header, sequence_num))
 
 #define OLD_JOURNAL_HEADER_MAGIC  0x4a484452   // 'JHDR'
 
@@ -99,6 +122,7 @@ typedef struct journal {
 
     struct vnode       *jdev;              // vnode of the device where the journal lives
     off_t               jdev_offset;       // byte offset to the start of the journal
+    const char         *jdev_name;
 
     struct vnode       *fsdev;             // vnode of the file system device
     
@@ -110,6 +134,9 @@ typedef struct journal {
 
     char               *header_buf;        // in-memory copy of the journal header
     journal_header     *jhdr;              // points to the first byte of header_buf
+
+    off_t               max_read_size;
+    off_t               max_write_size;
 
     transaction        *cur_tr;            // for group-commit
     transaction        *completed_trs;     // out-of-order transactions that completed
@@ -131,6 +158,7 @@ typedef struct journal {
 #define JOURNAL_INVALID           0x00020000
 #define JOURNAL_FLUSHCACHE_ERR    0x00040000   // means we already printed this err
 #define JOURNAL_NEED_SWAP         0x00080000   // swap any data read from disk
+#define JOURNAL_DO_FUA_WRITES     0x00100000   // do force-unit-access writes
 
 /* journal_open/create options are always in the low-16 bits */
 #define JOURNAL_OPTION_FLAGS_MASK 0x0000ffff
@@ -143,7 +171,7 @@ __BEGIN_DECLS
 /*
  * Call journal_init() to initialize the journaling code (sets up lock attributes)
  */
-void      journal_init(void);
+void      journal_init(void) __attribute__((section("__TEXT, initcode")));
 
 /*
  * Call journal_create() to create a new journal.  You only
@@ -252,13 +280,35 @@ void      journal_close(journal *journalp);
 int   journal_start_transaction(journal *jnl);
 int   journal_modify_block_start(journal *jnl, struct buf *bp);
 int   journal_modify_block_abort(journal *jnl, struct buf *bp);
-int   journal_modify_block_end(journal *jnl, struct buf *bp);
+int   journal_modify_block_end(journal *jnl, struct buf *bp, void (*func)(struct buf *bp, void *arg), void *arg);
 int   journal_kill_block(journal *jnl, struct buf *bp);
 int   journal_end_transaction(journal *jnl);
 
 int   journal_active(journal *jnl);
 int   journal_flush(journal *jnl);
 void *journal_owner(journal *jnl);    // compare against current_thread()
+int   journal_uses_fua(journal *jnl);
+
+
+/*
+ * Relocate the journal.
+ * 
+ * You provide the new starting offset and size for the journal. You may
+ * optionally provide a new tbuffer_size; passing zero defaults to not
+ * changing the tbuffer size except as needed to fit within the new journal
+ * size.
+ * 
+ * You must have already started a transaction. The transaction may contain
+ * modified blocks (such as those needed to deallocate the old journal,
+ * allocate the new journal, and update the location and size of the journal
+ * in filesystem-private structures). Any transactions prior to the active
+ * transaction will be flushed to the old journal. The new journal will be
+ * initialized, and the blocks from the active transaction will be written to
+ * the new journal. The caller will need to update the structures that
+ * identify the location and size of the journal from the callback routine.
+ */
+int journal_relocate(journal *jnl, off_t offset, off_t journal_size, int32_t tbuffer_size,
+	errno_t (*callback)(void *), void *callback_arg);
 
 __END_DECLS
 

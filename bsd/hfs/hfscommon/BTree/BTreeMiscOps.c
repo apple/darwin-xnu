@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003, 2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
 	File:		BTreeMiscOps.c
@@ -106,6 +112,7 @@
 */
 
 #include "../headers/BTreesPrivate.h"
+#include "../../hfs_btreeio.h"
 
 
 ////////////////////////////// Routine Definitions //////////////////////////////
@@ -121,11 +128,11 @@ Input:		keySize		- length of key (including length field)
 
 Output:		none
 			
-Result:		UInt16		- size of combined key/record that will be inserted in btree
+Result:		u_int16_t	- size of combined key/record that will be inserted in btree
 -------------------------------------------------------------------------------*/
 
-UInt16		CalcKeyRecordSize		(UInt16					 keySize,
-									 UInt16					 recSize )
+u_int16_t		CalcKeyRecordSize		(u_int16_t				 keySize,
+										 u_int16_t				 recSize )
 {
 	if ( M_IsOdd (keySize) )	keySize += 1;	// pad byte
 	
@@ -153,8 +160,8 @@ Result:		noErr		- success
 OSStatus	VerifyHeader	(FCB				*filePtr,
 							 BTHeaderRec			 *header )
 {
-	UInt64		forkSize;
-	UInt32		totalNodes;
+	u_int64_t		forkSize;
+	u_int32_t		totalNodes;
 	
 
 	switch (header->nodeSize)							// node size == 512*2^n
@@ -171,9 +178,9 @@ OSStatus	VerifyHeader	(FCB				*filePtr,
 	
 	totalNodes = header->totalNodes;
 
-	forkSize = (UInt64)totalNodes * (UInt64)header->nodeSize;
+	forkSize = (u_int64_t)totalNodes * (u_int64_t)header->nodeSize;
 	
-	if ( forkSize > filePtr->fcbEOF )
+	if ( forkSize > (u_int64_t)filePtr->fcbEOF )
 		return fsBTInvalidHeaderErr;
 	
 	if ( header->freeNodes >= totalNodes )
@@ -235,7 +242,7 @@ OSStatus UpdateHeader(BTreeControlBlockPtr btreePtr, Boolean forceWrite)
 	OSStatus				err;
 	BlockDescriptor			node;
 	BTHeaderRec	*header;	
-	UInt32 options;
+	u_int32_t options;
 
 	if ((btreePtr->flags & kBTHeaderDirty) == 0)			// btree info already flushed
 	return	noErr;
@@ -309,20 +316,20 @@ OSStatus	FindIteratorPosition	(BTreeControlBlockPtr	 btreePtr,
 									 BlockDescriptor		*left,
 									 BlockDescriptor		*middle,
 									 BlockDescriptor		*right,
-									 UInt32					*returnNodeNum,
-									 UInt16					*returnIndex,
+									 u_int32_t				*returnNodeNum,
+									 u_int16_t				*returnIndex,
 									 Boolean				*foundRecord )
 {
 	OSStatus		err;
 	Boolean			foundIt;
-	UInt32			nodeNum;
-	UInt16			leftIndex,	index,	rightIndex;
+	u_int32_t		nodeNum;
+	u_int16_t		leftIndex,	index,	rightIndex;
 	Boolean			validHint;
 
 	// assume btreePtr valid
 	// assume left, middle, right point to BlockDescriptors
-	// assume nodeNum points to UInt32
-	// assume index points to UInt16
+	// assume nodeNum points to u_int32_t
+	// assume index points to u_int16_t
 	// assume foundRecord points to Boolean
 	
 	left->buffer		= nil;
@@ -359,16 +366,16 @@ OSStatus	FindIteratorPosition	(BTreeControlBlockPtr	 btreePtr,
 		 ((NodeDescPtr) middle->buffer)->numRecords <= 0 )
 	{	
 		goto SearchTheTree;
-	}
-		
-	++btreePtr->numValidHints;
+	}	
 	
 	foundIt = SearchNode (btreePtr, middle->buffer, &iterator->key, &index);
 	if (foundIt == true)
 	{
+		++btreePtr->numValidHints;
 		goto SuccessfulExit;
 	}
-	
+	iterator->hint.nodeNum = 0;
+
 	if (index == 0)
 	{
 		if (((NodeDescPtr) middle->buffer)->bLink == 0)		// before 1st btree record
@@ -378,9 +385,20 @@ OSStatus	FindIteratorPosition	(BTreeControlBlockPtr	 btreePtr,
 		
 		nodeNum = ((NodeDescPtr) middle->buffer)->bLink;
 		
-		err = GetLeftSiblingNode (btreePtr, middle->buffer, left);
+		// BTree nodes are always grabbed in left to right order.  
+		// Therefore release the current node before looking up the 
+		// left node.
+		err = ReleaseNode(btreePtr, middle);
+		M_ExitOnError(err);
+
+		// Look up the left node 
+		err = GetNode (btreePtr, nodeNum, left);
 		M_ExitOnError (err);
-		
+
+		// Look up the current node again
+		err = GetRightSiblingNode (btreePtr, left->buffer, middle);
+		M_ExitOnError (err);
+
 		if ( ((NodeDescPtr) left->buffer)->kind != kBTLeafNode ||
 			 ((NodeDescPtr) left->buffer)->numRecords <= 0 )
 		{	
@@ -506,7 +524,7 @@ ErrorExit:
 OSStatus	CheckInsertParams		(FCB						*filePtr,
 									 BTreeIterator				*iterator,
 									 FSBufferDescriptor			*record,
-									 UInt16						 recordLen )
+									 u_int16_t					 recordLen )
 {
 	BTreeControlBlockPtr	btreePtr;
 	
@@ -560,13 +578,13 @@ OSStatus	TrySimpleReplace		(BTreeControlBlockPtr	 btreePtr,
 									 NodeDescPtr			 nodePtr,
 									 BTreeIterator			*iterator,
 									 FSBufferDescriptor		*record,
-									 UInt16					 recordLen,
+									 u_int16_t				 recordLen,
 									 Boolean				*recordInserted )
 {
-	UInt32				oldSpace;
-	UInt32				spaceNeeded;
-	UInt16				index;
-	UInt16				keySize;
+	u_int32_t			oldSpace;
+	u_int32_t			spaceNeeded;
+	u_int16_t			index;
+	u_int16_t			keySize;
 	Boolean				foundIt;
 	Boolean				didItFit;
 	
@@ -589,7 +607,7 @@ OSStatus	TrySimpleReplace		(BTreeControlBlockPtr	 btreePtr,
 	
 	if ( spaceNeeded == oldSpace )
 	{
-		UInt8 *		dst;
+		u_int8_t *		dst;
 
 		dst = GetRecordAddress (btreePtr, nodePtr, index);
 

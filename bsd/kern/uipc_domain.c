@@ -1,25 +1,30 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-/* Copyright (c) 1998, 1999 Apple Computer, Inc. All Rights Reserved */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
  * Copyright (c) 1982, 1986, 1993
@@ -69,8 +74,21 @@
 #include <sys/syslog.h>
 #include <sys/queue.h>
 
+#include <pexpert/pexpert.h>
+
+void domaininit(void) __attribute__((section("__TEXT, initcode")));
+void init_domain(struct domain *dp) __attribute__((section("__TEXT, initcode")));
+void concat_domain(struct domain *dp) __attribute__((section("__TEXT, initcode")));
+
+
 void	pffasttimo(void *);
 void	pfslowtimo(void *);
+
+struct protosw *pffindprotonotype(int, int);
+struct protosw *pffindprotonotype_locked(int , int , int);
+struct domain *pffinddomain(int);
+void concat_domain(struct domain *);
+void init_domain(struct domain *);
 
 /*
  * Add/delete 'domain': Link structure into system list,
@@ -84,7 +102,19 @@ static lck_grp_attr_t	*domain_proto_mtx_grp_attr;
 lck_mtx_t		*domain_proto_mtx;
 extern int		do_reclaim;
 
-void init_domain(register struct domain *dp)
+static void
+init_proto(struct protosw *pr)
+{
+	TAILQ_INIT(&pr->pr_filter_head);
+	if (pr->pr_init)
+		(*pr->pr_init)();
+
+	/* Make sure pr_init isn't called again!! */
+	pr->pr_init = 0;
+}
+
+void
+init_domain(struct domain *dp)
 {
 	struct protosw  *pr;
 	
@@ -104,8 +134,8 @@ void init_domain(register struct domain *dp)
 			      dp->dom_name, 
 			      (int)(pr - dp->dom_protosw));
 
-		if (pr->pr_init)
-			(*pr->pr_init)();
+		init_proto(pr);
+
 	}
 
 	/* Recompute for new protocol */
@@ -117,7 +147,8 @@ void init_domain(register struct domain *dp)
 	max_datalen = MHLEN - max_hdr;
 }
 
-void	concat_domain(struct domain *dp) 
+void
+concat_domain(struct domain *dp) 
 {
 	lck_mtx_assert(domain_proto_mtx, LCK_MTX_ASSERT_OWNED);
 	dp->dom_next = domains; 
@@ -125,9 +156,8 @@ void	concat_domain(struct domain *dp)
 }
 
 void
-net_add_domain(register struct domain *dp)
-{	register struct protosw *pr;
-
+net_add_domain(struct domain *dp)
+{
 	kprintf("Adding domain %s (family %d)\n", dp->dom_name,
 		dp->dom_family);
 	/* First, link in the domain */
@@ -141,7 +171,7 @@ net_add_domain(register struct domain *dp)
 }
 
 int
-net_del_domain(register struct domain *dp)
+net_del_domain(struct domain *dp)
 {	register struct domain *dp1, *dp2;
 	register int retval = 0;
 
@@ -174,8 +204,7 @@ net_del_domain(register struct domain *dp)
  * note: protocols must use their own domain lock before calling net_add_proto
  */
 int
-net_add_proto(register struct protosw *pp,
-	      register struct domain *dp)
+net_add_proto(struct protosw *pp, struct domain *dp)
 {	register struct protosw *pp1, *pp2;
 
 	for (pp2 = NULL, pp1 = dp->dom_protosw; pp1; pp1 = pp1->pr_next)
@@ -189,13 +218,9 @@ net_add_proto(register struct protosw *pp,
 		dp->dom_protosw = pp;
 	else
 		pp2->pr_next = pp;
-	pp->pr_next = NULL;
-	TAILQ_INIT(&pp->pr_filter_head);
-	if (pp->pr_init)
-		(*pp->pr_init)();
 
-	/* Make sure pr_init isn't called again!! */
-	pp->pr_init = 0;
+	init_proto(pp);
+
 	return(0);
 }
 
@@ -207,10 +232,9 @@ net_add_proto(register struct protosw *pp,
  * note: protocols must use their own domain lock before calling net_del_proto
  */
 int
-net_del_proto(register int type,
-	      register int protocol,
-	      register struct domain *dp)
-{	register struct protosw *pp1, *pp2;
+net_del_proto(int type, int protocol, struct domain *dp)
+{
+	register struct protosw *pp1, *pp2;
 
 	for (pp2 = NULL, pp1 = dp->dom_protosw; pp1; pp1 = pp1->pr_next)
 	{	if (pp1->pr_type == type &&
@@ -229,31 +253,33 @@ net_del_proto(register int type,
 }
 
 
-void
-domaininit()
-{	register struct domain *dp;
-	register struct protosw *pr;
-	extern struct domain localdomain, routedomain, ndrvdomain, inetdomain;
-	extern struct domain systemdomain;
 #if NS
-	extern struct domain nsdomain;
+extern struct domain nsdomain;
 #endif
 #if ISO
-	extern struct domain isodomain;
+extern struct domain isodomain;
 #endif
 #if CCITT
-	extern struct domain ccittdomain;
+extern struct domain ccittdomain;
 #endif
 
 #if NETAT
-	extern struct domain atalkdomain;
+extern struct domain atalkdomain;
 #endif
 #if INET6
-	extern struct domain inet6domain;
+extern struct domain inet6domain;
 #endif
 #if IPSEC
-	extern struct domain keydomain;
+extern struct domain keydomain;
 #endif
+
+extern struct domain routedomain, ndrvdomain, inetdomain;
+extern struct domain systemdomain;
+
+void
+domaininit(void)
+{
+	register struct domain *dp;
 
 	/*
 	 * allocate lock group attribute and group for domain mutexes
@@ -315,21 +341,34 @@ domaininit()
 	timeout(pfslowtimo, NULL, 1);
 }
 
+static __inline__ struct domain *
+pffinddomain_locked(int pf)
+{
+	struct domain *dp;
+
+	dp = domains;
+	while (dp != NULL)
+	{	if (dp->dom_family == pf) {
+			break;
+		}
+		dp = dp->dom_next;
+	}
+	return (dp);
+}
+
 struct protosw *
-pffindtype(family, type)
-	int family, type;
+pffindtype(int family, int type)
 {
 	register struct domain *dp;
 	register struct protosw *pr;
 
 	lck_mtx_assert(domain_proto_mtx, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(domain_proto_mtx);
-	for (dp = domains; dp; dp = dp->dom_next)
-		if (dp->dom_family == family)
-			goto found;
+	dp = pffinddomain_locked(family);
+	if (dp == NULL) {
 	lck_mtx_unlock(domain_proto_mtx);
-	return (0);
-found:
+		return (NULL);
+	}
 	for (pr = dp->dom_protosw; pr; pr = pr->pr_next)
 		if (pr->pr_type && pr->pr_type == type) {
 			lck_mtx_unlock(domain_proto_mtx);
@@ -341,25 +380,18 @@ found:
 
 struct domain *
 pffinddomain(int pf)
-{	struct domain *dp;
+{
+	struct domain *dp;
 
 	lck_mtx_assert(domain_proto_mtx, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(domain_proto_mtx);
-	dp = domains;
-	while (dp)
-	{	if (dp->dom_family == pf) {
+	dp = pffinddomain_locked(pf);
 			lck_mtx_unlock(domain_proto_mtx);
 			return(dp);
 		}
-		dp = dp->dom_next;
-	}
-	lck_mtx_unlock(domain_proto_mtx);
-	return(NULL);
-}
 
 struct protosw *
-pffindproto(family, protocol, type)
-	int family, protocol, type;
+pffindproto(int family, int protocol, int type)
 {
 	register struct protosw *pr;
 	lck_mtx_assert(domain_proto_mtx, LCK_MTX_ASSERT_NOTOWNED);
@@ -370,8 +402,7 @@ pffindproto(family, protocol, type)
 }
 
 struct protosw *
-pffindproto_locked(family, protocol, type)
-	int family, protocol, type;
+pffindproto_locked(int family, int protocol, int type)
 {
 	register struct domain *dp;
 	register struct protosw *pr;
@@ -379,11 +410,10 @@ pffindproto_locked(family, protocol, type)
 
 	if (family == 0)
 		return (0);
-	for (dp = domains; dp; dp = dp->dom_next)
-		if (dp->dom_family == family)
-			goto found;
-	return (0);
-found:
+	dp = pffinddomain_locked(family);
+	if (dp == NULL) {
+		return (NULL);
+	}
 	for (pr = dp->dom_protosw; pr; pr = pr->pr_next) {
 		if ((pr->pr_protocol == protocol) && (pr->pr_type == type))
 			return (pr);
@@ -395,9 +425,43 @@ found:
 	return (maybe);
 }
 
+struct protosw *
+pffindprotonotype_locked(int family, int protocol, __unused int type)
+{
+	register struct domain *dp;
+	register struct protosw *pr;
+
+	if (family == 0)
+		return (0);
+	dp = pffinddomain_locked(family);
+	if (dp == NULL) {
+		return (NULL);
+	}
+	for (pr = dp->dom_protosw; pr; pr = pr->pr_next) {
+		if (pr->pr_protocol == protocol) {
+			return (pr);
+		}
+	}
+	return (NULL);
+}
+
+struct protosw *
+pffindprotonotype(int family, int protocol)
+{
+	register struct protosw *pr;
+	if (protocol == 0) {
+		return (NULL);
+	}
+	lck_mtx_assert(domain_proto_mtx, LCK_MTX_ASSERT_NOTOWNED);
+	lck_mtx_lock(domain_proto_mtx);
+	pr = pffindprotonotype_locked(family, protocol, 0);
+	lck_mtx_unlock(domain_proto_mtx);
+	return (pr);
+}
+
 int
 net_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp, 
-           user_addr_t newp, size_t newlen, struct proc *p)
+           user_addr_t newp, size_t newlen, __unused struct proc *p)
 {
 	register struct domain *dp;
 	register struct protosw *pr;
@@ -434,18 +498,13 @@ found:
 }
 
 void
-pfctlinput(cmd, sa)
-	int cmd;
-	struct sockaddr *sa;
+pfctlinput(int cmd, struct sockaddr *sa)
 {
 	pfctlinput2(cmd, sa, (void*)0);
 }
 
 void
-pfctlinput2(cmd, sa, ctlparam)
-	int cmd;
-	struct sockaddr *sa;
-	void *ctlparam;
+pfctlinput2(int cmd, struct sockaddr *sa, void *ctlparam)
 {
 	struct domain *dp;
 	struct protosw *pr;
@@ -462,8 +521,7 @@ pfctlinput2(cmd, sa, ctlparam)
 }
 
 void
-pfslowtimo(arg)
-	void *arg;
+pfslowtimo(__unused void *arg)
 {
 	register struct domain *dp;
 	register struct protosw *pr;
@@ -478,13 +536,12 @@ pfslowtimo(arg)
 		}
 	do_reclaim = 0;
 	lck_mtx_unlock(domain_proto_mtx);
-	timeout(pfslowtimo, NULL, hz/2);
+	timeout(pfslowtimo, NULL, hz/PR_SLOWHZ);
         
 }
 
 void
-pffasttimo(arg)
-	void *arg;
+pffasttimo(__unused void *arg)
 {
 	register struct domain *dp;
 	register struct protosw *pr;
@@ -495,5 +552,5 @@ pffasttimo(arg)
 			if (pr->pr_fasttimo)
 				(*pr->pr_fasttimo)();
 	lck_mtx_unlock(domain_proto_mtx);
-	timeout(pffasttimo, NULL, hz/5);
+	timeout(pffasttimo, NULL, hz/PR_FASTHZ);
 }

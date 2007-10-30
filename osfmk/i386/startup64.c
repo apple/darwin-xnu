@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <string.h>
@@ -63,25 +69,52 @@
 void
 cpu_IA32e_enable(cpu_data_t *cdp)
 {
-	uint32_t	cr0 = get_cr0();
-        uint64_t	efer = rdmsr64(MSR_IA32_EFER);
-
 	assert(!ml_get_interrupts_enabled());
+
+	if (!cdp->cpu_is64bit ||
+	    (rdmsr64(MSR_IA32_EFER) & MSR_IA32_EFER_LMA) != 0)
+		return;
 
 	postcode(CPU_IA32_ENABLE_ENTRY);
 
-	/* Turn paging off - works because we're identity mapped */
-	set_cr0(cr0 & ~CR0_PG);
+	/* 
+	 * The following steps are performed by inlines so that
+	 * we can be assured we don't use the stack or any other
+	 * non-identity mapped data while paging is turned off...
+	 */
+	/* Turn paging off */
+	asm volatile(
+		"mov	%%cr0, %%eax	\n\t"
+		"andl	%0, %%eax	\n\t"
+		"mov	%%eax, %%cr0	\n\t"
+		:
+		: "i" (~CR0_PG)
+		: "eax" );
 
-	/* pop in new top level phys pg addr */
-	set_cr3((vm_offset_t) kernel64_cr3);
+	/* Pop new top level phys pg addr into CR3 */
+	asm volatile(
+		"mov	%%eax, %%cr3	\n\t"
+		:
+		: "a" ((uint32_t) kernel64_cr3));
 
-	wrmsr64(MSR_IA32_EFER, efer | MSR_IA32_EFER_LME); /* set  mode */
+	/* Turn on the 64-bit mode bit */
+	asm volatile(
+		"rdmsr			\n\t"
+		"orl	%1, %%eax	\n\t"
+		"wrmsr			\n\t"
+		:
+		: "c" (MSR_IA32_EFER), "i" (MSR_IA32_EFER_LME)
+		: "eax", "edx");
 
-	/* Turn paging on */
-        set_cr0(cr0 | CR0_PG);
-
-	/* this call is required to re-activate paging */
+	/* Turn paging on again */
+	asm volatile(
+		"mov	%%cr0, %%eax	\n\t"
+		"orl	%0, %%eax	\n\t"
+		"mov	%%eax, %%cr0	\n\t"
+		:
+		: "i" (CR0_PG)
+		: "eax" );
+	
 	kprintf("cpu_IA32e_enable(%p)\n", cdp);
 
 	if ((rdmsr64(MSR_IA32_EFER) & MSR_IA32_EFER_LMA) == 0)
@@ -95,28 +128,52 @@ cpu_IA32e_enable(cpu_data_t *cdp)
 void
 cpu_IA32e_disable(cpu_data_t *cdp)
 {
-	uint32_t	cr0 = get_cr0();
-        uint64_t	efer = rdmsr64(MSR_IA32_EFER);
-
 	assert(!ml_get_interrupts_enabled());
 
 	postcode(CPU_IA32_DISABLE_ENTRY);
 
-	if ((rdmsr64(MSR_IA32_EFER) & MSR_IA32_EFER_LMA) == 0)
-		panic("cpu_IA32e_disable() MSR_IA32_EFER_LMA clear on entry");
+	if (!cdp->cpu_is64bit ||
+	    (rdmsr64(MSR_IA32_EFER) & MSR_IA32_EFER_LMA) == 0)
+		return;
 
-	/* Turn paging off - works because we're identity mapped */
-	set_cr0(cr0 & ~CR0_PG);
+	/* 
+	 * The following steps are performed by inlines so that
+	 * we can be assured we don't use the stack or any other
+	 * non-identity mapped data while paging is turned off...
+	 */
+	/* Turn paging off */
+	asm volatile(
+		"mov	%%cr0, %%eax	\n\t"
+		"andl	%0, %%eax	\n\t"
+		"mov	%%eax, %%cr0	\n\t"
+		:
+		: "i" (~CR0_PG)
+		: "eax" );
 
-	/* pop in legacy top level phys pg addr */
-	set_cr3((vm_offset_t) lo_kernel_cr3);
+	/* Pop legacy top level phys pg addr into CR3 */
+	asm volatile(
+		"mov	%%eax, %%cr3	\n\t"
+		:
+		: "a" ((uint32_t) lo_kernel_cr3));
 
-	wrmsr64(MSR_IA32_EFER, efer & ~MSR_IA32_EFER_LME); /* reset mode */
+	/* Turn off the 64-bit mode bit */
+	asm volatile(
+		"rdmsr			\n\t"
+		"andl	%1, %%eax	\n\t"
+		"wrmsr			\n\t"
+		:
+		: "c" (MSR_IA32_EFER), "i" (~MSR_IA32_EFER_LME)
+		: "eax", "edx");
 
-	/* Turn paging on */
-        set_cr0(cr0 | CR0_PG);
-
-	/* this call is required to re-activate paging */
+	/* Turn paging on again */
+	asm volatile(
+		"mov	%%cr0, %%eax	\n\t"
+		"orl	%0, %%eax	\n\t"
+		"mov	%%eax, %%cr0	\n\t"
+		:
+		: "i" (CR0_PG)
+		: "eax" );
+	
 	kprintf("cpu_IA32e_disable(%p)\n", cdp);
 
 	if ((rdmsr64(MSR_IA32_EFER) & MSR_IA32_EFER_LMA) != 0)
@@ -203,12 +260,12 @@ dump_frame32(x86_saved_state_compat32_t *scp)
 	unsigned int	i;
 	uint32_t	*ip = (uint32_t *) scp;
 
-	kprintf("dump_frame32(0x%08x):\n", scp);
+	kprintf("dump_frame32(%p):\n", scp);
 	
 	for (i = 0;
 	     i < sizeof(x86_saved_state_compat32_t)/sizeof(uint32_t);
 	     i++, ip++)
-		kprintf("0x%08x: 0x%08x\n", ip, *ip);
+		kprintf("%p: 0x%08x\n", ip, *ip);
 
 	kprintf("scp->isf64.err:    0x%016llx\n", scp->isf64.err);
 	kprintf("scp->isf64.rip:    0x%016llx\n", scp->isf64.rip);
@@ -251,7 +308,7 @@ dump_frame64(x86_saved_state64_t *sp)
 	for (i = 0;
 	     i < sizeof(x86_saved_state64_t)/sizeof(uint64_t);
 	     i++, ip++)
-		kprintf("0x%08x: 0x%016x\n", ip, *ip);
+		kprintf("%p: 0x%016llx\n", ip, *ip);
 
 	kprintf("sp->isf.trapno: 0x%08x\n", sp->isf.trapno);
 	kprintf("sp->isf.trapfn: 0x%08x\n", sp->isf.trapfn);
@@ -293,7 +350,7 @@ dump_gdt(void *gdtp)
 	unsigned int	i;
 	uint32_t	*ip = (uint32_t *) gdtp;
 
-	kprintf("GDT:\n", ip);
+	kprintf("GDT:\n");
 	for (i = 0; i < GDTSZ; i++, ip += 2) {
 		kprintf("%p: 0x%08x\n", ip+0, *(ip+0));
 		kprintf("%p: 0x%08x\n", ip+1, *(ip+1));
@@ -306,7 +363,7 @@ dump_ldt(void *ldtp)
 	unsigned int	i;
 	uint32_t	*ip = (uint32_t *) ldtp;
 
-	kprintf("LDT:\n", ip);
+	kprintf("LDT:\n");
 	for (i = 0; i < LDTSZ_MIN; i++, ip += 2) {
 		kprintf("%p: 0x%08x\n", ip+0, *(ip+0));
 		kprintf("%p: 0x%08x\n", ip+1, *(ip+1));
@@ -319,7 +376,7 @@ dump_idt(void *idtp)
 	unsigned int	i;
 	uint32_t	*ip = (uint32_t *) idtp;
 
-	kprintf("IDT64:\n", ip);
+	kprintf("IDT64:\n");
 	for (i = 0; i < 16; i++, ip += 4) {
 		kprintf("%p: 0x%08x\n", ip+0, *(ip+0));
 		kprintf("%p: 0x%08x\n", ip+1, *(ip+1));
@@ -334,7 +391,7 @@ dump_tss(void *tssp)
 	unsigned int	i;
 	uint32_t	*ip = (uint32_t *) tssp;
 
-	kprintf("TSS64:\n", ip);
+	kprintf("TSS64:\n");
 	for (i = 0; i < sizeof(master_ktss64)/sizeof(uint32_t); i++, ip++) {
 		kprintf("%p: 0x%08x\n", ip+0, *(ip+0));
 	}

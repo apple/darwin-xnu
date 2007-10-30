@@ -1,30 +1,39 @@
 /*
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <kern/thread.h>
+#include <kern/ipc_tt.h>
 #include <ppc/exception.h>
 #include <ppc/savearea.h>
 #include <ppc/hw_perfmon.h>
 #include <ppc/hw_perfmon_mmcr.h>
+#include <ppc/trap.h>
+#include <mach/thread_act.h>
 
 decl_simple_lock_data(,hw_perfmon_lock)
 static task_t hw_perfmon_owner = TASK_NULL;
@@ -131,10 +140,10 @@ int perfmon_release_facility(task_t task)
 	return retval;
 }
 
-int perfmon_enable(thread_t thread)
+static int
+perfmon_enable(thread_t thread)
 {
 	struct savearea *sv = thread->machine.pcb;
-	kern_return_t kr;
 	kern_return_t retval = KERN_SUCCESS;
 	int curPMC;
   
@@ -233,7 +242,8 @@ int perfmon_disable(thread_t thread)
 	return KERN_SUCCESS;
 }
 
-int perfmon_clear_counters(thread_t thread)
+static int
+perfmon_clear_counters(thread_t thread)
 {
 	struct savearea *sv = thread->machine.pcb;
 	int curPMC;
@@ -251,7 +261,8 @@ int perfmon_clear_counters(thread_t thread)
 	return KERN_SUCCESS;
 }
 
-int perfmon_write_counters(thread_t thread, uint64_t *pmcs)
+static int
+perfmon_write_counters(thread_t thread, uint64_t *pmcs)
 {
 	struct savearea *sv = thread->machine.pcb;
 	int curPMC;
@@ -269,7 +280,8 @@ int perfmon_write_counters(thread_t thread, uint64_t *pmcs)
 	return KERN_SUCCESS;
 }
 
-int perfmon_read_counters(thread_t thread, uint64_t *pmcs)
+static int
+perfmon_read_counters(thread_t thread, uint64_t *pmcs)
 {
 	struct savearea *sv = thread->machine.pcb;
 	int curPMC;
@@ -300,7 +312,8 @@ int perfmon_read_counters(thread_t thread, uint64_t *pmcs)
 	return KERN_SUCCESS;
 }
 
-int perfmon_start_counters(thread_t thread)
+static int
+perfmon_start_counters(thread_t thread)
 {
 	struct savearea *sv = thread->machine.pcb;
 	kern_return_t retval = KERN_SUCCESS;
@@ -356,7 +369,8 @@ int perfmon_start_counters(thread_t thread)
 	return retval;
 }
 
-int perfmon_stop_counters(thread_t thread)
+static int
+perfmon_stop_counters(thread_t thread)
 {
 	struct savearea *sv = thread->machine.pcb;
 	kern_return_t retval = KERN_SUCCESS;
@@ -392,7 +406,8 @@ int perfmon_stop_counters(thread_t thread)
 	return retval;
 }
 
-int perfmon_set_event(thread_t thread, int pmc, int event)
+static int
+perfmon_set_event(thread_t thread, int pmc, int event)
 {
 	struct savearea *sv = thread->machine.pcb;
 	kern_return_t retval = KERN_SUCCESS;
@@ -532,7 +547,8 @@ int perfmon_set_event(thread_t thread, int pmc, int event)
 	return retval;
 }
 
-int perfmon_set_event_func(thread_t thread, uint32_t f)
+static int
+perfmon_set_event_func(thread_t thread, uint32_t f)
 {
 	struct savearea *sv = thread->machine.pcb;
 	kern_return_t retval = KERN_SUCCESS;
@@ -589,7 +605,8 @@ int perfmon_set_event_func(thread_t thread, uint32_t f)
 	return retval;
 }
 
-int perfmon_set_threshold(thread_t thread, int threshold)
+static int
+perfmon_set_threshold(thread_t thread, int threshold)
 {
 	struct savearea *sv = thread->machine.pcb;
 	kern_return_t retval = KERN_SUCCESS;
@@ -686,7 +703,8 @@ int perfmon_set_threshold(thread_t thread, int threshold)
 	return retval;
 }
 
-int perfmon_set_tbsel(thread_t thread, int tbsel)
+static int
+perfmon_set_tbsel(thread_t thread, int tbsel)
 {
 	struct savearea *sv = thread->machine.pcb;
 	kern_return_t retval = KERN_SUCCESS;
@@ -744,7 +762,7 @@ int perfmon_set_tbsel(thread_t thread, int tbsel)
 
 int perfmon_control(struct savearea *ssp)
 {
-	mach_port_t thr_port = CAST_DOWN(mach_port_t, ssp->save_r3); 
+	mach_port_name_t thr_port = CAST_DOWN(mach_port_name_t, ssp->save_r3); 
 	int action = (int)ssp->save_r4;
 	int pmc = (int)ssp->save_r5;
 	int val = (int)ssp->save_r6;
@@ -755,7 +773,7 @@ int perfmon_control(struct savearea *ssp)
 	int error;  
 	boolean_t oldlevel;
 
-	thread = (thread_t) port_name_to_thread(thr_port); // convert user space thread port name to a thread_t
+	thread = port_name_to_thread(thr_port); // convert user space thread port name to a thread_t
 	if(!thread) {
 		ssp->save_r3 = KERN_INVALID_ARGUMENT;
 		return 1;  /* Return and check for ASTs... */
@@ -826,7 +844,7 @@ int perfmon_control(struct savearea *ssp)
 				}
 			}
 			if(action & PPC_PERFMON_WRITE_COUNTERS) {
-				if(error = copyin(CAST_USER_ADDR_T(usr_pmcs_p), (void *)kern_pmcs, MAX_CPUPMC_COUNT*sizeof(uint64_t))) {
+				if((error = copyin(CAST_USER_ADDR_T(usr_pmcs_p), (void *)kern_pmcs, MAX_CPUPMC_COUNT*sizeof(uint64_t)))) {
 					retval = error;
 					goto perfmon_return;
 				}
@@ -842,7 +860,7 @@ int perfmon_control(struct savearea *ssp)
 					retval = error;
 					goto perfmon_return;
 				}
-				if(error = copyout((void *)kern_pmcs, CAST_USER_ADDR_T(usr_pmcs_p), MAX_CPUPMC_COUNT*sizeof(uint64_t))) {
+				if((error = copyout((void *)kern_pmcs, CAST_USER_ADDR_T(usr_pmcs_p), MAX_CPUPMC_COUNT*sizeof(uint64_t)))) {
 					retval = error;
 					goto perfmon_return;
 				}

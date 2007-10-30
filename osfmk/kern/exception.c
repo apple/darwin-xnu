@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -61,6 +67,8 @@
 #include <mach/task.h>
 #include <mach/thread_status.h>
 #include <mach/exception_types.h>
+#include <mach/exc.h>
+#include <mach/mach_exc.h>
 #include <ipc/port.h>
 #include <ipc/ipc_entry.h>
 #include <ipc/ipc_object.h>
@@ -78,7 +86,6 @@
 #include <kern/host.h>
 #include <kern/misc_protos.h>
 #include <string.h>
-#include <mach/exc.h>
 
 #if	MACH_KDB
 #include <ddb/db_trap.h>
@@ -104,9 +111,10 @@ unsigned long c_tsk_exc_raise_state = 0;
 unsigned long c_tsk_exc_raise_state_id = 0;
 
 /* forward declarations */
-void exception_deliver(
+kern_return_t exception_deliver(
+	thread_t 		thread,
 	exception_type_t	exception,
-	exception_data_t	code,
+	mach_exception_data_t	code,
 	mach_msg_type_number_t  codeCnt,
 	struct exception_action *excp,
 	mutex_t			*mutex);
@@ -114,7 +122,7 @@ void exception_deliver(
 #ifdef MACH_BSD
 kern_return_t bsd_exception(
 	exception_type_t	exception,
-	exception_data_t	code,
+	mach_exception_data_t	code,
 	mach_msg_type_number_t  codeCnt);
 #endif /* MACH_BSD */
 
@@ -128,18 +136,20 @@ kern_return_t bsd_exception(
  *		thread_exception_return and thread_kdb_return
  *		are possible.
  *	Returns:
- *		If the exception was not handled by this handler
+ *		KERN_SUCCESS if the exception was handled
  */
-void
+kern_return_t 
 exception_deliver(
+	thread_t		thread,
 	exception_type_t	exception,
-	exception_data_t	code,
+	mach_exception_data_t	code,
 	mach_msg_type_number_t  codeCnt,
 	struct exception_action *excp,
 	mutex_t			*mutex)
 {
-	thread_t		self = current_thread();
 	ipc_port_t		exc_port;
+	exception_data_type_t	small_code[EXCEPTION_CODE_MAX];
+	int			code64;
 	int			behavior;
 	int			flavor;
 	kern_return_t		kr;
@@ -148,8 +158,8 @@ exception_deliver(
 	 *  Save work if we are terminating.
 	 *  Just go back to our AST handler.
 	 */
-	if (!self->active)
-		thread_exception_return();
+	if (!thread->active)
+		return KERN_SUCCESS;
 
 	/*
 	 * Snapshot the exception action data under lock for consistency.
@@ -162,13 +172,13 @@ exception_deliver(
 	exc_port = excp->port;
 	if (!IP_VALID(exc_port)) {
 		mutex_unlock(mutex);
-		return;
+		return KERN_FAILURE;
 	}
 	ip_lock(exc_port);
 	if (!ip_active(exc_port)) {
 		ip_unlock(exc_port);
 		mutex_unlock(mutex);
-		return;
+		return KERN_FAILURE;
 	}
 	ip_reference(exc_port);	
 	exc_port->ip_srights++;
@@ -178,6 +188,15 @@ exception_deliver(
 	behavior = excp->behavior;
 	mutex_unlock(mutex);
 
+	code64 = (behavior & MACH_EXCEPTION_CODES);
+	behavior &= ~MACH_EXCEPTION_CODES;
+
+	if (!code64) {
+		small_code[0] = CAST_DOWN(exception_data_type_t, code[0]);
+		small_code[1] = CAST_DOWN(exception_data_type_t, code[1]);
+	}
+
+
 	switch (behavior) {
 	case EXCEPTION_STATE: {
 		mach_msg_type_number_t state_cnt;
@@ -185,39 +204,54 @@ exception_deliver(
 
 		c_thr_exc_raise_state++;
 		state_cnt = _MachineStateCount[flavor];
-		kr = thread_getstatus(self, flavor, 
+		kr = thread_getstatus(thread, flavor, 
 				      (thread_state_t)state,
 				      &state_cnt);
 		if (kr == KERN_SUCCESS) {
-			kr = exception_raise_state(exc_port, exception,
-						   code, codeCnt,
-						   &flavor,
-						   state, state_cnt,
-						   state, &state_cnt);
+			if (code64) {
+				kr = mach_exception_raise_state(exc_port, 
+						exception,
+						code, 
+						codeCnt,
+						&flavor,
+						state, state_cnt,
+						state, &state_cnt);
+			} else {
+				kr = exception_raise_state(exc_port, exception,
+						small_code, 
+						codeCnt,
+						&flavor,
+						state, state_cnt,
+						state, &state_cnt);
+			}
 			if (kr == MACH_MSG_SUCCESS)
-				kr = thread_setstatus(self, flavor, 
-						      (thread_state_t)state,
-						      state_cnt);
+				kr = thread_setstatus(thread, flavor, 
+						(thread_state_t)state,
+						state_cnt);
 		}
 
-		if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
-			thread_exception_return();
-			/*NOTREACHED*/
-		return;
+		return kr;
 	}
 
 	case EXCEPTION_DEFAULT:
 		c_thr_exc_raise++;
-		kr = exception_raise(exc_port,
-				retrieve_thread_self_fast(self),
-				retrieve_task_self_fast(self->task),
-				exception,
-				code, codeCnt);
+		if (code64) {
+			kr = mach_exception_raise(exc_port,
+					retrieve_thread_self_fast(thread),
+					retrieve_task_self_fast(thread->task),
+					exception,
+					code, 
+					codeCnt);
+		} else {
+			kr = exception_raise(exc_port,
+					retrieve_thread_self_fast(thread),
+					retrieve_task_self_fast(thread->task),
+					exception,
+					small_code, 
+					codeCnt);
+		}
 
-		if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
-			thread_exception_return();
-			/*NOTREACHED*/
-		return;
+		return kr;
 
 	case EXCEPTION_STATE_IDENTITY: {
 		mach_msg_type_number_t state_cnt;
@@ -225,32 +259,44 @@ exception_deliver(
 
 		c_thr_exc_raise_state_id++;
 		state_cnt = _MachineStateCount[flavor];
-		kr = thread_getstatus(self, flavor,
+		kr = thread_getstatus(thread, flavor,
 				      (thread_state_t)state,
 				      &state_cnt);
 		if (kr == KERN_SUCCESS) {
-		    kr = exception_raise_state_identity(exc_port,
-				retrieve_thread_self_fast(self),
-				retrieve_task_self_fast(self->task),
-				exception,
-				code, codeCnt,
-				&flavor,
-				state, state_cnt,
-				state, &state_cnt);
-		    if (kr == MACH_MSG_SUCCESS)
-			kr = thread_setstatus(self, flavor,
-					      (thread_state_t)state,
-					      state_cnt);
+			if (code64) {
+				kr = mach_exception_raise_state_identity(
+						exc_port,
+						retrieve_thread_self_fast(thread),
+						retrieve_task_self_fast(thread->task),
+						exception,
+						code, 
+						codeCnt,
+						&flavor,
+						state, state_cnt,
+						state, &state_cnt);
+			} else {
+				kr = exception_raise_state_identity(exc_port,
+						retrieve_thread_self_fast(thread),
+						retrieve_task_self_fast(thread->task),
+						exception,
+						small_code, 
+						codeCnt,
+						&flavor,
+						state, state_cnt,
+						state, &state_cnt);
+			}
+			if (kr == MACH_MSG_SUCCESS)
+				kr = thread_setstatus(thread, flavor,
+						(thread_state_t)state,
+						state_cnt);
 		}
 
-		if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
-			thread_exception_return();
-			/*NOTREACHED*/
-		return;
+		return kr;
 	}
-	
+
 	default:
-		panic ("bad exception behavior!");
+	       panic ("bad exception behavior!");
+	       return KERN_FAILURE; 
 	}/* switch */
 }
 
@@ -270,7 +316,7 @@ exception_deliver(
 void
 exception_triage(
 	exception_type_t	exception,
-	exception_data_t	code,
+	mach_exception_data_t	code,
 	mach_msg_type_number_t  codeCnt)
 {
 	thread_t		thread;
@@ -278,6 +324,7 @@ exception_triage(
 	host_priv_t		host_priv;
 	struct exception_action *excp;
 	mutex_t			*mutex;
+	kern_return_t		kr;
 
 	assert(exception != EXC_RPC_ALERT);
 
@@ -290,7 +337,9 @@ exception_triage(
 	thread = current_thread();
 	mutex = mutex_addr(thread->mutex);
 	excp = &thread->exc_actions[exception];
-	exception_deliver(exception, code, codeCnt, excp, mutex);
+	kr = exception_deliver(thread, exception, code, codeCnt, excp, mutex);
+	if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
+		goto out;
 
 	/*
 	 * Maybe the task level will handle it.
@@ -298,7 +347,9 @@ exception_triage(
 	task = current_task();
 	mutex = mutex_addr(task->lock);
 	excp = &task->exc_actions[exception];
-	exception_deliver(exception, code, codeCnt, excp, mutex);
+	kr = exception_deliver(thread, exception, code, codeCnt, excp, mutex);
+	if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
+		goto out;
 
 	/*
 	 * How about at the host level?
@@ -306,7 +357,9 @@ exception_triage(
 	host_priv = host_priv_self();
 	mutex = mutex_addr(host_priv->lock);
 	excp = &host_priv->exc_actions[exception];
-	exception_deliver(exception, code, codeCnt, excp, mutex);
+	kr = exception_deliver(thread, exception, code, codeCnt, excp, mutex);
+	if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
+		goto out;
 
 	/*
 	 * Nobody handled it, terminate the task.
@@ -325,23 +378,23 @@ exception_triage(
 #endif	/* MACH_KDB */
 
 	(void) task_terminate(task);
-	thread_exception_return();
-	/*NOTREACHED*/
+
+out:
+	if (exception != EXC_CRASH)
+		thread_exception_return();
+	return;
 }
 
 kern_return_t
 bsd_exception(
 	exception_type_t	exception,
-	exception_data_t	code,
+	mach_exception_data_t	code,
 	mach_msg_type_number_t  codeCnt)
 {
 	task_t			task;
 	struct exception_action *excp;
 	mutex_t			*mutex;
 	thread_t		self = current_thread();
-	ipc_port_t		exc_port;
-	int			behavior;
-	int			flavor;
 	kern_return_t		kr;
 
 	/*
@@ -351,174 +404,73 @@ bsd_exception(
 	mutex = mutex_addr(task->lock);
 	excp = &task->exc_actions[exception];
 
-	/*
-	 *  Save work if we are terminating.
-	 *  Just go back to our AST handler.
-	 */
-	if (!self->active) {
-		return(KERN_FAILURE);
-	}
+	kr = exception_deliver(self, exception, code, codeCnt, excp, mutex);
 
-	/*
-	 * Snapshot the exception action data under lock for consistency.
-	 * Hold a reference to the port over the exception_raise_* calls
-	 * so it can't be destroyed.  This seems like overkill, but keeps
-	 * the port from disappearing between now and when
-	 * ipc_object_copyin_from_kernel is finally called.
-	 */
-	mutex_lock(mutex);
-	exc_port = excp->port;
-	if (!IP_VALID(exc_port)) {
-		mutex_unlock(mutex);
-		return(KERN_FAILURE);
-	}
-	ip_lock(exc_port);
-	if (!ip_active(exc_port)) {
-		ip_unlock(exc_port);
-		mutex_unlock(mutex);
-		return(KERN_FAILURE);
-	}
-	ip_reference(exc_port);	
-	exc_port->ip_srights++;
-	ip_unlock(exc_port);
-
-	flavor = excp->flavor;
-	behavior = excp->behavior;
-	mutex_unlock(mutex);
-
-	switch (behavior) {
-	case EXCEPTION_STATE: {
-		mach_msg_type_number_t state_cnt;
-		thread_state_data_t state;
-
-		c_thr_exc_raise_state++;
-		state_cnt = _MachineStateCount[flavor];
-		kr = thread_getstatus(self, flavor, 
-				      (thread_state_t)state,
-				      &state_cnt);
-		if (kr == KERN_SUCCESS) {
-			kr = exception_raise_state(exc_port, exception,
-						   code, codeCnt,
-						   &flavor,
-						   state, state_cnt,
-						   state, &state_cnt);
-			if (kr == MACH_MSG_SUCCESS)
-				kr = thread_setstatus(self, flavor, 
-						      (thread_state_t)state,
-						      state_cnt);
-		}
-
-		if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
-			return(KERN_SUCCESS);
-
-		return(KERN_FAILURE);
-	}
-
-	case EXCEPTION_DEFAULT:
-		c_thr_exc_raise++;
-		kr = exception_raise(exc_port,
-				retrieve_thread_self_fast(self),
-				retrieve_task_self_fast(self->task),
-				exception,
-				code, codeCnt);
-
-		if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
-			return(KERN_SUCCESS);
-		return(KERN_FAILURE);
-
-	case EXCEPTION_STATE_IDENTITY: {
-		mach_msg_type_number_t state_cnt;
-		thread_state_data_t state;
-
-		c_thr_exc_raise_state_id++;
-		state_cnt = _MachineStateCount[flavor];
-		kr = thread_getstatus(self, flavor,
-				      (thread_state_t)state,
-				      &state_cnt);
-		if (kr == KERN_SUCCESS) {
-		    kr = exception_raise_state_identity(exc_port,
-				retrieve_thread_self_fast(self),
-				retrieve_task_self_fast(self->task),
-				exception,
-				code, codeCnt,
-				&flavor,
-				state, state_cnt,
-				state, &state_cnt);
-		    if (kr == MACH_MSG_SUCCESS)
-			kr = thread_setstatus(self, flavor,
-					      (thread_state_t)state,
-					      state_cnt);
-		}
-
-		if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
-			return(KERN_SUCCESS);
-		return(KERN_FAILURE);
-	}
-	
-	default:
-		
-		return(KERN_FAILURE);
-	}/* switch */
+	if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
+		return(KERN_SUCCESS);
 	return(KERN_FAILURE);
 }
 
 
+/*
+ * Raise an EXC_CRASH exception on the dying task.
+ * This should tell launchd to launch Crash Reporter for this task.
+ */
+kern_return_t abnormal_exit_notify(mach_exception_data_type_t exccode, 
+		mach_exception_data_type_t excsubcode)
+{
+	mach_exception_data_type_t	code[EXCEPTION_CODE_MAX];
+	wait_interrupt_t		wsave;
+
+	code[0] = exccode;
+	code[1] = excsubcode;
+
+	wsave = thread_interrupt_level(THREAD_UNINT);
+	exception_triage(EXC_CRASH, code, EXCEPTION_CODE_MAX);
+	(void) thread_interrupt_level(wsave);
+	return (KERN_SUCCESS);
+}
 
 
 /*
- *	Handle interface for special perfomance monitoring
+ *	Handle interface for special performance monitoring
  *	This is a special case of the host exception handler
  */
-
-kern_return_t sys_perf_notify(struct task *task,
-	exception_data_t code,
-	mach_msg_type_number_t codeCnt)
+kern_return_t sys_perf_notify(thread_t thread, int pid) 
 {
 	host_priv_t		hostp;
 	struct exception_action *excp;
-	thread_t		thread = current_thread();
 	ipc_port_t		xport;
-	kern_return_t	ret;
 	wait_interrupt_t	wsave;
+	kern_return_t		ret;
 
-	hostp = host_priv_self();				/* Get the host privileged ports */
-	excp = &hostp->exc_actions[EXC_RPC_ALERT];	/* Point to the RPC_ALERT action */
+	hostp = host_priv_self();	/* Get the host privileged ports */
+	mach_exception_data_type_t	code[EXCEPTION_CODE_MAX];
+	code[0] = 0xFF000001;		/* Set terminate code */
+	code[1] = pid;		/* Pass out the pid */
 
-	mutex_lock(&hostp->lock);				/* Lock the priv port */
-	xport = excp->port;						/* Get the port for this exception */
-	if (!IP_VALID(xport)) {					/* Is it valid? */
-		mutex_unlock(&hostp->lock);			/* Unlock */
-		return(KERN_FAILURE);				/* Go away... */
+	struct task *task = thread->task;
+	excp = &hostp->exc_actions[EXC_RPC_ALERT];	
+	xport = excp->port;	
+
+	/* Make sure we're not catching our own exception */
+	if (!IP_VALID(xport) ||
+			!ip_active(xport) ||
+			task->itk_space == xport->data.receiver) {
+
+		return(KERN_FAILURE);	
 	}
 
-	ip_lock(xport);							/* Lock the exception port */
-	if (!ip_active(xport)) {				/* and is it active? */
-		ip_unlock(xport);					/* Nope, fail */
-		mutex_unlock(&hostp->lock);			/* Unlock */
-		return(KERN_FAILURE);				/* Go away... */
-	}
+	wsave = thread_interrupt_level(THREAD_UNINT);	
+	ret = exception_deliver(
+			thread,
+			EXC_RPC_ALERT, 
+			code, 
+			2, 
+			excp,
+			&hostp->lock);
+	(void)thread_interrupt_level(wsave);
 
-	if (task->itk_space == xport->data.receiver) {	/* Are we trying to send to ourselves? */
-		ip_unlock(xport);					/* Yes, fail */
-		mutex_unlock(&hostp->lock);			/* Unlock */
-		return(KERN_FAILURE);				/* Go away... */
-	}
-	
-	ip_reference(xport);					/* Bump reference so it doesn't go away */
-	xport->ip_srights++;					/* Bump send rights */
-	ip_unlock(xport);						/* We can unlock it now */
-
-	mutex_unlock(&hostp->lock);				/* All done with the lock */
-
-	wsave = thread_interrupt_level(THREAD_UNINT);	/* Make sure we aren't aborted here */
-	
-	ret = exception_raise(xport,			/* Send the exception to the perf handler */
-		retrieve_thread_self_fast(thread),		/* Not always the dying guy */
-		retrieve_task_self_fast(thread->task),	/* Not always the dying guy */
-		EXC_RPC_ALERT,						/* Unused exception type until now */
-		code, codeCnt);	
-		
-	(void)thread_interrupt_level(wsave);	/* Restore interrupt level */			
-
-	return(ret);							/* Tell caller how it went */
+	return(ret);
 }
+

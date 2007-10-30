@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <sys/types.h>
@@ -56,7 +62,8 @@
  * text length             2 bytes
  * text                    N bytes + 1 terminating NULL byte
  */
-token_t *au_to_arg32(char n, char *text, u_int32_t v)
+token_t *
+au_to_arg32(char n, const char *text, u_int32_t v)
 {
 	token_t *t;
 	u_char *dptr;
@@ -66,11 +73,7 @@ token_t *au_to_arg32(char n, char *text, u_int32_t v)
 		return NULL;	
 	}
 	
-	/* Make sure that text is null terminated */
 	textlen = strlen(text);
-	if(text[textlen] != '\0') {	
-		return NULL;
-	}
 	
 	GET_TOKEN_AREA(t, dptr, 9 + textlen);
 	if(t == NULL) {
@@ -89,7 +92,8 @@ token_t *au_to_arg32(char n, char *text, u_int32_t v)
 
 }
 
-token_t *au_to_arg64(char n, char *text, u_int64_t v)
+token_t *
+au_to_arg64(char n, const char *text, u_int64_t v)
 {
 	token_t *t;
 	u_char *dptr;
@@ -99,11 +103,7 @@ token_t *au_to_arg64(char n, char *text, u_int64_t v)
 		return NULL;	
 	}
 	
-	/* Make sure that text is null terminated */
 	textlen = strlen(text);
-	if(text[textlen] != '\0') {	
-		return NULL;
-	}
 	
 	GET_TOKEN_AREA(t, dptr, 13 + textlen);
 	if(t == NULL) {
@@ -122,7 +122,8 @@ token_t *au_to_arg64(char n, char *text, u_int64_t v)
 
 }
 
-token_t *au_to_arg(char n, char *text, u_int32_t v)
+token_t *
+au_to_arg(char n, char *text, u_int32_t v)
 {
 	return au_to_arg32(n, text, v);
 }
@@ -210,7 +211,7 @@ token_t *au_to_attr(struct vnode_attr *attr)
  * data items              (depends on basic unit)
  */
 token_t *au_to_data(char unit_print, char unit_type,
-                    char unit_count, char *p)
+                    char unit_count, unsigned char *p)
 {
 	token_t *t;
 	u_char *dptr;
@@ -274,7 +275,8 @@ token_t *au_to_exit(int retval, int err)
 
 /*
  */
-token_t *au_to_groups(int *groups)
+token_t *
+au_to_groups(gid_t *groups)
 {
 	return au_to_newgroups(MAX_GROUPS, groups);	
 }
@@ -443,26 +445,19 @@ token_t *au_to_ipc_perm(struct ipc_perm *perm)
 	 */
 	ADD_U_CHAR(dptr, AU_IPCPERM_TOKEN);
 
-	ADD_U_INT16(dptr, pad0);
-	ADD_U_INT16(dptr, perm->uid);
-
-	ADD_U_INT16(dptr, pad0);
-	ADD_U_INT16(dptr, perm->gid);
-
-	ADD_U_INT16(dptr, pad0);
-	ADD_U_INT16(dptr, perm->cuid);
-
-	ADD_U_INT16(dptr, pad0);
-	ADD_U_INT16(dptr, perm->cgid);
+	ADD_U_INT32(dptr, perm->uid);
+	ADD_U_INT32(dptr, perm->gid);
+	ADD_U_INT32(dptr, perm->cuid);
+	ADD_U_INT32(dptr, perm->cgid);
 
 	ADD_U_INT16(dptr, pad0);
 	ADD_U_INT16(dptr, perm->mode);
 
 	ADD_U_INT16(dptr, pad0);
-	ADD_U_INT16(dptr, perm->seq);
+	ADD_U_INT16(dptr, perm->_seq);
 
 	ADD_U_INT16(dptr, pad0);
-	ADD_U_INT16(dptr, perm->key);
+	ADD_U_INT16(dptr, perm->_key);
 
 	return t;
 }
@@ -535,11 +530,7 @@ token_t *kau_to_file(const char *file, const struct timeval *tv)
 	if(file == NULL) {
 		return NULL;
 	}
-	/* Make sure that text is null terminated */
 	filelen = strlen(file);
-	if(file[filelen] != '\0') {
-		return NULL;
-	}
  
 	GET_TOKEN_AREA(t, dptr, filelen + 12);
 	if(t == NULL) {
@@ -566,7 +557,7 @@ token_t *kau_to_file(const char *file, const struct timeval *tv)
  * text length             2 bytes
  * text                    N bytes + 1 terminating NULL byte
  */
-token_t *au_to_text(char *text)
+token_t *au_to_text(const char *text)
 {
 	token_t *t;
 	u_char *dptr;
@@ -575,11 +566,7 @@ token_t *au_to_text(char *text)
 	if(text == NULL) {
 		return NULL;
 	}
-	/* Make sure that text is null terminated */
 	textlen = strlen(text);
-	if(text[textlen] != '\0') {
-		return NULL;
-	}
 
 	GET_TOKEN_AREA(t, dptr, textlen + 4);
 	if(t == NULL) {
@@ -609,11 +596,7 @@ token_t *au_to_path(char *text)
 	if(text == NULL) {
 		return NULL;
 	}
-	/* Make sure that text is null terminated */
 	textlen = strlen(text);
-	if(text[textlen] != '\0') {
-		return NULL;
-	}
 
 	GET_TOKEN_AREA(t, dptr, textlen + 4);
 	if(t == NULL) {
@@ -812,7 +795,7 @@ token_t *au_to_return(char status, u_int32_t ret)
  * token ID                1 byte
  * sequence number         4 bytes
  */
-token_t *au_to_seq(long audit_count)
+token_t *au_to_seq(u_int32_t audit_count)
 {
 	token_t *t;
 	u_char *dptr;
@@ -1157,10 +1140,6 @@ token_t *au_to_exec_args(const char **args)
 		int nextlen;
 		
 		nextlen = strlen(nextarg);
-		if(nextarg[nextlen] != '\0') {
-			return NULL;
-		}
-		
 		totlen += nextlen + 1;
 		count++;
 		nextarg = *(args + count);
@@ -1207,10 +1186,6 @@ token_t *au_to_exec_env(const char **env)
 		int nextlen;
 		
 		nextlen = strlen(nextenv);
-		if(nextenv[nextlen] != '\0') {
-			return NULL;
-		}
-		
 		totlen += nextlen + 1;
 		count++;
 		nextenv = *(env + count);

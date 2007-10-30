@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *	Copyright (c) 1993-1998 Apple Computer, Inc.
@@ -47,17 +53,16 @@
 
 #include <netat/sysglue.h>
 #include <netat/appletalk.h>
+#include <netat/at_pcb.h>
 #include <netat/at_var.h>
 #include <netat/ddp.h>
 #include <netat/rtmp.h>
 #include <netat/zip.h>
 #include <netat/routing_tables.h>
 #include <netat/debug.h>
-#include <netat/at_pcb.h>
 
 #include <sys/kern_event.h>
 
-extern void rtmp_router_input();
 
 /****************************************************************/
 /*								*/
@@ -77,7 +82,7 @@ extern void rtmp_router_input();
 #define NET(r)		((r)->ifARouter.s_net)
 #define	INUSE(r)	(NODE(r))
 
-void ddp_age_router();
+void ddp_age_router(void *arg);
 
 static struct routerinfo {
 	struct at_addr ifARouter;
@@ -88,7 +93,7 @@ static struct routerinfo {
 void trackrouter_rem_if(ifID)
      register at_ifaddr_t *ifID;
 {
-	register i;
+	int i;
 	register struct routerinfo *router;
 
 	for (i = NROUTERS2TRAK; --i >= 0;) {
@@ -101,9 +106,9 @@ void trackrouter_rem_if(ifID)
 }
 
 
-void routershutdown()
+void routershutdown(void)
 {
-	register i;
+	int i;
 
 	for (i = NROUTERS2TRAK; --i >= 0;) {
 		register struct routerinfo *router;
@@ -127,7 +132,7 @@ void trackrouter(ifID, net, node)
      register unsigned char	node;
 {
 	register struct routerinfo *unused = NULL;
-	register i;
+	int i;
 
 	for (i = NROUTERS2TRAK; --i >= 0;) {
 		register struct routerinfo *router;
@@ -171,9 +176,9 @@ void trackrouter(ifID, net, node)
  * frames to something that is not there. Untimeout is called if 
  * an RTMP packet comes in so this routine will not be called.
  */
-void ddp_age_router(deadrouter)
-     register struct routerinfo *deadrouter;
+void ddp_age_router(void *arg)
 {
+	struct routerinfo *deadrouter = (struct routerinfo*)arg;
 	register at_ifaddr_t *ourrouter;
 
 	atalk_lock();
@@ -192,8 +197,8 @@ void ddp_age_router(deadrouter)
 	if (NODE(ourrouter) == NODE(deadrouter) && 
 	    NET(ourrouter) == NET(deadrouter)) {
 		register unsigned long	atrandom = random();
-		register struct routerinfo *newrouter;
-		register i;
+		register struct routerinfo *newrouter = NULL;
+		int i;
 
 		bzero((caddr_t) deadrouter, sizeof(struct routerinfo));
 		for (i = NROUTERS2TRAK; --i >= 0;) {

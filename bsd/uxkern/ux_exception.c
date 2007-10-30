@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* 
  * Mach Operating System
@@ -42,6 +48,7 @@
 #include <mach/mach_port.h>
 #include <mach/mig_errors.h>
 #include <mach/exc_server.h>
+#include <mach/mach_exc_server.h>
 #include <kern/task.h>
 #include <kern/thread.h>
 #include <kern/sched_prim.h>
@@ -51,9 +58,9 @@
 #include <sys/user.h>
 #include <sys/systm.h>
 #include <sys/ux_exception.h>
+#include <sys/vmparam.h>	/* MAXSSIZ */
 
 #include <vm/vm_protos.h>	/* get_task_ipcspace() */
-
 /*
  * XXX Things that should be retrieved from Mach headers, but aren't
  */
@@ -74,12 +81,14 @@ extern void ipc_port_release(ipc_port_t);
 
 
 
+
 /*
  *	Unix exception handler.
  */
 
-static void	ux_exception(int exception, int code, int subcode,
-				int *ux_signal, int *ux_code);
+static void	ux_exception(int exception, mach_exception_code_t code, 
+				mach_exception_subcode_t subcode,
+				int *ux_signal, mach_exception_code_t *ux_code);
 
 mach_port_name_t		ux_exception_port;
 static task_t			ux_handler_self;
@@ -91,8 +100,6 @@ ux_handler(void)
     task_t		self = current_task();
     mach_port_name_t	exc_port_name;
     mach_port_name_t	exc_set_name;
-
-    (void) thread_funnel_set(kernel_flock, TRUE);
 
     /* self->kernel_vm_space = TRUE; */
     ux_handler_self = self;
@@ -139,7 +146,7 @@ ux_handler(void)
 		NDR_record_t NDR;
 		exception_type_t exception;
 		mach_msg_type_number_t codeCnt;
-		exception_data_t code;
+		mach_exception_data_t code;
 		/* some times RCV_TO_LARGE probs */
 		char pad[512];
 	} exc_msg;
@@ -159,7 +166,7 @@ ux_handler(void)
 	if (result == MACH_MSG_SUCCESS) {
 	    reply_port = (mach_port_name_t)exc_msg.Head.msgh_remote_port;
 
-	    if (exc_server(&exc_msg.Head, &rep_msg.Head))
+	    if (mach_exc_server(&exc_msg.Head, &rep_msg.Head))
 		(void) mach_msg_send(&rep_msg.Head, MACH_SEND_MSG,
 			sizeof (rep_msg),MACH_MSG_TIMEOUT_NONE,MACH_PORT_NULL);
 
@@ -171,7 +178,6 @@ ux_handler(void)
 	else
 		panic("exception_handler");
     }
-	thread_funnel_set(kernel_flock, FALSE);
 }
 
 void
@@ -182,7 +188,7 @@ ux_handler_init(void)
 	if (ux_exception_port == MACH_PORT_NULL)  {
 		assert_wait(&ux_exception_port, THREAD_UNINT);
 		thread_block(THREAD_CONTINUE_NULL);
-		}
+	}
 }
 
 kern_return_t
@@ -195,19 +201,44 @@ catch_exception_raise(
         __unused mach_msg_type_number_t codeCnt
 )
 {
-	task_t		self = current_task();
-	thread_t	th_act;
-	ipc_port_t 	thread_port;
-	kern_return_t	result = MACH_MSG_SUCCESS;
-	int		ux_signal = 0;
-	u_long		ucode = 0;
-	struct uthread *ut;
+	mach_exception_data_type_t big_code[EXCEPTION_CODE_MAX];
+	big_code[0] = code[0];
+	big_code[1] = code[1];
+
+	return catch_mach_exception_raise(exception_port,
+			thread,
+			task,
+			exception,
+			big_code,
+			codeCnt);
+
+}
+
+kern_return_t
+catch_mach_exception_raise(
+        __unused mach_port_t exception_port,
+        mach_port_t thread,
+        mach_port_t task,
+        exception_type_t exception,
+        mach_exception_data_t code,
+        __unused mach_msg_type_number_t codeCnt
+)
+{
+	task_t			self = current_task();
+	thread_t		th_act;
+	ipc_port_t 		thread_port;
+	struct task		*sig_task;
+	struct proc		*p;
+	kern_return_t		result = MACH_MSG_SUCCESS;
+	int			ux_signal = 0;
+	mach_exception_code_t 	ucode = 0;
+	struct uthread 		*ut;
 	mach_port_name_t thread_name = (mach_port_name_t)thread; /* XXX */
 	mach_port_name_t task_name = (mach_port_name_t)task;	/* XXX */
 
-   /*
-     *	Convert local thread name to global port.
-     */
+	/*
+	 *	Convert local thread name to global port.
+	 */
    if (MACH_PORT_VALID(thread_name) &&
        (ipc_object_copyin(get_task_ipcspace(self), thread_name,
 		       MACH_MSG_TYPE_PORT_SEND,
@@ -223,14 +254,75 @@ catch_exception_raise(
 	 *	Catch bogus ports
 	 */
 	if (th_act != THREAD_NULL) {
-  
+
 	    /*
 	     *	Convert exception to unix signal and code.
 	     */
-		ut = get_bsdthread_info(th_act);
-	    ux_exception(exception, code[0], code[1],
-	    			&ux_signal, (int *)&ucode);
+	    ux_exception(exception, code[0], code[1], &ux_signal, &ucode);
 
+	    ut = get_bsdthread_info(th_act);
+	    sig_task = get_threadtask(th_act);
+	    p = (struct proc *) get_bsdtask_info(sig_task);
+
+	    /* Can't deliver a signal without a bsd process */
+	    if (p == NULL) {
+		    ux_signal = 0;
+		    result = KERN_FAILURE;
+	    }
+
+	    /*
+	     * Stack overflow should result in a SIGSEGV signal
+	     * on the alternate stack.
+	     * but we have one or more guard pages after the
+	     * stack top, so we would get a KERN_PROTECTION_FAILURE
+	     * exception instead of KERN_INVALID_ADDRESS, resulting in
+	     * a SIGBUS signal.
+	     * Detect that situation and select the correct signal.
+	     */
+	    if (code[0] == KERN_PROTECTION_FAILURE &&
+		ux_signal == SIGBUS) {
+		    user_addr_t		sp, stack_min, stack_max;
+		    int			mask;
+		    struct sigacts	*ps;
+
+		    sp = code[1];
+		    if (ut && (ut->uu_flag & UT_VFORK))
+			    p = ut->uu_proc;
+#if STACK_GROWTH_UP
+		    stack_min = p->user_stack;
+		    stack_max = p->user_stack + MAXSSIZ;
+#else /* STACK_GROWTH_UP */
+		    stack_max = p->user_stack;
+		    stack_min = p->user_stack - MAXSSIZ;
+#endif /* STACK_GROWTH_UP */
+		    if (sp >= stack_min &&
+			sp < stack_max) {
+			    /*
+			     * This is indeed a stack overflow.  Deliver a
+			     * SIGSEGV signal.
+			     */
+			    ux_signal = SIGSEGV;
+
+			    /*
+			     * If the thread/process is not ready to handle
+			     * SIGSEGV on an alternate stack, force-deliver
+			     * SIGSEGV with a SIG_DFL handler.
+			     */
+			    mask = sigmask(ux_signal);
+			    ps = p->p_sigacts;
+			    if ((p->p_sigignore & mask) ||
+				(ut->uu_sigwait & mask) ||
+				(ut->uu_sigmask & mask) ||
+				(ps->ps_sigact[SIGSEGV] == SIG_IGN) ||
+				(! (ps->ps_sigonstack & mask))) {
+				    p->p_sigignore &= ~mask;
+				    p->p_sigcatch &= ~mask;
+				    ps->ps_sigact[SIGSEGV] = SIG_DFL;
+				    ut->uu_sigwait &= ~mask;
+				    ut->uu_sigmask &= ~mask;
+			    }
+		    }
+	    }
 	    /*
 	     *	Send signal.
 	     */
@@ -239,7 +331,7 @@ catch_exception_raise(
 			//ut->uu_code = code[0]; // filled in by threadsignal
 			ut->uu_subcode = code[1];			
 			threadsignal(th_act, ux_signal, code[0]);
-		}
+	    }
 
 	    thread_deallocate(th_act);
 	}
@@ -274,6 +366,21 @@ catch_exception_raise_state(
 }
 
 kern_return_t
+catch_mach_exception_raise_state(
+        __unused mach_port_t exception_port,
+        __unused exception_type_t exception,
+        __unused const mach_exception_data_t code,
+        __unused mach_msg_type_number_t codeCnt,
+        __unused int *flavor,
+        __unused const thread_state_t old_state,
+        __unused mach_msg_type_number_t old_stateCnt,
+        __unused thread_state_t new_state,
+        __unused mach_msg_type_number_t *new_stateCnt)
+{
+	return(KERN_INVALID_ARGUMENT);
+}
+
+kern_return_t
 catch_exception_raise_state_identity(
         __unused mach_port_t exception_port,
         __unused mach_port_t thread,
@@ -290,6 +397,24 @@ catch_exception_raise_state_identity(
 	return(KERN_INVALID_ARGUMENT);
 }
 
+kern_return_t
+catch_mach_exception_raise_state_identity(
+        __unused mach_port_t exception_port,
+        __unused mach_port_t thread,
+        __unused mach_port_t task,
+        __unused exception_type_t exception,
+        __unused mach_exception_data_t code,
+        __unused mach_msg_type_number_t codeCnt,
+        __unused int *flavor,
+        __unused thread_state_t old_state,
+        __unused mach_msg_type_number_t old_stateCnt,
+        __unused thread_state_t new_state,
+        __unused mach_msg_type_number_t *new_stateCnt)
+{
+	return(KERN_INVALID_ARGUMENT);
+}
+
+
 /*
  *	ux_exception translates a mach exception, code and subcode to
  *	a signal and u.u_code.  Calls machine_exception (machine dependent)
@@ -298,12 +423,11 @@ catch_exception_raise_state_identity(
 
 static
 void ux_exception(
-    int			exception,
-    int			code,
-    int			subcode,
-    int			*ux_signal,
-    int			*ux_code
-)
+		int			exception,
+		mach_exception_code_t 	code,
+		mach_exception_subcode_t subcode,
+		int			*ux_signal,
+		mach_exception_code_t 	*ux_code)
 {
     /*
      *	Try machine-dependent translation first.

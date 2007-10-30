@@ -9,11 +9,14 @@
 #  Standard Apple MacOS X Configurations:
 #  -------- ---- -------- ---------------
 #
-#  osfmk = [intel pc mach small event vol pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug mk30 mk30_i386]
-#  RELEASE = [intel pc iokit mach_pe mach mach_kdp small event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386]
-#  DEBUG_KDP = [intel pc iokit mach_pe mach mach_kdp small event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 osf_debug debug]
-#  DEBUG= [intel pc iokit mach_pe mach mach_kdp small event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 osf_debug debug mach_kdb]
+#  RELEASE = [ medium intel pc iokit mach_pe mach mach_kdp event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 hibernation crypto config_dtrace]
+#  DEBUG_KDP = [ RELEASE osf_debug debug ]
+#  DEBUG= [ RELEASE osf_debug debug mach_kdb mach_assert ]
 #  PROFILE = [ RELEASE profile ]
+#
+#  EMBEDDED_BASE = [ bsmall intel pc iokit mach_pe mach mach_kdp event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 hibernation crypto ]
+#  EMBEDDED = [ EMBEDDED_BASE no_printf_str no_kprintf_str no_kdebug ]
+#  DEVELOPMENT = [ EMBEDDED_BASE mach_assert config_dtrace ]
 #
 ######################################################################
 #
@@ -53,3 +56,7 @@ options		MACH_KDB	#				# <mach_kdb>
 options		MACH_KDP	# KDP				# <mach_kdp>
 options		PAE
 options		X86_64
+options		DISPATCH_COUNTS
+
+options		CONFIG_MACF		# Mandatory Access Control Framework
+#options	CONFIG_MACF_MACH	# MACF applied to Mach services

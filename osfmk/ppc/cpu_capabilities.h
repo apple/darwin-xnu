@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #ifdef	PRIVATE
 
@@ -105,6 +111,37 @@ static __inline__ int _NumCPUs( void ) { return (_cpu_capabilities & kNumCPUs) >
 /* The Objective-C runtime fixed address page to optimize message dispatch */
 #define _OBJC_PAGE_BASE_ADDRESS			(-20*4096)						// start at page -20, ie 0xFFFEC000
  
+/*
+ * Objective-C needs an "absolute" area all the way up to the top of the
+ * address space.
+ * For a ppc32 task, that area gets allocated at runtime from user space.
+ * For a ppc64 task, that area is not within the user-accessible address range,
+ * so we pre-allocate it at exec time (see vm_map_exec()) along with the
+ * comm page.
+ * 
+ * NOTE: that means we can't "nest" the 64-bit comm page...
+ */
+#define _COMM_PAGE32_OBJC_SIZE	0ULL
+#define _COMM_PAGE32_OBJC_BASE	0ULL
+#if 0
+#define _COMM_PAGE64_OBJC_SIZE	(4 * 4096)
+#define _COMM_PAGE64_OBJC_BASE	(_OBJC_PAGE_BASE_ADDRESS)
+#else
+/*
+ * PPC51: ppc64 is limited to 51-bit addresses.
+ * PPC64 has a 51-bit address space limit, so we can't just go and
+ * map the Obj-C area up there.  We would have to create a nested pmap
+ * and make a special mapping that redirects the large virtual addresses to
+ * that other address space with lower addresses that fit within the 51-bit
+ * limit.
+ * VM would then have to handle this redirection when we fault one
+ * of these pages in but it doesn't do that at this point, so no
+ * Obj-C area for ppc64 for now :-(
+ */
+#define _COMM_PAGE64_OBJC_SIZE	0ULL
+#define _COMM_PAGE64_OBJC_BASE	0ULL
+#endif
+
 /* data in the comm page */
  
 #define _COMM_PAGE_SIGNATURE			(_COMM_PAGE_BASE_ADDRESS+0x000)	// first few bytes are a signature

@@ -31,57 +31,72 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd August, 25 1996
+.\" $FreeBSD: src/lib/libc/sys/issetugid.2,v 1.13 2004/07/02 23:52:13 ru Exp $
+.\"
+.Dd August 25, 1996
 .Dt ISSETUGID 2
-.Os OpenBSD 2.0
+.Os
 .Sh NAME
 .Nm issetugid
-.Nd is current executable running setuid or setgid
+.Nd is current process tainted by uid or gid changes
+.Sh LIBRARY
+.Lb libc
 .Sh SYNOPSIS
-.Fd #include <unistd.h>
+.In unistd.h
 .Ft int
 .Fn issetugid void
 .Sh DESCRIPTION
 The
 .Fn issetugid
-function returns 1 if the process was made setuid or setgid as
-the result of the last
-.Fn execve
-system call.
-Otherwise it returns 0.
+system call returns 1 if the process environment or memory address space
+is considered
+.Dq tainted ,
+and returns 0 otherwise.
 .Pp
-This system call exists so that library routines (inside libc, libtermlib,
-or other libraries) can gaurantee safe behavior when used inside
-setuid or setgid programs.
-Some library routines may not be passed sufficient information to know
-if the current program was started setuid or setgid because higher level
-calling code may have made changes to the uid or the euid.
-In particular, it is wise to use this call to determine if a
-pathname returned from a
-.Fn getenv
-call may safely be used to
-.Fn open
-the specified file.
+A process is tainted if it was created as a result of an
+.Xr execve 2
+system call which had either of the setuid or setgid bits set (and extra
+privileges were given as a result) or if it has changed any of its real,
+effective or saved user or group ID's since it began execution.
 .Pp
-.Fn issetugid
-is unaffected by calls to
-.Fn setuid ,
-.Fn fork ,
-and other such calls.  It is only controlled by
-.Fn execve .
+This system call exists so that library routines (eg: libc, libtermcap)
+can reliably determine if it is safe to use information
+that was obtained from the user, in particular the results from
+.Xr getenv 3
+should be viewed with suspicion if it is used to control operation.
+.Pp
+A
+.Dq tainted
+status is inherited by child processes as a result of the
+.Xr fork 2
+system call (or other library code that calls fork, such as
+.Xr popen 3 ) .
+.Pp
+It is assumed that a program that clears all privileges as it prepares
+to execute another will also reset the environment, hence the
+.Dq tainted
+status will not be passed on.
+This is important for programs such as
+.Xr su 1
+which begin setuid but need to be able to create an untainted process.
 .Sh ERRORS
 The
 .Fn issetugid
-function is always successful, and no return value is reserved to
+system call is always successful, and no return value is reserved to
 indicate an error.
 .Sh SEE ALSO
 .Xr execve 2 ,
-.Xr setuid 2 ,
-.Xr seteuid 2,
+.Xr fork 2 ,
+.Xr setegid 2 ,
+.Xr seteuid 2 ,
 .Xr setgid 2 ,
-.Xr setegid 2
+.Xr setregid 2 ,
+.Xr setreuid 2 ,
+.Xr setuid 2
 .Sh HISTORY
-A
-.Fn lstat
-function call appeared in
-OpenBSD 2.0
+The
+.Fn issetugid
+system call first appeared in
+.Ox 2.0
+and was also implemented in
+.Fx 3.0 .

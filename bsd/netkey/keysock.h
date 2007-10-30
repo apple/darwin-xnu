@@ -62,6 +62,10 @@ struct pfkeystat {
 #define KEY_SENDUP_ALL		1
 #define KEY_SENDUP_REGISTERED	2
 
+#define PFKEY_STAT_INCREMENT(x)	 \
+	{lck_mtx_lock(pfkey_stat_mutex); (x)++; lck_mtx_unlock(pfkey_stat_mutex);}
+
+
 #ifdef KERNEL_PRIVATE
 #ifdef KERNEL
 struct keycb {

@@ -41,12 +41,15 @@
 .Nm getppid
 .Nd get parent or calling process identification
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
 .Fd #include <unistd.h>
 .Ft pid_t
-.Fn getpid void
+.Fo getpid
+.Fa void
+.Fc
 .Ft pid_t
-.Fn getppid void
+.Fo getppid
+.Fa void
+.Fc
 .Sh DESCRIPTION
 .Fn Getpid
 returns
@@ -65,8 +68,16 @@ and
 .Fn getppid
 functions are always successful, and no return value is reserved to
 indicate an error.
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <unistd.h>
+.Pp
+The include file
+.In sys/types.h
+is necessary.
 .Sh SEE ALSO
-.Xr gethostid 2
+.Xr gethostid 2 ,
+.Xr compat 5
 .Sh STANDARDS
 .Fn Getpid
 and

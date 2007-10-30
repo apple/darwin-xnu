@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -66,540 +72,604 @@
 #include <sys/appleapiopts.h>
 
 #ifdef __APPLE_API_PRIVATE
-/*
- * These macros do strange and peculiar things to mbuf chains for
- * the assistance of the nfs code. To attempt to use them for any
- * other purpose will be dangerous. (they make weird assumptions)
- */
 
-/*
- * First define what the actual subs. return
- */
-int nfsm_reqh(int hsiz, caddr_t *bposp, mbuf_t *mbp);
-int nfsm_rpchead(struct ucred *cr, int nmflag, int procid,
-			       int auth_type, int auth_len, char *auth_str,
-			       int verf_len, char *verf_str,
-			       mbuf_t mrest, int mrest_len,
-			       mbuf_t *mbp, u_long *xidp, mbuf_t *mreqp);
+int nfsm_rpchead(struct nfsreq *, int, mbuf_t, u_int64_t *, mbuf_t *);
+int nfsm_rpchead2(int, int, int, int, int, int, kauth_cred_t, struct nfsreq *, mbuf_t, u_int64_t *, mbuf_t *);
 
-/*
- * Now for the macros that do the simple stuff and call the functions
- * for the hard stuff.
- * These macros use several vars. declared in nfsm_reqhead and these
- * vars. must not be used elsewhere unless you are careful not to corrupt
- * them. The vars. starting with pN and tN (N=1,2,3,..) are temporaries
- * that may be used so long as the value is not expected to retained
- * after a macro.
- * I know, this is kind of dorkey, but it makes the actual op functions
- * fairly clean and deals with the mess caused by the xdr discriminating
- * unions.
- */
+int nfsm_chain_new_mbuf(struct nfsm_chain *, size_t);
+int nfsm_chain_add_opaque_f(struct nfsm_chain *, const u_char *, uint32_t);
+int nfsm_chain_add_opaque_nopad_f(struct nfsm_chain *, const u_char *, uint32_t);
+int nfsm_chain_add_uio(struct nfsm_chain *, struct uio *, uint32_t);
+int nfsm_chain_add_fattr4_f(struct nfsm_chain *, struct vnode_attr *, struct nfsmount *);
+int nfsm_chain_add_v2sattr_f(struct nfsm_chain *, struct vnode_attr *, uint32_t);
+int nfsm_chain_add_v3sattr_f(struct nfsm_chain *, struct vnode_attr *);
 
-#define	nfsm_build(a,c,s) \
-		{ if ((s) > mbuf_trailingspace(mb)) { \
-			int __nfsm_error; \
-			__nfsm_error = mbuf_get(MBUF_WAITOK, MBUF_TYPE_DATA, &mb2); \
-			if (__nfsm_error) \
-				panic("nfsm_build mbuf_get error %d", __nfsm_error); \
-			if ((s) > mbuf_maxlen(mb2)) \
-				panic("nfsm_build size error"); \
-			__nfsm_error = mbuf_setnext(mb, mb2); \
-			if (__nfsm_error) \
-				panic("nfsm_build mbuf_setnext error %d", __nfsm_error); \
-			mb = mb2; \
-			bpos = mbuf_data(mb); \
-		} \
-		(a) = (c)(bpos); \
-		mbuf_setlen(mb, (mbuf_len(mb) + (s))); \
-		bpos += (s); }
+int nfsm_chain_advance(struct nfsm_chain *, uint32_t);
+int nfsm_chain_offset(struct nfsm_chain *);
+int nfsm_chain_reverse(struct nfsm_chain *, uint32_t);
+int nfsm_chain_get_opaque_pointer_f(struct nfsm_chain *, uint32_t, u_char **);
+int nfsm_chain_get_opaque_f(struct nfsm_chain *, uint32_t, u_char *);
+int nfsm_chain_get_uio(struct nfsm_chain *, uint32_t, struct uio *);
+int nfsm_chain_get_fh_attr(struct nfsm_chain *, nfsnode_t,
+	vfs_context_t, int, uint64_t *, fhandle_t *, struct nfs_vattr *);
+int nfsm_chain_get_wcc_data_f(struct nfsm_chain *, nfsnode_t, struct timespec *, int *, u_int64_t *);
 
-#define	nfsm_dissect(a, c, s) \
-		{ t1 = ((caddr_t)mbuf_data(md)) + mbuf_len(md) - dpos; \
-		if (t1 >= (s)) { \
-			(a) = (c)(dpos); \
-			dpos += (s); \
-		} else if ((t1 = nfsm_disct(&md, &dpos, (s), t1, &cp2))) { \
-			error = t1; \
-			mbuf_freem(mrep); \
-			goto nfsmout; \
-		} else { \
-			(a) = (c)cp2; \
-		} }
+#if NFSSERVER
+void nfsm_adj(mbuf_t, int, int);
+int nfsm_mbuf_get_list(size_t, mbuf_t *, int *);
 
-#define nfsm_fhtom(v, v3) \
-	      { if (v3) { \
-			t2 = nfsm_rndup(VTONFS(v)->n_fhsize) + NFSX_UNSIGNED; \
-			if (t2 <= mbuf_trailingspace(mb)) { \
-				nfsm_build(tl, u_long *, t2); \
-				*tl++ = txdr_unsigned(VTONFS(v)->n_fhsize); \
-				*(tl + ((t2>>2) - 2)) = 0; \
-				bcopy((caddr_t)VTONFS(v)->n_fhp,(caddr_t)tl, \
-					VTONFS(v)->n_fhsize); \
-			} else if ((t2 = nfsm_strtmbuf(&mb, &bpos, \
-				(caddr_t)VTONFS(v)->n_fhp, VTONFS(v)->n_fhsize))) { \
-				error = t2; \
-				mbuf_freem(mreq); \
-				goto nfsmout; \
-			} \
-		} else { \
-			nfsm_build(cp, caddr_t, NFSX_V2FH); \
-			bcopy((caddr_t)VTONFS(v)->n_fhp, cp, NFSX_V2FH); \
-		} }
+int nfsm_chain_add_fattr(struct nfsrv_descript *, struct nfsm_chain *, struct vnode_attr *);
+int nfsm_chain_add_wcc_data_f(struct nfsrv_descript *, struct nfsm_chain *, int,
+	struct vnode_attr *, int, struct vnode_attr *);
+int nfsm_chain_get_path_namei(struct nfsm_chain *, uint32_t, struct nameidata *);
+int nfsm_chain_get_sattr(struct nfsrv_descript *, struct nfsm_chain *, struct vnode_attr *);
+int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
+#endif /* NFSSERVER */
 
-#define nfsm_srvfhtom(f, v3) \
-		{ if (v3) { \
-			nfsm_build(tl, u_long *, NFSX_UNSIGNED + (unsigned)(f)->nfh_len); \
-			*tl++ = txdr_unsigned((f)->nfh_len); \
-			bcopy((caddr_t)&(f)->nfh_xh, (caddr_t)tl, (f)->nfh_len); \
-		} else { \
-			nfsm_build(cp, caddr_t, NFSX_V2FH); \
-			bcopy((caddr_t)&(f)->nfh_xh, cp, NFSX_V2FH); \
-		} }
-
-#define nfsm_srvpostop_fh(f) \
-		{ nfsm_build(tl, u_long *, 2 * NFSX_UNSIGNED + (unsigned)(f)->nfh_len); \
-		*tl++ = nfs_true; \
-		*tl++ = txdr_unsigned((f)->nfh_len); \
-		bcopy((caddr_t)&(f)->nfh_xh, (caddr_t)tl, (f)->nfh_len); \
-		}
-
-#define nfsm_mtofh(d, cnp, v, v3, xp, f) \
-		{ \
-		struct nfsnode *ttnp; u_char *ttfhp = NULL; \
-		int ttfhsize = 0, ttgotfh = 1, ttgotattr = 1, ttgotnode = 0; \
-		struct nfs_vattr ttvattr; \
-		(v) = NULL; \
-		/* XXX would be nice to not bail to nfsmout on error */ \
-		if (v3) { /* check for file handle */ \
-			nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
-			ttgotfh = fxdr_unsigned(int, *tl); \
-		} \
-		if (ttgotfh) { \
-			/* get file handle */ \
-			nfsm_getfh(ttfhp, ttfhsize, (v3)); \
-		} \
-		if (v3) { /* check for attributes */ \
-			nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
-			ttgotattr = fxdr_unsigned(int, *tl); \
-		} \
-		/* get attributes */ \
-		if (ttgotattr) { \
-			if (!ttgotfh) { \
-				nfsm_adv(NFSX_V3FATTR); \
-			} else { \
-				nfsm_attr_get(v3, &ttvattr); \
-			} \
-		} else if (ttgotfh) { \
-			/* We need valid attributes in order */ \
-			/* to call nfs_nget/vnode_create().  */ \
-			t1 = nfs_getattr_no_vnode(vnode_mount(d), \
-				ttfhp, ttfhsize, cred, p, &ttvattr, xp); \
-			if (t1) \
-				ttgotattr = 0; \
-		} \
-		if (ttgotfh && ttgotattr) { \
-			int ttngflags = NG_MAKEENTRY; \
-			if ((t1 = nfs_nget(vnode_mount(d), d, cnp, ttfhp, ttfhsize, \
-					&ttvattr, xp, ttngflags, &ttnp))) { \
-				error = t1; \
-				ttgotnode = 0; \
-			} else { \
-				ttgotnode = 1; \
-				(v) = NFSTOV(ttnp); \
-			} \
-		} \
-		(f) = ttgotnode;  \
-		}
-
-#define nfsm_getfh(f, s, v3) \
-		{ if (v3) { \
-			nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
-			if (((s) = fxdr_unsigned(int, *tl)) <= 0 || \
-				(s) > NFSX_V3FHMAX) { \
-				mbuf_freem(mrep); \
-				error = EBADRPC; \
-				goto nfsmout; \
-			} \
-		} else { \
-			(s) = NFSX_V2FH; \
-		} \
-		nfsm_dissect((f), u_char *, nfsm_rndup(s)); }
-
-#define	nfsm_loadattr(v, v3, a, x) \
-		{ struct nfs_vattr ttvattr; \
-		if ((t1 = nfs_parsefattr(&md, &dpos, v3, &ttvattr))) { \
-			error = t1; \
-			mbuf_freem(mrep); \
-			goto nfsmout; \
-		} \
-		if ((t1 = nfs_loadattrcache(VTONFS(v), &ttvattr, (x), 0))) { \
-			error = t1; \
-			mbuf_freem(mrep); \
-			goto nfsmout; \
-		} \
-		if (a) { \
-			bcopy(&ttvattr, (a), sizeof(ttvattr)); \
-		} \
-		}
-
-#define	nfsm_attr_get(v3, vap) \
-		{ \
-		if ((t1 = nfs_parsefattr(&md, &dpos, v3, vap))) { \
-			error = t1; \
-			mbuf_freem(mrep); \
-			goto nfsmout; \
-		} \
-		}
-
-#define	nfsm_postop_attr_get(v3, f, vap) \
-		{ \
-		nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
-		if (((f) = fxdr_unsigned(int, *tl))) { \
-			if ((t1 = nfs_parsefattr(&md, &dpos, v3, vap))) { \
-				error = t1; \
-				(f) = 0; \
-				mbuf_freem(mrep); \
-				goto nfsmout; \
-			} \
-		} }
-
-#define	nfsm_postop_attr_update(v, v3, f, x) \
-		{ \
-		nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
-		if (((f) = fxdr_unsigned(int, *tl))) { \
-			struct nfs_vattr ttvattr; \
-			if ((t1 = nfs_parsefattr(&md, &dpos, v3, &ttvattr))) { \
-				error = t1; \
-				(f) = 0; \
-				mbuf_freem(mrep); \
-				goto nfsmout; \
-			} \
-			if ((t1 = nfs_loadattrcache(VTONFS(v), &ttvattr, (x), 1))) { \
-				error = t1; \
-				(f) = 0; \
-				mbuf_freem(mrep); \
-				goto nfsmout; \
-			} \
-			if (*(x) == 0) \
-				(f) = 0; \
-		} }
-
-#define	nfsm_wcc_data(v, premtime, newpostattr, x) \
-		{ \
-		nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
-		if (*tl == nfs_true) { \
-			nfsm_dissect(tl, u_long *, 6 * NFSX_UNSIGNED); \
-			(premtime)->tv_sec = fxdr_unsigned(time_t, *(tl + 2)); \
-			(premtime)->tv_nsec = fxdr_unsigned(time_t, *(tl + 3)); \
-		} else { \
-			(premtime)->tv_sec = 0; \
-			(premtime)->tv_nsec = 0; \
-		} \
-		nfsm_postop_attr_update((v), 1, (newpostattr), (x)); \
-		}
-
-#define nfsm_v3sattr(vap) \
-		{\
-		struct timeval now; \
-		if (VATTR_IS_ACTIVE(vap, va_mode)) { \
-			nfsm_build(tl, u_long *, 2 * NFSX_UNSIGNED); \
-			*tl++ = nfs_true; \
-			*tl = txdr_unsigned(vap->va_mode); \
-		} else { \
-			nfsm_build(tl, u_long *, NFSX_UNSIGNED); \
-			*tl = nfs_false; \
-		} \
-		if (VATTR_IS_ACTIVE(vap, va_uid)) { \
-			nfsm_build(tl, u_long *, 2 * NFSX_UNSIGNED); \
-			*tl++ = nfs_true; \
-			*tl = txdr_unsigned(vap->va_uid); \
-		} else { \
-			nfsm_build(tl, u_long *, NFSX_UNSIGNED); \
-			*tl = nfs_false; \
-		} \
-		if (VATTR_IS_ACTIVE(vap, va_gid)) { \
-			nfsm_build(tl, u_long *, 2 * NFSX_UNSIGNED); \
-			*tl++ = nfs_true; \
-			*tl = txdr_unsigned(vap->va_gid); \
-		} else { \
-			nfsm_build(tl, u_long *, NFSX_UNSIGNED); \
-			*tl = nfs_false; \
-		} \
-		if (VATTR_IS_ACTIVE(vap, va_data_size)) { \
-			nfsm_build(tl, u_long *, 3 * NFSX_UNSIGNED); \
-			*tl++ = nfs_true; \
-			txdr_hyper(&vap->va_data_size, tl); \
-		} else { \
-			nfsm_build(tl, u_long *, NFSX_UNSIGNED); \
-			*tl = nfs_false; \
-		} \
-		microtime(&now); \
-		if (VATTR_IS_ACTIVE(vap, va_access_time)) { \
-			if (vap->va_access_time.tv_sec != now.tv_sec) { \
-				nfsm_build(tl, u_long *, 3 * NFSX_UNSIGNED); \
-				*tl++ = txdr_unsigned(NFSV3SATTRTIME_TOCLIENT); \
-				txdr_nfsv3time(&vap->va_access_time, tl); \
-			} else { \
-				nfsm_build(tl, u_long *, NFSX_UNSIGNED); \
-				*tl = txdr_unsigned(NFSV3SATTRTIME_TOSERVER); \
-			} \
-		} else { \
-			nfsm_build(tl, u_long *, NFSX_UNSIGNED); \
-			*tl = txdr_unsigned(NFSV3SATTRTIME_DONTCHANGE); \
-		} \
-		if (VATTR_IS_ACTIVE(vap, va_modify_time)) { \
-			if (vap->va_modify_time.tv_sec != now.tv_sec) { \
-				nfsm_build(tl, u_long *, 3 * NFSX_UNSIGNED); \
-				*tl++ = txdr_unsigned(NFSV3SATTRTIME_TOCLIENT); \
-				txdr_nfsv3time(&vap->va_modify_time, tl); \
-			} else { \
-				nfsm_build(tl, u_long *, NFSX_UNSIGNED); \
-				*tl = txdr_unsigned(NFSV3SATTRTIME_TOSERVER); \
-			} \
-		} else { \
-			nfsm_build(tl, u_long *, NFSX_UNSIGNED); \
-			*tl = txdr_unsigned(NFSV3SATTRTIME_DONTCHANGE); \
-		} \
-		}
-
-#define	nfsm_strsiz(s,m,v3) \
-		{ nfsm_dissect(tl,u_long *,NFSX_UNSIGNED); \
-		(s) = fxdr_unsigned(long,*tl); \
-		if (!(v3) && ((s) > (m))) { \
-			mbuf_freem(mrep); \
+/* check name length */
+#define nfsm_name_len_check(E, ND, LEN) \
+	do { \
+		if (E) break; \
+		if (((ND)->nd_vers == NFS_VER2) && ((LEN) > NFS_MAXNAMLEN)) \
+			(E) = NFSERR_NAMETOL; \
+		if ((LEN) <= 0) \
 			error = EBADRPC; \
-			goto nfsmout; \
-		} }
+	} while (0)
 
-#define	nfsm_srvstrsiz(s,m) \
-		{ nfsm_dissect(tl,u_long *,NFSX_UNSIGNED); \
-		if (((s) = fxdr_unsigned(long,*tl)) > (m) || (s) <= 0) { \
-			error = EBADRPC; \
-			nfsm_reply(0); \
-		} }
+#define nfsm_assert(E, COND, ERR) \
+	do { \
+		if (E) break; \
+		if (!(COND)) \
+			(E) = (ERR); \
+	} while (0)
 
-#define	nfsm_srvnamesiz(s,v3) \
-		{ nfsm_dissect(tl,u_long *,NFSX_UNSIGNED); \
-		(s) = fxdr_unsigned(long,*tl); \
-		if (!(v3) && ((s) > NFS_MAXNAMLEN)) \
-			error = NFSERR_NAMETOL; \
-		if ((s) <= 0) \
-			error = EBADRPC; \
-		if (error) \
-			nfsm_reply(0); \
-		}
+/* Initialize a vnode_attr to retrieve attributes for the NFS server. */
+#define nfsm_srv_vattr_init(VAP, VERS) \
+	do { \
+		VATTR_INIT(VAP); \
+		VATTR_WANTED((VAP), va_type); \
+		VATTR_WANTED((VAP), va_mode); \
+		VATTR_WANTED((VAP), va_nlink); \
+		VATTR_WANTED((VAP), va_uid); \
+		VATTR_WANTED((VAP), va_gid); \
+		VATTR_WANTED((VAP), va_data_size); \
+		VATTR_WANTED((VAP), va_data_alloc); \
+		VATTR_WANTED((VAP), va_rdev); \
+		VATTR_WANTED((VAP), va_fsid); \
+		VATTR_WANTED((VAP), va_fileid); \
+		VATTR_WANTED((VAP), va_access_time); \
+		VATTR_WANTED((VAP), va_modify_time); \
+		VATTR_WANTED((VAP), va_change_time); \
+		if ((VERS) == NFS_VER2) \
+			VATTR_WANTED((VAP), va_iosize); \
+	} while (0)
 
-#define nfsm_mtouio(p,s) \
-		if ((s) > 0 && \
-		   (t1 = nfsm_mbuftouio(&md,(p),(s),&dpos))) { \
-			error = t1; \
-			mbuf_freem(mrep); \
-			goto nfsmout; \
-		}
+/* Initialize a vnode_attr to retrieve pre-operation attributes for the NFS server. */
+#define nfsm_srv_pre_vattr_init(VAP) \
+	do { \
+		VATTR_INIT(VAP); \
+		VATTR_WANTED((VAP), va_data_size); \
+		VATTR_WANTED((VAP), va_modify_time); \
+		VATTR_WANTED((VAP), va_change_time); \
+	} while (0)
 
-#define nfsm_uiotom(p,s) \
-		if ((t1 = nfsm_uiotombuf((p),&mb,(s),&bpos))) { \
-			error = t1; \
-			mbuf_freem(mreq); \
-			goto nfsmout; \
-		}
-
-#define	nfsm_reqhead(s) \
-		error = nfsm_reqh((s), &bpos, &mreq); \
-		mb = mreq;
-
-#define nfsm_reqdone	mbuf_freem(mrep); \
-		nfsmout:
-
+/* round up to a multiple of 4 */
 #define nfsm_rndup(a)	(((a)+3)&(~0x3))
 
-#define	nfsm_request(v, t, p, c, x)	\
-		if ((error = nfs_request((v), vnode_mount(v), mreq, (t), (p), \
-		   (c), &mrep, &md, &dpos, (x)))) { \
-			if (error & NFSERR_RETERR) \
-				error &= ~NFSERR_RETERR; \
-			else \
-				goto nfsmout; \
-                }
+#define nfsm_pad(a)	(nfsm_rndup(a) - (a))
 
-#define	nfsm_strtom(a,s,m,v3) \
-		if (!(v3) && ((s) > (m))) { \
-			mbuf_freem(mreq); \
-			error = ENAMETOOLONG; \
+/*
+ * control flow macros:
+ * go to the appropriate label on condition
+ */
+#define nfsmout_if(E)	do { if (E) goto nfsmout; } while (0)
+#define nfsmerr_if(E)	do { if (E) goto nfsmerr; } while (0)
+
+/*
+ * For NFS v2 errors and EBADRPC, the reply contains only the error.
+ * This macro is used to skip any reply building code and go straight
+ * to nfsmout instead.
+ */
+#define nfsmout_on_status(ND, E) \
+	do { \
+		if (((ND)->nd_repstat == EBADRPC) || \
+		    ((ND)->nd_repstat && ((ND)->nd_vers == NFS_VER2))) { \
+			(E) = 0; \
 			goto nfsmout; \
 		} \
-		t2 = nfsm_rndup(s)+NFSX_UNSIGNED; \
-		if (t2 <= mbuf_trailingspace(mb)) { \
-			nfsm_build(tl,u_long *,t2); \
-			*tl++ = txdr_unsigned(s); \
-			*(tl+((t2>>2)-2)) = 0; \
-			bcopy((caddr_t)(a), (caddr_t)tl, (s)); \
-		} else if ((t2 = nfsm_strtmbuf(&mb, &bpos, (a), (s)))) { \
-			error = t2; \
-			mbuf_freem(mreq); \
-			goto nfsmout; \
-		}
+	} while (0)
 
-#define	nfsm_srvdone \
-		nfsmout: \
-		return(error)
+/* initialize an mbuf chain */
+#define nfsm_chain_null(NMC) \
+	do { \
+		(NMC)->nmc_mhead = (NMC)->nmc_mcur = NULL; \
+		(NMC)->nmc_ptr = NULL; \
+	} while (0)
 
-#define	nfsm_reply(s) \
-		{ \
-		nfsd->nd_repstat = error; \
-		if (error && !(nfsd->nd_flag & ND_NFSV3)) \
-		   nfs_rephead(0, nfsd, slp, error, mrq, &mb, &bpos); \
+/* cleanup an mbuf chain */
+#define nfsm_chain_cleanup(NMC) \
+	do { \
+		if (!(NMC)->nmc_mhead) break; \
+		mbuf_freem((NMC)->nmc_mhead); \
+		nfsm_chain_null(NMC); \
+	} while (0)
+
+/* get an mbuf given a size hint */
+#define nfsm_mbuf_get(E, MBP, SIZEHINT) \
+	do { \
+		*(MBP) = NULL; \
+		if ((size_t)(SIZEHINT) >= nfs_mbuf_minclsize) \
+			(E) = mbuf_mclget(MBUF_WAITOK, MBUF_TYPE_DATA, (MBP)); \
 		else \
-		   nfs_rephead((s), nfsd, slp, error, mrq, &mb, &bpos); \
-		mbuf_freem(mrep); \
-		mrep = NULL; \
-		mreq = *mrq; \
-		if (error && (!(nfsd->nd_flag & ND_NFSV3) || \
-			error == EBADRPC)) { \
-			error = 0; \
-			goto nfsmout; \
+			(E) = mbuf_get(MBUF_WAITOK, MBUF_TYPE_DATA, (MBP)); \
+	} while (0)
+
+
+/*
+ * macros for building NFS mbuf chains
+ */
+
+/* prepare an mbuf chain for building starting with the given mbuf */
+#define nfsm_chain_init(NMC, MB) \
+	do { \
+		(NMC)->nmc_mhead = (MB); \
+		(NMC)->nmc_mcur = (NMC)->nmc_mhead; \
+		(NMC)->nmc_ptr = mbuf_data((NMC)->nmc_mcur); \
+		(NMC)->nmc_left = mbuf_trailingspace((NMC)->nmc_mcur); \
+		(NMC)->nmc_flags = 0; \
+	} while (0)
+
+/* prepare an mbuf chain for building starting with a newly allocated mbuf */
+#define nfsm_chain_build_alloc_init(E, NMC, SIZEHINT) \
+	do { \
+		mbuf_t ncbimb; \
+		nfsm_mbuf_get((E), &ncbimb, (SIZEHINT)); \
+		if (E) break; \
+		nfsm_chain_init((NMC), ncbimb); \
+	} while (0)
+
+/* done building an mbuf chain */
+#define nfsm_chain_build_done(E, NMC) \
+	do { \
+		if ((E) || !(NMC)->nmc_mcur) break; \
+		/* cap off current mbuf */ \
+		mbuf_setlen((NMC)->nmc_mcur, \
+			(NMC)->nmc_ptr - (caddr_t)mbuf_data((NMC)->nmc_mcur)); \
+	} while (0)
+
+/*
+ *  set the TCP record mark at the head of an mbuf chain -
+ *  assumes 4 bytes are already allocated in the head mbuf
+ */
+#define nfsm_chain_set_recmark(E, NMC, VAL) \
+	do { \
+		if (E) break; \
+		*((uint32_t*)mbuf_data((NMC)->nmc_mhead)) \
+			= txdr_unsigned(VAL); \
+	} while (0)
+
+/* make sure there's room for size bytes in current mbuf */
+#define nfsm_chain_check_size(E, NMC, SIZE) \
+	do { \
+		if (E) break; \
+		if ((NMC)->nmc_left < (SIZE)) { \
+			(E) = nfsm_chain_new_mbuf((NMC), (SIZE)); \
+			if (!(E) && ((NMC)->nmc_left < (SIZE))) \
+				(E) = ENOMEM; \
 		} \
-		}
+	} while (0)
 
-#define	nfsm_writereply(s, v3) \
-		{ \
-		nfsd->nd_repstat = error; \
-		if (error && !(v3)) \
-		   nfs_rephead(0, nfsd, slp, error, &mreq, &mb, &bpos); \
-		else \
-		   nfs_rephead((s), nfsd, slp, error, &mreq, &mb, &bpos); \
-		}
+/* add a 32bit value to an mbuf chain extending if necessary */
+#define nfsm_chain_add_32(E, NMC, VAL) \
+	do { \
+		nfsm_chain_check_size((E), (NMC), NFSX_UNSIGNED); \
+		if (E) break; \
+		*((uint32_t*)(NMC)->nmc_ptr) = txdr_unsigned(VAL); \
+		(NMC)->nmc_ptr += NFSX_UNSIGNED; \
+		(NMC)->nmc_left -= NFSX_UNSIGNED; \
+	} while (0)
 
-#define	nfsm_adv(s) \
-		{ t1 = ((caddr_t)mbuf_data(md)) + mbuf_len(md) - dpos; \
-		if (t1 >= (s)) { \
-			dpos += (s); \
-		} else if ((t1 = nfs_adv(&md, &dpos, (s), t1))) { \
-			error = t1; \
-			mbuf_freem(mrep); \
-			goto nfsmout; \
-		} }
+/* add a 64bit value to an mbuf chain */
+#define nfsm_chain_add_64(E, NMC, VAL) \
+	do { \
+		uint64_t __tmp64; \
+		nfsm_chain_check_size((E), (NMC), 2 * NFSX_UNSIGNED); \
+		if (E) break; \
+		__tmp64 = (VAL); \
+		txdr_hyper(&__tmp64, (NMC)->nmc_ptr); \
+		(NMC)->nmc_ptr += 2 * NFSX_UNSIGNED; \
+		(NMC)->nmc_left -= 2 * NFSX_UNSIGNED; \
+	} while (0)
 
-#define nfsm_srvmtofh(f) \
-		{ \
-		if (nfsd->nd_flag & ND_NFSV3) { \
-			nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
-			(f)->nfh_len = fxdr_unsigned(int, *tl); \
-			if (((f)->nfh_len < (int)sizeof(struct nfs_exphandle)) || \
-			    ((f)->nfh_len > NFSX_V3FHMAX)) { \
-				error = EBADRPC; \
-				nfsm_reply(0); \
-			} \
+/* zero the last 4 bytes for a range of opaque */
+/* data to make sure any pad bytes will be zero. */
+#define nfsm_chain_zero_opaque_pad(BUF, LEN) \
+	*(((uint32_t*)(BUF))+((nfsm_rndup(LEN)>>2)-1)) = 0
+
+/* add buffer of opaque data to an mbuf chain */
+#define nfsm_chain_add_opaque(E, NMC, BUF, LEN) \
+	do { \
+		uint32_t rndlen = nfsm_rndup(LEN); \
+		if (E) break; \
+		if ((NMC)->nmc_left < rndlen) { \
+			(E) = nfsm_chain_add_opaque_f((NMC), (const u_char*)(BUF), (LEN)); \
+			break; \
+		} \
+		nfsm_chain_zero_opaque_pad((NMC)->nmc_ptr, (LEN)); \
+		bcopy((BUF), (NMC)->nmc_ptr, (LEN)); \
+		(NMC)->nmc_ptr += rndlen; \
+		(NMC)->nmc_left -= rndlen; \
+	} while (0)
+
+/* add buffer of opaque data to an mbuf chain without padding */
+#define nfsm_chain_add_opaque_nopad(E, NMC, BUF, LEN) \
+	do { \
+		if (E) break; \
+		if ((NMC)->nmc_left < (uint32_t) (LEN)) { \
+			(E) = nfsm_chain_add_opaque_nopad_f((NMC), (const u_char*)(BUF), (LEN)); \
+			break; \
+		} \
+		bcopy((BUF), (NMC)->nmc_ptr, (LEN)); \
+		(NMC)->nmc_ptr += (LEN); \
+		(NMC)->nmc_left -= (LEN); \
+	} while (0)
+
+/* finish an mbuf in a chain to allow subsequent insertion */
+#define nfsm_chain_finish_mbuf(E, NMC) \
+	do { \
+		if (E) break; \
+		mbuf_setlen((NMC)->nmc_mcur, \
+			(NMC)->nmc_ptr - (caddr_t)mbuf_data((NMC)->nmc_mcur)); \
+		(NMC)->nmc_left = 0; \
+	} while (0)
+
+/* add a file handle to an mbuf chain */
+#define nfsm_chain_add_fh(E, NMC, VERS, FHP, FHLEN) \
+	do { \
+		if (E) break; \
+		if ((VERS) != NFS_VER2) \
+			nfsm_chain_add_32((E), (NMC), (FHLEN)); \
+		nfsm_chain_add_opaque((E), (NMC), (FHP), (FHLEN)); \
+	} while (0)
+
+/* add a string to an mbuf chain */
+#define nfsm_chain_add_string(E, NMC, STR, LEN) \
+	do { \
+		nfsm_chain_add_32((E), (NMC), (LEN)); \
+		nfsm_chain_add_opaque((E), (NMC), (STR), (LEN)); \
+	} while (0)
+
+/* add an NFSv2 time to an mbuf chain */
+#define nfsm_chain_add_v2time(E, NMC, TVP) \
+	do { \
+		if (TVP) { \
+			nfsm_chain_add_32((E), (NMC), (TVP)->tv_sec); \
+			nfsm_chain_add_32((E), (NMC), ((TVP)->tv_nsec != -1) ? \
+				((uint32_t)(TVP)->tv_nsec / 1000) : 0xffffffff); \
 		} else { \
-			(f)->nfh_len = NFSX_V2FH; \
+			/* no time... use -1 */ \
+			nfsm_chain_add_32((E), (NMC), -1); \
+			nfsm_chain_add_32((E), (NMC), -1); \
 		} \
-		nfsm_dissect(tl, u_long *, (f)->nfh_len); \
-		bcopy((caddr_t)tl, (caddr_t)&(f)->nfh_xh, (f)->nfh_len); \
-		}
+	} while (0)
 
-#define	nfsm_clget \
-		if (bp >= be) { \
-			int __nfsm_error, __nfsm_len; \
-			if (mp == mb) \
-				mbuf_setlen(mp, mbuf_len(mp) + bp - bpos); \
-			mp = NULL; \
-			__nfsm_error = mbuf_mclget(MBUF_WAITOK, MBUF_TYPE_DATA, &mp); \
-			if (__nfsm_error) \
-				panic("nfsm_clget: mbuf_mclget error %d", __nfsm_error); \
-			__nfsm_len = mbuf_maxlen(mp); \
-			mbuf_setlen(mp, __nfsm_len); \
-			__nfsm_error = mbuf_setnext(mp2, mp); \
-			if (__nfsm_error) \
-				panic("nfsm_clget: mbuf_setnext error %d", __nfsm_error); \
-			mp2 = mp; \
-			bp = mbuf_data(mp); \
-			be = bp + __nfsm_len; \
+/* add an NFSv3 time to an mbuf chain */
+#define nfsm_chain_add_v3time(E, NMC, TVP) \
+	do { \
+		nfsm_chain_add_32((E), (NMC), (TVP)->tv_sec); \
+		nfsm_chain_add_32((E), (NMC), (TVP)->tv_nsec); \
+	} while (0)
+
+/* add an NFS v2 or v3 time to an mbuf chain */
+#define nfsm_chain_add_time(E, NMC, VERS, TVP) \
+	do { \
+		if ((VERS) == NFS_VER2) { \
+			nfsm_chain_add_v2time((E), (NMC), (TVP)); \
+		} else { \
+			nfsm_chain_add_v3time((E), (NMC), (TVP)); \
 		} \
-		tl = (u_long *)bp
+	} while (0)
 
-#define	nfsm_srv_vattr_init(vap, v3) \
-		{ \
-		VATTR_INIT(vap); \
-		VATTR_WANTED((vap), va_type); \
-		VATTR_WANTED((vap), va_mode); \
-		VATTR_WANTED((vap), va_nlink); \
-		VATTR_WANTED((vap), va_uid); \
-		VATTR_WANTED((vap), va_gid); \
-		VATTR_WANTED((vap), va_data_size); \
-		VATTR_WANTED((vap), va_data_alloc); \
-		VATTR_WANTED((vap), va_rdev); \
-		VATTR_WANTED((vap), va_fsid); \
-		VATTR_WANTED((vap), va_fileid); \
-		VATTR_WANTED((vap), va_access_time); \
-		VATTR_WANTED((vap), va_modify_time); \
-		VATTR_WANTED((vap), va_change_time); \
-		if (!v3) VATTR_WANTED((vap), va_iosize); \
-		}
+/* add an NFSv3 postop file handle to an mbuf chain */
+#define nfsm_chain_add_postop_fh(E, NMC, FHP, FHLEN) \
+	do { \
+		nfsm_chain_add_32((E), (NMC), TRUE); \
+		nfsm_chain_add_fh((E), (NMC), NFS_VER3, (FHP), (FHLEN)); \
+	} while (0)
 
-#define	nfsm_srv_pre_vattr_init(vap, v3) \
-		{ \
-		VATTR_INIT(vap); \
-		VATTR_WANTED((vap), va_data_size); \
-		VATTR_WANTED((vap), va_modify_time); \
-		VATTR_WANTED((vap), va_change_time); \
-		}
-
-#define	nfsm_srvfillattr(a, f) \
-		nfsm_srvfattr(nfsd, (a), (f))
-
-#define nfsm_srvwcc_data(br, b, ar, a) \
-		nfsm_srvwcc(nfsd, (br), (b), (ar), (a), &mb, &bpos)
-
-#define nfsm_srvpostop_attr(r, a) \
-		nfsm_srvpostopattr(nfsd, (r), (a), &mb, &bpos)
-
-#define nfsm_srvsattr(a) \
-		{ \
-		struct timespec now; \
-		nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
-		if (*tl == nfs_true) { \
-			nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
-			VATTR_SET(a, va_mode, nfstov_mode(*tl)); \
-		} \
-		nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
-		if (*tl == nfs_true) { \
-			nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
-			VATTR_SET(a, va_uid, fxdr_unsigned(uid_t, *tl)); \
-		} \
-		nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
-		if (*tl == nfs_true) { \
-			nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
-			VATTR_SET(a, va_gid, fxdr_unsigned(gid_t, *tl)); \
-		} \
-		nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
-		if (*tl == nfs_true) { \
-			nfsm_dissect(tl, u_long *, 2 * NFSX_UNSIGNED); \
-			fxdr_hyper(tl, &(a)->va_data_size); \
-			VATTR_SET_ACTIVE(a, va_data_size); \
-		} \
-		nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
-		nanotime(&now); \
-		switch (fxdr_unsigned(int, *tl)) { \
-		case NFSV3SATTRTIME_TOCLIENT: \
-			nfsm_dissect(tl, u_long *, 2 * NFSX_UNSIGNED); \
-			fxdr_nfsv3time(tl, &(a)->va_access_time); \
-			VATTR_SET_ACTIVE(a, va_access_time); \
+/* add NFSv3 postop attributes to an mbuf chain */
+#define nfsm_chain_add_postop_attr(E, ND, NMC, ATTRERR, VAP) \
+	do { \
+		if (E) break; \
+		if (ATTRERR) { \
+			nfsm_chain_add_32((E), (NMC), FALSE); \
 			break; \
-		case NFSV3SATTRTIME_TOSERVER: \
-			VATTR_SET(a, va_access_time, now); \
+		} \
+		nfsm_chain_add_32((E), (NMC), TRUE); \
+		if (E) break; \
+		(E) = nfsm_chain_add_fattr((ND), (NMC), (VAP)); \
+	} while (0)
+
+/* Add an NFSv2 "sattr" structure to an mbuf chain */
+#define nfsm_chain_add_v2sattr(E, NMC, VAP, SZRDEV) \
+	do { \
+		if (E) break; \
+		(E) = nfsm_chain_add_v2sattr_f((NMC), (VAP), (SZRDEV)); \
+	} while (0)
+
+/* Add an NFSv3 "sattr" structure to an mbuf chain */
+#define nfsm_chain_add_v3sattr(E, NMC, VAP) \
+	do { \
+		if (E) break; \
+		(E) = nfsm_chain_add_v3sattr_f((NMC), (VAP)); \
+	} while (0)
+
+/* Add an NFSv4 "fattr" structure to an mbuf chain */
+#define nfsm_chain_add_fattr4(E, NMC, VAP, NMP) \
+	do { \
+		if (E) break; \
+		(E) = nfsm_chain_add_fattr4_f((NMC), (VAP), (NMP)); \
+	} while (0)
+
+/* add NFSv3 WCC data to an mbuf chain */
+#define nfsm_chain_add_wcc_data(E, ND, NMC, PREERR, PREVAP, POSTERR, POSTVAP) \
+	do { \
+		if (E) break; \
+		(E) = nfsm_chain_add_wcc_data_f((ND), (NMC), \
+			(PREERR), (PREVAP), (POSTERR), (POSTVAP)); \
+	} while (0)
+
+/* add NFSv4 COMPOUND header */
+#define nfsm_chain_add_compound_header(E, NMC, TAG, NUMOPS) \
+	do { \
+		if ((TAG) && strlen(TAG)) \
+			nfsm_chain_add_string((E), (NMC), (TAG), strlen(TAG)); \
+		else \
+			nfsm_chain_add_32((E), (NMC), 0); \
+		nfsm_chain_add_32((E), (NMC), 0); /*minorversion*/ \
+		nfsm_chain_add_32((E), (NMC), (NUMOPS)); \
+	} while (0)
+
+/* add NFSv4 attr bitmap */
+#define nfsm_chain_add_bitmap(E, NMC, B, LEN) \
+	do { \
+		int __i; \
+		nfsm_chain_add_32((E), (NMC), (LEN)); \
+		for (__i=0; __i < (LEN); __i++) \
+			nfsm_chain_add_32((E), (NMC), (B)[__i]); \
+	} while (0)
+
+/* add NFSv4 attr bitmap masked with the given mask */
+#define nfsm_chain_add_bitmap_masked(E, NMC, B, LEN, MASK) \
+	do { \
+		int __i; \
+		nfsm_chain_add_32((E), (NMC), (LEN)); \
+		for (__i=0; __i < (LEN); __i++) \
+			nfsm_chain_add_32((E), (NMC), ((B)[__i] & (MASK)[__i])); \
+	} while (0)
+
+/*
+ * macros for dissecting NFS mbuf chains
+ */
+
+/* prepare an mbuf chain for dissection starting with the given mbuf */
+#define nfsm_chain_dissect_init(E, NMC, H) \
+	do { \
+		if (!(H)) { \
+			(E) = EINVAL; \
 			break; \
-		}; \
-		nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
-		switch (fxdr_unsigned(int, *tl)) { \
-		case NFSV3SATTRTIME_TOCLIENT: \
-			nfsm_dissect(tl, u_long *, 2 * NFSX_UNSIGNED); \
-			fxdr_nfsv3time(tl, &(a)->va_modify_time); \
-			VATTR_SET_ACTIVE(a, va_modify_time); \
+		} \
+		(NMC)->nmc_mcur = (NMC)->nmc_mhead = (H); \
+		(NMC)->nmc_ptr = mbuf_data(H); \
+		(NMC)->nmc_left = mbuf_len(H); \
+	} while (0)
+
+/* skip a number of bytes in an mbuf chain */
+#define nfsm_chain_adv(E, NMC, LEN) \
+	do { \
+		if (E) break; \
+		if ((NMC)->nmc_left >= (uint32_t)(LEN)) { \
+			(NMC)->nmc_left -= (LEN); \
+			(NMC)->nmc_ptr += (LEN); \
+		} else { \
+			(E) = nfsm_chain_advance((NMC), (LEN)); \
+		} \
+	} while (0)
+
+/* get a 32bit value from an mbuf chain */
+#define nfsm_chain_get_32(E, NMC, LVAL) \
+	do { \
+		uint32_t __tmp32, *__tmpptr; \
+		if (E) break; \
+		if ((NMC)->nmc_left >= NFSX_UNSIGNED) { \
+			__tmpptr = (uint32_t*)(NMC)->nmc_ptr; \
+			(NMC)->nmc_left -= NFSX_UNSIGNED; \
+			(NMC)->nmc_ptr += NFSX_UNSIGNED; \
+		} else { \
+			__tmpptr = &__tmp32; \
+			(E) = nfsm_chain_get_opaque_f((NMC), NFSX_UNSIGNED, (u_char*)__tmpptr); \
+			if (E) break; \
+		} \
+		(LVAL) = fxdr_unsigned(uint32_t, *__tmpptr); \
+	} while (0)
+
+/* get a 64bit value from an mbuf chain */
+#define nfsm_chain_get_64(E, NMC, LVAL) \
+	do { \
+		uint64_t __tmp64, *__tmpptr; \
+		if (E) break; \
+		if ((NMC)->nmc_left >= 2 * NFSX_UNSIGNED) { \
+			__tmpptr = (uint64_t*)(NMC)->nmc_ptr; \
+			(NMC)->nmc_left -= 2 * NFSX_UNSIGNED; \
+			(NMC)->nmc_ptr += 2 * NFSX_UNSIGNED; \
+		} else { \
+			__tmpptr = &__tmp64; \
+			(E) = nfsm_chain_get_opaque_f((NMC), 2 * NFSX_UNSIGNED, (u_char*)__tmpptr); \
+			if (E) break; \
+		} \
+		fxdr_hyper(__tmpptr, &(LVAL)); \
+	} while (0)
+
+/* get a pointer to the next consecutive bytes in an mbuf chain */
+#define nfsm_chain_get_opaque_pointer(E, NMC, LEN, PTR) \
+	do { \
+		if (E) break; \
+		if ((NMC)->nmc_left >= (uint32_t)(LEN)) { \
+			(PTR) = (void*)(NMC)->nmc_ptr; \
+			(NMC)->nmc_left -= nfsm_rndup(LEN); \
+			(NMC)->nmc_ptr += nfsm_rndup(LEN); \
+		} else { \
+			(E) = nfsm_chain_get_opaque_pointer_f((NMC), (LEN), (u_char**)&(PTR)); \
+		} \
+	} while (0)
+
+/* copy the next consecutive bytes of opaque data from an mbuf chain */
+#define nfsm_chain_get_opaque(E, NMC, LEN, PTR) \
+	do { \
+		if (E) break; \
+		if ((NMC)->nmc_left >= (LEN)) { \
+			u_char *__tmpptr = (u_char*)(NMC)->nmc_ptr; \
+			(NMC)->nmc_left -= nfsm_rndup(LEN); \
+			(NMC)->nmc_ptr += nfsm_rndup(LEN); \
+			bcopy(__tmpptr, (PTR), (LEN)); \
+		} else { \
+			(E) = nfsm_chain_get_opaque_f((NMC), (LEN), (u_char*)(PTR)); \
+		} \
+	} while (0)
+
+/* get the size of and a pointer to a file handle in an mbuf chain */
+#define nfsm_chain_get_fh_ptr(E, NMC, VERS, FHP, FHSIZE) \
+	do { \
+		if ((VERS) != NFS_VER2) \
+			nfsm_chain_get_32((E), (NMC), (FHSIZE)); \
+		else \
+			(FHSIZE) = NFSX_V2FH;\
+		nfsm_chain_get_opaque_pointer((E), (NMC), (FHSIZE), (FHP));\
+	} while (0)
+
+/* get the size of and data for a file handle in an mbuf chain */
+#define nfsm_chain_get_fh(E, NMC, VERS, FHP) \
+	do { \
+		if ((VERS) != NFS_VER2) \
+			nfsm_chain_get_32((E), (NMC), (FHP)->fh_len); \
+		else \
+			(FHP)->fh_len = NFSX_V2FH;\
+		nfsm_chain_get_opaque((E), (NMC), (uint32_t)(FHP)->fh_len, (FHP)->fh_data);\
+		if (E) \
+			(FHP)->fh_len = 0;\
+	} while (0)
+
+/* get an NFS v2 or v3 time from an mbuf chain */
+#define nfsm_chain_get_time(E, NMC, VERS, TSEC, TNSEC) \
+	do { \
+		nfsm_chain_get_32((E), (NMC), (TSEC)); \
+		nfsm_chain_get_32((E), (NMC), (TNSEC)); \
+		if ((E) || ((VERS) != NFS_VER2)) break; \
+		if ((uint32_t)(TNSEC) == 0xffffffff) \
+			(TNSEC) = 0; \
+		else \
+			(TNSEC) *= 1000; \
+	} while (0)
+
+/* get postop attributes from an mbuf chain */
+#define nfsm_chain_postop_attr_get(E, NMC, F, VAP) \
+	do { \
+		(F) = 0; \
+		if ((E) || !(NMC)->nmc_mhead) break; \
+		nfsm_chain_get_32((E), (NMC), (F)); \
+		if ((E) || !(F)) break; \
+		if (((E) = nfs_parsefattr((NMC), NFS_VER3, (VAP)))) \
+			(F) = 0; \
+	} while (0)
+
+/* update a node's attribute cache with postop attributes from an mbuf chain */
+/* (F returns whether the attributes were updated or not) */
+#define nfsm_chain_postop_attr_update_flag(E, NMC, NP, F, X) \
+	do { \
+		struct nfs_vattr ttvattr; \
+		nfsm_chain_postop_attr_get((E), (NMC), (F), &ttvattr); \
+		if ((E) || !(F)) break; \
+		if (((E) = nfs_loadattrcache((NP), &ttvattr, (X), 1))) { \
+			(F) = 0; \
 			break; \
-		case NFSV3SATTRTIME_TOSERVER: \
-			VATTR_SET(a, va_modify_time, now); \
-			break; \
-		}; }
+		} \
+		if (*(X) == 0) \
+			(F) = 0; \
+	} while (0)
+
+/* update a node's attribute cache with postop attributes from an mbuf chain */
+#define nfsm_chain_postop_attr_update(E, NMC, NP, X) \
+	do { \
+		int __dummy_flag = 0; \
+		nfsm_chain_postop_attr_update_flag((E), (NMC), (NP), __dummy_flag, (X)); \
+	} while (0)
+
+/* get and process NFSv3 WCC data from an mbuf chain */
+#define nfsm_chain_get_wcc_data(E, NMC, NP, PREMTIME, NEWPOSTATTR, X) \
+	do { \
+		if (E) break; \
+		(E) = nfsm_chain_get_wcc_data_f((NMC), (NP), (PREMTIME), (NEWPOSTATTR), (X)); \
+	} while (0)
+
+/* update a node's attribute cache with attributes from an mbuf chain */
+#define nfsm_chain_loadattr(E, NMC, NP, VERS, A, X) \
+	do { \
+		struct nfs_vattr ttvattr, *ttnvap; \
+		if (E) break; \
+		ttnvap = (A) ? (A) : &ttvattr; \
+		if ((VERS) == NFS_VER4) { \
+			NFS_CLEAR_ATTRIBUTES(ttnvap->nva_bitmap); \
+			(E) = nfs4_parsefattr((NMC), NULL, ttnvap, NULL, NULL); \
+		} else { \
+			(E) = nfs_parsefattr((NMC), (VERS), ttnvap); \
+		} \
+		if (E) break; \
+		(E) = nfs_loadattrcache((NP), ttnvap, (X), 0); \
+	} while (0)
+
+/* get NFSv4 attr bitmap */
+#define nfsm_chain_get_bitmap(E, NMC, B, LEN) \
+	do { \
+		uint32_t __len, __i; \
+		nfsm_chain_get_32((E), (NMC), __len); \
+		if (E) break; \
+		for (__i=0; __i < MIN(__len, (LEN)); __i++) \
+			nfsm_chain_get_32((E), (NMC), (B)[__i]); \
+		if (E) break; \
+		for (; __i < (LEN); __i++) \
+			(B)[__i] = 0; \
+		(LEN) = __len; \
+	} while (0)
+
+#define nfsm_chain_skip_tag(E, NMC) \
+	do { \
+		uint32_t __val; \
+		nfsm_chain_get_32((E), (NMC), __val); \
+		nfsm_chain_adv((E), (NMC), nfsm_rndup(__val)); \
+	} while (0)
+
+#define nfsm_chain_op_check(E, NMC, OP) \
+	do { \
+		uint32_t __val = 0; \
+		nfsm_chain_get_32((E), (NMC), __val); \
+		nfsm_assert((E), (__val == (OP)), EBADRPC); \
+		nfsm_chain_get_32((E), (NMC), __val); \
+		nfsm_assert((E), (__val == NFS_OK), __val); \
+	} while (0)
+
+#define nfsm_chain_check_change_info(E, NMC, DNP) \
+	do { \
+		uint64_t __ci_before, __ci_after; \
+		uint32_t __ci_atomic = 0; \
+		nfsm_chain_get_32((E), (NMC), __ci_atomic); \
+		nfsm_chain_get_64((E), (NMC), __ci_before); \
+		nfsm_chain_get_64((E), (NMC), __ci_after); \
+		if (E) break; \
+		if (__ci_atomic && (__ci_before == (DNP)->n_ncchange)) \
+			(DNP)->n_ncchange = __ci_after; \
+		else \
+			cache_purge(NFSTOV(DNP)); \
+	} while (0)
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* _NFS_NFSM_SUBS_H_ */

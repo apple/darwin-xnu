@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 1999-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1989, 1993
@@ -71,23 +77,14 @@
 #include <sys/mount.h>
 #include <sys/vnode.h>
 #include <sys/malloc.h>
-#include <sys/paths.h>
 #include <sys/kdebug.h>
 #include <sys/kauth.h>
+#include <sys/namei.h>
 
 #include "hfs.h"
 #include "hfs_catalog.h"
 #include "hfs_cnode.h"
 
-#define LEGACY_FORK_NAMES	1
-
-static int forkcomponent(struct componentname *cnp, int *rsrcfork);
-
-#define _PATH_DATAFORKSPEC	"/..namedfork/data"
-
-#if LEGACY_FORK_NAMES
-#define LEGACY_RSRCFORKSPEC	"/rsrc"
-#endif
 
 /*	
  * FROM FREEBSD 3.1
@@ -153,15 +150,11 @@ static int forkcomponent(struct componentname *cnp, int *rsrcfork);
  *	When should we lock parent_hp in here ??
  */
 static int
-hfs_lookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp, vfs_context_t context, int *cnode_locked)
+hfs_lookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp, int *cnode_locked)
 {
 	struct cnode *dcp;	/* cnode for directory being searched */
 	struct vnode *tvp;	/* target vnode */
 	struct hfsmount *hfsmp;
-	kauth_cred_t cred;
-	struct proc *p;
-	int wantrsrc = 0;
-	int forknamelen = 0;
 	int flags;
 	int nameiop;
 	int retval = 0;
@@ -172,7 +165,8 @@ hfs_lookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp, vfs
 	struct cat_fork fork;
 	int lockflags;
 
-	dcp = VTOC(dvp);
+  retry:
+	dcp = NULL;
 	hfsmp = VTOHFS(dvp);
 	*vpp = NULL;
 	*cnode_locked = 0;
@@ -181,9 +175,6 @@ hfs_lookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp, vfs
 	nameiop = cnp->cn_nameiop;
 	flags = cnp->cn_flags;
 	bzero(&desc, sizeof(desc));
-
-	cred = vfs_context_ucred(context);
-	p    = vfs_context_proc(context);
 
 	/*
 	 * First check to see if it is a . or .., else look it up.
@@ -196,50 +187,66 @@ hfs_lookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp, vfs
 		cnp->cn_flags &= ~MAKEENTRY;
 		goto found;	/* We always know who we are */
 	} else {
-		/* Check fork suffix to see if we want the resource fork */
-		forknamelen = forkcomponent(cnp, &wantrsrc);
-		
-		/* Resource fork names are not cached. */
-		if (wantrsrc)
-			cnp->cn_flags &= ~MAKEENTRY;
+		if (hfs_lock(VTOC(dvp), HFS_EXCLUSIVE_LOCK) != 0) {
+			retval = ENOENT;  /* The parent no longer exists ? */
+			goto exit;
+		}
+		dcp = VTOC(dvp);
 
-		if (hfs_lock(dcp, HFS_EXCLUSIVE_LOCK) != 0) {
-			goto notfound;
+		if (dcp->c_flag & C_DIR_MODIFICATION) {
+		    // XXXdbg - if we could msleep on a lck_rw_t then we would do that
+		    //          but since we can't we have to unlock, delay for a bit
+		    //          and then retry...
+		    // msleep((caddr_t)&dcp->c_flag, &dcp->c_rwlock, PINOD, "hfs_vnop_lookup", 0);
+		    hfs_unlock(dcp);
+		    tsleep((caddr_t)dvp, PRIBIO, "hfs_lookup", 1);
+
+		    goto retry;
 		}
 
 		/* No need to go to catalog if there are no children */
 		if (dcp->c_entries == 0) {
-			hfs_unlock(dcp);
 			goto notfound;
 		}
 
 		bzero(&cndesc, sizeof(cndesc));
-		cndesc.cd_nameptr = cnp->cn_nameptr;
+		cndesc.cd_nameptr = (const u_int8_t *)cnp->cn_nameptr;
 		cndesc.cd_namelen = cnp->cn_namelen;
-		cndesc.cd_parentcnid = dcp->c_cnid;
+		cndesc.cd_parentcnid = dcp->c_fileid;
 		cndesc.cd_hint = dcp->c_childhint;
 
 		lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
 
-		retval = cat_lookup(hfsmp, &cndesc, wantrsrc, &desc, &attr, &fork, NULL);
+		retval = cat_lookup(hfsmp, &cndesc, 0, &desc, &attr, &fork, NULL);
 		
 		hfs_systemfile_unlock(hfsmp, lockflags);
 
 		if (retval == 0) {
 			dcp->c_childhint = desc.cd_hint;
-			hfs_unlock(dcp);
+			/*
+			 * Note: We must drop the parent lock here before calling
+			 * hfs_getnewvnode (which takes the child lock).
+			 */
+		    	hfs_unlock(dcp);
+		    	dcp = NULL;
 			goto found;
 		}
-		hfs_unlock(dcp);
 notfound:
-		/* ENAMETOOLONG supersedes other errors */
-		if (((nameiop != CREATE) && (nameiop != RENAME)) && 
-			(retval != ENAMETOOLONG) && 
-		    (cnp->cn_namelen > kHFSPlusMaxFileNameChars)) {
+		/*
+		 * ENAMETOOLONG supersedes other errors
+		 *
+		 * For a CREATE or RENAME operation on the last component
+		 * the ENAMETOOLONG will be handled in the next VNOP.
+		 */
+		if ((retval != ENAMETOOLONG) && 
+		    (cnp->cn_namelen > kHFSPlusMaxFileNameChars) &&
+		    (((flags & ISLASTCN) == 0) || ((nameiop != CREATE) && (nameiop != RENAME)))) {
 			retval = ENAMETOOLONG;
 		} else if (retval == 0) {
 			retval = ENOENT;
 		}
+		if (retval != ENOENT)
+			goto exit;
 		/*
 		 * This is a non-existing entry
 		 *
@@ -252,39 +259,23 @@ notfound:
 		    (cnp->cn_flags & DOWHITEOUT) &&
 		    (cnp->cn_flags & ISWHITEOUT))) &&
 		    (flags & ISLASTCN) &&
-		    (retval == ENOENT)) {
+		    !(ISSET(dcp->c_flag, C_DELETED | C_NOEXISTS))) {
 			retval = EJUSTRETURN;
 			goto exit;
 		}
 		/*
-		 * Insert name into cache (as non-existent) if appropriate.
-		 *
-		 * Only done for case-sensitive HFS+ volumes.
+		 * Insert name into the name cache (as non-existent).
 		 */
-		if ((retval == ENOENT) &&
-		    (hfsmp->hfs_flags & HFS_CASE_SENSITIVE) &&
-		    (cnp->cn_flags & MAKEENTRY) && nameiop != CREATE) {
+		if ((hfsmp->hfs_flags & HFS_STANDARD) == 0 &&
+		    (cnp->cn_flags & MAKEENTRY) &&
+		    (nameiop != CREATE)) {
 			cache_enter(dvp, NULL, cnp);
+			dcp->c_flag |= C_NEG_ENTRIES;
 		}
 		goto exit;
 	}
 
 found:
-	/*
-	 * Process any fork specifiers
-	 */
-	if (forknamelen && S_ISREG(attr.ca_mode)) {
-		/* fork names are only for lookups */
-		if ((nameiop != LOOKUP) && (nameiop != CREATE)) {
-			retval = EPERM;  
-			goto exit;
-		}
-		cnp->cn_consume = forknamelen;
-		flags |= ISLASTCN;
-	} else {
-		wantrsrc = 0;
-		forknamelen = 0;
-	}
 	if (flags & ISLASTCN) {
 		switch(nameiop) {
 		case DELETE:
@@ -306,37 +297,90 @@ found:
 			goto exit;
 		*vpp = dvp;
 	} else if (flags & ISDOTDOT) {
-		if ((retval = hfs_vget(hfsmp, dcp->c_parentcnid, &tvp, 0)))
+		/*
+		 * Directory hard links can have multiple parents so
+		 * find the appropriate parent for the current thread.
+		 */
+		if ((retval = hfs_vget(hfsmp, hfs_currentparent(VTOC(dvp)), &tvp, 0))) {
 			goto exit;
+		}
 		*cnode_locked = 1;
 		*vpp = tvp;
 	} else {
 		int type = (attr.ca_mode & S_IFMT);
+#if NAMEDRSRCFORK
+		int rsrc_warn = 0;
 
+		/*
+		 * Check if caller wants the resource fork but utilized
+		 * the legacy "file/rsrc" access path.
+		 *
+		 * This is deprecated behavior and support for it will not
+		 * be allowed beyond case insensitive HFS+ and even that
+		 * support will be removed in the next major OS release.
+		 */
+		if ((type == S_IFREG) &&
+		    ((flags & ISLASTCN) == 0) &&
+		    (cnp->cn_nameptr[cnp->cn_namelen] == '/') &&
+		    (bcmp(&cnp->cn_nameptr[cnp->cn_namelen+1], "rsrc", 5) == 0) &&
+		    ((hfsmp->hfs_flags & (HFS_STANDARD | HFS_CASE_SENSITIVE)) == 0)) {
+		
+			cnp->cn_consume = 5;
+			cnp->cn_flags |= CN_WANTSRSRCFORK | ISLASTCN | NOCACHE;
+			cnp->cn_flags &= ~MAKEENTRY;
+			flags |= ISLASTCN;
+			rsrc_warn = 1;
+		}
+#endif
 		if (!(flags & ISLASTCN) && (type != S_IFDIR) && (type != S_IFLNK)) {
 			retval = ENOTDIR;
 			goto exit;
 		}
-
+		/* Don't cache directory hardlink names. */
+		if (attr.ca_recflags & kHFSHasLinkChainMask) {
+			cnp->cn_flags &= ~MAKEENTRY;
+		}
 		/* Names with composed chars are not cached. */
 		if (cnp->cn_namelen != desc.cd_namelen)
 			cnp->cn_flags &= ~MAKEENTRY;
 
-		/* Resource fork vnode names include the fork specifier. */
-		if (wantrsrc && (flags & ISLASTCN))
-			cnp->cn_namelen += forknamelen;
+		retval = hfs_getnewvnode(hfsmp, dvp, cnp, &desc, 0, &attr, &fork, &tvp);
 
-		retval = hfs_getnewvnode(hfsmp, dvp, cnp, &desc, wantrsrc, &attr, &fork, &tvp);
-
-		if (wantrsrc && (flags & ISLASTCN))
-			cnp->cn_namelen -= forknamelen;
-
-		if (retval)
+		if (retval) {
+			/*
+			 * If this was a create operation lookup and another
+			 * process removed the object before we had a chance
+			 * to create the vnode, then just treat it as the not
+			 * found case above and return EJUSTRETURN.
+			 */
+			if ((retval == ENOENT) &&
+			    (cnp->cn_nameiop == CREATE) &&
+			    (flags & ISLASTCN)) {
+				retval = EJUSTRETURN;
+			}
 			goto exit;
+		}
+
+		/* Save the origin info of a directory link for future ".." requests. */
+		if (S_ISDIR(attr.ca_mode) && (attr.ca_recflags & kHFSHasLinkChainMask)) {
+			hfs_savelinkorigin(VTOC(tvp), VTOC(dvp)->c_fileid);
+		}
 		*cnode_locked = 1;
 		*vpp = tvp;
+#if NAMEDRSRCFORK
+		if (rsrc_warn) {
+			if ((VTOC(tvp)->c_flag & C_WARNED_RSRC) == 0) {
+				VTOC(tvp)->c_flag |= C_WARNED_RSRC;
+				printf("%.200s: file access by '/rsrc' was deprecated in 10.4\n",
+				       cnp->cn_nameptr);
+			}
+		}
+#endif
 	}
 exit:
+	if (dcp) {
+		hfs_unlock(dcp);
+	}
 	cat_releasedesc(&desc);
 	return (retval);
 }
@@ -393,9 +437,9 @@ hfs_vnop_lookup(struct vnop_lookup_args *ap)
 	 */
 	error = cache_lookup(dvp, vpp, cnp);
 	if (error != -1) {
-		if (error == ENOENT)		/* found a negative cache entry */
-			goto exit;
-		goto lookup;			/* did not find it in the cache */
+		if ((error == ENOENT) && (cnp->cn_nameiop != CREATE))		
+			goto exit;	/* found a negative cache entry */
+		goto lookup;		/* did not find it in the cache */
 	}
 	/*
 	 * We have a name that matched
@@ -414,7 +458,7 @@ hfs_vnop_lookup(struct vnop_lookup_args *ap)
 
 	if ((flags & ISLASTCN) && (cp->c_flag & C_HARDLINK)) {
 		hfs_lock(cp, HFS_FORCE_LOCK);
-		if ((cp->c_parentcnid != VTOC(dvp)->c_cnid) ||
+		if ((cp->c_parentcnid != dcp->c_cnid) ||
 		    (bcmp(cnp->cn_nameptr, cp->c_desc.cd_nameptr, cp->c_desc.cd_namelen) != 0)) {
 			struct cat_desc desc;
 			int lockflags;
@@ -422,11 +466,13 @@ hfs_vnop_lookup(struct vnop_lookup_args *ap)
 			/*
 			 * Get an updated descriptor
 			 */
-			bzero(&desc, sizeof(desc));
-			desc.cd_nameptr = cnp->cn_nameptr;
+			desc.cd_nameptr = (const u_int8_t *)cnp->cn_nameptr;
 			desc.cd_namelen = cnp->cn_namelen;
-			desc.cd_parentcnid = VTOC(dvp)->c_cnid;
-			desc.cd_hint = VTOC(dvp)->c_childhint;
+			desc.cd_parentcnid = dcp->c_fileid;
+			desc.cd_hint = dcp->c_childhint;
+			desc.cd_encoding = 0;
+			desc.cd_cnid = 0;
+			desc.cd_flags = S_ISDIR(cp->c_mode) ? CD_ISDIR : 0;
 	
 			lockflags = hfs_systemfile_lock(VTOHFS(dvp), SFL_CATALOG, HFS_SHARED_LOCK);		
 			if (cat_lookup(VTOHFS(vp), &desc, 0, &desc, NULL, NULL, NULL) == 0)
@@ -435,46 +481,33 @@ hfs_vnop_lookup(struct vnop_lookup_args *ap)
 		}
 		hfs_unlock(cp);
 	}
-	if (dvp != vp && !(flags & ISDOTDOT)) {
-		if ((flags & ISLASTCN) == 0 && vnode_isreg(vp)) {
-			int wantrsrc = 0;
+#if NAMEDRSRCFORK
+	/*
+	 * Check if caller wants the resource fork but utilized
+	 * the legacy "file/rsrc" access path.
+	 *
+	 * This is deprecated behavior and support for it will not
+	 * be allowed beyond case insensitive HFS+ and even that
+	 * support will be removed in the next major OS release.
+	 */
+	if ((dvp != vp) &&
+	    ((flags & ISLASTCN) == 0) &&
+	    vnode_isreg(vp) &&
+	    (cnp->cn_nameptr[cnp->cn_namelen] == '/') &&
+	    (bcmp(&cnp->cn_nameptr[cnp->cn_namelen+1], "rsrc", 5) == 0) &&
+	    ((VTOHFS(vp)->hfs_flags & (HFS_STANDARD | HFS_CASE_SENSITIVE)) == 0)) {		
+		cnp->cn_consume = 5;
+		cnp->cn_flags |= CN_WANTSRSRCFORK | ISLASTCN | NOCACHE;
+		cnp->cn_flags &= ~MAKEENTRY;
 
-			cnp->cn_consume = forkcomponent(cnp, &wantrsrc);
-			if (cnp->cn_consume) {
-				flags |= ISLASTCN;
-				/* Fork names are only for lookups */
-				if (cnp->cn_nameiop != LOOKUP &&
-				    cnp->cn_nameiop != CREATE) {
-				        vnode_put(vp);
-					error = EPERM;
-					goto exit;
-				}
-			}
-			/*
-			 * Use cnode's rsrcfork vnode if possible.
-			 */
-			if (wantrsrc) {
-			        int	vid;
-
-			        *vpp = NULL;
-
-			        if (cp->c_rsrc_vp == NULL) {
-				        vnode_put(vp);
-				        goto lookup;
-				}
-				vid = vnode_vid(cp->c_rsrc_vp);
-
-				error = vnode_getwithvid(cp->c_rsrc_vp, vid);
-				if (error) {
-					vnode_put(vp);
-				        goto lookup;
-				}
-				*vpp = cp->c_rsrc_vp;
-				vnode_put(vp);
-				vp = *vpp;
-			}
+		hfs_lock(cp, HFS_FORCE_LOCK);
+		if ((cp->c_flag & C_WARNED_RSRC) == 0) {
+			cp->c_flag |= C_WARNED_RSRC;
+			printf("%.200s: file access by '/rsrc' was deprecated in 10.4\n", cnp->cn_nameptr);
 		}
+		hfs_unlock(cp);
 	}
+#endif
 	return (error);
 	
 lookup:
@@ -485,7 +518,7 @@ lookup:
 	 */
 	cnode_locked = 0;
 
-	error = hfs_lookup(dvp, vpp, cnp, ap->a_context, &cnode_locked);
+	error = hfs_lookup(dvp, vpp, cnp, &cnode_locked);
 	
 	if (cnode_locked)
 		hfs_unlock(VTOC(*vpp));
@@ -493,40 +526,4 @@ exit:
 	return (error);
 }
 
-
-/*
- * forkcomponent - look for a fork suffix in the component name
- *
- */
-static int
-forkcomponent(struct componentname *cnp, int *rsrcfork)
-{
-	char *suffix = cnp->cn_nameptr + cnp->cn_namelen;
-	int consume = 0;
-
-	*rsrcfork = 0;
-	if (*suffix == '\0')
-		return (0);
-	/*
-	 * There are only 3 valid fork suffixes:
-	 *	"/..namedfork/rsrc"
-	 *	"/..namedfork/data"
-	 *	"/rsrc"  (legacy)
-	 */
-	if (bcmp(suffix, _PATH_RSRCFORKSPEC, sizeof(_PATH_RSRCFORKSPEC)) == 0) {
-		consume = sizeof(_PATH_RSRCFORKSPEC) - 1;
-		*rsrcfork = 1;
-	} else if (bcmp(suffix, _PATH_DATAFORKSPEC, sizeof(_PATH_DATAFORKSPEC)) == 0) {
-		consume = sizeof(_PATH_DATAFORKSPEC) - 1;
-	}
-
-#if LEGACY_FORK_NAMES
-	else if (bcmp(suffix, LEGACY_RSRCFORKSPEC, sizeof(LEGACY_RSRCFORKSPEC)) == 0) {
-		consume = sizeof(LEGACY_RSRCFORKSPEC) - 1;
-		*rsrcfork = 1;
-		printf("HFS: /rsrc paths are deprecated (%s)\n", cnp->cn_nameptr);
-	}
-#endif
-	return (consume);
-}
 

@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -88,24 +94,17 @@ extern ppnum_t upl_get_highest_page(
 
 extern unsigned int	vm_pageout_scan_event_counter;
 extern unsigned int	vm_zf_count;
+extern unsigned int	vm_zf_queue_count;
 
 /*
  *	Routines exported to Mach.
  */
 extern void		vm_pageout(void);
 
-extern vm_object_t	vm_pageout_object_allocate(
-					vm_page_t		m,
-					vm_size_t		size,
-					vm_object_offset_t	offset);
+extern kern_return_t	vm_pageout_internal_start(void);
 
 extern void		vm_pageout_object_terminate(
 					vm_object_t	object);
-
-extern vm_page_t	vm_pageout_setup(
-					vm_page_t		m,
-					vm_object_t		new_object,
-					vm_object_offset_t	new_offset);
 
 extern void		vm_pageout_cluster(
 					vm_page_t	m);
@@ -114,12 +113,6 @@ extern void		vm_pageout_initialize_page(
 					vm_page_t	m);
 
 extern void		vm_pageclean_setup(
-					vm_page_t		m,
-					vm_page_t		new_m,
-					vm_object_t		new_object,
-					vm_object_offset_t	new_offset);
-
-extern void		vm_pageclean_copy(
 					vm_page_t		m,
 					vm_page_t		new_m,
 					vm_object_t		new_object,
@@ -164,7 +157,7 @@ struct upl {
 #define UPL_IO_WIRE		0x200
 #define UPL_ACCESS_BLOCKED	0x400
 #define UPL_ENCRYPTED		0x800
-
+#define UPL_SHADOWED		0x1000
 
 /* flags for upl_create flags parameter */
 #define UPL_CREATE_EXTERNAL	0
@@ -242,7 +235,8 @@ extern kern_return_t vm_paging_map_object(
 	vm_page_t		page,
 	vm_object_t		object,
 	vm_object_offset_t	offset,
-	vm_map_size_t		*size);
+	vm_map_size_t		*size,
+	boolean_t		can_unlock_object);
 extern void vm_paging_unmap_object(
 	vm_object_t		object,
 	vm_map_offset_t		start,

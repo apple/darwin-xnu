@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -115,11 +121,6 @@
 #include <kern/kern_types.h>
 #include <kern/zalloc.h>
 
-#include "faith.h"
-#if defined(NFAITH) && NFAITH > 0
-#include <net/if_faith.h>
-#endif
-
 #if IPSEC
 #include <netinet6/ipsec.h>
 #if INET6
@@ -130,11 +131,48 @@
 #include <netinet6/ah6.h>
 #endif
 #include <netkey/key.h>
-extern lck_mtx_t *sadb_mutex;
 #endif /* IPSEC */
 
 struct	in6_addr zeroin6_addr;
 
+/*
+  in6_pcblookup_local_and_cleanup does everything
+  in6_pcblookup_local does but it checks for a socket
+  that's going away. Since we know that the lock is
+  held read+write when this function is called, we
+  can safely dispose of this socket like the slow
+  timer would usually do and return NULL. This is
+  great for bind.
+*/
+static struct inpcb*
+in6_pcblookup_local_and_cleanup(
+	struct inpcbinfo *pcbinfo,
+	struct in6_addr *laddr,
+	u_int lport_arg,
+	int wild_okay)
+{
+	struct inpcb *inp;
+	
+	/* Perform normal lookup */
+	inp = in6_pcblookup_local(pcbinfo, laddr, lport_arg, wild_okay);
+	
+	/* Check if we found a match but it's waiting to be disposed */
+	if (inp && inp->inp_wantcnt == WNT_STOPUSING) {
+		struct socket *so = inp->inp_socket;
+		
+		lck_mtx_lock(inp->inpcb_mtx);
+		
+		if (so->so_usecount == 0) {
+			in_pcbdispose(inp);
+			inp = NULL;
+		}
+		else {
+			lck_mtx_unlock(inp->inpcb_mtx);
+		}
+	}
+	
+	return inp;
+}
 int
 in6_pcbbind(
 	struct inpcb *inp,
@@ -231,7 +269,7 @@ in6_pcbbind(
 
 			if (so->so_uid &&
 			    !IN6_IS_ADDR_MULTICAST(&sin6->sin6_addr)) {
-				t = in6_pcblookup_local(pcbinfo,
+				t = in6_pcblookup_local_and_cleanup(pcbinfo,
 				    &sin6->sin6_addr, lport,
 				    INPLOOKUP_WILDCARD);
 				if (t &&
@@ -239,7 +277,8 @@ in6_pcbbind(
 				     !IN6_IS_ADDR_UNSPECIFIED(&t->in6p_laddr) ||
 				     (t->inp_socket->so_options &
 				      SO_REUSEPORT) == 0) &&
-				    so->so_uid != t->inp_socket->so_uid) {
+				     (so->so_uid != t->inp_socket->so_uid) &&
+				     ((t->inp_socket->so_flags & SOF_REUSESHAREUID) == 0)) {
 					lck_rw_done(pcbinfo->mtx);
 					socket_lock(so, 0);
 					return (EADDRINUSE);
@@ -249,10 +288,10 @@ in6_pcbbind(
 					struct sockaddr_in sin;
 
 					in6_sin6_2_sin(&sin, sin6);
-					t = in_pcblookup_local(pcbinfo,
+					t = in_pcblookup_local_and_cleanup(pcbinfo,
 						sin.sin_addr, lport,
 						INPLOOKUP_WILDCARD);
-					if (t &&
+					if (t && (t->inp_socket->so_options & SO_REUSEPORT) == 0 &&
 					    (so->so_uid !=
 					     t->inp_socket->so_uid) &&
 					    (ntohl(t->inp_laddr.s_addr) !=
@@ -266,7 +305,7 @@ in6_pcbbind(
 					}
 				}
 			}
-			t = in6_pcblookup_local(pcbinfo, &sin6->sin6_addr,
+			t = in6_pcblookup_local_and_cleanup(pcbinfo, &sin6->sin6_addr,
 						lport, wild);
 			if (t && (reuseport & t->inp_socket->so_options) == 0) {
 				lck_rw_done(pcbinfo->mtx);
@@ -278,7 +317,7 @@ in6_pcbbind(
 				struct sockaddr_in sin;
 
 				in6_sin6_2_sin(&sin, sin6);
-				t = in_pcblookup_local(pcbinfo, sin.sin_addr,
+				t = in_pcblookup_local_and_cleanup(pcbinfo, sin.sin_addr,
 						       lport, wild);
 				if (t &&
 				    (reuseport & t->inp_socket->so_options)
@@ -313,6 +352,7 @@ in6_pcbbind(
 		}
 	}	
 	lck_rw_done(pcbinfo->mtx);
+	sflt_notify(so, sock_evt_bound, NULL);
 	return(0);
 }
 
@@ -552,7 +592,7 @@ in6_selectsrc(
 		struct ifnet *ifp = mopts ? mopts->im6o_multicast_ifp : NULL;
 
 		if (ifp == NULL && IN6_IS_ADDR_MC_NODELOCAL(dst)) {
-			ifp = &loif[0];
+			ifp = lo_ifp;
 		}
 
 		if (ifp) {
@@ -617,8 +657,8 @@ in6_selectsrc(
 			dst6->sin6_len = sizeof(struct sockaddr_in6);
 			dst6->sin6_addr = *dst;
 			if (IN6_IS_ADDR_MULTICAST(dst)) {
-				ro->ro_rt = rtalloc1(&((struct route *)ro)
-						     ->ro_dst, 0, 0UL);
+				ro->ro_rt =
+				    rtalloc1(&((struct route *)ro)->ro_dst, 0, 0UL);
 			} else {
 				rtalloc((struct route *)ro);
 			}
@@ -701,14 +741,12 @@ in6_pcbdetach(inp)
 
 #if IPSEC
 	if (inp->in6p_sp != NULL) {
-		lck_mtx_lock(sadb_mutex);
 		ipsec6_delete_pcbpolicy(inp);
-		lck_mtx_unlock(sadb_mutex);
 	}
 #endif /* IPSEC */
 
 	if (in_pcb_checkstate(inp, WNT_STOPUSING, 1) != WNT_STOPUSING)
-		printf("in6_pcbdetach so=%x can't be marked dead ok\n", so);
+		printf("in6_pcbdetach so=%p can't be marked dead ok\n", so);
 
 	inp->inp_state = INPCB_STATE_DEAD;
 
@@ -1138,7 +1176,7 @@ in6_losing(in6p)
 void
 in6_rtchange(
 	struct inpcb *inp,
-	int errno)
+	__unused int errno)
 {
 	if (inp->in6p_route.ro_rt) {
 		rtfree(inp->in6p_route.ro_rt);
@@ -1161,7 +1199,7 @@ in6_pcblookup_hash(
 	struct in6_addr *laddr,
 	u_int lport_arg,
 	int wildcard,
-	struct ifnet *ifp)
+	__unused struct ifnet *ifp)
 {
 	struct inpcbhead *head;
 	struct inpcb *inp;

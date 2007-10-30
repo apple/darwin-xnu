@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1988, 1993
@@ -52,6 +58,12 @@
  * SUCH DAMAGE.
  *
  *	@(#)ip_icmp.c	8.2 (Berkeley) 1/4/94
+ */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
  */
 
 #include <sys/param.h>
@@ -96,7 +108,11 @@
  */
 #ifndef M_SKIP_FIREWALL
 #define M_SKIP_FIREWALL         0x4000
-#endif
+#endif 
+
+#if CONFIG_MACF_NET
+#include <security/mac_framework.h>
+#endif /* MAC_NET */
 
 /*
  * ICMP routines: error generation, receive packet processing, and
@@ -173,10 +189,10 @@ icmp_error(
 	n_long dest,
 	struct ifnet *destifp)
 {
-	register struct ip *oip = mtod(n, struct ip *), *nip;
-	register unsigned oiplen = IP_VHL_HL(oip->ip_vhl) << 2;
-	register struct icmp *icp;
-	register struct mbuf *m;
+	struct ip *oip = mtod(n, struct ip *), *nip;
+	unsigned oiplen = IP_VHL_HL(oip->ip_vhl) << 2;
+	struct icmp *icp;
+	struct mbuf *m;
 	unsigned icmplen;
 
 #if ICMPPRINTFS
@@ -204,15 +220,18 @@ icmp_error(
 	/*
 	 * First, formulate icmp message
 	 */
-	m = m_gethdr(M_DONTWAIT, MT_HEADER);
+	m = m_gethdr(M_DONTWAIT, MT_HEADER);	/* MAC-OK */
 	if (m == NULL)
 		goto freeit;
 
-	if (n->m_flags & M_SKIP_FIREWALL) {
+        if (n->m_flags & M_SKIP_FIREWALL) {
 		/* set M_SKIP_FIREWALL to skip firewall check, since we're called from firewall */
 		m->m_flags |= M_SKIP_FIREWALL;
 	}
 
+#if CONFIG_MACF_NET
+	mac_mbuf_label_associate_netlayer(n, m);
+#endif
 	icmplen = min(oiplen + 8, oip->ip_len);
 	if (icmplen < sizeof(struct ip)) {
 		printf("icmp_error: bad length\n");
@@ -263,7 +282,6 @@ icmp_error(
 	m->m_len += sizeof(struct ip);
 	m->m_pkthdr.len = m->m_len;
 	m->m_pkthdr.rcvif = n->m_pkthdr.rcvif;
-	m->m_pkthdr.aux = NULL; /* for IPsec */
 	nip = mtod(m, struct ip *);
 	bcopy((caddr_t)oip, (caddr_t)nip, sizeof(struct ip));
 	nip->ip_len = m->m_len;
@@ -276,26 +294,26 @@ freeit:
 	m_freem(n);
 }
 
-static struct sockaddr_in icmpsrc = { sizeof (struct sockaddr_in), AF_INET };
-static struct sockaddr_in icmpdst = { sizeof (struct sockaddr_in), AF_INET };
-static struct sockaddr_in icmpgw = { sizeof (struct sockaddr_in), AF_INET };
+static struct sockaddr_in icmpsrc = { sizeof (struct sockaddr_in), AF_INET, 
+										0 , { 0 }, { 0,0,0,0,0,0,0,0 } };
+static struct sockaddr_in icmpdst = { sizeof (struct sockaddr_in), AF_INET, 
+										0 , { 0 }, { 0,0,0,0,0,0,0,0 } };
+static struct sockaddr_in icmpgw = { sizeof (struct sockaddr_in), AF_INET, 
+										0 , { 0 }, { 0,0,0,0,0,0,0,0 } };
 
 /*
  * Process a received ICMP message.
  */
 void
-icmp_input(m, hlen)
-	register struct mbuf *m;
-	int hlen;
+icmp_input(struct mbuf *m, int hlen)
 {
-	register struct icmp *icp;
-	register struct ip *ip = mtod(m, struct ip *);
+	struct icmp *icp;
+	struct ip *ip = mtod(m, struct ip *);
 	int icmplen = ip->ip_len;
-	register int i;
+	int i;
 	struct in_ifaddr *ia;
 	void (*ctlfunc)(int, struct sockaddr *, void *);
 	int code;
-	char ipv4str[MAX_IPv4_STR_LEN];
 
 	/*
 	 * Locate icmp structure in mbuf, and check
@@ -304,6 +322,7 @@ icmp_input(m, hlen)
 #if ICMPPRINTFS
 	if (icmpprintfs) {
 		char buf[MAX_IPv4_STR_LEN];
+		char ipv4str[MAX_IPv4_STR_LEN];
 
 		printf("icmp_input from %s to %s, len %d\n",
 		       inet_ntop(AF_INET, &ip->ip_src, buf, sizeof(buf)),
@@ -558,7 +577,7 @@ icmp_input(m, hlen)
 			break;
 		if (ia->ia_ifp == 0) {
 			ifafree(&ia->ia_ifa);
-			ia = 0;
+			ia = NULL;
 			break;
 		}
 		icp->icmp_type = ICMP_MASKREPLY;
@@ -658,13 +677,12 @@ freeit:
  * Reflect the ip packet back to the source
  */
 static void
-icmp_reflect(m)
-	struct mbuf *m;
+icmp_reflect(struct mbuf *m)
 {
-	register struct ip *ip = mtod(m, struct ip *);
-	register struct in_ifaddr *ia;
+	struct ip *ip = mtod(m, struct ip *);
+	struct in_ifaddr *ia;
 	struct in_addr t;
-	struct mbuf *opts = 0;
+	struct mbuf *opts = NULL;
 	int optlen = (IP_VHL_HL(ip->ip_vhl) << 2) - sizeof(struct ip);
 
 	if (!in_canforward(ip->ip_src) &&
@@ -709,6 +727,9 @@ icmp_reflect(m)
 		ifaref(&ia->ia_ifa);
 	}
 	lck_mtx_unlock(rt_mtx);
+#if CONFIG_MACF_NET
+	mac_netinet_icmp_reply(m);
+#endif
 	t = IA_SIN(ia)->sin_addr;
 	ip->ip_src = t;
 	ip->ip_ttl = ip_defttl;
@@ -716,7 +737,7 @@ icmp_reflect(m)
 	ia = NULL;
 
 	if (optlen > 0) {
-		register u_char *cp;
+		u_char *cp;
 		int opt, cnt;
 		u_int len;
 
@@ -726,7 +747,7 @@ icmp_reflect(m)
 		 */
 		cp = (u_char *) (ip + 1);
 		if ((opts = ip_srcroute()) == 0 &&
-		    (opts = m_gethdr(M_DONTWAIT, MT_HEADER))) {
+		    (opts = m_gethdr(M_DONTWAIT, MT_HEADER))) {	/* MAC-OK */
 			opts->m_len = sizeof(struct in_addr);
 			mtod(opts, struct in_addr *)->s_addr = 0;
 		}
@@ -799,15 +820,12 @@ done:
  * after supplying a checksum.
  */
 static void
-icmp_send(m, opts)
-	register struct mbuf *m;
-	struct mbuf *opts;
+icmp_send(struct mbuf *m, struct mbuf *opts)
 {
-	register struct ip *ip = mtod(m, struct ip *);
-	register int hlen;
-	register struct icmp *icp;
+	struct ip *ip = mtod(m, struct ip *);
+	int hlen;
+	struct icmp *icp;
 	struct route ro;
-	char ipv4str[MAX_IPv4_STR_LEN];
 
 	hlen = IP_VHL_HL(ip->ip_vhl) << 2;
 	m->m_data += hlen;
@@ -817,13 +835,13 @@ icmp_send(m, opts)
 	icp->icmp_cksum = in_cksum(m, ip->ip_len - hlen);
 	m->m_data -= hlen;
 	m->m_len += hlen;
-	m->m_pkthdr.rcvif = 0;
-	m->m_pkthdr.aux = NULL;
+	m->m_pkthdr.rcvif = NULL;
 	m->m_pkthdr.csum_data = 0;
 	m->m_pkthdr.csum_flags = 0;
 #if ICMPPRINTFS
 	if (icmpprintfs) {
 		char buf[MAX_IPv4_STR_LEN];
+		char ipv4str[MAX_IPv4_STR_LEN];
 
 		printf("icmp_send dst %s src %s\n",
 		       inet_ntop(AF_INET, &ip->ip_dst, buf, sizeof(buf)),
@@ -831,13 +849,13 @@ icmp_send(m, opts)
 	}
 #endif
 	bzero(&ro, sizeof ro);
-	(void) ip_output(m, opts, &ro, 0, NULL);
+	(void) ip_output(m, opts, &ro, 0, NULL, NULL);
 	if (ro.ro_rt)
 		rtfree(ro.ro_rt);
 }
 
 n_time
-iptime()
+iptime(void)
 {
 	struct timeval atv;
 	u_long t;
@@ -854,9 +872,7 @@ iptime()
  * is returned; otherwise, a smaller value is returned.
  */
 static int
-ip_next_mtu(mtu, dir)
-	int mtu;
-	int dir;
+ip_next_mtu(int mtu, int dir)
 {
 	static int mtutab[] = {
 		65535, 32000, 17914, 8166, 4352, 2002, 1492, 1006, 508, 296,
@@ -1003,10 +1019,10 @@ __private_extern__ struct pr_usrreqs icmp_dgram_usrreqs = {
 
 /* Like rip_attach but without root privilege enforcement */
 __private_extern__ int
-icmp_dgram_attach(struct socket *so, int proto, struct proc *p)
+icmp_dgram_attach(struct socket *so, __unused int proto, struct proc *p)
 {
         struct inpcb *inp;
-        int error, s;
+        int error;
 
         inp = sotoinpcb(so);
         if (inp)
@@ -1015,9 +1031,7 @@ icmp_dgram_attach(struct socket *so, int proto, struct proc *p)
         error = soreserve(so, rip_sendspace, rip_recvspace);
         if (error)
                 return error;
-        s = splnet();
         error = in_pcballoc(so, &ripcbinfo, p);
-        splx(s);
         if (error)
                 return error;
         inp = (struct inpcb *)so->so_pcb;       
@@ -1033,8 +1047,7 @@ icmp_dgram_attach(struct socket *so, int proto, struct proc *p)
 __private_extern__ int
 icmp_dgram_ctloutput(struct socket *so, struct sockopt *sopt)
 {
-	struct	inpcb *inp = sotoinpcb(so);
-	int	error, optval;
+	int	error;
 
 	if (sopt->sopt_level != IPPROTO_IP)
 		return (EINVAL);
@@ -1164,4 +1177,3 @@ bad:
 }
 
 #endif /* __APPLE__ */
-

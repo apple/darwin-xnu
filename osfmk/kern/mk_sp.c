@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -70,6 +76,9 @@ thread_policy_common(
 			invalid_policy(policy)		)
 		return(KERN_INVALID_ARGUMENT);
 
+	if (thread->static_param)
+		return (KERN_SUCCESS);
+
 	s = splsched();
 	thread_lock(thread);
 
@@ -81,15 +90,15 @@ thread_policy_common(
 			if (policy == POLICY_TIMESHARE && !oldmode) {
 				thread->sched_mode |= TH_MODE_TIMESHARE;
 
-				if (thread->state & TH_RUN)
-					pset_share_incr(thread->processor_set);
+				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
+					sched_share_incr();
 			}
 			else
 			if (policy != POLICY_TIMESHARE && oldmode) {
 				thread->sched_mode &= ~TH_MODE_TIMESHARE;
 
-				if (thread->state & TH_RUN)
-					pset_share_decr(thread->processor_set);
+				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
+					sched_share_decr();
 			}
 		}
 		else {
@@ -150,16 +159,10 @@ thread_set_policy(
 	kern_return_t			result = KERN_SUCCESS;
 
 	if (	thread == THREAD_NULL			||
-			pset == PROCESSOR_SET_NULL		)
+			pset == PROCESSOR_SET_NULL || pset != &pset0)
 		return (KERN_INVALID_ARGUMENT);
 
 	thread_mtx_lock(thread);
-
-	if (pset != thread->processor_set) {
-		thread_mtx_unlock(thread);
-
-		return (KERN_FAILURE);
-	}
 
 	switch (policy) {
 
@@ -261,9 +264,9 @@ thread_policy(
 	boolean_t				set_limit)
 {
 	kern_return_t			result = KERN_SUCCESS;
-	processor_set_t			pset;
-	policy_limit_t			limit;
-	int						limcount;
+	processor_set_t			pset = &pset0;
+	policy_limit_t			limit = NULL;
+	int						limcount = 0;
 	policy_rr_limit_data_t			rr_limit;
 	policy_fifo_limit_data_t		fifo_limit;
 	policy_timeshare_limit_data_t	ts_limit;
@@ -272,13 +275,6 @@ thread_policy(
 		return (KERN_INVALID_ARGUMENT);
 
 	thread_mtx_lock(thread);
-
-	pset = thread->processor_set;
-	if (pset == PROCESSOR_SET_NULL) {
-		thread_mtx_unlock(thread);
-
-		return (KERN_INVALID_ARGUMENT);
-	}
 
 	if (	invalid_policy(policy)											||
 			((POLICY_TIMESHARE | POLICY_RR | POLICY_FIFO) & policy) == 0	) {

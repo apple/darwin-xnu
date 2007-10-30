@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <mach/mach_types.h>
@@ -69,7 +75,7 @@ static kdp_dispatch_t
 /*10 */ kdp_breakpoint_remove,
 /*11 */	kdp_regions,
 /*12 */ kdp_reattach,
-/*13 */ kdp_reboot
+/*13 */ (kdp_dispatch_t)kdp_reboot
     };
     
 kdp_glob_t	kdp;
@@ -93,6 +99,7 @@ static unsigned int breakpoints_initialized = 0;
 
 int reattach_wait = 0;
 int noresume_on_disconnect = 0;
+extern unsigned int return_on_panic;
 
 #define MAXCOMLEN 16
 
@@ -115,13 +122,14 @@ struct thread_snapshot {
 typedef struct thread_snapshot *thread_snapshot_t;
 
 extern int
-machine_trace_thread(thread_t thread, uint32_t tracepos, uint32_t tracebound, int nframes, boolean_t user_p);
+machine_trace_thread(thread_t thread, char *tracepos, char *tracebound, int nframes, boolean_t user_p);
 extern int
-machine_trace_thread64(thread_t thread, uint32_t tracepos, uint32_t tracebound, int nframes, boolean_t user_p);
+machine_trace_thread64(thread_t thread, char *tracepos, char *tracebound, int nframes, boolean_t user_p);
 extern int
 proc_pid(void *p);
 extern void
-proc_name(int pid, char *buf, int size);
+proc_name_kdp(task_t  task, char *buf, int size);
+
 extern void
 kdp_snapshot_postflight(void);
 
@@ -129,7 +137,7 @@ static int
 pid_from_task(task_t task);
 
 int
-kdp_stackshot(int pid, uint32_t tracebuf, uint32_t tracebuf_size, unsigned trace_options, uint32_t *pbytesTraced);
+kdp_stackshot(int pid, void *tracebuf, uint32_t tracebuf_size, unsigned trace_options, uint32_t *pbytesTraced);
 
 extern char version[];
 
@@ -142,8 +150,8 @@ kdp_packet(
 {
     static unsigned	aligned_pkt[1538/sizeof(unsigned)+1]; // max ether pkt
     kdp_pkt_t		*rd = (kdp_pkt_t *)&aligned_pkt;
-    int			plen = *len;
-    unsigned int	req;
+    size_t		plen = *len;
+    kdp_req_t		req;
     boolean_t		ret;
     
 #if DO_ALIGN
@@ -152,7 +160,7 @@ kdp_packet(
     rd = (kdp_pkt_t *)pkt;
 #endif
     if (plen < sizeof (rd->hdr) || rd->hdr.len != plen) {
-	printf("kdp_packet bad len pkt %d hdr %d\n", plen, rd->hdr.len);
+	printf("kdp_packet bad len pkt %lu hdr %d\n", plen, rd->hdr.len);
 
 	return (FALSE);
     }
@@ -165,7 +173,7 @@ kdp_packet(
     }
     
     req = rd->hdr.request;
-    if ((req < KDP_CONNECT) || (req > KDP_HOSTREBOOT)) {
+    if (req > KDP_HOSTREBOOT) {
 	printf("kdp_packet bad request %x len %d seq %x key %x\n",
 	    rd->hdr.request, rd->hdr.len, rd->hdr.seq, rd->hdr.key);
 
@@ -182,8 +190,8 @@ kdp_packet(
 static boolean_t
 kdp_unknown(
     kdp_pkt_t		*pkt,
-    int			*len,
-    unsigned short	*reply_port
+    __unused int	*len,
+    __unused unsigned short	*reply_port
 )
 {
     kdp_pkt_t		*rd = (kdp_pkt_t *)pkt;
@@ -202,7 +210,7 @@ kdp_connect(
 )
 {
     kdp_connect_req_t	*rq = &pkt->connect_req;
-    int			plen = *len;
+    size_t		plen = *len;
     kdp_connect_reply_t	*rp = &pkt->connect_reply;
 
     if (plen < sizeof (*rq))
@@ -245,7 +253,7 @@ kdp_disconnect(
 )
 {
     kdp_disconnect_req_t	*rq = &pkt->disconnect_req;
-    int				plen = *len;
+    size_t			plen = *len;
     kdp_disconnect_reply_t	*rp = &pkt->disconnect_reply;
 
     if (plen < sizeof (*rq))
@@ -261,6 +269,9 @@ kdp_disconnect(
     kdp.reply_port = kdp.exception_port = 0;
     kdp.is_halted = kdp.is_conn = FALSE;
     kdp.exception_seq = kdp.conn_seq = 0;
+
+    if ((panicstr != NULL) && (return_on_panic == 0))
+	    reattach_wait = 1;
 
     if (noresume_on_disconnect == 1) {
 	reattach_wait = 1;
@@ -286,7 +297,6 @@ kdp_reattach(
 )
 {
   kdp_reattach_req_t            *rq = &pkt->reattach_req;
-  kdp_disconnect_reply_t	*rp = &pkt->disconnect_reply;
 
   kdp.is_conn = TRUE;
   kdp_disconnect(pkt, len, reply_port);
@@ -303,7 +313,7 @@ kdp_hostinfo(
 )
 {
     kdp_hostinfo_req_t	*rq = &pkt->hostinfo_req;
-    int			plen = *len;
+    size_t		plen = *len;
     kdp_hostinfo_reply_t *rp = &pkt->hostinfo_reply;
 
     if (plen < sizeof (*rq))
@@ -328,7 +338,7 @@ kdp_suspend(
 )
 {
     kdp_suspend_req_t	*rq = &pkt->suspend_req;
-    int			plen = *len;
+    size_t		plen = *len;
     kdp_suspend_reply_t *rp = &pkt->suspend_reply;
 
     if (plen < sizeof (*rq))
@@ -355,7 +365,7 @@ kdp_resumecpus(
 )
 {
     kdp_resumecpus_req_t	*rq = &pkt->resumecpus_req;
-    int			plen = *len;
+    size_t			plen = *len;
     kdp_resumecpus_reply_t 	*rp = &pkt->resumecpus_reply;
 
     if (plen < sizeof (*rq))
@@ -382,7 +392,7 @@ kdp_writemem(
 )
 {
     kdp_writemem_req_t	*rq = &pkt->writemem_req;
-    int			plen = *len;
+    size_t		plen = *len;
     kdp_writemem_reply_t *rp = &pkt->writemem_reply;
     int 		cnt;
 
@@ -415,10 +425,10 @@ kdp_readmem(
 )
 {
     kdp_readmem_req_t	*rq = &pkt->readmem_req;
-    int			plen = *len;
+    size_t		plen = *len;
     kdp_readmem_reply_t *rp = &pkt->readmem_reply;
     int			cnt;
-#if __i386__
+#if __i386__ || __arm__
     void		*pversion = &version;
 #endif
     if (plen < sizeof (*rq))
@@ -432,19 +442,22 @@ kdp_readmem(
     else {
 	unsigned int	n = rq->nbytes;
 
-	dprintf(("kdp_readmem addr %x size %d\n", rq->address, rq->nbytes));
-#if __i386__
+	dprintf(("kdp_readmem addr %x size %d\n", rq->address, n));
+#if __i386__ || __arm__
 	/* XXX This is a hack to facilitate the "showversion" macro
-	 * on i386, which is used to obtain the kernel version without
+	 * on i386/ARM, which is used to obtain the kernel version without
 	 * symbols - a pointer to the version string should eventually
 	 * be pinned at a fixed address when an equivalent of the
 	 * VECTORS segment (loaded at a fixed load address, and contains
-	 * a table) is implemented on x86, as with PPC.
+	 * a table) is implemented on these architectures, as with PPC.
+	 * N.B.: x86 now has a low global page, and the version indirection
+	 * is pinned at 0x201C. We retain the 0x501C address override
+	 * for compatibility.
 	 */
 	if (rq->address == (void *)0x501C)
 		rq->address = &pversion;
 #endif
-	cnt = kdp_vm_read((caddr_t)rq->address, (caddr_t)rp->data, rq->nbytes);
+	cnt = kdp_vm_read((caddr_t)rq->address, (caddr_t)rp->data, n);
 	rp->error = KDPERR_NO_ERROR;
 
 	rp->hdr.len += cnt;
@@ -464,7 +477,7 @@ kdp_maxbytes(
 )
 {
     kdp_maxbytes_req_t	*rq = &pkt->maxbytes_req;
-    int			plen = *len;
+    size_t		plen = *len;
     kdp_maxbytes_reply_t *rp = &pkt->maxbytes_reply;
 
     if (plen < sizeof (*rq))
@@ -491,9 +504,8 @@ kdp_version(
 )
 {
     kdp_version_req_t	*rq = &pkt->version_req;
-    int			plen = *len;
+    size_t		plen = *len;
     kdp_version_reply_t *rp = &pkt->version_reply;
-    kdp_region_t	*r;	
 
     if (plen < sizeof (*rq))
 	return (FALSE);
@@ -504,7 +516,7 @@ kdp_version(
     dprintf(("kdp_version\n"));
 
     rp->version = KDP_VERSION;
-#ifdef	__ppc__
+#if	__ppc__
     if (!(kdp_flag & KDP_BP_DIS))
       rp->feature = KDP_FEATURE_BP;
     else
@@ -527,7 +539,7 @@ kdp_regions(
 )
 {
     kdp_regions_req_t	*rq = &pkt->regions_req;
-    int			plen = *len;
+    size_t		plen = *len;
     kdp_regions_reply_t *rp = &pkt->regions_reply;
     kdp_region_t	*r;	
 
@@ -542,7 +554,7 @@ kdp_regions(
     r = rp->regions;
     rp->nregions = 0;
 
-    (vm_offset_t)r->address = 0;
+    r->address = NULL;
     r->nbytes = 0xffffffff;
 
     r->protection = VM_PROT_ALL; r++; rp->nregions++;
@@ -563,7 +575,7 @@ kdp_writeregs(
 )
 {
     kdp_writeregs_req_t	*rq = &pkt->writeregs_req;
-    int			plen = *len;
+    size_t		plen = *len;
     int			size;
     kdp_writeregs_reply_t *rp = &pkt->writeregs_reply;
 
@@ -590,7 +602,7 @@ kdp_readregs(
 )
 {
     kdp_readregs_req_t	*rq = &pkt->readregs_req;
-    int			plen = *len;
+    size_t		plen = *len;
     kdp_readregs_reply_t *rp = &pkt->readregs_reply;
     int			size;
 
@@ -618,7 +630,7 @@ kdp_breakpoint_set(
 {
   kdp_breakpoint_req_t	*rq = &pkt->breakpoint_req;
   kdp_breakpoint_reply_t *rp = &pkt->breakpoint_reply;
-  int			plen = *len;
+  size_t		plen = *len;
   int                   cnt, i;
   unsigned int          old_instruction = 0;
   unsigned int breakinstr = kdp_ml_get_breakinsn();
@@ -681,7 +693,7 @@ kdp_breakpoint_remove(
 {
   kdp_breakpoint_req_t	*rq = &pkt->breakpoint_req;
   kdp_breakpoint_reply_t *rp = &pkt->breakpoint_reply;
-  int			plen = *len;
+  size_t		plen = *len;
   int                   cnt,i;
 
   if (plen < sizeof (*rq))
@@ -711,7 +723,7 @@ kdp_breakpoint_remove(
 }
 
 boolean_t
-kdp_remove_all_breakpoints()
+kdp_remove_all_breakpoints(void)
 {
   int i;
   boolean_t breakpoint_found = FALSE;
@@ -747,28 +759,33 @@ static int pid_from_task(task_t task)
 }
 
 int
-kdp_stackshot(int pid, uint32_t tracebuf, uint32_t tracebuf_size, unsigned trace_options, uint32_t *pbytesTraced)
+kdp_stackshot(int pid, void *tracebuf, uint32_t tracebuf_size, unsigned trace_options, uint32_t *pbytesTraced)
 {
-	uint32_t tracepos = (uint32_t) tracebuf;
-	uint32_t tracebound = tracepos + tracebuf_size;
+	char *tracepos = (char *) tracebuf;
+	char *tracebound = tracepos + tracebuf_size;
 	uint32_t tracebytes = 0;
 	int error = 0;
-	
-	processor_set_t pset = &default_pset;
+
 	task_t task = TASK_NULL;
 	thread_t thread = THREAD_NULL;
 	int nframes = trace_options;
 	thread_snapshot_t tsnap = NULL;
 	unsigned framesize = 2 * sizeof(vm_offset_t);
+	struct task ctask;
+	struct thread cthread;
 
 	if ((nframes <= 0) || nframes > MAX_FRAMES)
 		nframes = MAX_FRAMES;
 
-	queue_iterate(&pset->tasks, task, task_t, pset_tasks) {
+	queue_iterate(&tasks, task, task_t, tasks) {
+		if ((task == NULL) || (ml_nofault_copy((vm_offset_t) task, (vm_offset_t) &ctask, sizeof(struct task)) != sizeof(struct task)))
+			goto error_exit;
 		/* Trace everything, unless a process was specified */
 		if ((pid == -1) || (pid == pid_from_task(task)))
 			queue_iterate(&task->threads, thread, thread_t, task_threads){
-				if ((tracepos + 4 * sizeof(struct thread_snapshot)) > tracebound) {
+				if ((thread == NULL) || (ml_nofault_copy((vm_offset_t) thread, (vm_offset_t) &cthread, sizeof(struct thread)) != sizeof(struct thread)))
+					goto error_exit;
+				if (((tracepos + 4 * sizeof(struct thread_snapshot)) > tracebound)) {
 					error = -1;
 					goto error_exit;
 				}
@@ -783,7 +800,7 @@ kdp_stackshot(int pid, uint32_t tracebuf, uint32_t tracebuf_size, unsigned trace
 				tsnap->continuation = thread->continuation;
 /* Add the BSD process identifiers */
 				if ((tsnap->pid = pid_from_task(task)) != -1)
-					proc_name(tsnap->pid, tsnap->p_comm, MAXCOMLEN + 1);
+					proc_name_kdp(task, tsnap->p_comm, MAXCOMLEN + 1);
 				else
 					tsnap->p_comm[0] = '\0';
 
@@ -822,7 +839,7 @@ error_exit:
 	/* Release stack snapshot wait indicator */
 	kdp_snapshot_postflight();
 
-	*pbytesTraced = tracepos - tracebuf;
+	*pbytesTraced = tracepos - (char *) tracebuf;
 
 	return error;
 }

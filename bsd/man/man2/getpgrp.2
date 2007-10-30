@@ -36,6 +36,7 @@
 .Dt GETPGRP 2
 .Os
 .Sh NAME
+.Nm getpgid ,
 .Nm getpgrp
 .Nd get process group
 .Sh LIBRARY
@@ -43,9 +44,13 @@
 .Sh SYNOPSIS
 .In unistd.h
 .Ft pid_t
-.Fn getpgrp void
+.Fo getpgid
+.Fa "pid_t pid"
+.Fc
 .Ft pid_t
-.Fn getpgid "pid_t pid"
+.Fo getpgrp
+.Fa void
+.Fc
 .Sh DESCRIPTION
 The process group of the current process is returned by
 .Fn getpgrp .
@@ -90,9 +95,10 @@ to indicate the error.
 .Fn getpgid
 will succeed unless:
 .Bl -tag -width Er
+.\" ==========
 .It Bq Er ESRCH
-there is no process whose process ID equals
-.Fa pid
+There is no process whose process ID equals
+.Fa pid .
 .El
 .Sh SEE ALSO
 .Xr getsid 2 ,

@@ -1,3 +1,30 @@
+/*
+ * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
 #ifndef KERNEL
 #include <libc.h>
 #include "vers_rsrc.h"
@@ -70,8 +97,8 @@ static int __VERS_isreleasestate(char c) {
 }
 
 
-static VERS_stage __VERS_stage_for_string(char ** string_p) {
-    char * string;
+static VERS_stage __VERS_stage_for_string(const char ** string_p) {
+    const char * string;
 
     if (!string_p || !*string_p) {
         return VERS_invalid;
@@ -121,7 +148,7 @@ static VERS_stage __VERS_stage_for_string(char ** string_p) {
     return VERS_invalid;
 }
 
-static char * __VERS_string_for_stage(VERS_stage stage) {
+static const char * __VERS_string_for_stage(VERS_stage stage) {
     switch (stage) {
       case VERS_invalid:     return "?"; break;
       case VERS_development: return "d"; break;
@@ -144,13 +171,13 @@ VERS_version VERS_parse_string(const char * vers_string) {
     VERS_version vers_revision = 0;
     VERS_version vers_stage = 0;
     VERS_version vers_stage_level = 0;
-    char * current_char_p;
+    const char * current_char_p;
 
     if (!vers_string || *vers_string == '\0') {
         return -1;
     }
 
-    current_char_p = (char *)&vers_string[0];
+    current_char_p = (const char *)&vers_string[0];
 
    /*****
     * Check for an initial digit of the major release number.
@@ -353,7 +380,7 @@ int VERS_string(char * buffer, UInt32 length, VERS_version vers) {
     VERS_version vers_revision = 0;
     VERS_version vers_stage = 0;
     VERS_version vers_stage_level = 0;
-    char * stage_string = NULL;  // don't free
+    const char * stage_string = NULL;  // don't free
 
    /* No buffer or length less than longest possible vers string,
     * return 0.
@@ -365,7 +392,7 @@ int VERS_string(char * buffer, UInt32 length, VERS_version vers) {
     bzero(buffer, length * sizeof(char));
 
     if (vers < 0) {
-        strcpy(buffer, "(invalid)");
+        strlcpy(buffer, "(invalid)", length);
         return 1;
     }
 
@@ -387,30 +414,31 @@ int VERS_string(char * buffer, UInt32 length, VERS_version vers) {
         ( (vers_major * VERS_MAJOR_MULT) + (vers_minor * VERS_MINOR_MULT) +
           (vers_revision * VERS_REVISION_MULT) + (vers_stage * VERS_STAGE_MULT));
 
-    cpos = sprintf(buffer, "%lu", (UInt32)vers_major);
+    cpos = snprintf(buffer, length, "%lu", (UInt32)vers_major);
 
    /* Always include the minor version; it just looks weird without.
     */
     buffer[cpos] = '.';
     cpos++;
-    cpos += sprintf(buffer+cpos, "%lu", (UInt32)vers_minor);
+    cpos += snprintf(buffer+cpos, length - cpos, "%lu", (UInt32)vers_minor);
 
    /* The revision is displayed only if nonzero.
     */
     if (vers_revision) {
         buffer[cpos] = '.';
         cpos++;
-        cpos += sprintf(buffer+cpos, "%lu", (UInt32)vers_revision);
+        cpos += snprintf(buffer+cpos, length - cpos, "%lu",
+			(UInt32)vers_revision);
     }
 
     stage_string = __VERS_string_for_stage(vers_stage);
     if (stage_string && stage_string[0]) {
-        strcat(buffer, stage_string);
+        strlcat(buffer, stage_string, length);
         cpos += strlen(stage_string);
     }
 
     if (vers_stage < VERS_release) {
-        sprintf(buffer+cpos, "%lu", (UInt32)vers_stage_level);
+        snprintf(buffer+cpos, length - cpos, "%lu", (UInt32)vers_stage_level);
     }
 
     return 1;

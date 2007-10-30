@@ -57,18 +57,24 @@
 .Sh SYNOPSIS
 .In poll.h
 .Ft int
-.Fn poll "struct pollfd *fds" "nfds_t nfds" "int timeout"
+.Fo poll
+.Fa "struct pollfd fds[]"
+.Fa "nfds_t nfds"
+.Fa "int timeout"
+.Fc
 .Sh DESCRIPTION
 .Fn Poll
-examines a set of file descriptors to see if some of them are ready for
-I/O or if certain events have occurred on them.
+examines a set of file descriptors
+to see if some of them are ready for I/O
+or if certain events have occurred on them.
 The
 .Fa fds
-argument is a pointer to an array of pollfd structures as defined in
+argument is a pointer to an array of pollfd structures,
+as defined in
 .Aq Pa poll.h
 (shown below).  The
 .Fa nfds
-argument determines the size of the
+argument specifies the size of the
 .Fa fds
 array.
 .Bd -literal
@@ -82,7 +88,7 @@ struct pollfd {
 The fields of
 .Fa struct pollfd
 are as follows:
-.Bl -tag -width XXXrevents
+.Bl -tag -width XXXPOLLWRNORM
 .It fd
 File descriptor to poll.
 .It events
@@ -97,49 +103,63 @@ and
 .Fa revents
 have the following bits:
 .Bl -tag -width XXXPOLLWRNORM
-.It POLLIN
-Data other than high priority data may be read without blocking.
-This is equivalent to ( POLLRDNORM | POLLRDBAND ).
-.It POLLRDNORM
-Normal data may be read without blocking.
-.It POLLRDBAND
-Priority data may be read without blocking.
-.It POLLPRI
-High priority data may be read without blocking.
-.It POLLOUT
-.It POLLWRNORM
-Normal data may be written without blocking.
-.It POLLWRBAND
-Priority data may be written without blocking.
+.\" ===========
 .It POLLERR
-An exceptional condition has occurred on the device or socket.  This
-flag is output only, and ignored if present in the input
+An exceptional condition has occurred on the device or socket.
+This flag is output only, and ignored if present in the input
 .Fa events
 bitmask.
+.\" ===========
 .It POLLHUP
-The device or socket has been disconnected.  This flag is output only,
+The device or socket has been disconnected.
+This flag is output only,
 and ignored if present in the input
 .Fa events
-bitmask.  Note that
-POLLHUP
-and
-POLLOUT
+bitmask.
+Note that POLLHUP and POLLOUT
 are mutually exclusive and should never be present in the
 .Fa revents
 bitmask at the same time.
+.\" ===========
+.It POLLIN
+Data other than high priority data may be read without blocking.
+This is equivalent to ( POLLRDNORM | POLLRDBAND ).
+.\" ===========
 .It POLLNVAL
-The file descriptor is not open.  This flag is output only, and ignored if present in the input
+The file descriptor is not open.
+This flag is output only, and ignored if present in the input
 .Fa events
 bitmask.
+.\" ===========
+.It POLLOUT
+Normal data may be written without blocking.
+This is equivalent to POLLWRNORM.
+.\" ===========
+.It POLLPRI
+High priority data may be read without blocking.
+.\" ===========
+.It POLLRDBAND
+Priority data may be read without blocking.
+.\" ===========
+.It POLLRDNORM
+Normal data may be read without blocking.
+.\" ===========
+.It POLLWRBAND
+Priority data may be written without blocking.
+.\" ===========
+.It POLLWRNORM
+Normal data may be written without blocking.
 .El
 .Pp
-The distinction between normal, priority, and high-priority data is file type
-or device specific.
+The distinction between normal, priority, and high-priority data
+is specific to particular file types or devices.
 .Pp
 If
 .Fa timeout
-is greater than zero, it specifies a maximum interval to
-wait for any file descriptor to become ready, in milliseconds.  If
+is greater than zero,
+it specifies a maximum interval (in milliseconds)
+to wait for any file descriptor to become ready.
+If
 .Fa timeout
 is zero, then
 .Fn poll
@@ -148,8 +168,9 @@ will return without blocking. If the value of
 is -1, the poll blocks indefinitely.
 .Sh RETURN VALUES
 .Fn Poll
-returns the number of descriptors that are ready for I/O, or -1 if an
-error occured.  If the time limit expires,
+returns the number of descriptors that are ready for I/O,
+or -1 if an error occurred.
+If the time limit expires,
 .Fn poll
 returns 0.
 If
@@ -158,22 +179,30 @@ returns with an error,
 including one due to an interrupted call,
 the
 .Fa fds
-array will be unmodified.
+array will be unmodified and the global variable
+.Va errno
+will be set to indicate the error.
 .Sh ERRORS
-An error return from
-.Fn poll
-indicates:
+.Fn Poll
+will fail if:
 .Bl -tag -width Er
+.\" ===========
+.It Bq Er EAGAIN
+Allocation of internal data structures fails.
+A subsequent request may succeed.
+.\" ===========
 .It Bq Er EFAULT
 .Fa Fds
 points outside the process's allocated address space.
+.\" ===========
 .It Bq Er EINTR
-A signal was delivered before the time limit expired and
-before any of the selected events occurred.
+A signal is delivered before the time limit expires
+and before any of the selected events occurs.
+.\" ===========
 .It Bq Er EINVAL
 The
 .Fa nfds
-argument is greater than OPEN_MAX, or the
+argument is greater than OPEN_MAX or the
 .Fa timeout
 argument is less than -1.
 .El
@@ -195,4 +224,3 @@ The
 .Fn poll
 function call appeared in
 .At V .
-

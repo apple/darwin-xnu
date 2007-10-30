@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -54,6 +60,12 @@
  *
  *	@(#)kern_xxx.c	8.2 (Berkeley) 11/14/93
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 #include <cputypes.h> 
 
@@ -71,28 +83,42 @@
 
 #include <sys/mount_internal.h>
 #include <sys/sysproto.h>
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
 
 int
 reboot(struct proc *p, register struct reboot_args *uap, __unused register_t *retval)
 {
 	char command[64];
-	int error;
+	int error=0;
 	int dummy=0;
+#if CONFIG_MACF
+	kauth_cred_t my_cred;
+#endif
 
 	AUDIT_ARG(cmd, uap->opt);
 
 	command[0] = '\0';
 
+#ifndef CONFIG_EMBEDDED
 	if ((error = suser(kauth_cred_get(), &p->p_acflag)))
 		return(error);	
+#endif	
 	
 	if (uap->opt & RB_COMMAND)
 		error = copyinstr(uap->command,
 					(void *)command, sizeof(command), (size_t *)&dummy);
+#if CONFIG_MACF
+	if (error)
+		return (error);
+	my_cred = kauth_cred_proc_ref(p);
+	error = mac_system_check_reboot(my_cred, uap->opt);
+	kauth_cred_unref(&my_cred);
+#endif
 	if (!error) {
-		SET(p->p_flag, P_REBOOT);	/* No more signals for this proc */
+		OSBitOrAtomic(P_REBOOT, (UInt32 *)&p->p_flag);  /* No more signals for this proc */
 		boot(RB_BOOT, uap->opt, command);
 	}
 	return(error);
 }
-

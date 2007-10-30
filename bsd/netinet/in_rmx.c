@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000,2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright 1994, 1995 Massachusetts Institute of Technology
@@ -77,14 +83,15 @@
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 
+extern int tvtohz(struct timeval *);
 extern int	in_inithead(void **head, int off);
+extern u_long route_generation;
 
 #ifdef __APPLE__
 static void in_rtqtimo(void *rock);
 #endif
 
 #define RTPRF_OURS		RTF_PROTO3	/* set on routes we manage */
-extern lck_mtx_t *rt_mtx;
 
 /*
  * Do what we need to do when inserting a route.
@@ -231,35 +238,42 @@ SYSCTL_INT(_net_inet_ip, OID_AUTO, use_route_genid, CTLFLAG_RW,
  * timed out.
  */
 static void
-in_clsroute(struct radix_node *rn, struct radix_node_head *head)
+in_clsroute(struct radix_node *rn, __unused struct radix_node_head *head)
 {
 	struct rtentry *rt = (struct rtentry *)rn;
-	struct timeval timenow;
 
-	if(!(rt->rt_flags & RTF_UP))
+	if (!(rt->rt_flags & RTF_UP))
 		return;		/* prophylactic measures */
 
-	if((rt->rt_flags & (RTF_LLINFO | RTF_HOST)) != RTF_HOST)
+	if ((rt->rt_flags & (RTF_LLINFO | RTF_HOST)) != RTF_HOST)
 		return;
 
-	if((rt->rt_flags & (RTF_WASCLONED | RTPRF_OURS))
-	   != RTF_WASCLONED)
+	if ((rt->rt_flags & (RTF_WASCLONED | RTPRF_OURS)) != RTF_WASCLONED)
 		return;
 
 	/*
-	 * As requested by David Greenman:
-	 * If rtq_reallyold is 0, just delete the route without
-	 * waiting for a timeout cycle to kill it.
+	 * Delete the route immediately if RTF_DELCLONE is set or
+	 * if route caching is disabled (rtq_reallyold set to 0).
+	 * Otherwise, let it expire and be deleted by in_rtqkill().
 	 */
-	if(rtq_reallyold != 0) {
+	if ((rt->rt_flags & RTF_DELCLONE) || rtq_reallyold == 0) {
+		/*
+		 * Delete the route from the radix tree but since we are
+		 * called when the route's reference count is 0, don't
+		 * deallocate it until we return from this routine by
+		 * telling rtrequest that we're interested in it.
+		 */
+		if (rtrequest_locked(RTM_DELETE, (struct sockaddr *)rt_key(rt),
+		    rt->rt_gateway, rt_mask(rt), rt->rt_flags, &rt) == 0) {
+			/* Now let the caller free it */
+			rtunref(rt);
+		}
+	} else {
+		struct timeval timenow;
+
 		getmicrotime(&timenow);
 		rt->rt_flags |= RTPRF_OURS;
 		rt->rt_rmx.rmx_expire = timenow.tv_sec + rtq_reallyold;
-	} else {
-		rtrequest_locked(RTM_DELETE,
-			  (struct sockaddr *)rt_key(rt),
-			  rt->rt_gateway, rt_mask(rt),
-			  rt->rt_flags, 0);
 	}
 }
 
@@ -287,24 +301,25 @@ in_rtqkill(struct radix_node *rn, void *rock)
 
 	getmicrotime(&timenow);
 	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_OWNED);
-	if(rt->rt_flags & RTPRF_OURS) {
+
+	if (rt->rt_flags & RTPRF_OURS) {
 		ap->found++;
 
-		if(ap->draining || rt->rt_rmx.rmx_expire <= timenow.tv_sec) {
-			if(rt->rt_refcnt > 0)
+		if (ap->draining || rt->rt_rmx.rmx_expire <= timenow.tv_sec) {
+			if (rt->rt_refcnt > 0)
 				panic("rtqkill route really not free");
 
 			err = rtrequest_locked(RTM_DELETE,
 					(struct sockaddr *)rt_key(rt),
 					rt->rt_gateway, rt_mask(rt),
 					rt->rt_flags, 0);
-			if(err) {
+			if (err) {
 				log(LOG_WARNING, "in_rtqkill: error %d\n", err);
 			} else {
 				ap->killed++;
 			}
 		} else {
-			if(ap->updating
+			if (ap->updating
 			   && (rt->rt_rmx.rmx_expire - timenow.tv_sec
 			       > rtq_reallyold)) {
 				rt->rt_rmx.rmx_expire = timenow.tv_sec
@@ -336,12 +351,14 @@ in_rtqtimo(void *rock)
 	static time_t last_adjusted_timeout = 0;
 	struct timeval timenow;
 
+	lck_mtx_lock(rt_mtx);
+	/* Get the timestamp after we acquire the lock for better accuracy */
 	getmicrotime(&timenow);
+
 	arg.found = arg.killed = 0;
 	arg.rnh = rnh;
 	arg.nextstop = timenow.tv_sec + rtq_timeout;
 	arg.draining = arg.updating = 0;
-	lck_mtx_lock(rt_mtx);
 	rnh->rnh_walktree(rnh, in_rtqkill, &arg);
 
 	/*
@@ -471,6 +488,10 @@ in_ifadown(struct ifaddr *ifa, int delete)
 
 	if (ifa->ifa_addr->sa_family != AF_INET)
 		return 1;
+
+	/* trigger route cache reevaluation */
+	if (use_routegenid) 
+		route_generation++;
 
 	arg.rnh = rnh = rt_tables[AF_INET];
 	arg.ifa = ifa;

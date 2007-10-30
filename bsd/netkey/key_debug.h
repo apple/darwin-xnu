@@ -52,8 +52,12 @@
 #define KEYDEBUG_IPSEC_DATA	(KEYDEBUG_IPSEC | KEYDEBUG_DATA)
 #define KEYDEBUG_IPSEC_DUMP	(KEYDEBUG_IPSEC | KEYDEBUG_DUMP)
 
+#if 0
 #define KEYDEBUG(lev,arg) \
 	do { if ((key_debug_level & (lev)) == (lev)) { arg; } } while (0)
+#else
+#define KEYDEBUG(lev,arg)
+#endif
 
 struct sadb_msg;
 struct sadb_ext;
@@ -83,7 +87,6 @@ extern void kdebug_sockaddr(struct sockaddr *);
 extern void ipsec_hexdump(caddr_t, int);
 extern void ipsec_bindump(caddr_t, int);
 
-#define KEYDEBUG(lev,arg)
 
 #endif /* _NETKEY_KEY_DEBUG_H_ */
 

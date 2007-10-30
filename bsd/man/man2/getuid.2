@@ -37,16 +37,19 @@
 .Dt GETUID 2
 .Os BSD 4
 .Sh NAME
-.Nm getuid ,
-.Nm geteuid
+.Nm geteuid ,
+.Nm getuid
 .Nd get user identification
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
 .Fd #include <unistd.h>
 .Ft uid_t
-.Fn getuid void
+.Fo geteuid
+.Fa void
+.Fc
 .Ft uid_t
-.Fn geteuid void
+.Fo getuid
+.Fa void
+.Fc
 .Sh DESCRIPTION
 The
 .Fn getuid
@@ -71,9 +74,17 @@ and
 .Fn geteuid
 functions are always successful, and no return value is reserved to
 indicate an error.
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <unistd.h>
+.Pp
+The include file
+.In sys/types.h
+is necessary for both functions.
 .Sh SEE ALSO
 .Xr getgid 2 ,
-.Xr setreuid 2
+.Xr setreuid 2 ,
+.Xr compat 5
 .Sh STANDARDS
 .Fn Geteuid
 and

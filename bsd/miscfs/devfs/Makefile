@@ -20,10 +20,9 @@ EXPINC_SUBDIRS_PPC = \
 EXPINC_SUBDIRS_I386 = \
 
 DATAFILES = \
-	devfs.h
+	devfs.h	devfs_proto.h devfsdefs.h
 
-PRIVATE_DATAFILES = \
-	devfs_proto.h devfsdefs.h
+PRIVATE_DATAFILES = 
 
 INSTALL_MI_LIST	= ${DATAFILES}
 

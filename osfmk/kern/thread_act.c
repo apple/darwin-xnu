@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_FREE_COPYRIGHT@
@@ -46,7 +52,6 @@
 #include <mach/mach_types.h>
 #include <mach/kern_return.h>
 #include <mach/alert.h>
-#include <mach_prof.h>
 #include <mach/rpc.h>
 #include <mach/thread_act_server.h>
 
@@ -62,20 +67,38 @@
 #include <kern/exception.h>
 #include <kern/ipc_mig.h>
 #include <kern/ipc_tt.h>
-#include <kern/profile.h>
 #include <kern/machine.h>
 #include <kern/spl.h>
 #include <kern/syscall_subr.h>
 #include <kern/sync_lock.h>
 #include <kern/processor.h>
 #include <kern/timer.h>
-#include <mach_prof.h>
+#include <kern/affinity.h>
+
 #include <mach/rpc.h>
 
+#include <mach/sdt.h>
+
 void			act_abort(thread_t);
-void			act_set_apc(thread_t);
 void			install_special_handler_locked(thread_t);
 void			special_handler_continue(void);
+
+/*
+ * Internal routine to mark a thread as started.
+ * Always called with the thread locked.
+ *
+ * Note: function intentionall declared with the noinline attribute to
+ * prevent multiple declaration of probe symbols in this file; we would
+ * prefer "#pragma noinline", but gcc does not support it.
+ */
+void
+thread_start_internal(
+	thread_t			thread)
+{
+	clear_wait(thread, THREAD_AWAKENED);
+	thread->started = TRUE;
+	DTRACE_PROC1(lwp__start, thread_t, thread);
+}
 
 /*
  * Internal routine to terminate a thread.
@@ -87,6 +110,8 @@ thread_terminate_internal(
 {
 	kern_return_t		result = KERN_SUCCESS;
 
+	DTRACE_PROC(lwp__exit);
+
 	thread_mtx_lock(thread);
 
 	if (thread->active) {
@@ -97,12 +122,14 @@ thread_terminate_internal(
 		if (thread->started)
 			clear_wait(thread, THREAD_INTERRUPTED);
 		else {
-			clear_wait(thread, THREAD_AWAKENED);
-			thread->started = TRUE;
+			thread_start_internal(thread);
 		}
 	}
 	else
 		result = KERN_TERMINATED;
+
+	if (thread->affinity_set != NULL)
+		thread_affinity_terminate(thread);
 
 	thread_mtx_unlock(thread);
 
@@ -178,8 +205,7 @@ thread_release(
 		if (thread->started)
 			thread_wakeup_one(&thread->suspend_count);
 		else {
-			clear_wait(thread, THREAD_AWAKENED);
-			thread->started = TRUE;
+			thread_start_internal(thread);
 		}
 	}
 }
@@ -233,8 +259,7 @@ thread_resume(
 				if (thread->started)
 					thread_wakeup_one(&thread->suspend_count);
 				else {
-					clear_wait(thread, THREAD_AWAKENED);
-					thread->started = TRUE;
+					thread_start_internal(thread);
 				}
 			}
 		}
@@ -290,12 +315,12 @@ act_abort(
 
 	thread_lock(thread);
 
-	if (!(thread->state & TH_ABORT)) {
-		thread->state |= TH_ABORT;
+	if (!(thread->sched_mode & TH_MODE_ABORT)) {
+		thread->sched_mode |= TH_MODE_ABORT;
 		install_special_handler_locked(thread);
 	}
 	else
-		thread->state &= ~TH_ABORT_SAFELY;
+		thread->sched_mode &= ~TH_MODE_ABORTSAFELY;
 
 	thread_unlock(thread);
 	splx(s);
@@ -340,9 +365,9 @@ thread_abort_safely(
 
 		thread_lock(thread);
 		if (!thread->at_safe_point ||
-			clear_wait_internal(thread, THREAD_INTERRUPTED) != KERN_SUCCESS) {
-			if (!(thread->state & TH_ABORT)) {
-				thread->state |= (TH_ABORT|TH_ABORT_SAFELY);
+				clear_wait_internal(thread, THREAD_INTERRUPTED) != KERN_SUCCESS) {
+			if (!(thread->sched_mode & TH_MODE_ABORT)) {
+				thread->sched_mode |= TH_MODE_ISABORTED;
 				install_special_handler_locked(thread);
 			}
 		}
@@ -550,6 +575,8 @@ thread_dup(
 		if (thread_stop(target)) {
 			thread_mtx_lock(target);
 			result = machine_thread_dup(self, target);
+			if (self->affinity_set != AFFINITY_SET_NULL)
+				thread_affinity_dup(self, target);
 			thread_unstop(target);
 		}
 		else {
@@ -759,7 +786,7 @@ special_handler(
 
 	s = splsched();
 	thread_lock(thread);
-	thread->state &= ~(TH_ABORT|TH_ABORT_SAFELY);	/* clear any aborts */
+	thread->sched_mode &= ~TH_MODE_ISABORTED;
 	thread_unlock(thread);
 	splx(s);
 

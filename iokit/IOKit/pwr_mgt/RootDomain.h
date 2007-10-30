@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #ifndef _IOKIT_ROOTDOMAIN_H
 #define _IOKIT_ROOTDOMAIN_H
@@ -25,7 +31,6 @@
 #include <IOKit/IOService.h>
 #include <IOKit/pwr_mgt/IOPM.h>
 
-class IOPMWorkArbiter;
 class IOPMPowerStateQueue;
 class RootDomainUserClient;
 
@@ -36,7 +41,29 @@ enum {
     kPCICantSleep			= 0x00000004
 };
 
-#define kRootDomainSupportedFeatures "Supported Features"
+/* 
+ *IOPMrootDomain registry property keys
+ */
+#define kRootDomainSupportedFeatures        "Supported Features"
+#define kRootDomainSleepReasonKey           "Last Sleep Reason"
+#define kRootDomainSleepOptionsKey          "Last Sleep Options"
+
+/*
+ * Possible sleep reasons found under kRootDomainSleepReasonsKey
+ */
+#define kIOPMClamshellSleepKey              "Clamshell Sleep"
+#define kIOPMPowerButtonSleepKey            "Power Button Sleep"
+#define kIOPMSoftwareSleepKey               "Software Sleep"
+#define kIOPMOSSwitchHibernationKey         "OS Switch Sleep"
+#define kIOPMIdleSleepKey                   "Idle Sleep"
+#define kIOPMLowPowerSleepKey               "Low Power Sleep"
+#define kIOPMThermalEmergencySleepKey       "Thermal Emergency Sleep"
+
+/*
+ * String constants for communication with PM CPU
+ */
+#define kIOPMRootDomainLidCloseCString      "LidClose"
+#define kIOPMRootDomainBatPowerCString      "BatPower"
 
 // Supported Feature bitfields for IOPMrootDomain::publishFeature()
 enum {
@@ -76,14 +103,15 @@ OSDeclareDefaultStructors(IOPMrootDomain)
 public:
 
     class IOService * wrangler;			// we tickle the wrangler on button presses, etc
-    
-    IOPMWorkArbiter * getPMArbiter(void);
 
     static IOPMrootDomain * construct( void );
     virtual bool start( IOService * provider );
     virtual IOReturn setAggressiveness ( unsigned long, unsigned long );
     virtual IOReturn youAreRoot ( void );
+
     virtual IOReturn sleepSystem ( void );
+    IOReturn sleepSystemOptions ( OSDictionary *options );
+
     virtual IOReturn setProperties ( OSObject * );
     IOReturn shutdownSystem ( void );
     IOReturn restartSystem ( void );
@@ -165,16 +193,29 @@ public:
                                  uintptr_t  refcon,
                                  OSObject   **handle);    // out param
 
+/*! @function acknowledgeSystemWillShutdown
+    @abstract Handle callbacks from IOService::systemWillShutdown().
+    @param The IOService sender of the callback. */
+	void acknowledgeSystemWillShutdown( IOService * from );
+
+/*! @function handlePlatformHaltRestart
+    @abstract Handle platform halt and restart notifications.
+    @param kPEHaltCPU or kPERestartCPU. */
+	void handlePlatformHaltRestart( UInt32 pe_type );
+
 private:
 
     // Points to our parent
     class IORootParent * patriarch;
 
     // Pref: idle time before idle sleep
-    long		sleepSlider;			
+    long		sleepSlider;		
+    long		idleSeconds;
+    uint64_t		autoWakeStart;
+    uint64_t		autoWakeEnd;
 
     // Pref: longest of other idle times (disk and display)
-    long		longestNonSleepSlider;		
+    long		longestNonSleepSlider;
 
     // Difference between sleepSlider and longestNonSleepSlider
     long		extraSleepDelay;		
@@ -184,6 +225,10 @@ private:
 
     // Used to ignore clamshell close events while we're waking from sleep
     thread_call_t   clamshellWakeupIgnore;   
+    
+	// IOPMrootDomain internal sleep call
+    IOReturn 	privateSleepSystem ( const char *sleepReason );
+
     
     virtual void powerChangeDone ( unsigned long );
     virtual void command_received ( void *, void * , void * , void *);
@@ -213,12 +258,11 @@ private:
     bool shouldSleepOnClamshellClosed (void );
     void sendClientClamshellNotification ( void );
     
+    // Inform PMCPU of changes to state like lid, AC vs. battery
+    void informCPUStateChange( uint32_t type, uint32_t value );
+        
     IOLock                  *featuresDictLock;  // guards supportedFeatures
     IOPMPowerStateQueue     *pmPowerStateQueue;
-    
-    IOWorkLoop              *arbiterWorkLoop;
-    IOPMWorkArbiter         *pmArbiter;
-    
     unsigned int user_spindown;       // User's selected disk spindown value
 
     unsigned int systemBooting:1;
@@ -230,13 +274,12 @@ private:
     unsigned int idleSleepPending:1;
     unsigned int sleepASAP:1;
     unsigned int desktopMode:1;
+    unsigned int userDisabledAllSleep:1;
 
     unsigned int acAdaptorConnect:1;
     unsigned int ignoringClamshellDuringWakeup:1;
     unsigned int clamshellIsClosed:1;
     unsigned int clamshellExists:1;
-    unsigned int reservedA:4;
-    unsigned char reservedB[3];
     
     OSArray         *allowedPMSettings;
     
@@ -249,6 +292,10 @@ private:
     thread_call_t           diskSyncCalloutEntry;
     IONotifier              *_batteryPublishNotifier;
     IONotifier              *_displayWranglerNotifier;
+
+    // Info for communicating system state changes to PMCPU
+    int32_t                idxPMCPUClamshell;
+    int32_t                idxPMCPULimitedPower;
 
     struct ExpansionData {    
     };

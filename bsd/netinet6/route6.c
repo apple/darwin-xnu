@@ -34,8 +34,10 @@
 #include <sys/mbuf.h>
 #include <sys/socket.h>
 #include <sys/queue.h>
+#include <string.h>
 
 #include <net/if.h>
+#include <net/route.h>
 
 #include <netinet/in.h>
 #include <netinet6/in6_var.h>
@@ -50,19 +52,16 @@ static int ip6_rthdr0(struct mbuf *, struct ip6_hdr *,
 #endif /* IP6_RTHDR0_ALLOWED */
 
 int
-route6_input(mp, offp)
-	struct mbuf **mp;
-	int *offp;
+route6_input(struct mbuf **mp, int *offp)
 {
 	struct ip6_hdr *ip6;
 	struct mbuf *m = *mp;
 	struct ip6_rthdr *rh;
 	int off = *offp, rhlen;
-	struct mbuf *n;
+	struct ip6aux *ip6a;
 
-	n = ip6_findaux(m);
-	if (n) {
-		struct ip6aux *ip6a = mtod(n, struct ip6aux *);
+	ip6a = ip6_findaux(m);
+	if (ip6a) {
 		/* XXX reject home-address option before rthdr */
 		if (ip6a->ip6a_flags & IP6A_SWAP) {
 			ip6stat.ip6s_badoptions++;
@@ -145,6 +144,7 @@ ip6_rthdr0(m, ip6, rh0)
 {
 	int addrs, index;
 	struct in6_addr *nextaddr, tmpaddr;
+	struct route_in6 ip6forward_rt;
 
 	if (rh0->ip6r0_segleft == 0)
 		return(0);
@@ -210,15 +210,31 @@ ip6_rthdr0(m, ip6, rh0)
 	if (IN6_IS_ADDR_LINKLOCAL(&ip6->ip6_dst))
 		ip6->ip6_dst.s6_addr16[1] = htons(m->m_pkthdr.rcvif->if_index);
 
+	/*
+	 * Don't use the globally cached route to forward packet having
+	 * Type 0 routing header(s); instead, do an explicit lookup using
+	 * a local route entry variable, in case the next address in the
+	 * packet is bogus (which would otherwise unnecessarily invalidate
+	 * the globally cached route).
+	 */
+	bzero(&ip6forward_rt, sizeof (ip6forward_rt));
+
 #if COMPAT_RFC1883
 	if (rh0->ip6r0_slmap[index / 8] & (1 << (7 - (index % 8))))
-		ip6_forward(m, IPV6_SRCRT_NEIGHBOR, 0);
+		ip6_forward(m, &ip6forward_rt, IPV6_SRCRT_NEIGHBOR, 0);
 	else
-		ip6_forward(m, IPV6_SRCRT_NOTNEIGHBOR, 0);
+		ip6_forward(m, &ip6forward_rt, IPV6_SRCRT_NOTNEIGHBOR, 0);
 #else
-	ip6_forward(m, 1, 0);
+	ip6_forward(m, &ip6forward_rt, 1, 0);
 #endif
+
+	/* Release reference to the looked up route */
+	if (ip6forward_rt.ro_rt != NULL) {
+		rtfree(ip6forward_rt.ro_rt);
+		ip6forward_rt.ro_rt = NULL;
+	}
 
 	return(-1);			/* m would be freed in ip6_forward() */
 }
 #endif /* IP6_RTHDR0_ALLOWED */
+

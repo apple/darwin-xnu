@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -88,7 +94,7 @@ struct iovec {
 #endif
 
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /*
  * IO direction for uio_t.
  *	UIO_READ - data moves into iovec(s) associated with uio_t
@@ -251,8 +257,8 @@ user_size_t uio_curriovlen( uio_t a_uio );
 #define UIO_MAXIOV	1024		/* max 1K of iov's */
 #define UIO_SMALLIOV	8		/* 8 on stack, else malloc */
 
-extern int uiomove(caddr_t cp, int n, struct uio *uio);
-extern int uiomove64(unsigned long long cp, int n, struct uio *uio);
+extern int uiomove(const char * cp, int n, struct uio *uio);
+extern int uiomove64(const unsigned long long cp, int n, struct uio *uio);
 extern int ureadc(int c, struct uio *uio);
 extern int uwritec(struct uio *uio);
 __END_DECLS
@@ -262,8 +268,8 @@ __END_DECLS
 #ifndef	KERNEL
 
 __BEGIN_DECLS
-ssize_t	readv(int, const struct iovec *, int);
-ssize_t	writev(int, const struct iovec *, int);
+ssize_t	readv(int, const struct iovec *, int) __DARWIN_ALIAS_C(readv);
+ssize_t	writev(int, const struct iovec *, int) __DARWIN_ALIAS_C(writev);
 __END_DECLS
 #endif /* !KERNEL */
 

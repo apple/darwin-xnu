@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -53,7 +59,7 @@
  *	Author: David B. Golub, Carnegie Mellon University
  *	Date:	7/90
  */
-#include <string.h>			/* For strcpy() */
+#include <string.h>			/* For strlcpy() */
 #include <mach/boolean.h>
 #include <machine/db_machdep.h>
 
@@ -93,23 +99,21 @@ int db_examine_width(
 	int *items,
 	int *remainder);
 
+extern char db_last_modifier[];
+
 /*
  * Examine (print) data.
  */
 void
-db_examine_cmd(
-	db_expr_t	addr,
-	int		have_addr,
-	db_expr_t	count,
-	char *		modif)
+db_examine_cmd(db_expr_t addr, __unused boolean_t have_addr, db_expr_t count,
+	       char *modif)
 {
 	thread_t	thr_act;
-	extern char	db_last_modifier[];
 
 	if (modif[0] != '\0')
-	    strcpy(db_examine_format, modif);
+	    strlcpy(db_examine_format, modif, TOK_STRING_SIZE);
 
-	if (count == -1)
+	if (count == (db_expr_t)-1)
 	    count = 1;
 	db_examine_count = count;
 	if (db_option(modif, 't')) {
@@ -119,7 +123,7 @@ db_examine_cmd(
 		return;
 	} else
 	  if (db_option(modif,'u'))
-	    thr_act = current_act();
+	    thr_act = current_thread();
 	  else
 	    thr_act = THREAD_NULL;
 
@@ -129,22 +133,16 @@ db_examine_cmd(
 }
 
 void
-db_examine_forward(
-	db_expr_t	addr,
-	int		have_addr,
-	db_expr_t	count,
-	char *		modif)
+db_examine_forward(__unused db_expr_t addr, __unused boolean_t have_addr,
+		   __unused db_expr_t count, __unused char *modif)
 {
 	db_examine(db_next, db_examine_format, db_examine_count,
 				db_act_to_task(db_examine_act));
 }
 
 void
-db_examine_backward(
-	db_expr_t	addr,
-	int		have_addr,
-	db_expr_t	count,
-	char *		modif)
+db_examine_backward(__unused db_expr_t addr, __unused boolean_t have_addr,
+		    __unused db_expr_t count, __unused char *modif)
 {
 	db_examine(db_examine_prev_addr - (db_next - db_examine_prev_addr),
 			 db_examine_format, db_examine_count,
@@ -189,9 +187,9 @@ db_examine(
 	int		width;
 	int		leader;
 	int		items;
-	int		nitems;
+	int		nitems = 0;
 	char *		fp;
-	db_addr_t	next_addr;
+	db_addr_t	next_addr = 0;
 	int		sz;
 
 	db_examine_prev_addr = addr;
@@ -276,7 +274,7 @@ db_examine(
 				break;
 			    case 'r':	/* signed, current radix */
 				for (sz = size, next_addr = addr;
-				     sz >= sizeof (db_expr_t);
+				     sz >= (signed)sizeof (db_expr_t);
 				     sz -= sizeof (db_expr_t)) {
 				    if (nitems-- == 0) {
 					db_putchar('\n');
@@ -302,7 +300,7 @@ db_examine(
 			    case 'X':	/* unsigned hex */
 			    case 'x':	/* unsigned hex */
 				for (sz = size, next_addr = addr;
-				     sz >= sizeof (db_expr_t);
+				     sz >= (signed)sizeof (db_expr_t);
 				     sz -= sizeof (db_expr_t)) {
 				    if (nitems-- == 0) {
 					db_putchar('\n');
@@ -333,7 +331,7 @@ db_examine(
 				break;
 			    case 'z':	/* signed hex */
 				for (sz = size, next_addr = addr;
-				     sz >= sizeof (db_expr_t);
+				     sz >= (signed)sizeof (db_expr_t);
 				     sz -= sizeof (db_expr_t)) {
 				    if (nitems-- == 0) {
 					db_putchar('\n');
@@ -358,7 +356,7 @@ db_examine(
 				break;
 			    case 'd':	/* signed decimal */
 				for (sz = size, next_addr = addr;
-				     sz >= sizeof (db_expr_t);
+				     sz >= (signed)sizeof (db_expr_t);
 				     sz -= sizeof (db_expr_t)) {
 				    if (nitems-- == 0) {
 					db_putchar('\n');
@@ -384,7 +382,7 @@ db_examine(
 			    case 'U':	/* unsigned decimal */
 			    case 'u':
 				for (sz = size, next_addr = addr;
-				     sz >= sizeof (db_expr_t);
+				     sz >= (signed)sizeof (db_expr_t);
 				     sz -= sizeof (db_expr_t)) {
 				    if (nitems-- == 0) {
 					db_putchar('\n');
@@ -409,7 +407,7 @@ db_examine(
 				break;
 			    case 'o':	/* unsigned octal */
 				for (sz = size, next_addr = addr;
-				     sz >= sizeof (db_expr_t);
+				     sz >= (signed)sizeof (db_expr_t);
 				     sz -= sizeof (db_expr_t)) {
 				    if (nitems-- == 0) {
 					db_putchar('\n');

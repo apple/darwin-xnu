@@ -7,10 +7,14 @@ _cpu_number
 _cpu_to_lapic
 _cpuid_features
 _cpuid_info
+_hfs_addconverter
+_hfs_remconverter
 _kdreboot
 _lapic_end_of_interrupt
 _lapic_smm_restore
 _ml_get_max_cpus
+_mp_broadcast
+_mp_cpus_call 
 _mp_rendezvous_no_intrs
 _mtrr_range_add
 _mtrr_range_remove
@@ -19,3 +23,6 @@ _pmsCPULoadVIDTable
 _rtc_clock_stepped
 _rtc_clock_stepping
 _smp_initialized
+_thread_bind
+__ZN24IOBufferMemoryDescriptor20initWithPhysicalMaskEP4taskmyyy
+__ZN24IOBufferMemoryDescriptor22inTaskWithPhysicalMaskEP4taskmyy

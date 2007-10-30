@@ -58,8 +58,8 @@ struct  sigaction {
 .Ft int
 .Fo sigaction
 .Fa "int sig"
-.Fa "const struct sigaction * restrict act"
-.Fa "struct sigaction * restrict oact"
+.Fa "const struct sigaction *restrict act"
+.Fa "struct sigaction *restrict oact"
 .Fc
 .Sh DESCRIPTION
 The system defines a set of signals that may be delivered to a process.
@@ -534,6 +534,7 @@ system call
 will fail and no new signal handler will be installed if one
 of the following occurs:
 .Bl -tag -width Er
+.\" ===========
 .It Bq Er EFAULT
 Either
 .Fa act
@@ -541,16 +542,22 @@ or
 .Fa oact
 points to memory that is not a valid part of the process
 address space.
+.\" ===========
 .It Bq Er EINVAL
 The
 .Fa sig
 argument
 is not a valid signal number.
+.\" ===========
 .It Bq Er EINVAL
 An attempt is made to ignore or supply a handler for
 .Dv SIGKILL
 or
 .Dv SIGSTOP .
+.\" ===========
+.It Bq Er EINVAL
+An attempt was made to set the action to SIG_DFL
+for a signal that cannot be caught or ignored (or both).
 .El
 .Sh STANDARDS
 The

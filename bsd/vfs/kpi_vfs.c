@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -59,13 +65,17 @@
  *
  *	@(#)kpi_vfs.c
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 /*
  * External virtual filesystem routines
  */
 
-#undef	DIAGNOSTIC
-#define DIAGNOSTIC 1
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -95,6 +105,7 @@
 
 #include <kern/assert.h>
 #include <kern/kalloc.h>
+#include <kern/task.h>
 
 #include <libkern/OSByteOrder.h>
 
@@ -102,6 +113,11 @@
 
 #include <mach/mach_types.h>
 #include <mach/memory_object_types.h>
+#include <mach/task.h>
+
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
 
 #define ESUCCESS 0
 #undef mount_t
@@ -114,12 +130,13 @@
 	((VP)->v_unsafefs ? 0 : 1)
 
 #define NATIVE_XATTR(VP)  \
-	((VP)->v_mount ? (VP)->v_mount->mnt_vtable->vfc_vfsflags & VFC_VFSNATIVEXATTR : 0)
+	((VP)->v_mount ? (VP)->v_mount->mnt_kern_flag & MNTK_EXTENDED_ATTRS : 0)
 
-static void xattrfile_remove(vnode_t dvp, const char * basename, vfs_context_t context,
-                             int thread_safe, int force);
-static void xattrfile_setattr(vnode_t dvp, const char * basename, struct vnode_attr * vap,
-                              vfs_context_t context, int thread_safe);
+static void xattrfile_remove(vnode_t dvp, const char *basename,
+				vfs_context_t ctx, int thread_safe, int force);
+static void xattrfile_setattr(vnode_t dvp, const char * basename,
+				struct vnode_attr * vap, vfs_context_t ctx,
+				int thread_safe);
 
 
 static void
@@ -127,7 +144,7 @@ vnode_setneedinactive(vnode_t vp)
 {
         cache_purge(vp);
 
-        vnode_lock(vp);
+        vnode_lock_spin(vp);
 	vp->v_lflag |= VL_NEEDINACTIVE;
 	vnode_unlock(vp);
 }
@@ -183,7 +200,7 @@ unlock_fsnode(vnode_t vp, int *funnel_state)
  * prototypes for exported VFS operations
  */
 int 
-VFS_MOUNT(struct mount * mp, vnode_t devvp, user_addr_t data, vfs_context_t context)
+VFS_MOUNT(mount_t mp, vnode_t devvp, user_addr_t data, vfs_context_t ctx)
 {
 	int error;
 	int thread_safe;
@@ -199,16 +216,16 @@ VFS_MOUNT(struct mount * mp, vnode_t devvp, user_addr_t data, vfs_context_t cont
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
 	
-	if (vfs_context_is64bit(context)) {
+	if (vfs_context_is64bit(ctx)) {
 		if (vfs_64bitready(mp)) {
-			error = (*mp->mnt_op->vfs_mount)(mp, devvp, data, context);
+			error = (*mp->mnt_op->vfs_mount)(mp, devvp, data, ctx);
 		}
 		else {
 			error = ENOTSUP;
 		}
 	}
 	else {
-		error = (*mp->mnt_op->vfs_mount)(mp, devvp, data, context);
+		error = (*mp->mnt_op->vfs_mount)(mp, devvp, data, ctx);
 	}
 	
 	if (!thread_safe) {
@@ -218,7 +235,7 @@ VFS_MOUNT(struct mount * mp, vnode_t devvp, user_addr_t data, vfs_context_t cont
 }
 
 int 
-VFS_START(struct mount * mp, int flags, vfs_context_t context)
+VFS_START(mount_t mp, int flags, vfs_context_t ctx)
 {
 	int error;
 	int thread_safe;
@@ -232,7 +249,7 @@ VFS_START(struct mount * mp, int flags, vfs_context_t context)
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-	error = (*mp->mnt_op->vfs_start)(mp, flags, context);
+	error = (*mp->mnt_op->vfs_start)(mp, flags, ctx);
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
@@ -240,7 +257,7 @@ VFS_START(struct mount * mp, int flags, vfs_context_t context)
 }
 
 int 
-VFS_UNMOUNT(struct mount *mp, int flags, vfs_context_t context)
+VFS_UNMOUNT(mount_t mp, int flags, vfs_context_t ctx)
 {
 	int error;
 	int thread_safe;
@@ -254,35 +271,49 @@ VFS_UNMOUNT(struct mount *mp, int flags, vfs_context_t context)
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-	error = (*mp->mnt_op->vfs_unmount)(mp, flags, context);
+	error = (*mp->mnt_op->vfs_unmount)(mp, flags, ctx);
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
 	return (error);
 }
 
+/*
+ * Returns:	0			Success
+ *		ENOTSUP			Not supported
+ *		<vfs_root>:ENOENT
+ *		<vfs_root>:???
+ *
+ * Note:	The return codes from the underlying VFS's root routine can't
+ *		be fully enumerated here, since third party VFS authors may not
+ *		limit their error returns to the ones documented here, even
+ *		though this may result in some programs functioning incorrectly.
+ *
+ *		The return codes documented above are those which may currently
+ *		be returned by HFS from hfs_vfs_root, which is a simple wrapper
+ *		for a call to hfs_vget on the volume mount poit, not including
+ *		additional error codes which may be propagated from underlying
+ *		routines called by hfs_vget.
+ */
 int 
-VFS_ROOT(struct mount * mp, struct vnode  ** vpp, vfs_context_t context)
+VFS_ROOT(mount_t mp, struct vnode  ** vpp, vfs_context_t ctx)
 {
 	int error;
 	int thread_safe;
 	int funnel_state = 0;
-	struct vfs_context acontext;
 
 	if ((mp == dead_mountp) || (mp->mnt_op->vfs_root == 0))
 		return(ENOTSUP);
 
-	if (context == NULL) {
-		acontext.vc_proc = current_proc();
-		acontext.vc_ucred = kauth_cred_get();
-		context = &acontext;
+	if (ctx == NULL) {
+		ctx = vfs_context_current();
 	}
 	thread_safe = mp->mnt_vtable->vfc_threadsafe;
 
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-	error = (*mp->mnt_op->vfs_root)(mp, vpp, context);
+	error = (*mp->mnt_op->vfs_root)(mp, vpp, ctx);
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
@@ -290,7 +321,7 @@ VFS_ROOT(struct mount * mp, struct vnode  ** vpp, vfs_context_t context)
 }
 
 int 
-VFS_QUOTACTL(struct mount *mp, int cmd, uid_t uid, caddr_t datap, vfs_context_t context)
+VFS_QUOTACTL(mount_t mp, int cmd, uid_t uid, caddr_t datap, vfs_context_t ctx)
 {
 	int error;
 	int thread_safe;
@@ -304,7 +335,7 @@ VFS_QUOTACTL(struct mount *mp, int cmd, uid_t uid, caddr_t datap, vfs_context_t 
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-	error = (*mp->mnt_op->vfs_quotactl)(mp, cmd, uid, datap, context);
+	error = (*mp->mnt_op->vfs_quotactl)(mp, cmd, uid, datap, ctx);
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
@@ -312,27 +343,25 @@ VFS_QUOTACTL(struct mount *mp, int cmd, uid_t uid, caddr_t datap, vfs_context_t 
 }
 
 int 
-VFS_GETATTR(struct mount *mp, struct vfs_attr *vfa, vfs_context_t context)
+VFS_GETATTR(mount_t mp, struct vfs_attr *vfa, vfs_context_t ctx)
 {
 	int error;
 	int thread_safe;
 	int funnel_state = 0;
-	struct vfs_context acontext;
 
 	if ((mp == dead_mountp) || (mp->mnt_op->vfs_getattr == 0))
 		return(ENOTSUP);
 
-	if (context == NULL) {
-		acontext.vc_proc = current_proc();
-		acontext.vc_ucred = kauth_cred_get();
-		context = &acontext;
+	if (ctx == NULL) {
+		ctx = vfs_context_current();
 	}
+
 	thread_safe = mp->mnt_vtable->vfc_threadsafe;
 	
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-	error = (*mp->mnt_op->vfs_getattr)(mp, vfa, context);
+	error = (*mp->mnt_op->vfs_getattr)(mp, vfa, ctx);
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
@@ -340,27 +369,25 @@ VFS_GETATTR(struct mount *mp, struct vfs_attr *vfa, vfs_context_t context)
 }
 
 int 
-VFS_SETATTR(struct mount *mp, struct vfs_attr *vfa, vfs_context_t context)
+VFS_SETATTR(mount_t mp, struct vfs_attr *vfa, vfs_context_t ctx)
 {
 	int error;
 	int thread_safe;
 	int funnel_state = 0;
-	struct vfs_context acontext;
 
 	if ((mp == dead_mountp) || (mp->mnt_op->vfs_setattr == 0))
 		return(ENOTSUP);
 
-	if (context == NULL) {
-		acontext.vc_proc = current_proc();
-		acontext.vc_ucred = kauth_cred_get();
-		context = &acontext;
+	if (ctx == NULL) {
+		ctx = vfs_context_current();
 	}
+
 	thread_safe = mp->mnt_vtable->vfc_threadsafe;
 	
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-	error = (*mp->mnt_op->vfs_setattr)(mp, vfa, context);
+	error = (*mp->mnt_op->vfs_setattr)(mp, vfa, ctx);
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
@@ -368,27 +395,24 @@ VFS_SETATTR(struct mount *mp, struct vfs_attr *vfa, vfs_context_t context)
 }
 
 int 
-VFS_SYNC(struct mount *mp, int flags, vfs_context_t context)
+VFS_SYNC(mount_t mp, int flags, vfs_context_t ctx)
 {
 	int error;
 	int thread_safe;
 	int funnel_state = 0;
-	struct vfs_context acontext;
 
 	if ((mp == dead_mountp) || (mp->mnt_op->vfs_sync == 0))
 		return(ENOTSUP);
 
-	if (context == NULL) {
-		acontext.vc_proc = current_proc();
-		acontext.vc_ucred = kauth_cred_get();
-		context = &acontext;
+	if (ctx == NULL) {
+		ctx = vfs_context_current();
 	}
 	thread_safe = mp->mnt_vtable->vfc_threadsafe;
 
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-	error = (*mp->mnt_op->vfs_sync)(mp, flags, context);
+	error = (*mp->mnt_op->vfs_sync)(mp, flags, ctx);
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
@@ -396,27 +420,24 @@ VFS_SYNC(struct mount *mp, int flags, vfs_context_t context)
 }
 
 int 
-VFS_VGET(struct mount * mp, ino64_t ino, struct vnode **vpp, vfs_context_t context)
+VFS_VGET(mount_t mp, ino64_t ino, struct vnode **vpp, vfs_context_t ctx)
 {
 	int error;
 	int thread_safe;
 	int funnel_state = 0;
-	struct vfs_context acontext;
 
 	if ((mp == dead_mountp) || (mp->mnt_op->vfs_vget == 0))
 		return(ENOTSUP);
 
-	if (context == NULL) {
-		acontext.vc_proc = current_proc();
-		acontext.vc_ucred = kauth_cred_get();
-		context = &acontext;
+	if (ctx == NULL) {
+		ctx = vfs_context_current();
 	}
 	thread_safe = mp->mnt_vtable->vfc_threadsafe;
 
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-	error = (*mp->mnt_op->vfs_vget)(mp, ino, vpp, context);
+	error = (*mp->mnt_op->vfs_vget)(mp, ino, vpp, ctx);
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
@@ -424,27 +445,24 @@ VFS_VGET(struct mount * mp, ino64_t ino, struct vnode **vpp, vfs_context_t conte
 }
 
 int 
-VFS_FHTOVP(struct mount * mp, int fhlen, unsigned char * fhp, vnode_t * vpp, vfs_context_t context) 
+VFS_FHTOVP(mount_t mp, int fhlen, unsigned char * fhp, vnode_t * vpp, vfs_context_t ctx) 
 {
 	int error;
 	int thread_safe;
 	int funnel_state = 0;
-	struct vfs_context acontext;
 
 	if ((mp == dead_mountp) || (mp->mnt_op->vfs_fhtovp == 0))
 		return(ENOTSUP);
 
-	if (context == NULL) {
-		acontext.vc_proc = current_proc();
-		acontext.vc_ucred = kauth_cred_get();
-		context = &acontext;
+	if (ctx == NULL) {
+		ctx = vfs_context_current();
 	}
 	thread_safe = mp->mnt_vtable->vfc_threadsafe;
 
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-	error = (*mp->mnt_op->vfs_fhtovp)(mp, fhlen, fhp, vpp, context);
+	error = (*mp->mnt_op->vfs_fhtovp)(mp, fhlen, fhp, vpp, ctx);
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
@@ -452,27 +470,24 @@ VFS_FHTOVP(struct mount * mp, int fhlen, unsigned char * fhp, vnode_t * vpp, vfs
 }
 
 int 
-VFS_VPTOFH(struct vnode * vp, int *fhlenp, unsigned char * fhp, vfs_context_t context)
+VFS_VPTOFH(struct vnode * vp, int *fhlenp, unsigned char * fhp, vfs_context_t ctx)
 {
 	int error;
 	int thread_safe;
 	int funnel_state = 0;
-	struct vfs_context acontext;
 
 	if ((vp->v_mount == dead_mountp) || (vp->v_mount->mnt_op->vfs_vptofh == 0))
 		return(ENOTSUP);
 
-	if (context == NULL) {
-		acontext.vc_proc = current_proc();
-		acontext.vc_ucred = kauth_cred_get();
-		context = &acontext;
+	if (ctx == NULL) {
+		ctx = vfs_context_current();
 	}
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	}
-	error = (*vp->v_mount->mnt_op->vfs_vptofh)(vp, fhlenp, fhp, context);
+	error = (*vp->v_mount->mnt_op->vfs_vptofh)(vp, fhlenp, fhp, ctx);
 	if (!thread_safe) {
 		(void) thread_funnel_set(kernel_flock, funnel_state);
 	}
@@ -508,7 +523,9 @@ vfs_setflags(mount_t mp, uint64_t flags)
 {
 	uint32_t lflags = (uint32_t)(flags & (MNT_CMDFLAGS | MNT_VISFLAGMASK)); 
 
+	mount_lock(mp);
 	mp->mnt_flag |= lflags;
+	mount_unlock(mp);
 }
 
 /* clear any of the command modifier flags(MNT_CMDFLAGS) in mount_t */
@@ -517,7 +534,9 @@ vfs_clearflags(mount_t mp , uint64_t flags)
 {
 	uint32_t lflags = (uint32_t)(flags & (MNT_CMDFLAGS | MNT_VISFLAGMASK)); 
 
+	mount_lock(mp);
 	mp->mnt_flag &= ~lflags;
+	mount_unlock(mp);
 }
 
 /* Is the mount_t ronly and upgrade read/write requested? */
@@ -569,7 +588,7 @@ vfs_isreload(mount_t mp)
 int 
 vfs_isforce(mount_t mp)
 {
-	if ((mp->mnt_flag & MNT_FORCE) || (mp->mnt_kern_flag & MNTK_FRCUNMOUNT))
+	if ((mp->mnt_lflag & MNT_LFORCE) || (mp->mnt_kern_flag & MNTK_FRCUNMOUNT))
 		return(1);
 	else
 		return(0);
@@ -583,6 +602,49 @@ vfs_64bitready(mount_t mp)
 	else
 		return(0);
 }
+
+
+int
+vfs_authcache_ttl(mount_t mp)
+{
+        if ( (mp->mnt_kern_flag & (MNTK_AUTH_OPAQUE | MNTK_AUTH_CACHE_TTL)) )
+	        return (mp->mnt_authcache_ttl);
+	else
+	        return (CACHED_RIGHT_INFINITE_TTL);
+}
+
+void
+vfs_setauthcache_ttl(mount_t mp, int ttl)
+{
+	mount_lock(mp);
+	mp->mnt_kern_flag |= MNTK_AUTH_CACHE_TTL;
+	mp->mnt_authcache_ttl = ttl;
+	mount_unlock(mp);
+}
+
+void
+vfs_clearauthcache_ttl(mount_t mp)
+{
+	mount_lock(mp);
+	mp->mnt_kern_flag &= ~MNTK_AUTH_CACHE_TTL;
+	/*
+	 * back to the default TTL value in case
+	 * MNTK_AUTH_OPAQUE is set on this mount
+	 */
+	mp->mnt_authcache_ttl = CACHED_LOOKUP_RIGHT_TTL;
+	mount_unlock(mp);
+}
+
+void
+vfs_markdependency(mount_t mp)
+{
+	proc_t p = current_proc();
+	mount_lock(mp);
+	mp->mnt_dependent_process = p;
+	mp->mnt_dependent_pid = proc_pid(p);
+	mount_unlock(mp);
+}
+
 
 int
 vfs_authopaque(mount_t mp)
@@ -681,7 +743,6 @@ int
 vfs_getattr(mount_t mp, struct vfs_attr *vfa, vfs_context_t ctx)
 {
 	int		error;
-	char		*vname;
 
 	if ((error = VFS_GETATTR(mp, vfa, ctx)) != 0)
 		return(error);
@@ -726,7 +787,9 @@ vfs_fsprivate(mount_t mp)
 void 
 vfs_setfsprivate(mount_t mp, void *mntdata)
 {
+	mount_lock(mp);
 	mp->mnt_data = mntdata;
+	mount_unlock(mp);
 }
 
 
@@ -755,6 +818,7 @@ vfs_ioattr(mount_t mp, struct vfsioattr *ioattrp)
 		ioattrp->io_maxsegreadsize  = MAXPHYS;
 		ioattrp->io_maxsegwritesize = MAXPHYS;
 		ioattrp->io_devblocksize = DEV_BSIZE;
+		ioattrp->io_flags = 0;
 	} else {
 	        ioattrp->io_maxreadcnt  = mp->mnt_maxreadcnt;
 		ioattrp->io_maxwritecnt = mp->mnt_maxwritecnt;
@@ -763,10 +827,10 @@ vfs_ioattr(mount_t mp, struct vfsioattr *ioattrp)
 		ioattrp->io_maxsegreadsize  = mp->mnt_maxsegreadsize;
 		ioattrp->io_maxsegwritesize = mp->mnt_maxsegwritesize;
 		ioattrp->io_devblocksize = mp->mnt_devblocksize;
+		ioattrp->io_flags = mp->mnt_ioflags;
 	}
-	ioattrp->io_reserved[0] = 0;
-	ioattrp->io_reserved[1] = 0;
-	ioattrp->io_reserved[2] = 0;
+	ioattrp->io_reserved[0] = NULL;
+	ioattrp->io_reserved[1] = NULL;
 }
 
 
@@ -785,6 +849,7 @@ vfs_setioattr(mount_t mp, struct vfsioattr * ioattrp)
 	mp->mnt_maxsegreadsize = ioattrp->io_maxsegreadsize;
 	mp->mnt_maxsegwritesize = ioattrp->io_maxsegwritesize;
 	mp->mnt_devblocksize = ioattrp->io_devblocksize;
+	mp->mnt_ioflags = ioattrp->io_flags;
 }
  
 /*
@@ -846,11 +911,19 @@ vfs_fsadd(struct vfs_fsentry *vfe, vfstable_t * handle)
 		newvfstbl->vfc_threadsafe= 1;
 	if ((vfe->vfe_flags & VFS_TBLLOCALVOL) == VFS_TBLLOCALVOL)
 		newvfstbl->vfc_flags |= MNT_LOCAL;
-	if (vfe->vfe_flags & VFS_TBLLOCALVOL)
+	if ((vfe->vfe_flags & VFS_TBLLOCALVOL) && (vfe->vfe_flags & VFS_TBLGENERICMNTARGS) == 0)
 		newvfstbl->vfc_vfsflags |= VFC_VFSLOCALARGS;
 	else
 		newvfstbl->vfc_vfsflags |= VFC_VFSGENERICARGS;
-		
+
+	if (vfe->vfe_flags &  VFS_TBLNATIVEXATTR)
+		newvfstbl->vfc_vfsflags |= VFC_VFSNATIVEXATTR;
+	if (vfe->vfe_flags &  VFS_TBLUNMOUNT_PREFLIGHT)
+		newvfstbl->vfc_vfsflags |= VFC_VFSPREFLIGHT;
+	if (vfe->vfe_flags &  VFS_TBLREADDIR_EXTENDED)
+		newvfstbl->vfc_vfsflags |= VFC_VFSREADDIR_EXTENDED;
+	if (vfe->vfe_flags & VFS_TBLNOMACLABEL)
+		newvfstbl->vfc_vfsflags |= VFC_VFSNOMACLABEL;
 
 	/*
 	 * Allocate and init the vectors.
@@ -1007,52 +1080,200 @@ vfs_mountrele(__unused mount_t mp ) /* drops reference */
 }
 
 int
-vfs_context_pid(vfs_context_t context)
+vfs_context_pid(vfs_context_t ctx)
 {
-	return (context->vc_proc->p_pid);
+	return (proc_pid(vfs_context_proc(ctx)));
 }
 
 int
-vfs_context_suser(vfs_context_t context)
+vfs_context_suser(vfs_context_t ctx)
 {
-	return (suser(context->vc_ucred, 0));
+	return (suser(ctx->vc_ucred, NULL));
 }
+
+/*
+ * XXX Signals should be tied to threads, not processes, for most uses of this
+ * XXX call.
+ */
 int
-vfs_context_issignal(vfs_context_t context, sigset_t mask)
+vfs_context_issignal(vfs_context_t ctx, sigset_t mask)
 {
-	if (context->vc_proc)
-		return(proc_pendingsignals(context->vc_proc, mask));
+	proc_t p = vfs_context_proc(ctx);
+	if (p)
+		return(proc_pendingsignals(p, mask));
 	return(0);
 }
 
 int
-vfs_context_is64bit(vfs_context_t context)
+vfs_context_is64bit(vfs_context_t ctx)
 {
-	if (context->vc_proc)
-		return(proc_is64bit(context->vc_proc));
+	proc_t proc = vfs_context_proc(ctx);
+
+	if (proc)
+		return(proc_is64bit(proc));
 	return(0);
 }
 
+
+/*
+ * vfs_context_proc
+ *
+ * Description:	Given a vfs_context_t, return the proc_t associated with it.
+ *
+ * Parameters:	vfs_context_t			The context to use
+ *
+ * Returns:	proc_t				The process for this context
+ *
+ * Notes:	This function will return the current_proc() if any of the
+ *		following conditions are true:
+ *
+ *		o	The supplied context pointer is NULL
+ *		o	There is no Mach thread associated with the context
+ *		o	There is no Mach task associated with the Mach thread
+ *		o	There is no proc_t associated with the Mach task
+ *		o	The proc_t has no per process open file table
+ *		o	The proc_t is post-vfork()
+ *
+ *		This causes this function to return a value matching as
+ *		closely as possible the previous behaviour, while at the
+ *		same time avoiding the task lending that results from vfork()
+ */
 proc_t
-vfs_context_proc(vfs_context_t context)
+vfs_context_proc(vfs_context_t ctx)
 {
-	return (context->vc_proc);
+	proc_t	proc = NULL;
+
+	if (ctx != NULL && ctx->vc_thread != NULL)
+		proc = (proc_t)get_bsdthreadtask_info(ctx->vc_thread);
+	if (proc != NULL && (proc->p_fd == NULL || (proc->p_lflag & P_LVFORK)))
+		proc = NULL;
+
+	return(proc == NULL ? current_proc() : proc);
 }
+
+/*
+ * vfs_context_get_special_port
+ *
+ * Description: Return the requested special port from the task associated
+ * 		with the given context.
+ *
+ * Parameters:	vfs_context_t			The context to use
+ * 		int				Index of special port
+ * 		ipc_port_t *			Pointer to returned port
+ *
+ * Returns:	kern_return_t			see task_get_special_port()
+ */
+kern_return_t
+vfs_context_get_special_port(vfs_context_t ctx, int which, ipc_port_t *portp)
+{
+	task_t			task = NULL;
+
+	if (ctx != NULL && ctx->vc_thread != NULL)
+		task = get_threadtask(ctx->vc_thread);
+
+	return task_get_special_port(task, which, portp);
+}
+
+/*
+ * vfs_context_set_special_port
+ *
+ * Description: Set the requested special port in the task associated
+ * 		with the given context.
+ *
+ * Parameters:	vfs_context_t			The context to use
+ * 		int				Index of special port
+ * 		ipc_port_t			New special port
+ *
+ * Returns:	kern_return_t			see task_set_special_port()
+ */
+kern_return_t
+vfs_context_set_special_port(vfs_context_t ctx, int which, ipc_port_t port)
+{
+	task_t			task = NULL;
+
+	if (ctx != NULL && ctx->vc_thread != NULL)
+		task = get_threadtask(ctx->vc_thread);
+
+	return task_set_special_port(task, which, port);
+}
+
+/*
+ * vfs_context_thread
+ *
+ * Description:	Return the Mach thread associated with a vfs_context_t
+ *
+ * Parameters:	vfs_context_t			The context to use
+ *
+ * Returns:	thread_t			The thread for this context, or
+ *						NULL, if there is not one.
+ *
+ * Notes:	NULL thread_t's are legal, but discouraged.  They occur only
+ *		as a result of a static vfs_context_t declaration in a function
+ *		and will result in this function returning NULL.
+ *
+ *		This is intentional; this function should NOT return the
+ *		current_thread() in this case.
+ */
+thread_t
+vfs_context_thread(vfs_context_t ctx)
+{
+	return(ctx->vc_thread);
+}
+
+
+/*
+ * vfs_context_cwd
+ *
+ * Description:	Returns a reference on the vnode for the current working
+ *		directory for the supplied context
+ *
+ * Parameters:	vfs_context_t			The context to use
+ *
+ * Returns:	vnode_t				The current working directory
+ *						for this context
+ *
+ * Notes:	The function first attempts to obtain the current directory
+ *		from the thread, and if it is not present there, falls back
+ *		to obtaining it from the process instead.  If it can't be
+ *		obtained from either place, we return NULLVP.
+ */
+vnode_t
+vfs_context_cwd(vfs_context_t ctx)
+{
+	vnode_t cwd = NULLVP;
+
+	if(ctx != NULL && ctx->vc_thread != NULL) {
+		uthread_t uth = get_bsdthread_info(ctx->vc_thread);
+		proc_t proc;
+
+		/*
+		 * Get the cwd from the thread; if there isn't one, get it
+		 * from the process, instead.
+		 */
+		if ((cwd = uth->uu_cdir) == NULLVP &&
+		    (proc = (proc_t)get_bsdthreadtask_info(ctx->vc_thread)) != NULL &&
+		    proc->p_fd != NULL)
+			cwd = proc->p_fd->fd_cdir;
+	}
+
+	return(cwd);
+}
+
 
 vfs_context_t
-vfs_context_create(vfs_context_t context)
+vfs_context_create(vfs_context_t ctx)
 {
-	struct vfs_context *  newcontext;
+	vfs_context_t newcontext;
 
-	newcontext = (struct vfs_context *)kalloc(sizeof(struct vfs_context));
+	newcontext = (vfs_context_t)kalloc(sizeof(struct vfs_context));
 
 	if (newcontext) {
 		kauth_cred_t safecred;
-		if (context) {
-			newcontext->vc_proc = context->vc_proc;
-			safecred = context->vc_ucred;
+		if (ctx) {
+			newcontext->vc_thread = ctx->vc_thread;
+			safecred = ctx->vc_ucred;
 		} else {
-			newcontext->vc_proc = proc_self();
+			newcontext->vc_thread = current_thread();
 			safecred = kauth_cred_get();
 		}
 		if (IS_VALID_CRED(safecred))
@@ -1060,34 +1281,81 @@ vfs_context_create(vfs_context_t context)
 		newcontext->vc_ucred = safecred;
 		return(newcontext);
 	}
-	return((vfs_context_t)0);	
+	return(NULL);	
 }
 
-int
-vfs_context_rele(vfs_context_t context)
+
+vfs_context_t
+vfs_context_current(void)
 {
-	if (context) {
-		if (IS_VALID_CRED(context->vc_ucred))
-			kauth_cred_unref(&context->vc_ucred);
-		kfree(context, sizeof(struct vfs_context));
+	vfs_context_t ctx = NULL;
+	volatile uthread_t ut = (uthread_t)get_bsdthread_info(current_thread());
+
+	if (ut != NULL ) {
+		if (ut->uu_context.vc_ucred != NULL) {
+			ctx = &ut->uu_context;
+		}
+	}
+
+	return(ctx == NULL ? vfs_context_kernel() : ctx);
+}
+
+
+/*
+ * XXX Do not ask
+ *
+ * Dangerous hack - adopt the first kernel thread as the current thread, to
+ * get to the vfs_context_t in the uthread associated with a kernel thread.
+ * This is used by UDF to make the call into IOCDMediaBSDClient,
+ * IOBDMediaBSDClient, and IODVDMediaBSDClient to determine whether the
+ * ioctl() is being called from kernel or user space (and all this because
+ * we do not pass threads into our ioctl()'s, instead of processes).
+ *
+ * This is also used by imageboot_setup(), called early from bsd_init() after
+ * kernproc has been given a credential.
+ *
+ * Note: The use of proc_thread() here is a convenience to avoid inclusion
+ * of many Mach headers to do the reference directly rather than indirectly;
+ * we will need to forego this convenience when we reture proc_thread().
+ */
+static struct vfs_context kerncontext;
+vfs_context_t
+vfs_context_kernel(void)
+{
+	if (kerncontext.vc_ucred == NOCRED)
+		kerncontext.vc_ucred = kernproc->p_ucred;
+	if (kerncontext.vc_thread == NULL)
+		kerncontext.vc_thread = proc_thread(kernproc);
+
+	return(&kerncontext);
+}
+
+
+int
+vfs_context_rele(vfs_context_t ctx)
+{
+	if (ctx) {
+		if (IS_VALID_CRED(ctx->vc_ucred))
+			kauth_cred_unref(&ctx->vc_ucred);
+		kfree(ctx, sizeof(struct vfs_context));
 	}
 	return(0);
 }
 
 
 ucred_t
-vfs_context_ucred(vfs_context_t context)
+vfs_context_ucred(vfs_context_t ctx)
 {
-	return (context->vc_ucred);
+	return (ctx->vc_ucred);
 }
 
 /*
  * Return true if the context is owned by the superuser.
  */
 int
-vfs_context_issuser(vfs_context_t context)
+vfs_context_issuser(vfs_context_t ctx)
 {
-	return(context->vc_ucred->cr_uid == 0);
+	return(kauth_cred_issuser(vfs_context_ucred(ctx)));
 }
 
 
@@ -1178,7 +1446,7 @@ vnode_fsnode(vnode_t vp)
 void 
 vnode_clearfsnode(vnode_t vp)
 {
-	vp->v_data = 0;
+	vp->v_data = NULL;
 }
 
 dev_t 
@@ -1203,6 +1471,13 @@ vnode_issystem(vnode_t vp)
 	return ((vp->v_flag & VSYSTEM)? 1 : 0);
 }
 
+/* is vnode_t a swap file vnode */
+int 
+vnode_isswap(vnode_t vp)
+{
+	return ((vp->v_flag & VSWAP)? 1 : 0);
+}
+
 /* if vnode_t mount operation in progress */
 int 
 vnode_ismount(vnode_t vp)
@@ -1216,7 +1491,7 @@ vnode_isrecycled(vnode_t vp)
 {
 	int ret;
 
-	vnode_lock(vp);
+	vnode_lock_spin(vp);
 	ret =  (vp->v_lflag & (VL_TERMINATE|VL_DEAD))? 1 : 0;
 	vnode_unlock(vp);
 	return(ret);
@@ -1236,6 +1511,12 @@ int
 vnode_isnoreadahead(vnode_t vp)
 {
 	return ((vp->v_flag & VRAOFF)? 1 : 0);
+}
+
+int
+vnode_is_openevt(vnode_t vp)
+{
+	return ((vp->v_flag & VOPENEVT)? 1 : 0);
 }
 
 /* is vnode_t a standard one? */
@@ -1301,12 +1582,28 @@ vnode_issock(vnode_t vp)
 	return ((vp->v_type == VSOCK)? 1 : 0);
 }
 
+/* is vnode_t a named stream? */
+int 
+vnode_isnamedstream(
+#if NAMEDSTREAMS
+		vnode_t vp
+#else
+		__unused vnode_t vp
+#endif
+		)
+{
+#if NAMEDSTREAMS
+	return ((vp->v_flag & VISNAMEDSTREAM) ? 1 : 0);
+#else
+	return (0);
+#endif
+}
 
 /* TBD:  set vnode_t to not cache data after it is consumed once; used for quota */
 void 
 vnode_setnocache(vnode_t vp)
 {
-	vnode_lock(vp);
+	vnode_lock_spin(vp);
 	vp->v_flag |= VNOCACHE_DATA;
 	vnode_unlock(vp);
 }
@@ -1314,15 +1611,32 @@ vnode_setnocache(vnode_t vp)
 void 
 vnode_clearnocache(vnode_t vp)
 {
-	vnode_lock(vp);
+	vnode_lock_spin(vp);
 	vp->v_flag &= ~VNOCACHE_DATA;
 	vnode_unlock(vp);
 }
 
+void
+vnode_set_openevt(vnode_t vp)
+{
+	vnode_lock_spin(vp);
+	vp->v_flag |= VOPENEVT;
+	vnode_unlock(vp);
+}
+
+void
+vnode_clear_openevt(vnode_t vp)
+{
+	vnode_lock_spin(vp);
+	vp->v_flag &= ~VOPENEVT;
+	vnode_unlock(vp);
+}
+
+
 void 
 vnode_setnoreadahead(vnode_t vp)
 {
-	vnode_lock(vp);
+	vnode_lock_spin(vp);
 	vp->v_flag |= VRAOFF;
 	vnode_unlock(vp);
 }
@@ -1330,7 +1644,7 @@ vnode_setnoreadahead(vnode_t vp)
 void 
 vnode_clearnoreadahead(vnode_t vp)
 {
-	vnode_lock(vp);
+	vnode_lock_spin(vp);
 	vp->v_flag &= ~VRAOFF;
 	vnode_unlock(vp);
 }
@@ -1340,7 +1654,7 @@ vnode_clearnoreadahead(vnode_t vp)
 void 
 vnode_setnoflush(vnode_t vp)
 {
-	vnode_lock(vp);
+	vnode_lock_spin(vp);
 	vp->v_flag |= VNOFLUSH;
 	vnode_unlock(vp);
 }
@@ -1348,7 +1662,7 @@ vnode_setnoflush(vnode_t vp)
 void 
 vnode_clearnoflush(vnode_t vp)
 {
-	vnode_lock(vp);
+	vnode_lock_spin(vp);
 	vp->v_flag &= ~VNOFLUSH;
 	vnode_unlock(vp);
 }
@@ -1364,7 +1678,7 @@ vnode_ismountedon(vnode_t vp)
 void 
 vnode_setmountedon(vnode_t vp)
 {
-	vnode_lock(vp);
+	vnode_lock_spin(vp);
 	vp->v_specflags |= SI_MOUNTEDON;
 	vnode_unlock(vp);
 }
@@ -1372,7 +1686,7 @@ vnode_setmountedon(vnode_t vp)
 void 
 vnode_clearmountedon(vnode_t vp)
 {
-	vnode_lock(vp);
+	vnode_lock_spin(vp);
 	vp->v_specflags &= ~SI_MOUNTEDON;
 	vnode_unlock(vp);
 }
@@ -1404,7 +1718,7 @@ vnode_setparent(vnode_t vp, vnode_t dvp)
 	vp->v_parent = dvp;
 }
 
-char *
+const char *
 vnode_name(vnode_t vp)
 {
 	/* we try to keep v_name a reasonable name for the node */    
@@ -1486,28 +1800,26 @@ vnode_vfsisrdonly(vnode_t vp)
 }
 
 
-/* returns vnode ref to current working directory */
+/*
+ * Returns vnode ref to current working directory; if a per-thread current
+ * working directory is in effect, return that instead of the per process one.
+ *
+ * XXX Published, but not used.
+ */
 vnode_t 
 current_workingdir(void)
 {
-	struct proc *p = current_proc();
-	struct vnode * vp ;
-
-	if ( (vp = p->p_fd->fd_cdir) ) {
-	        if ( (vnode_getwithref(vp)) )
-		        return (NULL);
-	}
-	return vp;
+	return vfs_context_cwd(vfs_context_current());
 }
 
 /* returns vnode ref to current root(chroot) directory */
 vnode_t 
 current_rootdir(void)
 {
-	struct proc *p = current_proc();
+	proc_t proc = current_proc();
 	struct vnode * vp ;
 
-	if ( (vp = p->p_fd->fd_rdir) ) {
+	if ( (vp = proc->p_fd->fd_rdir) ) {
 	        if ( (vnode_getwithref(vp)) )
 		        return (NULL);
 	}
@@ -1555,7 +1867,6 @@ vnode_get_filesec(vnode_t vp, kauth_filesec_t *fsecp, vfs_context_t ctx)
 	size_t	fsec_size;
 	size_t	xsize, rsize;
 	int	error;
-	int	i;
 	uint32_t	host_fsec_magic;
 	uint32_t	host_acl_entrycount;
 
@@ -1694,7 +2005,6 @@ vnode_set_filesec(vnode_t vp, kauth_filesec_t fsec, kauth_acl_t acl, vfs_context
 {
 	uio_t		fsec_uio;
 	int		error;
-	int		i;
 	uint32_t	saved_acl_copysize;
 
 	fsec_uio = NULL;
@@ -1730,6 +2040,15 @@ out:
 }
 
 
+/*
+ * Returns:	0			Success
+ *		ENOMEM			Not enough space [only if has filesec]
+ *		VNOP_GETATTR:		???
+ *		vnode_get_filesec:	???
+ *		kauth_cred_guid2uid:	???
+ *		kauth_cred_guid2gid:	???
+ *		vfs_update_vfsstat:	???
+ */
 int
 vnode_getattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 {
@@ -1840,7 +2159,9 @@ vnode_getattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 	 * Handle uid/gid == 99 and MNT_IGNORE_OWNERSHIP here.
 	 */
 	if (VATTR_IS_ACTIVE(vap, va_uid)) {
-		if (vp->v_mount->mnt_flag & MNT_IGNORE_OWNERSHIP) {
+		if (vfs_context_issuser(ctx) && VATTR_IS_SUPPORTED(vap, va_uid)) {
+			nuid = vap->va_uid;
+		} else if (vp->v_mount->mnt_flag & MNT_IGNORE_OWNERSHIP) {
 			nuid = vp->v_mount->mnt_fsowner;
 			if (nuid == KAUTH_UID_NONE)
 				nuid = 99;
@@ -1855,7 +2176,9 @@ vnode_getattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 		VATTR_RETURN(vap, va_uid, nuid);
 	}
 	if (VATTR_IS_ACTIVE(vap, va_gid)) {
-		if (vp->v_mount->mnt_flag & MNT_IGNORE_OWNERSHIP) {
+		if (vfs_context_issuser(ctx) && VATTR_IS_SUPPORTED(vap, va_gid)) {
+			ngid = vap->va_gid;
+		} else if (vp->v_mount->mnt_flag & MNT_IGNORE_OWNERSHIP) {
 			ngid = vp->v_mount->mnt_fsgroup;
 			if (ngid == KAUTH_GID_NONE)
 				ngid = 99;
@@ -1897,7 +2220,7 @@ vnode_getattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 	    VATTR_IS_ACTIVE(vap, va_total_alloc)) {
                 /* make sure f_bsize is valid */
                 if (vp->v_mount->mnt_vfsstat.f_bsize == 0) {
-                    if ((error = vfs_update_vfsstat(vp->v_mount, ctx)) != 0)
+                    if ((error = vfs_update_vfsstat(vp->v_mount, ctx, VFS_KERNEL_EVENT)) != 0)
                         goto out;
                 }
 
@@ -1961,7 +2284,7 @@ out:
 int
 vnode_setattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 {
-	int	error, is_ownership_change=0;
+	int	error, is_perm_change=0;
 
 	/*
 	 * Make sure the filesystem is mounted R/W.
@@ -1971,6 +2294,13 @@ vnode_setattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 		error = EROFS;
 		goto out;
 	}
+#if NAMEDSTREAMS
+	/* For streams, va_data_size is the only setable attribute. */
+	if ((vp->v_flag & VISNAMEDSTREAM) && (vap->va_active != VNODE_ATTR_va_data_size)) {
+		error = EPERM;
+		goto out;
+	}
+#endif
 	
 	/*
 	 * If ownership is being ignored on this volume, we silently discard
@@ -1981,8 +2311,9 @@ vnode_setattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 		VATTR_CLEAR_ACTIVE(vap, va_gid);
 	}
 
-	if (VATTR_IS_ACTIVE(vap, va_uid) || VATTR_IS_ACTIVE(vap, va_gid)) {
-	    is_ownership_change = 1;
+	if (   VATTR_IS_ACTIVE(vap, va_uid)  || VATTR_IS_ACTIVE(vap, va_gid)
+	    || VATTR_IS_ACTIVE(vap, va_mode) || VATTR_IS_ACTIVE(vap, va_acl)) {
+	    is_perm_change = 1;
 	}
 	
 	/*
@@ -2001,29 +2332,19 @@ vnode_setattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 	if ((error == 0) && !VATTR_ALL_SUPPORTED(vap))
 		error = vnode_setattr_fallback(vp, vap, ctx);
 
-	/*
-	 * If we have changed any of the things about the file that are likely
-	 * to result in changes to authorisation results, blow the vnode auth
-	 * cache
-	 */
-	if (VATTR_IS_SUPPORTED(vap, va_mode) ||
-	    VATTR_IS_SUPPORTED(vap, va_uid) ||
-	    VATTR_IS_SUPPORTED(vap, va_gid) ||
-	    VATTR_IS_SUPPORTED(vap, va_flags) ||
-	    VATTR_IS_SUPPORTED(vap, va_acl) ||
-	    VATTR_IS_SUPPORTED(vap, va_uuuid) ||
-	    VATTR_IS_SUPPORTED(vap, va_guuid))
-		vnode_uncache_credentials(vp);
+#if CONFIG_FSE
 	// only send a stat_changed event if this is more than
 	// just an access time update
 	if (error == 0 && (vap->va_active != VNODE_ATTR_BIT(va_access_time))) {
-	    if (need_fsevent(FSE_STAT_CHANGED, vp) || (is_ownership_change && need_fsevent(FSE_CHOWN, vp))) {
-		if (is_ownership_change == 0)
-		        add_fsevent(FSE_STAT_CHANGED, ctx, FSE_ARG_VNODE, vp, FSE_ARG_DONE);
-		else
-		        add_fsevent(FSE_CHOWN, ctx, FSE_ARG_VNODE, vp, FSE_ARG_DONE);
+	    if (is_perm_change) {
+		if (need_fsevent(FSE_CHOWN, vp)) {
+		    add_fsevent(FSE_CHOWN, ctx, FSE_ARG_VNODE, vp, FSE_ARG_DONE);
+		}
+	    } else if(need_fsevent(FSE_STAT_CHANGED, vp)) {
+		add_fsevent(FSE_STAT_CHANGED, ctx, FSE_ARG_VNODE, vp, FSE_ARG_DONE);
 	    }
 	}
+#endif
 
 out:
 	return(error);
@@ -2187,8 +2508,30 @@ struct vnop_lookup_args {
 };
 #endif /* 0*/
 
+/*
+ * Returns:	0			Success
+ *	lock_fsnode:ENOENT		No such file or directory [only for VFS
+ *					 that is not thread safe & vnode is
+ *					 currently being/has been terminated]
+ *	<vfs_lookup>:ENAMETOOLONG
+ *	<vfs_lookup>:ENOENT
+ *	<vfs_lookup>:EJUSTRETURN
+ *	<vfs_lookup>:EPERM
+ *	<vfs_lookup>:EISDIR
+ *	<vfs_lookup>:ENOTDIR
+ *	<vfs_lookup>:???
+ *
+ * Note:	The return codes from the underlying VFS's lookup routine can't
+ *		be fully enumerated here, since third party VFS authors may not
+ *		limit their error returns to the ones documented here, even
+ *		though this may result in some programs functioning incorrectly.
+ *
+ *		The return codes documented above are those which may currently
+ *		be returned by HFS from hfs_lookup, not including additional
+ *		error code which may be propagated from underlying routines.
+ */
 errno_t 
-VNOP_LOOKUP(vnode_t dvp, vnode_t *vpp, struct componentname *cnp, vfs_context_t context)
+VNOP_LOOKUP(vnode_t dvp, vnode_t *vpp, struct componentname *cnp, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_lookup_args a;
@@ -2200,10 +2543,8 @@ VNOP_LOOKUP(vnode_t dvp, vnode_t *vpp, struct componentname *cnp, vfs_context_t 
 	a.a_dvp = dvp;
 	a.a_vpp = vpp;
 	a.a_cnp = cnp;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(dvp);
-
-	vnode_cache_credentials(dvp, context);
 
 	if (!thread_safe) {
 		if ( (_err = lock_fsnode(dvp, &funnel_state)) ) {
@@ -2255,7 +2596,7 @@ struct vnop_create_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_CREATE(vnode_t dvp, vnode_t * vpp, struct componentname * cnp, struct vnode_attr * vap, vfs_context_t context)
+VNOP_CREATE(vnode_t dvp, vnode_t * vpp, struct componentname * cnp, struct vnode_attr * vap, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_create_args a;
@@ -2267,7 +2608,7 @@ VNOP_CREATE(vnode_t dvp, vnode_t * vpp, struct componentname * cnp, struct vnode
 	a.a_vpp = vpp;
 	a.a_cnp = cnp;
 	a.a_vap = vap;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(dvp);
 
 	if (!thread_safe) {
@@ -2280,7 +2621,7 @@ VNOP_CREATE(vnode_t dvp, vnode_t * vpp, struct componentname * cnp, struct vnode
 		/* 
 		 * Remove stale Apple Double file (if any).
 		 */
-		xattrfile_remove(dvp, cnp->cn_nameptr, context, thread_safe, 0);
+		xattrfile_remove(dvp, cnp->cn_nameptr, ctx, thread_safe, 0);
 	}
 	if (!thread_safe) {
 		unlock_fsnode(dvp, &funnel_state);
@@ -2305,7 +2646,7 @@ struct vnop_whiteout_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_WHITEOUT(vnode_t dvp, struct componentname * cnp, int flags, vfs_context_t context)
+VNOP_WHITEOUT(vnode_t dvp, struct componentname * cnp, int flags, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_whiteout_args a;
@@ -2316,7 +2657,7 @@ VNOP_WHITEOUT(vnode_t dvp, struct componentname * cnp, int flags, vfs_context_t 
 	a.a_dvp = dvp;
 	a.a_cnp = cnp;
 	a.a_flags = flags;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(dvp);
 
 	if (!thread_safe) {
@@ -2348,7 +2689,7 @@ struct vnop_mknod_args {
 };
 #endif /* 0*/
 errno_t
-VNOP_MKNOD(vnode_t dvp, vnode_t * vpp, struct componentname * cnp, struct vnode_attr * vap, vfs_context_t context)
+VNOP_MKNOD(vnode_t dvp, vnode_t * vpp, struct componentname * cnp, struct vnode_attr * vap, vfs_context_t ctx)
 {
 
        int _err;
@@ -2361,7 +2702,7 @@ VNOP_MKNOD(vnode_t dvp, vnode_t * vpp, struct componentname * cnp, struct vnode_
        a.a_vpp = vpp;
        a.a_cnp = cnp;
        a.a_vap = vap;
-       a.a_context = context;
+       a.a_context = ctx;
        thread_safe = THREAD_SAFE_FS(dvp);
 
        if (!thread_safe) {
@@ -2390,23 +2731,20 @@ struct vnop_open_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_OPEN(vnode_t vp, int mode, vfs_context_t context)
+VNOP_OPEN(vnode_t vp, int mode, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_open_args a;
 	int thread_safe;
 	int funnel_state = 0;
-	struct vfs_context acontext;
 
-	if (context == NULL) {
-		acontext.vc_proc = current_proc();
-		acontext.vc_ucred = kauth_cred_get();
-		context = &acontext;
+	if (ctx == NULL) {
+		ctx = vfs_context_current();
 	}
 	a.a_desc = &vnop_open_desc;
 	a.a_vp = vp;
 	a.a_mode = mode;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -2442,23 +2780,20 @@ struct vnop_close_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_CLOSE(vnode_t vp, int fflag, vfs_context_t context)
+VNOP_CLOSE(vnode_t vp, int fflag, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_close_args a;
 	int thread_safe;
 	int funnel_state = 0;
-	struct vfs_context acontext;
 
-	if (context == NULL) {
-		acontext.vc_proc = current_proc();
-		acontext.vc_ucred = kauth_cred_get();
-		context = &acontext;
+	if (ctx == NULL) {
+		ctx = vfs_context_current();
 	}
 	a.a_desc = &vnop_close_desc;
 	a.a_vp = vp;
 	a.a_fflag = fflag;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -2494,23 +2829,20 @@ struct vnop_access_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_ACCESS(vnode_t vp, int action, vfs_context_t context)
+VNOP_ACCESS(vnode_t vp, int action, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_access_args a;
 	int thread_safe;
 	int funnel_state = 0;
-	struct vfs_context acontext;
 
-	if (context == NULL) {
-		acontext.vc_proc = current_proc();
-		acontext.vc_ucred = kauth_cred_get();
-		context = &acontext;
+	if (ctx == NULL) {
+		ctx = vfs_context_current();
 	}
 	a.a_desc = &vnop_access_desc;
 	a.a_vp = vp;
 	a.a_action = action;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -2539,17 +2871,17 @@ struct vnop_getattr_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_GETATTR(vnode_t vp, struct vnode_attr * vap, vfs_context_t context)
+VNOP_GETATTR(vnode_t vp, struct vnode_attr * vap, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_getattr_args a;
 	int thread_safe;
-	int funnel_state;
+	int funnel_state = 0;	/* protected by thread_safe */
 
 	a.a_desc = &vnop_getattr_desc;
 	a.a_vp = vp;
 	a.a_vap = vap;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -2578,17 +2910,17 @@ struct vnop_setattr_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_SETATTR(vnode_t vp, struct vnode_attr * vap, vfs_context_t context)
+VNOP_SETATTR(vnode_t vp, struct vnode_attr * vap, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_setattr_args a;
 	int thread_safe;
-	int funnel_state;
+	int funnel_state = 0;	/* protected by thread_safe */
 
 	a.a_desc = &vnop_setattr_desc;
 	a.a_vp = vp;
 	a.a_vap = vap;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -2599,7 +2931,7 @@ VNOP_SETATTR(vnode_t vp, struct vnode_attr * vap, vfs_context_t context)
 	_err = (*vp->v_op[vnop_setattr_desc.vdesc_offset])(&a);
 
 	/* 
-	 * Shadow uid/gid/mod change to extended attibute file.
+	 * Shadow uid/gid/mod change to extended attribute file.
 	 */
 	if (_err == 0 && !NATIVE_XATTR(vp)) {
 		struct vnode_attr va;
@@ -2620,12 +2952,12 @@ VNOP_SETATTR(vnode_t vp, struct vnode_attr * vap, vfs_context_t context)
 		}
 		if (change) {
 		        vnode_t dvp;
-			char   *vname;
+			const char   *vname;
 
 			dvp = vnode_getparent(vp);
 			vname = vnode_getname(vp);
 
-			xattrfile_setattr(dvp, vname, &va, context, thread_safe);
+			xattrfile_setattr(dvp, vname, &va, ctx, thread_safe);
 			if (dvp != NULLVP)
 			        vnode_put(dvp);
 			if (vname != NULL)
@@ -2635,95 +2967,21 @@ VNOP_SETATTR(vnode_t vp, struct vnode_attr * vap, vfs_context_t context)
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
-	return (_err);
-}
+	/*
+	 * If we have changed any of the things about the file that are likely
+	 * to result in changes to authorization results, blow the vnode auth
+	 * cache
+	 */
+	if (_err == 0 && (
+			  VATTR_IS_SUPPORTED(vap, va_mode) ||
+			  VATTR_IS_SUPPORTED(vap, va_uid) ||
+			  VATTR_IS_SUPPORTED(vap, va_gid) ||
+			  VATTR_IS_SUPPORTED(vap, va_flags) ||
+			  VATTR_IS_SUPPORTED(vap, va_acl) ||
+			  VATTR_IS_SUPPORTED(vap, va_uuuid) ||
+			  VATTR_IS_SUPPORTED(vap, va_guuid)))
+	        vnode_uncache_authorized_action(vp, KAUTH_INVALIDATE_CACHED_RIGHTS);
 
-#if 0
-/*
- *#
- *#% getattrlist  vp      = = =
- *#
- */
-struct vnop_getattrlist_args {
-	struct vnodeop_desc *a_desc;
-	vnode_t a_vp;
-	struct attrlist *a_alist;
-	struct uio *a_uio;
-	int a_options;
-	vfs_context_t a_context;
-};
-#endif /* 0*/
-errno_t
-VNOP_GETATTRLIST(vnode_t vp, struct attrlist * alist, struct uio * uio, int options, vfs_context_t context)
-{
-	int _err;
-	struct vnop_getattrlist_args a;
-	int thread_safe;
-	int funnel_state = 0;
-
-	a.a_desc = &vnop_getattrlist_desc;
-	a.a_vp = vp;
-	a.a_alist = alist;
-	a.a_uio = uio;
-	a.a_options = options;
-	a.a_context = context;
-	thread_safe = THREAD_SAFE_FS(vp);
-
-	if (!thread_safe) {
-		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
-			return (_err);
-		}
-	}
-	_err = (*vp->v_op[vnop_getattrlist_desc.vdesc_offset])(&a);
-	if (!thread_safe) {
-		unlock_fsnode(vp, &funnel_state);
-	}
-	return (_err);
-}
-
-#if 0
-/*
- *#
- *#% setattrlist  vp      L L L
- *#
- */
-struct vnop_setattrlist_args {
-	struct vnodeop_desc *a_desc;
-	vnode_t a_vp;
-	struct attrlist *a_alist;
-	struct uio *a_uio;
-	int a_options;
-	vfs_context_t a_context;
-};
-#endif /* 0*/
-errno_t 
-VNOP_SETATTRLIST(vnode_t vp, struct attrlist * alist, struct uio * uio, int options, vfs_context_t context)
-{
-	int _err;
-	struct vnop_setattrlist_args a;
-	int thread_safe;
-	int funnel_state = 0;
-
-	a.a_desc = &vnop_setattrlist_desc;
-	a.a_vp = vp;
-	a.a_alist = alist;
-	a.a_uio = uio;
-	a.a_options = options;
-	a.a_context = context;
-	thread_safe = THREAD_SAFE_FS(vp);
-
-	if (!thread_safe) {
-		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
-			return (_err);
-		}
-	}
-	_err = (*vp->v_op[vnop_setattrlist_desc.vdesc_offset])(&a);
-
-	vnode_uncache_credentials(vp);
-
-	if (!thread_safe) {
-		unlock_fsnode(vp, &funnel_state);
-	}
 	return (_err);
 }
 
@@ -2743,25 +3001,22 @@ struct vnop_read_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_READ(vnode_t vp, struct uio * uio, int ioflag, vfs_context_t context)
+VNOP_READ(vnode_t vp, struct uio * uio, int ioflag, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_read_args a;
 	int thread_safe;
 	int funnel_state = 0;
-	struct vfs_context acontext;
 
-	if (context == NULL) {
-		acontext.vc_proc = current_proc();
-		acontext.vc_ucred = kauth_cred_get();
-		context = &acontext;
+	if (ctx == NULL) {
+		ctx = vfs_context_current();
 	}
 
 	a.a_desc = &vnop_read_desc;
 	a.a_vp = vp;
 	a.a_uio = uio;
 	a.a_ioflag = ioflag;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -2800,25 +3055,22 @@ struct vnop_write_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_WRITE(vnode_t vp, struct uio * uio, int ioflag, vfs_context_t context)
+VNOP_WRITE(vnode_t vp, struct uio * uio, int ioflag, vfs_context_t ctx)
 {
 	struct vnop_write_args a;
 	int _err;
 	int thread_safe;
 	int funnel_state = 0;
-	struct vfs_context acontext;
 
-	if (context == NULL) {
-		acontext.vc_proc = current_proc();
-		acontext.vc_ucred = kauth_cred_get();
-		context = &acontext;
+	if (ctx == NULL) {
+		ctx = vfs_context_current();
 	}
 
 	a.a_desc = &vnop_write_desc;
 	a.a_vp = vp;
 	a.a_uio = uio;
 	a.a_ioflag = ioflag;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -2858,21 +3110,18 @@ struct vnop_ioctl_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_IOCTL(vnode_t vp, u_long command, caddr_t data, int fflag, vfs_context_t context)
+VNOP_IOCTL(vnode_t vp, u_long command, caddr_t data, int fflag, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_ioctl_args a;
 	int thread_safe;
 	int funnel_state = 0;
-	struct vfs_context acontext;
 
-	if (context == NULL) {
-		acontext.vc_proc = current_proc();
-		acontext.vc_ucred = kauth_cred_get();
-		context = &acontext;
+	if (ctx == NULL) {
+		ctx = vfs_context_current();
 	}
 
-	if (vfs_context_is64bit(context)) {
+	if (vfs_context_is64bit(ctx)) {
 		if (!vnode_vfs64bitready(vp)) {
 			return(ENOTTY);
 		}
@@ -2883,7 +3132,7 @@ VNOP_IOCTL(vnode_t vp, u_long command, caddr_t data, int fflag, vfs_context_t co
 	a.a_command = command;
 	a.a_data = data;
 	a.a_fflag = fflag;
-	a.a_context= context;
+	a.a_context= ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -2922,24 +3171,21 @@ struct vnop_select_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_SELECT(vnode_t vp, int which , int fflags, void * wql, vfs_context_t context)
+VNOP_SELECT(vnode_t vp, int which , int fflags, void * wql, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_select_args a;
 	int thread_safe;
 	int funnel_state = 0;
-	struct vfs_context acontext;
 
-	if (context == NULL) {
-		acontext.vc_proc = current_proc();
-		acontext.vc_ucred = kauth_cred_get();
-		context = &acontext;
+	if (ctx == NULL) {
+		ctx = vfs_context_current();
 	}
 	a.a_desc = &vnop_select_desc;
 	a.a_vp = vp;
 	a.a_which = which;
 	a.a_fflags = fflags;
-	a.a_context = context;
+	a.a_context = ctx;
 	a.a_wql = wql;
 	thread_safe = THREAD_SAFE_FS(vp);
 
@@ -2979,7 +3225,7 @@ struct vnop_exchange_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_EXCHANGE(vnode_t fvp, vnode_t tvp, int options, vfs_context_t context)
+VNOP_EXCHANGE(vnode_t fvp, vnode_t tvp, int options, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_exchange_args a;
@@ -2991,7 +3237,7 @@ VNOP_EXCHANGE(vnode_t fvp, vnode_t tvp, int options, vfs_context_t context)
 	a.a_fvp = fvp;
 	a.a_tvp = tvp;
 	a.a_options = options;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(fvp);
 
 	if (!thread_safe) {
@@ -3036,7 +3282,7 @@ struct vnop_revoke_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_REVOKE(vnode_t vp, int flags, vfs_context_t context)
+VNOP_REVOKE(vnode_t vp, int flags, vfs_context_t ctx)
 {
 	struct vnop_revoke_args a;
 	int _err;
@@ -3046,7 +3292,7 @@ VNOP_REVOKE(vnode_t vp, int flags, vfs_context_t context)
 	a.a_desc = &vnop_revoke_desc;
 	a.a_vp = vp;
 	a.a_flags = flags;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -3074,7 +3320,7 @@ struct vnop_mmap_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_MMAP(vnode_t vp, int fflags, vfs_context_t context)
+VNOP_MMAP(vnode_t vp, int fflags, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_mmap_args a;
@@ -3084,7 +3330,7 @@ VNOP_MMAP(vnode_t vp, int fflags, vfs_context_t context)
 	a.a_desc = &vnop_mmap_desc;
 	a.a_vp = vp;
 	a.a_fflags = fflags;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -3113,7 +3359,7 @@ struct vnop_mnomap_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_MNOMAP(vnode_t vp, vfs_context_t context)
+VNOP_MNOMAP(vnode_t vp, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_mnomap_args a;
@@ -3122,7 +3368,7 @@ VNOP_MNOMAP(vnode_t vp, vfs_context_t context)
 
 	a.a_desc = &vnop_mnomap_desc;
 	a.a_vp = vp;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -3152,7 +3398,7 @@ struct vnop_fsync_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_FSYNC(vnode_t vp, int waitfor, vfs_context_t context)
+VNOP_FSYNC(vnode_t vp, int waitfor, vfs_context_t ctx)
 {
 	struct vnop_fsync_args a;
 	int _err;
@@ -3162,7 +3408,7 @@ VNOP_FSYNC(vnode_t vp, int waitfor, vfs_context_t context)
 	a.a_desc = &vnop_fsync_desc;
 	a.a_vp = vp;
 	a.a_waitfor = waitfor;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -3195,7 +3441,7 @@ struct vnop_remove_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_REMOVE(vnode_t dvp, vnode_t vp, struct componentname * cnp, int flags, vfs_context_t context)
+VNOP_REMOVE(vnode_t dvp, vnode_t vp, struct componentname * cnp, int flags, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_remove_args a;
@@ -3207,7 +3453,7 @@ VNOP_REMOVE(vnode_t dvp, vnode_t vp, struct componentname * cnp, int flags, vfs_
 	a.a_vp = vp;
 	a.a_cnp = cnp;
 	a.a_flags = flags;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(dvp);
 
 	if (!thread_safe) {
@@ -3222,9 +3468,9 @@ VNOP_REMOVE(vnode_t dvp, vnode_t vp, struct componentname * cnp, int flags, vfs_
 
 		if ( !(NATIVE_XATTR(dvp)) ) {
 		        /* 
-			 * Remove any associated extended attibute file (._ AppleDouble file).
+			 * Remove any associated extended attribute file (._ AppleDouble file).
 			 */
-		        xattrfile_remove(dvp, cnp->cn_nameptr, context, thread_safe, 1);
+		        xattrfile_remove(dvp, cnp->cn_nameptr, ctx, thread_safe, 1);
 		}
 	}
 	if (!thread_safe) {
@@ -3250,7 +3496,7 @@ struct vnop_link_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_LINK(vnode_t vp, vnode_t tdvp, struct componentname * cnp, vfs_context_t context)
+VNOP_LINK(vnode_t vp, vnode_t tdvp, struct componentname * cnp, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_link_args a;
@@ -3262,7 +3508,7 @@ VNOP_LINK(vnode_t vp, vnode_t tdvp, struct componentname * cnp, vfs_context_t co
 	 * disallow linking to an existing "._" Apple Double file.
 	 */
 	if ( !NATIVE_XATTR(tdvp) && (vp->v_type == VREG)) {
-		char   *vname;
+		const char   *vname;
 
 		vname = vnode_getname(vp);
 		if (vname != NULL) {
@@ -3279,7 +3525,7 @@ VNOP_LINK(vnode_t vp, vnode_t tdvp, struct componentname * cnp, vfs_context_t co
 	a.a_vp = vp;
 	a.a_tdvp = tdvp;
 	a.a_cnp = cnp;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -3318,7 +3564,7 @@ struct vnop_rename_args {
 errno_t
 VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
             struct vnode *tdvp, struct vnode *tvp, struct componentname *tcnp,
-            vfs_context_t context)
+            vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_rename_args a;
@@ -3338,7 +3584,7 @@ VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
 	a.a_tdvp = tdvp;
 	a.a_tvp = tvp;
 	a.a_tcnp = tcnp;
-	a.a_context = context;
+	a.a_context = ctx;
 
 	if (!THREAD_SAFE_FS(fdvp))
 	        fdvp_unsafe = fdvp;
@@ -3407,7 +3653,7 @@ VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
 		} else {
 			xfromname = &smallname1[0];
 		}
-		strcpy(xfromname, "._");
+		strlcpy(xfromname, "._", min(sizeof smallname1, len));
 		strncat(xfromname, fcnp->cn_nameptr, fcnp->cn_namelen);
 		xfromname[len-1] = '\0';
 
@@ -3418,7 +3664,7 @@ VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
 		} else {
 			xtoname = &smallname2[0];
 		}
-		strcpy(xtoname, "._");
+		strlcpy(xtoname, "._", min(sizeof smallname2, len));
 		strncat(xtoname, tcnp->cn_nameptr, tcnp->cn_namelen);
 		xtoname[len-1] = '\0';
 	}
@@ -3436,7 +3682,7 @@ VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
 	}
 
 	/* 
-	 * Rename any associated extended attibute file (._ AppleDouble file).
+	 * Rename any associated extended attribute file (._ AppleDouble file).
 	 */
 	if (_err == 0 && !NATIVE_XATTR(fdvp) && xfromname != NULL) {
 		struct nameidata fromnd, tond;
@@ -3448,8 +3694,8 @@ VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
 		 * Note that fdvp already has an iocount reference and
 		 * using DELETE will take an additional reference.
 		 */
-		NDINIT(&fromnd, DELETE, NOFOLLOW | USEDVP, UIO_SYSSPACE,
-		       CAST_USER_ADDR_T(xfromname), context);
+		NDINIT(&fromnd, DELETE, NOFOLLOW | USEDVP | CN_NBMOUNTLOOK, UIO_SYSSPACE,
+		       CAST_USER_ADDR_T(xfromname), ctx);
 		fromnd.ni_dvp = fdvp;
 		error = namei(&fromnd);
 
@@ -3472,8 +3718,8 @@ VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
 			 * Get destination attribute file vnode.
 			 * Note that tdvp already has an iocount reference.
 			 */
-			NDINIT(&tond, DELETE, NOFOLLOW | USEDVP, UIO_SYSSPACE,
-			       CAST_USER_ADDR_T(xtoname), context);
+			NDINIT(&tond, DELETE, NOFOLLOW | USEDVP | CN_NBMOUNTLOOK, UIO_SYSSPACE,
+			       CAST_USER_ADDR_T(xtoname), ctx);
 			tond.ni_dvp = tdvp;
 			error = namei(&tond);
 			if (error) {
@@ -3488,7 +3734,7 @@ VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
 			args.a_dvp     = tdvp;
 			args.a_vp      = tond.ni_vp;
 			args.a_cnp     = &tond.ni_cnd;
-			args.a_context = context;
+			args.a_context = ctx;
 
 			if (fdvp_unsafe != NULLVP)
 			        error = lock_fsnode(tond.ni_vp, NULL);
@@ -3510,8 +3756,8 @@ VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
 		 * Get destination attribute file vnode.
 		 */
 		NDINIT(&tond, RENAME,
-		       NOCACHE | NOFOLLOW | USEDVP, UIO_SYSSPACE,
-		       CAST_USER_ADDR_T(xtoname), context);
+		       NOCACHE | NOFOLLOW | USEDVP | CN_NBMOUNTLOOK, UIO_SYSSPACE,
+		       CAST_USER_ADDR_T(xtoname), ctx);
 		tond.ni_dvp = tdvp;
 		error = namei(&tond);
 
@@ -3527,7 +3773,7 @@ VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
 		a.a_tdvp = tdvp;
 		a.a_tvp = tond.ni_vp;
 		a.a_tcnp = &tond.ni_cnd;
-		a.a_context = context;
+		a.a_context = ctx;
 
 		if (fdvp_unsafe != NULLVP) {
 		        /*
@@ -3549,6 +3795,13 @@ VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
 			}
 		}
 		if (error == 0) {
+			const char *oname;
+			vnode_t oparent;
+
+			/* Save these off so we can later verify them (fix up below) */
+			oname   = fromnd.ni_vp->v_name;
+			oparent = fromnd.ni_vp->v_parent;
+
 		        error = (*fdvp->v_op[vnop_rename_desc.vdesc_offset])(&a);
 
 			if (fdvp_unsafe != NULLVP) {
@@ -3561,6 +3814,24 @@ VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
 				
 				if (tond.ni_vp && tond.ni_vp != fromnd.ni_vp)
 				        vnode_setneedinactive(tond.ni_vp);
+				/*
+				 * Fix up name & parent pointers on ._ file
+				 */
+				if (oname == fromnd.ni_vp->v_name &&
+				    oparent == fromnd.ni_vp->v_parent) {
+					int update_flags;
+			
+					update_flags = VNODE_UPDATE_NAME;
+			
+					if (fdvp != tdvp)
+						update_flags |= VNODE_UPDATE_PARENT;
+			
+					vnode_update_identity(fromnd.ni_vp, tdvp,
+					                      tond.ni_cnd.cn_nameptr,
+					                      tond.ni_cnd.cn_namelen,
+					                      tond.ni_cnd.cn_hash,
+					                      update_flags);
+				}
 			}
 		}
 		vnode_put(fromnd.ni_vp);
@@ -3604,7 +3875,7 @@ struct vnop_mkdir_args {
 #endif /* 0*/
 errno_t
 VNOP_MKDIR(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
-           struct vnode_attr *vap, vfs_context_t context)
+           struct vnode_attr *vap, vfs_context_t ctx)
 {
        int _err;
        struct vnop_mkdir_args a;
@@ -3616,7 +3887,7 @@ VNOP_MKDIR(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
        a.a_vpp = vpp;
        a.a_cnp = cnp;
        a.a_vap = vap;
-       a.a_context = context;
+       a.a_context = ctx;
        thread_safe = THREAD_SAFE_FS(dvp);
 
        if (!thread_safe) {
@@ -3629,7 +3900,7 @@ VNOP_MKDIR(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 		/* 
 		 * Remove stale Apple Double file (if any).
 		 */
-		xattrfile_remove(dvp, cnp->cn_nameptr, context, thread_safe, 0);
+		xattrfile_remove(dvp, cnp->cn_nameptr, ctx, thread_safe, 0);
 	}
        if (!thread_safe) {
                unlock_fsnode(dvp, &funnel_state);
@@ -3655,7 +3926,7 @@ struct vnop_rmdir_args {
 
 #endif /* 0*/
 errno_t
-VNOP_RMDIR(struct vnode *dvp, struct vnode *vp, struct componentname *cnp, vfs_context_t context)
+VNOP_RMDIR(struct vnode *dvp, struct vnode *vp, struct componentname *cnp, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_rmdir_args a;
@@ -3666,7 +3937,7 @@ VNOP_RMDIR(struct vnode *dvp, struct vnode *vp, struct componentname *cnp, vfs_c
 	a.a_dvp = dvp;
 	a.a_vp = vp;
 	a.a_cnp = cnp;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(dvp);
 
 	if (!thread_safe) {
@@ -3681,9 +3952,9 @@ VNOP_RMDIR(struct vnode *dvp, struct vnode *vp, struct componentname *cnp, vfs_c
 
 		if ( !(NATIVE_XATTR(dvp)) ) {
 		        /* 
-			 * Remove any associated extended attibute file (._ AppleDouble file).
+			 * Remove any associated extended attribute file (._ AppleDouble file).
 			 */
-		        xattrfile_remove(dvp, cnp->cn_nameptr, context, thread_safe, 1);
+		        xattrfile_remove(dvp, cnp->cn_nameptr, ctx, thread_safe, 1);
 		}
 	}
 	if (!thread_safe) {
@@ -3697,7 +3968,7 @@ VNOP_RMDIR(struct vnode *dvp, struct vnode *vp, struct componentname *cnp, vfs_c
  */
 #define AD_STALE_SECS  (180)
 static void
-xattrfile_remove(vnode_t dvp, const char * basename, vfs_context_t context, int thread_safe, int force) {
+xattrfile_remove(vnode_t dvp, const char * basename, vfs_context_t ctx, int thread_safe, int force) {
 	vnode_t xvp;
 	struct nameidata nd;
 	char smallname[64];
@@ -3715,8 +3986,8 @@ xattrfile_remove(vnode_t dvp, const char * basename, vfs_context_t context, int 
 		MALLOC(filename, char *, len, M_TEMP, M_WAITOK);
 		len = snprintf(filename, len, "._%s", basename);
 	}
-	NDINIT(&nd, DELETE, LOCKLEAF | NOFOLLOW | USEDVP, UIO_SYSSPACE,
-	       CAST_USER_ADDR_T(filename), context);
+	NDINIT(&nd, DELETE, WANTPARENT | LOCKLEAF | NOFOLLOW | USEDVP, UIO_SYSSPACE,
+	       CAST_USER_ADDR_T(filename), ctx);
 	nd.ni_dvp = dvp;
 	if (namei(&nd) != 0)
 		goto out2;
@@ -3737,7 +4008,7 @@ xattrfile_remove(vnode_t dvp, const char * basename, vfs_context_t context, int 
 		VATTR_INIT(&va);
 		VATTR_WANTED(&va, va_data_size);
 		VATTR_WANTED(&va, va_modify_time);
-		if (VNOP_GETATTR(xvp, &va, context) == 0  &&
+		if (VNOP_GETATTR(xvp, &va, ctx) == 0  &&
 		    VATTR_IS_SUPPORTED(&va, va_data_size)  &&
 		    VATTR_IS_SUPPORTED(&va, va_modify_time)  &&
 		    va.va_data_size != 0) {
@@ -3758,7 +4029,7 @@ xattrfile_remove(vnode_t dvp, const char * basename, vfs_context_t context, int 
 		a.a_dvp     = nd.ni_dvp;
 		a.a_vp      = xvp;
 		a.a_cnp     = &nd.ni_cnd;
-		a.a_context = context;
+		a.a_context = ctx;
 
 		if (!thread_safe) {
 			if ( (lock_fsnode(xvp, NULL)) )
@@ -3773,7 +4044,7 @@ xattrfile_remove(vnode_t dvp, const char * basename, vfs_context_t context, int 
 			vnode_setneedinactive(xvp);
 	}
 out1:		
-	/* Note: nd.ni_dvp's iocount is dropped by caller of VNOP_XXXX */
+	vnode_put(dvp);
 	vnode_put(xvp);
 out2:
 	if (filename && filename != &smallname[0]) {
@@ -3786,7 +4057,7 @@ out2:
  */
 static void
 xattrfile_setattr(vnode_t dvp, const char * basename, struct vnode_attr * vap,
-                  vfs_context_t context, int thread_safe) {
+                  vfs_context_t ctx, int thread_safe) {
 	vnode_t xvp;
 	struct nameidata nd;
 	char smallname[64];
@@ -3806,7 +4077,7 @@ xattrfile_setattr(vnode_t dvp, const char * basename, struct vnode_attr * vap,
 		len = snprintf(filename, len, "._%s", basename);
 	}
 	NDINIT(&nd, LOOKUP, NOFOLLOW | USEDVP, UIO_SYSSPACE,
-	       CAST_USER_ADDR_T(filename), context);
+	       CAST_USER_ADDR_T(filename), ctx);
 	nd.ni_dvp = dvp;
 	if (namei(&nd) != 0)
 		goto out2;
@@ -3820,7 +4091,7 @@ xattrfile_setattr(vnode_t dvp, const char * basename, struct vnode_attr * vap,
 		a.a_desc = &vnop_setattr_desc;
 		a.a_vp = xvp;
 		a.a_vap = vap;
-		a.a_context = context;
+		a.a_context = ctx;
 
 		if (!thread_safe) {
 			if ( (lock_fsnode(xvp, NULL)) )
@@ -3859,7 +4130,7 @@ struct vnop_symlink_args {
 #endif /* 0*/
 errno_t
 VNOP_SYMLINK(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
-             struct vnode_attr *vap, char *target, vfs_context_t context)
+             struct vnode_attr *vap, char *target, vfs_context_t ctx)
 {
        int _err;
        struct vnop_symlink_args a;
@@ -3872,7 +4143,7 @@ VNOP_SYMLINK(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
        a.a_cnp = cnp;
        a.a_vap = vap;
        a.a_target = target;
-       a.a_context = context;
+       a.a_context = ctx;
        thread_safe = THREAD_SAFE_FS(dvp);
 
        if (!thread_safe) {
@@ -3885,7 +4156,7 @@ VNOP_SYMLINK(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 		/* 
 		 * Remove stale Apple Double file (if any).
 		 */
-		xattrfile_remove(dvp, cnp->cn_nameptr, context, thread_safe, 0);
+		xattrfile_remove(dvp, cnp->cn_nameptr, ctx, thread_safe, 0);
 	}
        if (!thread_safe) {
                unlock_fsnode(dvp, &funnel_state);
@@ -3912,7 +4183,7 @@ struct vnop_readdir_args {
 #endif /* 0*/
 errno_t 
 VNOP_READDIR(struct vnode *vp, struct uio *uio, int flags, int *eofflag,
-             int *numdirent, vfs_context_t context)
+             int *numdirent, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_readdir_args a;
@@ -3925,7 +4196,7 @@ VNOP_READDIR(struct vnode *vp, struct uio *uio, int flags, int *eofflag,
 	a.a_flags = flags;
 	a.a_eofflag = eofflag;
 	a.a_numdirent = numdirent;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -3962,7 +4233,7 @@ struct vnop_readdirattr_args {
 #endif /* 0*/
 errno_t 
 VNOP_READDIRATTR(struct vnode *vp, struct attrlist *alist, struct uio *uio, u_long maxcount,
-                 u_long options, u_long *newstate, int *eofflag, u_long *actualcount, vfs_context_t context)
+                 u_long options, u_long *newstate, int *eofflag, u_long *actualcount, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_readdirattr_args a;
@@ -3978,7 +4249,7 @@ VNOP_READDIRATTR(struct vnode *vp, struct attrlist *alist, struct uio *uio, u_lo
 	a.a_newstate = newstate;
 	a.a_eofflag = eofflag;
 	a.a_actualcount = actualcount;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -4007,8 +4278,27 @@ struct vnop_readlink_args {
 };
 #endif /* 0 */
 
+/*
+ * Returns:	0			Success
+ *		lock_fsnode:ENOENT	No such file or directory [only for VFS
+ *					 that is not thread safe & vnode is
+ *					 currently being/has been terminated]
+ *		<vfs_readlink>:EINVAL
+ *		<vfs_readlink>:???
+ *
+ * Note:	The return codes from the underlying VFS's readlink routine
+ *		can't be fully enumerated here, since third party VFS authors
+ *		may not limit their error returns to the ones documented here,
+ *		even though this may result in some programs functioning
+ *		incorrectly.
+ *
+ *		The return codes documented above are those which may currently
+ *		be returned by HFS from hfs_vnop_readlink, not including
+ *		additional error code which may be propagated from underlying
+ *		routines.
+ */
 errno_t 
-VNOP_READLINK(struct vnode *vp, struct uio *uio, vfs_context_t context)
+VNOP_READLINK(struct vnode *vp, struct uio *uio, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_readlink_args a;
@@ -4018,7 +4308,7 @@ VNOP_READLINK(struct vnode *vp, struct uio *uio, vfs_context_t context)
 	a.a_desc = &vnop_readlink_desc;
 	a.a_vp = vp;
 	a.a_uio = uio;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -4046,7 +4336,7 @@ struct vnop_inactive_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_INACTIVE(struct vnode *vp, vfs_context_t context)
+VNOP_INACTIVE(struct vnode *vp, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_inactive_args a;
@@ -4055,7 +4345,7 @@ VNOP_INACTIVE(struct vnode *vp, vfs_context_t context)
 
 	a.a_desc = &vnop_inactive_desc;
 	a.a_vp = vp;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -4084,7 +4374,7 @@ struct vnop_reclaim_args {
 };
 #endif /* 0*/
 errno_t
-VNOP_RECLAIM(struct vnode *vp, vfs_context_t context)
+VNOP_RECLAIM(struct vnode *vp, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_reclaim_args a;
@@ -4093,7 +4383,7 @@ VNOP_RECLAIM(struct vnode *vp, vfs_context_t context)
 
 	a.a_desc = &vnop_reclaim_desc;
 	a.a_vp = vp;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -4107,6 +4397,13 @@ VNOP_RECLAIM(struct vnode *vp, vfs_context_t context)
 }
 
 
+/*
+ * Returns:	0			Success
+ *	lock_fsnode:ENOENT		No such file or directory [only for VFS
+ *					 that is not thread safe & vnode is
+ *					 currently being/has been terminated]
+ *	<vnop_pathconf_desc>:???	[per FS implementation specific]
+ */
 #if 0
 /*
  *#
@@ -4122,7 +4419,7 @@ struct vnop_pathconf_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_PATHCONF(struct vnode *vp, int name, register_t *retval, vfs_context_t context)
+VNOP_PATHCONF(struct vnode *vp, int name, register_t *retval, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_pathconf_args a;
@@ -4133,7 +4430,7 @@ VNOP_PATHCONF(struct vnode *vp, int name, register_t *retval, vfs_context_t cont
 	a.a_vp = vp;
 	a.a_name = name;
 	a.a_retval = retval;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -4148,6 +4445,17 @@ VNOP_PATHCONF(struct vnode *vp, int name, register_t *retval, vfs_context_t cont
 	return (_err);
 }
 
+/*
+ * Returns:	0			Success
+ *	err_advlock:ENOTSUP
+ *	lf_advlock:???
+ *	<vnop_advlock_desc>:???
+ *
+ * Notes:	VFS implementations of advisory locking using calls through
+ *		<vnop_advlock_desc> because lock enforcement does not occur
+ *		locally should try to limit themselves to the return codes
+ *		documented above for lf_advlock and err_advlock.
+ */
 #if 0
 /*
  *#
@@ -4165,7 +4473,7 @@ struct vnop_advlock_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_ADVLOCK(struct vnode *vp, caddr_t id, int op, struct flock *fl, int flags, vfs_context_t context)
+VNOP_ADVLOCK(struct vnode *vp, caddr_t id, int op, struct flock *fl, int flags, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_advlock_args a;
@@ -4179,7 +4487,7 @@ VNOP_ADVLOCK(struct vnode *vp, caddr_t id, int op, struct flock *fl, int flags, 
 	a.a_op = op;
 	a.a_fl = fl;
 	a.a_flags = flags;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	uth = get_bsdthread_info(current_thread());
@@ -4224,7 +4532,7 @@ struct vnop_allocate_args {
 
 #endif /* 0*/
 errno_t 
-VNOP_ALLOCATE(struct vnode *vp, off_t length, u_int32_t flags, off_t *bytesallocated, off_t offset, vfs_context_t context)
+VNOP_ALLOCATE(struct vnode *vp, off_t length, u_int32_t flags, off_t *bytesallocated, off_t offset, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_allocate_args a;
@@ -4237,7 +4545,7 @@ VNOP_ALLOCATE(struct vnode *vp, off_t length, u_int32_t flags, off_t *bytesalloc
 	a.a_flags = flags;
 	a.a_bytesallocated = bytesallocated;
 	a.a_offset = offset;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -4270,7 +4578,7 @@ struct vnop_pagein_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_PAGEIN(struct vnode *vp, upl_t pl, vm_offset_t pl_offset, off_t f_offset, size_t size, int flags, vfs_context_t context)
+VNOP_PAGEIN(struct vnode *vp, upl_t pl, vm_offset_t pl_offset, off_t f_offset, size_t size, int flags, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_pagein_args a;
@@ -4284,7 +4592,7 @@ VNOP_PAGEIN(struct vnode *vp, upl_t pl, vm_offset_t pl_offset, off_t f_offset, s
 	a.a_f_offset = f_offset;
 	a.a_size = size;
 	a.a_flags = flags;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -4316,7 +4624,7 @@ struct vnop_pageout_args {
 
 #endif /* 0*/
 errno_t 
-VNOP_PAGEOUT(struct vnode *vp, upl_t pl, vm_offset_t pl_offset, off_t f_offset, size_t size, int flags, vfs_context_t context)
+VNOP_PAGEOUT(struct vnode *vp, upl_t pl, vm_offset_t pl_offset, off_t f_offset, size_t size, int flags, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_pageout_args a;
@@ -4330,7 +4638,7 @@ VNOP_PAGEOUT(struct vnode *vp, upl_t pl, vm_offset_t pl_offset, off_t f_offset, 
 	a.a_f_offset = f_offset;
 	a.a_size = size;
 	a.a_flags = flags;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -4369,7 +4677,7 @@ struct vnop_searchfs_args {
 
 #endif /* 0*/
 errno_t 
-VNOP_SEARCHFS(struct vnode *vp, void *searchparams1, void *searchparams2, struct attrlist *searchattrs, u_long maxmatches, struct timeval *timelimit, struct attrlist *returnattrs, u_long *nummatches, u_long scriptcode, u_long options, struct uio *uio, struct searchstate *searchstate, vfs_context_t context)
+VNOP_SEARCHFS(struct vnode *vp, void *searchparams1, void *searchparams2, struct attrlist *searchattrs, u_long maxmatches, struct timeval *timelimit, struct attrlist *returnattrs, u_long *nummatches, u_long scriptcode, u_long options, struct uio *uio, struct searchstate *searchstate, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_searchfs_args a;
@@ -4389,7 +4697,7 @@ VNOP_SEARCHFS(struct vnode *vp, void *searchparams1, void *searchparams2, struct
 	a.a_options = options;
 	a.a_uio = uio;
 	a.a_searchstate = searchstate;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -4425,7 +4733,7 @@ struct vnop_copyfile_args {
 #endif /* 0*/
 errno_t 
 VNOP_COPYFILE(struct vnode *fvp, struct vnode *tdvp, struct vnode *tvp, struct componentname *tcnp,
-              int mode, int flags, vfs_context_t context)
+              int mode, int flags, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_copyfile_args a;
@@ -4436,14 +4744,13 @@ VNOP_COPYFILE(struct vnode *fvp, struct vnode *tdvp, struct vnode *tvp, struct c
 	a.a_tcnp = tcnp;
 	a.a_mode = mode;
 	a.a_flags = flags;
-	a.a_context = context;
+	a.a_context = ctx;
 	_err = (*fvp->v_op[vnop_copyfile_desc.vdesc_offset])(&a);
 	return (_err);
 }
 
-
 errno_t
-VNOP_GETXATTR(vnode_t vp, const char *name, uio_t uio, size_t *size, int options, vfs_context_t context)
+VNOP_GETXATTR(vnode_t vp, const char *name, uio_t uio, size_t *size, int options, vfs_context_t ctx)
 {
 	struct vnop_getxattr_args a;
 	int error;
@@ -4456,7 +4763,7 @@ VNOP_GETXATTR(vnode_t vp, const char *name, uio_t uio, size_t *size, int options
 	a.a_uio = uio;
 	a.a_size = size;
 	a.a_options = options;
-	a.a_context = context;
+	a.a_context = ctx;
 
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
@@ -4472,7 +4779,7 @@ VNOP_GETXATTR(vnode_t vp, const char *name, uio_t uio, size_t *size, int options
 }
 
 errno_t
-VNOP_SETXATTR(vnode_t vp, const char *name, uio_t uio, int options, vfs_context_t context)
+VNOP_SETXATTR(vnode_t vp, const char *name, uio_t uio, int options, vfs_context_t ctx)
 {
 	struct vnop_setxattr_args a;
 	int error;
@@ -4484,7 +4791,7 @@ VNOP_SETXATTR(vnode_t vp, const char *name, uio_t uio, int options, vfs_context_
 	a.a_name = name;
 	a.a_uio = uio;
 	a.a_options = options;
-	a.a_context = context;
+	a.a_context = ctx;
 
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
@@ -4496,11 +4803,13 @@ VNOP_SETXATTR(vnode_t vp, const char *name, uio_t uio, int options, vfs_context_
 	if (!thread_safe) {
 		unlock_fsnode(vp, &funnel_state);
 	}
+	if (error == 0)
+	        vnode_uncache_authorized_action(vp, KAUTH_INVALIDATE_CACHED_RIGHTS);
 	return (error);
 }
 
 errno_t
-VNOP_REMOVEXATTR(vnode_t vp, const char *name, int options, vfs_context_t context)
+VNOP_REMOVEXATTR(vnode_t vp, const char *name, int options, vfs_context_t ctx)
 {
 	struct vnop_removexattr_args a;
 	int error;
@@ -4511,7 +4820,7 @@ VNOP_REMOVEXATTR(vnode_t vp, const char *name, int options, vfs_context_t contex
 	a.a_vp = vp;
 	a.a_name = name;
 	a.a_options = options;
-	a.a_context = context;
+	a.a_context = ctx;
 
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
@@ -4527,7 +4836,7 @@ VNOP_REMOVEXATTR(vnode_t vp, const char *name, int options, vfs_context_t contex
 }
 
 errno_t
-VNOP_LISTXATTR(vnode_t vp, uio_t uio, size_t *size, int options, vfs_context_t context)
+VNOP_LISTXATTR(vnode_t vp, uio_t uio, size_t *size, int options, vfs_context_t ctx)
 {
 	struct vnop_listxattr_args a;
 	int error;
@@ -4539,7 +4848,7 @@ VNOP_LISTXATTR(vnode_t vp, uio_t uio, size_t *size, int options, vfs_context_t c
 	a.a_uio = uio;
 	a.a_size = size;
 	a.a_options = options;
-	a.a_context = context;
+	a.a_context = ctx;
 
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
@@ -4648,18 +4957,15 @@ struct vnop_blockmap_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_BLOCKMAP(struct vnode *vp, off_t foffset, size_t size, daddr64_t *bpn, size_t *run, void *poff, int flags, vfs_context_t context)
+VNOP_BLOCKMAP(struct vnode *vp, off_t foffset, size_t size, daddr64_t *bpn, size_t *run, void *poff, int flags, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_blockmap_args a;
 	int thread_safe;
 	int funnel_state = 0;
-	struct vfs_context acontext;
 
-	if (context == NULL) {
-		acontext.vc_proc = current_proc();
-		acontext.vc_ucred = kauth_cred_get();
-		context = &acontext;
+	if (ctx == NULL) {
+		ctx = vfs_context_current();
 	}
 	a.a_desc = &vnop_blockmap_desc;
 	a.a_vp = vp;
@@ -4669,7 +4975,7 @@ VNOP_BLOCKMAP(struct vnode *vp, off_t foffset, size_t size, daddr64_t *bpn, size
 	a.a_run = run;
 	a.a_poff = poff;
 	a.a_flags = flags;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -4726,7 +5032,7 @@ struct vnop_kqfilt_add_args {
 };
 #endif
 errno_t
-VNOP_KQFILT_ADD(struct vnode *vp, struct knote *kn, vfs_context_t context)
+VNOP_KQFILT_ADD(struct vnode *vp, struct knote *kn, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_kqfilt_add_args a;
@@ -4736,7 +5042,7 @@ VNOP_KQFILT_ADD(struct vnode *vp, struct knote *kn, vfs_context_t context)
 	a.a_desc = VDESC(vnop_kqfilt_add);
 	a.a_vp = vp;
 	a.a_kn = kn;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -4760,7 +5066,7 @@ struct vnop_kqfilt_remove_args {
 };
 #endif
 errno_t
-VNOP_KQFILT_REMOVE(struct vnode *vp, uintptr_t ident, vfs_context_t context)
+VNOP_KQFILT_REMOVE(struct vnode *vp, uintptr_t ident, vfs_context_t ctx)
 {
 	int _err;
 	struct vnop_kqfilt_remove_args a;
@@ -4770,7 +5076,7 @@ VNOP_KQFILT_REMOVE(struct vnode *vp, uintptr_t ident, vfs_context_t context)
 	a.a_desc = VDESC(vnop_kqfilt_remove);
 	a.a_vp = vp;
 	a.a_ident = ident;
-	a.a_context = context;
+	a.a_context = ctx;
 	thread_safe = THREAD_SAFE_FS(vp);
 
 	if (!thread_safe) {
@@ -4785,3 +5091,101 @@ VNOP_KQFILT_REMOVE(struct vnode *vp, uintptr_t ident, vfs_context_t context)
 	return(_err);
 }
 
+#if 0
+struct vnop_setlabel_args {
+	struct vnodeop_desc *a_desc;
+	struct vnode *a_vp;
+	struct label *a_vl;
+	vfs_context_t a_context;
+};
+#endif
+errno_t
+VNOP_SETLABEL(struct vnode *vp, struct label *label, vfs_context_t ctx)
+{
+	int _err;
+	struct vnop_setlabel_args a;
+	int thread_safe;
+	int funnel_state = 0;
+
+	a.a_desc = VDESC(vnop_setlabel);
+	a.a_vp = vp;
+	a.a_vl = label;
+	a.a_context = ctx;
+	thread_safe = THREAD_SAFE_FS(vp);
+
+	if (!thread_safe) {
+		if ( (_err = lock_fsnode(vp, &funnel_state)) ) {
+			return (_err);
+		}
+	}
+	_err = (*vp->v_op[vnop_setlabel_desc.vdesc_offset])(&a);
+	if (!thread_safe) {
+		unlock_fsnode(vp, &funnel_state);
+	}
+	return(_err);
+}
+
+
+#if NAMEDSTREAMS
+/*
+ * Get a named streamed
+ */
+errno_t 
+VNOP_GETNAMEDSTREAM(vnode_t vp, vnode_t *svpp, const char *name, enum nsoperation operation, int flags, vfs_context_t ctx)
+{
+	struct vnop_getnamedstream_args a;
+
+	if (!THREAD_SAFE_FS(vp))
+		return (ENOTSUP);
+	a.a_desc = &vnop_getnamedstream_desc;
+	a.a_vp = vp;
+	a.a_svpp = svpp;
+	a.a_name = name;
+	a.a_operation = operation;
+	a.a_flags = flags;
+	a.a_context = ctx;
+
+	return (*vp->v_op[vnop_getnamedstream_desc.vdesc_offset])(&a);
+}
+
+/*
+ * Create a named streamed
+ */
+errno_t 
+VNOP_MAKENAMEDSTREAM(vnode_t vp, vnode_t *svpp, const char *name, int flags, vfs_context_t ctx)
+{
+	struct vnop_makenamedstream_args a;
+
+	if (!THREAD_SAFE_FS(vp))
+		return (ENOTSUP);
+	a.a_desc = &vnop_makenamedstream_desc;
+	a.a_vp = vp;
+	a.a_svpp = svpp;
+	a.a_name = name;
+	a.a_flags = flags;
+	a.a_context = ctx;
+
+	return (*vp->v_op[vnop_makenamedstream_desc.vdesc_offset])(&a);
+}
+
+
+/*
+ * Remove a named streamed
+ */
+errno_t 
+VNOP_REMOVENAMEDSTREAM(vnode_t vp, vnode_t svp, const char *name, int flags, vfs_context_t ctx)
+{
+	struct vnop_removenamedstream_args a;
+
+	if (!THREAD_SAFE_FS(vp))
+		return (ENOTSUP);
+	a.a_desc = &vnop_removenamedstream_desc;
+	a.a_vp = vp;
+	a.a_svp = svp;
+	a.a_name = name;
+	a.a_flags = flags;
+	a.a_context = ctx;
+
+	return (*vp->v_op[vnop_removenamedstream_desc.vdesc_offset])(&a);
+}
+#endif

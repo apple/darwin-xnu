@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000,2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000, 2002, 2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include "../headers/BTreesPrivate.h"
@@ -25,12 +31,12 @@
 
 // local routines
 static OSErr	CheckBTreeKey(const BTreeKey *key, const BTreeControlBlock *btcb);
-static Boolean	ValidHFSRecord(const void *record, const BTreeControlBlock *btcb, UInt16 recordSize);
+static Boolean	ValidHFSRecord(const void *record, const BTreeControlBlock *btcb, u_int16_t recordSize);
 
 
 
 
-OSErr SearchBTreeRecord(FileReference refNum, const void* key, UInt32 hint, void* foundKey, void* data, UInt16 *dataSize, UInt32 *newHint)
+OSErr SearchBTreeRecord(__unused FileReference refNum, __unused const void* key, __unused u_int32_t hint, __unused void* foundKey, __unused void* data, __unused u_int16_t *dataSize, __unused u_int32_t *newHint)
 {
 	panic("SearchBTreeRecord is dead code!");
 	return (-1);
@@ -88,7 +94,7 @@ ErrorExit:
 }
 
 
-OSErr ReplaceBTreeRecord(FileReference refNum, const void* key, UInt32 hint, void *newData, UInt16 dataSize, UInt32 *newHint)
+OSErr ReplaceBTreeRecord(FileReference refNum, const void* key, u_int32_t hint, void *newData, u_int16_t dataSize, u_int32_t *newHint)
 {
 	FSBufferDescriptor	btRecord;
 	BTreeIterator		iterator;
@@ -106,10 +112,10 @@ OSErr ReplaceBTreeRecord(FileReference refNum, const void* key, UInt32 hint, voi
 
 	iterator.hint.nodeNum = hint;
 
-	result = CheckBTreeKey((BTreeKey *) key, btcb);
+	result = CheckBTreeKey((const BTreeKey *) key, btcb);
 	ExitOnError(result);
 
-	BlockMoveData(key, &iterator.key, CalcKeySize(btcb, (BTreeKey *) key));		//€€ should we range check against maxkeylen?
+	BlockMoveData(key, &iterator.key, CalcKeySize(btcb, (const BTreeKey *) key));		//€€ should we range check against maxkeylen?
 
 	if ( DEBUG_BUILD && !ValidHFSRecord(newData, btcb, dataSize) )
 		DebugStr("\pReplaceBTreeRecord: bad record?");
@@ -129,7 +135,7 @@ ErrorExit:
 
 static OSErr CheckBTreeKey(const BTreeKey *key, const BTreeControlBlock *btcb)
 {
-	UInt16	keyLen;
+	u_int16_t	keyLen;
 	
 	if ( btcb->attributes & kBTBigKeysMask )
 		keyLen = key->length16;
@@ -147,9 +153,9 @@ static OSErr CheckBTreeKey(const BTreeKey *key, const BTreeControlBlock *btcb)
 }
 
 
-static Boolean ValidHFSRecord(const void *record, const BTreeControlBlock *btcb, UInt16 recordSize)
+static Boolean ValidHFSRecord(const void *record, const BTreeControlBlock *btcb, u_int16_t recordSize)
 {
-	UInt32			cNodeID;
+	u_int32_t			cNodeID;
 	
 	if ( btcb->maxKeyLength == kHFSExtentKeyMaximumLength )
 	{
@@ -161,7 +167,7 @@ static Boolean ValidHFSRecord(const void *record, const BTreeControlBlock *btcb,
 	}
 	else // Catalog record
 	{
-		CatalogRecord *catalogRecord = (CatalogRecord*) record;
+		const CatalogRecord *catalogRecord = (const CatalogRecord*) record;
 
 		switch(catalogRecord->recordType)
 		{
@@ -199,7 +205,7 @@ static Boolean ValidHFSRecord(const void *record, const BTreeControlBlock *btcb,
 	
 			case kHFSFileRecord:
 			{
-//				UInt16					i;
+//				u_int16_t					i;
 				HFSExtentDescriptor	*dataExtent;
 				HFSExtentDescriptor	*rsrcExtent;
 				
@@ -241,7 +247,7 @@ static Boolean ValidHFSRecord(const void *record, const BTreeControlBlock *btcb,
 	
 			case kHFSPlusFileRecord:
 			{
-//				UInt16					i;
+//				u_int16_t					i;
 				HFSPlusExtentDescriptor	*dataExtent;
 				HFSPlusExtentDescriptor	*rsrcExtent;
 				

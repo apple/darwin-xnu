@@ -1,14 +1,19 @@
 /*
- * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2004 Apple Computer, Inc.  All Rights Reserved.
+ * Copyright (c) 1999-2007 Apple Inc.  All Rights Reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
  * 
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
@@ -18,7 +23,13 @@
  * Please see the License for the specific language governing rights and
  * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
  */
 
 #ifndef _BSM_AUDIT_KEVENTS_H_
@@ -94,7 +105,7 @@
 #define	AUE_PIPE        185             /*42*/
 #define AUE_GETEGID     AUE_NULL        /*43*/
 #define AUE_PROFILE     305		/*44*/
-#define AUE_KTRACE      306		/*45*/
+#define AUE_KTRACE      AUE_NULL	/*45*/
 #define AUE_REBOOT      308
 #define AUE_SIGACTION   AUE_NULL        /*46*/    /*XXX*/
 #define AUE_GETGID	AUE_NULL	/*47*/
@@ -308,10 +319,6 @@
 #define AUE_SEMINIT     AUE_NULL        /*275*/   /*ENOSYS*/
 #define AUE_SEMDESTROY  AUE_NULL        /*276*/   /*ENOSYS*/
 
-#define AUE_LOADSHFILE  347		/*296*/
-#define AUE_RESETSHFILE 348		/*297*/
-#define AUE_NEWSYSTEMSHREG 349		/*298*/
-
 #define AUE_GETSID      AUE_NULL        /*310*/
 
 #define AUE_MLOCKALL    AUE_NULL        /*324*/   /*ENOSYS*/
@@ -328,6 +335,41 @@
 #define AUE_TASKFORPID	358
 #define AUE_PIDFORTASK	359
 #define AUE_SYSCTL_NONADMIN	360
+
+// BSM events for security system calls
+#define AUE_MAC_GET_PROC		400
+#define AUE_MAC_SET_PROC		401
+#define AUE_MAC_GET_PID			402
+#define AUE_MAC_SET_FILE		403
+#define AUE_MAC_GET_FILE		404
+#define AUE_MAC_SET_LINK		405
+#define AUE_MAC_GET_LINK		406
+#define AUE_MAC_SET_FD			407
+#define AUE_MAC_GET_FD			408
+#define AUE_MAC_EXECVE			409
+#define AUE_MAC_SYSCALL			410
+#define	AUE_MAC_GET_LCID		411
+#define	AUE_MAC_GET_LCTX		412
+#define	AUE_MAC_SET_LCTX		413
+#define	AUE_SETLCID			414
+#define	AUE_GETLCID			415
+#define	AUE_MAC_MOUNT			416
+#define	AUE_MAC_GET_MOUNT		417
+#define	AUE_MAC_GETFSSTAT		418
+ 
+// BSM events for extended attributes
+#define AUE_EXTATTR_SET_FILE		451
+#define AUE_EXTATTR_GET_FILE		452
+#define AUE_EXTATTR_DELETE_FILE		453
+#define AUE_EXTATTR_LIST_FILE		454
+#define AUE_EXTATTR_SET_LINK		455
+#define AUE_EXTATTR_GET_LINK		456 
+#define AUE_EXTATTR_DELETE_LINK		457
+#define AUE_EXTATTR_LIST_LINK		458
+#define AUE_EXTATTR_SET_FD		459
+#define AUE_EXTATTR_GET_FD		460
+#define AUE_EXTATTR_DELETE_FD		461
+#define AUE_EXTATTR_LIST_FD		462
 
 // BSM events - Have to identify which ones are relevant to MacOSX
 #define AUE_ACLSET                      251

@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *
@@ -165,37 +171,96 @@ typedef	struct {
 
 #ifdef NOT_YET
 /* from sys_glue.c */
-int ddp_adjmsg(gbuf_t *m, int len);
-gbuf_t *ddp_growmsg(gbuf_t  *mp, int len);
 	     
 /* from ddp.c */
-int ddp_add_if(at_ifaddr_t *ifID);
-int ddp_rem_if(at_ifaddr_t *ifID);
 int ddp_bind_socket(ddp_socket_t *socketp);
 int ddp_close_socket(ddp_socket_t *socketp);
-int ddp_output(gbuf_t **mp, at_socket src_socket, int src_addr_included);
-void ddp_input(gbuf_t   *mp, at_ifaddr_t *ifID);
-int ddp_router_output(
-     gbuf_t  *mp,
-     at_ifaddr_t *ifID,
-     int addr_type,
-     at_net_al router_net,
-     at_node router_node,
-     etalk_addr_t *enet_addr);
 
 /* from ddp_proto.c */
 int ddp_close(gref_t *gref);
 void ddp_putmsg(gref_t *gref, gbuf_t *mp);
-gbuf_t *ddp_compress_msg(gbuf_t *mp);
 void ddp_stop(gbuf_t *mioc, gref_t *gref);
 	     
 /* in ddp_lap.c */
-void ddp_bit_reverse(unsigned char *);
 
 #endif /* NOT_YET */
 
-/* in ddp_lap.c */
+void ddp_bit_reverse(unsigned char *);
+
+int	ddp_pru_abort(struct socket *so);
+
+int	ddp_pru_attach(struct socket *so, int proto,
+			       struct proc *p);
+int	ddp_pru_bind(struct socket *so, struct sockaddr *nam,
+			     struct proc *p);
+int	ddp_pru_connect(struct socket *so, struct sockaddr *nam,
+				struct proc *p);
+
+int	ddp_pru_control(struct socket *so, u_long cmd, caddr_t data,
+				struct ifnet *ifp, struct proc *p);
+int	ddp_pru_detach(struct socket *so);
+int	ddp_pru_disconnect(struct socket *so);
+
+int	ddp_pru_peeraddr(struct socket *so, 
+				 struct sockaddr **nam);
+
+int	ddp_pru_send(struct socket *so, int flags, struct mbuf *m, 
+				 struct sockaddr *addr, struct mbuf *control,
+				 struct proc *p);
+
+int	ddp_pru_shutdown(struct socket *so);
+int	ddp_pru_sockaddr(struct socket *so, 
+				 struct sockaddr **nam);
+
+int ddp_output(gbuf_t **, at_socket , int );
+u_short ddp_checksum(gbuf_t	*, int);
+gbuf_t *ddp_compress_msg(gbuf_t *);
+
+struct at_ifaddr;
+struct etalk_addr;
+
+int ddp_router_output(
+     gbuf_t  *mp,
+     struct at_ifaddr *ifID,
+     int addr_type,
+     at_net_al router_net,
+     at_node router_node,
+     struct etalk_addr *enet_addr);
+
+struct at_ifaddr *forUs(at_ddp_t *);
+
+void zip_send_queries(struct at_ifaddr *, at_net_al, at_node);
+int zip_handle_getmyzone(struct at_ifaddr *, gbuf_t *);
+int zip_type_packet(gbuf_t *);
+void zip_sched_getnetinfo (void *);
+
+int at_unreg_mcast(struct at_ifaddr *, caddr_t);
+int at_reg_mcast(struct at_ifaddr *, caddr_t);
+
 int ddp_shutdown(int);
+
+void routing_needed(gbuf_t *, struct at_ifaddr *, char);
+
+int getPhysAddrSize(int);
+int getAarpTableSize(int);
+
+int aarp_init1(struct at_ifaddr *);
+int aarp_init2(struct at_ifaddr *);
+
+int getRtmpTableSize(void);
+
+void sethzonehash(struct at_ifaddr *);
+
+int ddp_add_if(struct at_ifaddr *);
+void ddp_rem_if(struct at_ifaddr *);
+
+void ddp_brt_init(void);
+void ddp_brt_shutdown(void);
+
+int setLocalZones(at_nvestr_t *, int);
+
+void ddp_brt_sweep(void);
+
 
 #endif /* KERNEL_PRIVATE */
 #endif /* __APPLE_API_OBSOLETE */

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -104,71 +110,61 @@ typedef struct sched_average	*sched_average_t;
 void
 compute_averages(void)
 {
-	register processor_set_t	pset = &default_pset;
-	register int				ncpus;
-	register int				nthreads, nshared;
-	sched_average_t				avg;
-	register uint32_t			factor_now = 0;
-	register uint32_t			average_now = 0;
-	register uint32_t			load_now = 0;
+	int					ncpus, nthreads, nshared;
+	uint32_t			factor_now, average_now, load_now = 0;
+	sched_average_t		avg;
 
-	if ((ncpus = pset->processor_count) > 0) {
-		/*
-		 *	Retrieve counts, ignoring
-		 *	the current thread.
-		 */
-		nthreads = pset->run_count - 1;
-		nshared = pset->share_count;
+	/*
+	 *	Retrieve counts, ignoring
+	 *	the current thread.
+	 */
+	ncpus = processor_avail_count;
+	nthreads = sched_run_count - 1;
+	nshared = sched_share_count;
 
-		/*
-		 *	Load average and mach factor calculations for
-		 *	those which ask about these things.
-		 */
-		average_now = nthreads * LOAD_SCALE;
+	/*
+	 *	Load average and mach factor calculations for
+	 *	those which ask about these things.
+	 */
+	average_now = nthreads * LOAD_SCALE;
 
-		if (nthreads > ncpus)
-			factor_now = (ncpus * LOAD_SCALE) / (nthreads + 1);
+	if (nthreads > ncpus)
+		factor_now = (ncpus * LOAD_SCALE) / (nthreads + 1);
+	else
+		factor_now = (ncpus - nthreads) * LOAD_SCALE;
+
+	sched_mach_factor =	((sched_mach_factor << 2) + factor_now) / 5;
+	sched_load_average = ((sched_load_average << 2) + average_now) / 5;
+
+	/*
+	 *	Compute the timeshare priority
+	 *	conversion factor based on loading.
+	 */
+	if (nshared > nthreads)
+		nshared = nthreads;
+
+	if (nshared > ncpus) {
+		if (ncpus > 1)
+			load_now = nshared / ncpus;
 		else
-			factor_now = (ncpus - nthreads) * LOAD_SCALE;
+			load_now = nshared;
 
-		pset->mach_factor =	((pset->mach_factor << 2) + factor_now) / 5;
-		pset->load_average = ((pset->load_average << 2) + average_now) / 5;
-
-		/*
-		 *	Compute the timeshare priority
-		 *	conversion factor based on loading.
-		 */
-		if (nshared > nthreads)
-			nshared = nthreads;
-
-		if (nshared > ncpus) {
-			if (ncpus > 1)
-				load_now = nshared / ncpus;
-			else
-				load_now = nshared;
-
-			if (load_now > NRQS - 1)
-				load_now = NRQS - 1;
-		}
-
-		/*
-		 *	The conversion factor consists of
-		 *	two components: a fixed value based
-		 *	on the absolute time unit, and a
-		 *	dynamic portion based on loading.
-		 *
-		 *	Zero loading results in a out of range
-		 *	shift count.  Accumulated usage is ignored
-		 *	during conversion and new usage deltas
-		 *	are discarded.
-		 */
-		pset->pri_shift = sched_pri_shift - sched_load_shifts[load_now];
+		if (load_now > NRQS - 1)
+			load_now = NRQS - 1;
 	}
-	else {
-		pset->mach_factor = pset->load_average = 0;
-		pset->pri_shift = INT8_MAX;
-		nthreads = pset->run_count;
-	}
+
+	/*
+	 *	The conversion factor consists of
+	 *	two components: a fixed value based
+	 *	on the absolute time unit, and a
+	 *	dynamic portion based on loading.
+	 *
+	 *	Zero loading results in a out of range
+	 *	shift count.  Accumulated usage is ignored
+	 *	during conversion and new usage deltas
+	 *	are discarded.
+	 */
+	sched_pri_shift = sched_fixed_shift - sched_load_shifts[load_now];
 
 	/*
 	 *	Sample total running threads.

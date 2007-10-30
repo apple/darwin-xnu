@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <mach/mach_types.h>
 #include <mach/vm_attributes.h>
@@ -31,6 +37,7 @@
 #include <ppc/pmap.h>
 #include <ppc/mappings.h> 
 #include <ppc/cpu_data.h>
+#include <ppc/misc_protos.h>
 
 #include <mach/thread_status.h>
 #include <mach-o/loader.h>
@@ -48,10 +55,10 @@
 #include <mach/vm_map.h>
 
 
-pmap_t kdp_pmap=0;
-boolean_t kdp_trans_off=0;
-boolean_t kdp_read_io  =0;
-uint32_t kdp_src_high32 = 0;
+pmap_t kdp_pmap;
+boolean_t kdp_trans_off;
+boolean_t kdp_read_io;
+uint32_t kdp_src_high32;
 
 unsigned kdp_vm_read( caddr_t, caddr_t, unsigned);
 unsigned kdp_vm_write( caddr_t, caddr_t, unsigned);
@@ -59,14 +66,12 @@ unsigned kdp_vm_write( caddr_t, caddr_t, unsigned);
 extern vm_offset_t sectTEXTB, sectDATAB, sectLINKB, sectPRELINKB;
 extern int sectSizeTEXT, sectSizeDATA, sectSizeLINK, sectSizePRELINK;
 
-/* XXX prototypes which should be in a commmon header file */
-addr64_t	kdp_vtophys(pmap_t pmap, addr64_t va);
-int		kern_dump(void);
-int		kdp_dump_trap(int type, struct savearea *regs);
+static addr64_t	kdp_vtophys(pmap_t pmap, addr64_t va);
+int             kern_dump(void);
 
 typedef struct {
   int	flavor;			/* the number for this flavor */
-  int	count;			/* count of ints in this flavor */
+  mach_msg_type_number_t	count;	/* count of ints in this flavor */
 } mythread_state_flavor_t;
 
 static mythread_state_flavor_t thread_flavor_array[] = {
@@ -90,7 +95,7 @@ char command_buffer[512];
 /*
  *
  */
-addr64_t
+static addr64_t
 kdp_vtophys(
 	pmap_t pmap,
 	addr64_t va)
@@ -290,7 +295,7 @@ kdp_dump_trap(
 	      __unused struct savearea *regs)
 {
   printf ("An unexpected trap (type %d) occurred during the kernel dump, terminating.\n", type);
-  kdp_send_crashdump_pkt (KDP_EOF, NULL, 0, ((void *) 0));
+  kdp_send_crashdump_pkt(KDP_EOF, NULL, 0, ((void *) 0));
   abort_panic_transfer();
   kdp_flag &= ~KDP_PANIC_DUMP_ENABLED;
   kdp_flag &= ~PANIC_CORE_ON_NMI;
@@ -325,10 +330,10 @@ kern_dump(void)
   mythread_state_flavor_t flavors[MAX_TSTATE_FLAVORS];
   vm_size_t	nflavors;
   vm_size_t	i;
-  int nesting_depth = 0;
+  uint32_t nesting_depth = 0;
   kern_return_t	kret = 0;
   struct vm_region_submap_info_64 vbr;
-  int vbrcount  = 0;
+  mach_msg_type_number_t vbrcount  = 0;
   tir_t tir1;
 
   int panic_error = 0;
@@ -390,17 +395,17 @@ kern_dump(void)
    * to begin data transmission 
    */
 
-   if ((panic_error = kdp_send_crashdump_pkt (KDP_SEEK, NULL, sizeof(nfoffset) , &nfoffset)) < 0) { 
+   if ((panic_error = kdp_send_crashdump_pkt(KDP_SEEK, NULL, sizeof(nfoffset) , &nfoffset)) < 0) { 
      printf ("kdp_send_crashdump_pkt failed with error %d\n", panic_error); 
      return -1; 
    } 
 
-   if ((panic_error = kdp_send_crashdump_data (KDP_DATA, NULL, sizeof(struct mach_header), (caddr_t) mh) < 0)) {
+   if ((panic_error = kdp_send_crashdump_data(KDP_DATA, NULL, sizeof(struct mach_header), (caddr_t) mh) < 0)) {
      printf ("kdp_send_crashdump_data failed with error %d\n", panic_error);
      return -1 ;
    }
 
-   if ((panic_error = kdp_send_crashdump_pkt (KDP_SEEK, NULL, sizeof(foffset) , &foffset) < 0)) {
+   if ((panic_error = kdp_send_crashdump_pkt(KDP_SEEK, NULL, sizeof(foffset) , &foffset) < 0)) {
      printf ("kdp_send_crashdump_pkt failed with error %d\n", panic_error);
      return (-1);
    }
@@ -492,12 +497,12 @@ kern_dump(void)
     sc->initprot = prot;
     sc->nsects = 0;
 
-    if ((panic_error = kdp_send_crashdump_pkt (KDP_SEEK, NULL, sizeof(hoffset) , &hoffset)) < 0) { 
+    if ((panic_error = kdp_send_crashdump_pkt(KDP_SEEK, NULL, sizeof(hoffset) , &hoffset)) < 0) { 
 	printf ("kdp_send_crashdump_pkt failed with error %d\n", panic_error); 
 	return -1; 
       } 
     
-    if ((panic_error = kdp_send_crashdump_data (KDP_DATA, NULL, sizeof(struct segment_command) , (caddr_t) sc)) < 0) {
+    if ((panic_error = kdp_send_crashdump_data(KDP_DATA, NULL, sizeof(struct segment_command) , (caddr_t) sc)) < 0) {
 	printf ("kdp_send_crashdump_data failed with error %d\n", panic_error);
 	return -1 ;
       }
@@ -508,14 +513,14 @@ kern_dump(void)
 
     if ((vbr.user_tag != VM_MEMORY_IOKIT)) {
       
-      if ((panic_error = kdp_send_crashdump_pkt (KDP_SEEK, NULL, sizeof(foffset) , &foffset)) < 0) {
+      if ((panic_error = kdp_send_crashdump_pkt(KDP_SEEK, NULL, sizeof(foffset) , &foffset)) < 0) {
 	  printf ("kdp_send_crashdump_pkt failed with error %d\n", panic_error);
 	  return (-1);
 	}
 
       txstart = vmoffset;
 
-      if ((panic_error = kdp_send_crashdump_data (KDP_DATA, NULL, size, (caddr_t) txstart)) < 0)	{
+      if ((panic_error = kdp_send_crashdump_data(KDP_DATA, NULL, size, (caddr_t) txstart)) < 0)	{
 	  printf ("kdp_send_crashdump_data failed with error %d\n", panic_error);
 	  return -1 ;
 	}

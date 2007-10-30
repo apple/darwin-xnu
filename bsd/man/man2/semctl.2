@@ -32,11 +32,14 @@
 .Nm semctl
 .Nd control operations on a semaphore set
 .Sh SYNOPSIS
-.In sys/types.h
-.In sys/ipc.h
 .In sys/sem.h
 .Ft int
-.Fn semctl "int semid" "int semnum" "int cmd" ...
+.Fo semctl
+.Fa "int semid"
+.Fa "int semnum"
+.Fa "int cmd"
+.Fa ...
+.Fc
 .Sh DESCRIPTION
 The
 .Fn semctl
@@ -171,20 +174,25 @@ The
 system call
 will fail if:
 .Bl -tag -width Er
+.\" ===========
+.It Bq Er EACCES
+Permission denied due to mismatch between operation and mode of
+semaphore set.
+.\" ===========
 .It Bq Er EINVAL
 No semaphore set corresponds to
 .Fa semid .
+.\" ===========
 .It Bq Er EINVAL
 The
 .Fa semnum
 argument
 is not in the range of valid semaphores for given semaphore set.
+.\" ===========
 .It Bq Er EPERM
 The calling process's effective uid does not match the uid of
 the semaphore set's owner or creator.
-.It Bq Er EACCES
-Permission denied due to mismatch between operation and mode of
-semaphore set.
+.\" ===========
 .It Bq Er ERANGE
 .Dv SETVAL
 or
@@ -192,9 +200,20 @@ or
 attempted to set a semaphore outside the allowable range
 .Bq 0 .. Dv SEMVMX .
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/ipc.h>
+.Fd #include <sys/sem.h>
+.Pp
+The include files
+.In sys/types.h
+and
+.In sys/ipc.h
+are necessary.
 .Sh SEE ALSO
 .Xr semget 2 ,
-.Xr semop 2
+.Xr semop 2 ,
+.Xr compat 5
 .Sh BUGS
 .Dv SETALL
 may update some semaphore elements before returning an error.

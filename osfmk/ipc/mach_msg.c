@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -46,6 +52,13 @@
  * 
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
+ */
+/*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ * Copyright (c) 2005 SPARTA, Inc.
  */
 /*
  */
@@ -93,8 +106,10 @@
 #include <ipc/ipc_entry.h>
 
 #include <machine/machine_routines.h>
+#include <security/mac_mach_internal.h>
 
 #include <sys/kdebug.h>
+
 
 #ifndef offsetof
 #define offsetof(type, member)  ((size_t)(&((type *)0)->member))
@@ -268,7 +283,7 @@ mach_msg_receive_results(void)
 	ipc_kmsg_t        kmsg = self->ith_kmsg;
 	mach_port_seqno_t seqno = self->ith_seqno;
 
-	mach_msg_format_0_trailer_t *trailer;
+	mach_msg_max_trailer_t *trailer;
 
 	ipc_object_release(object);
 
@@ -296,12 +311,63 @@ mach_msg_receive_results(void)
 	  goto out;
 	}
 
-	trailer = (mach_msg_format_0_trailer_t *)
+	trailer = (mach_msg_max_trailer_t *)
 			((vm_offset_t)kmsg->ikm_header +
 			round_msg(kmsg->ikm_header->msgh_size));
 	if (option & MACH_RCV_TRAILER_MASK) {
 		trailer->msgh_seqno = seqno;
 		trailer->msgh_trailer_size = REQUESTED_TRAILER_SIZE(option);
+
+
+		if (option & MACH_RCV_TRAILER_ELEMENTS (MACH_RCV_TRAILER_AV)) {
+#if CONFIG_MACF_MACH
+		  if (kmsg->ikm_sender != NULL &&
+		    IP_VALID(kmsg->ikm_header->msgh_remote_port) &&
+		    mac_port_check_method(kmsg->ikm_sender,
+		    &kmsg->ikm_sender->maclabel,
+		    &((ipc_port_t)kmsg->ikm_header->msgh_remote_port)->ip_label,
+		    kmsg->ikm_header->msgh_id) == 0)
+		      trailer->msgh_ad = 1;
+		  else
+#endif
+		      trailer->msgh_ad = 0;
+		}
+
+		/*
+		 * The ipc_kmsg_t holds a reference to the label of a label
+		 * handle, not the port. We must get a reference to the port
+		 * and a send right to copyout to the receiver.
+		 */
+
+		if (option & MACH_RCV_TRAILER_ELEMENTS (MACH_RCV_TRAILER_LABELS)) {
+#if CONFIG_MACF_MACH
+		  if (kmsg->ikm_sender != NULL) {
+		    ipc_labelh_t  lh = kmsg->ikm_sender->label;
+		    kern_return_t kr;
+
+		    ip_lock(lh->lh_port);
+		    lh->lh_port->ip_mscount++;
+		    lh->lh_port->ip_srights++;
+		    ip_reference(lh->lh_port);
+		    ip_unlock(lh->lh_port);
+
+		    kr = ipc_object_copyout(space, (ipc_object_t)lh->lh_port,
+					    MACH_MSG_TYPE_PORT_SEND, 0,
+					    &trailer->msgh_labels.sender);
+		    if (kr != KERN_SUCCESS) {
+		      ip_lock(lh->lh_port);
+		      ip_release(lh->lh_port);
+		      ip_check_unlock(lh->lh_port);
+
+		      trailer->msgh_labels.sender = 0;
+		    }
+		  } else {
+		    trailer->msgh_labels.sender = 0;
+		  }
+#else
+		    trailer->msgh_labels.sender = 0;
+#endif
+		}
 	}
 
 	/*
@@ -559,7 +625,11 @@ unsigned int c_mmot_kernel_send = 0;		/* kernel server calls	*/
 
 #endif	/* !HOTPATH_DEBUG */
 
+#if CONFIG_MACF_MACH
+boolean_t enable_hotpath = FALSE;	/* XXX - push MAC into HOTPATH too */
+#else
 boolean_t enable_hotpath = TRUE;	/* Patchable, just in case ...	*/
+#endif
 #endif	/* HOTPATH_ENABLE */
 
 /*
@@ -585,16 +655,15 @@ mach_msg_overwrite_trap(
 	mach_port_name_t	notify = args->notify;
 	mach_vm_address_t	rcv_msg_addr = args->rcv_msg;
         mach_msg_size_t		scatter_list_size = 0; /* NOT INITIALIZED - but not used in pactice */
-	mach_port_seqno_t temp_seqno = 0;
+	__unused mach_port_seqno_t temp_seqno = 0;
 
-	register mach_msg_header_t *hdr;
 	mach_msg_return_t  mr = MACH_MSG_SUCCESS;
+#if	ENABLE_HOTPATH
 	/* mask out some of the options before entering the hot path */
 	mach_msg_option_t  masked_option = 
 		option & ~(MACH_SEND_TRAILER|MACH_RCV_TRAILER_MASK|MACH_RCV_LARGE);
+	register mach_msg_header_t *hdr;
 
-#if	ENABLE_HOTPATH
-	/* BEGINNING OF HOT PATH */
 	if ((masked_option == (MACH_SEND_MSG|MACH_RCV_MSG)) && enable_hotpath) {
 		thread_t self = current_thread();
 		mach_msg_format_0_trailer_t *trailer;
@@ -1092,120 +1161,88 @@ mach_msg_overwrite_trap(
 		  register ipc_mqueue_t dest_mqueue;
 		  wait_queue_t waitq;
 		  thread_t receiver;
-		  processor_t processor;
-		  boolean_t still_running;
 		  spl_t s;
 
 		  s = splsched();
-		  processor = current_processor();
-		  if (processor->current_pri >= BASEPRI_RTQUEUES)
-			  goto abort_send_receive1;
-
 		  dest_mqueue = &dest_port->ip_messages;
 		  waitq = &dest_mqueue->imq_wait_queue;
 		  imq_lock(dest_mqueue);
 
-		  wait_queue_peek64_locked(waitq, IPC_MQUEUE_RECEIVE, &receiver, &waitq);
-		  /* queue still locked, thread locked - but still on q */
+	    get_next_receiver:
+		  receiver = wait_queue_wakeup64_identity_locked(waitq,
+								IPC_MQUEUE_RECEIVE, 
+								THREAD_AWAKENED,
+								FALSE);
+		  /* queue still locked, receiver thread locked (if any) */
 
 		  if (	receiver == THREAD_NULL ) {
-		  abort_send_receive:
-			imq_unlock(dest_mqueue);
-		  abort_send_receive1:
-			splx(s);
-			ip_unlock(dest_port);
-			ipc_object_release(rcv_object);
-			HOT(c_mmot_cold_032++);
-			goto slow_send;
-		  }
+			  imq_unlock(dest_mqueue);
+			  splx(s);
 
-		  assert(receiver->state & TH_WAIT);
-		  assert(receiver->wait_queue == waitq);
-		  assert(receiver->wait_event == IPC_MQUEUE_RECEIVE);
-		
-		  /*
-		   * Make sure that the scheduling restrictions of the receiver
-		   * are consistent with a handoff here (if it comes down to that).
-		   */
-		  if (	receiver->sched_pri >= BASEPRI_RTQUEUES ||
-			  	receiver->processor_set != processor->processor_set ||
-				(receiver->bound_processor != PROCESSOR_NULL &&
-				 receiver->bound_processor != processor)) {
-			HOT(c_mmot_cold_033++);
-		fall_off:
-			thread_unlock(receiver);
-			if (waitq != &dest_mqueue->imq_wait_queue)
-				wait_queue_unlock(waitq);
-			goto abort_send_receive;
+			  ip_unlock(dest_port);
+			  ipc_object_release(rcv_object);
+			  HOT(c_mmot_cold_032++);
+			  goto slow_send;
 		  }
 
 		  /*
-		   * Check that the receiver can stay on the hot path.
-		   */
-		  if (ipc_kmsg_copyout_size(kmsg, receiver->map) + 
-			  REQUESTED_TRAILER_SIZE(receiver->ith_option) > receiver->ith_msize) {
-			/*
-			 *	The receiver can't accept the message.
-			 */
-			HOT(c_mmot_bad_rcvr++);
-			goto fall_off;
-		  }
-
-		  /*
-		   * Before committing to the handoff, make sure that we are
-		   * really going to block (i.e. there are no messages already
-		   * queued for us.  This violates lock ordering, so make sure
-		   * we don't deadlock. After the trylock succeeds below, we
-		   * may have up to 3 message queues locked:
-		   *	- the dest port mqueue
-		   * 	- a portset mqueue (where waiting receiver was found)
-		   *    - finally our own rcv_mqueue
+		   * Check that the receiver can handle the size of the message.
+		   * If not, and the receiver just wants to be informed of that
+		   * fact, set it running and try to find another thread.
 		   *
-		   * JMM - Need to make this check appropriate for portsets as
-		   * well before re-enabling them.
+		   * If he didn't want the "too large" message left on the queue,
+		   * give it to him anyway, he'll consume it as part of his receive
+		   * processing.
 		   */
-		  if (!imq_lock_try(rcv_mqueue)) {
-			goto fall_off;
-		  }
-		  if (ipc_kmsg_queue_first(&rcv_mqueue->imq_messages) != IKM_NULL) {
-			imq_unlock(rcv_mqueue);
-			splx(s);
-			HOT(c_mmot_cold_033++);
-			goto fall_off;
+		  if (receiver->ith_msize < 
+		      ipc_kmsg_copyout_size(kmsg, receiver->map) + 
+		      REQUESTED_TRAILER_SIZE(receiver->ith_option))
+		  {
+			  receiver->ith_msize = kmsg->ikm_header->msgh_size;
+			  receiver->ith_state = MACH_RCV_TOO_LARGE;
+
+			  if ((receiver->ith_option & MACH_RCV_LARGE) != 0) {
+				  receiver->ith_kmsg = IKM_NULL;
+				  receiver->ith_seqno = 0;
+				  thread_unlock(receiver);
+				  HOT(c_mmot_bad_rcvr++);
+				  goto get_next_receiver;
+			  }
+		  } else {
+			  receiver->ith_state = MACH_MSG_SUCCESS;
 		  }
 
-		  /* At this point we are committed to do the "handoff". */
+		  /* At this point we are committed to do the message handoff. */
 		  c_mach_msg_trap_switch_fast++;
-		  
-		  /*
-		   * Go ahead and pull the receiver from the waitq.  If the
-		   * waitq wasn't the one for the mqueue, unlock it.
-		   */
-		  wait_queue_pull_thread_locked(waitq,
-								receiver,
-								(waitq != &dest_mqueue->imq_wait_queue));
 
 		  /*
 		   *	Store the kmsg and seqno where the receiver can pick it up.
+		   *	and set it running.
 		   */
-		  receiver->ith_state = MACH_MSG_SUCCESS;
 		  receiver->ith_kmsg = kmsg;
 		  receiver->ith_seqno = dest_mqueue->imq_seqno++;
-
-		  /*
-		   * Unblock the receiver.  If it was still running on another
-		   * CPU, we'll give it a chance to run with the message where
-		   * it is (and just select someother thread to run here).
-		   * Otherwise, we'll invoke it here as part of the handoff.
-		   */
-		  still_running = thread_unblock(receiver, THREAD_AWAKENED);
-
 		  thread_unlock(receiver);
 
 		  imq_unlock(dest_mqueue);
 		  ip_unlock(dest_port);
 		  current_task()->messages_sent++;
+		 
+		  /*
+		   * Now prepare to wait on our receive queue.  But we have to make
+		   * sure the queue doesn't already have messages. If it does, we'll
+		   * have to do a slow receive.
+		   *
+		   * JMM - Need to make this check appropriate for portsets as
+		   * well before re-enabling them.
+		   */
+		  imq_lock(rcv_mqueue);
 
+		  if (ipc_kmsg_queue_first(&rcv_mqueue->imq_messages) != IKM_NULL) {
+			imq_unlock(rcv_mqueue);
+			splx(s);
+			HOT(c_mmot_cold_033++);
+			goto slow_receive;
+		  }
 
 		  /*
 		   *	Put self on receive port's queue.
@@ -1228,19 +1265,8 @@ mach_msg_overwrite_trap(
 										self);
 		  thread_unlock(self);
 		  imq_unlock(rcv_mqueue);
-
-		  /*
-		   * If the receiving thread wasn't still running, we switch directly
-		   * to it here.  Otherwise we let the scheduler pick something for
-		   * here.  In either case, block this thread as though it had called
-		   * ipc_mqueue_receive.
-		   */
-		  if (still_running) {
-			  splx(s);
-			  thread_block(ipc_mqueue_receive_continue);
-		  } else {
-			  thread_run(self, ipc_mqueue_receive_continue, NULL, receiver);
-		  }
+		  splx(s);
+		  thread_block(ipc_mqueue_receive_continue);
 		  /* NOTREACHED */
 		}
 
@@ -1711,13 +1737,13 @@ mach_msg_overwrite_trap(
 		/* hold ref for rcv_object */
 
 		/*
-		 * slow_receive:
 		 *
 		 *	Now we have sent the request and copied in rcv_name,
 		 *	and hold ref for rcv_object (to keep mqueue alive).
 		 *  Just receive a reply and try to get back to fast path.
 		 */
 
+		slow_receive:
 		self->ith_continuation = (void (*)(mach_msg_return_t))0;
 		ipc_mqueue_receive(rcv_mqueue,
 				   MACH_MSG_OPTION_NONE,
@@ -1730,22 +1756,22 @@ mach_msg_overwrite_trap(
 
 		ipc_object_release(rcv_object);
 
-		  if (mr != MACH_MSG_SUCCESS) {
+		if (mr != MACH_MSG_SUCCESS) {
 		    return(mr);
-		  }
+		}
 
-		  kmsg = self->ith_kmsg;
-		  hdr = kmsg->ikm_header;
-		  send_size = hdr->msgh_size;
-		  trailer = (mach_msg_format_0_trailer_t *) ((vm_offset_t) hdr +
-							     round_msg(send_size));
-		  if (option & MACH_RCV_TRAILER_MASK) {
+		kmsg = self->ith_kmsg;
+		hdr = kmsg->ikm_header;
+		send_size = hdr->msgh_size;
+		trailer = (mach_msg_format_0_trailer_t *) ((vm_offset_t) hdr +
+												   round_msg(send_size));
+		if (option & MACH_RCV_TRAILER_MASK) {
 		    trailer->msgh_seqno = temp_seqno;	
 		    trailer->msgh_trailer_size = REQUESTED_TRAILER_SIZE(option);
-		  }
-		  dest_port = (ipc_port_t) hdr->msgh_remote_port;
-		  HOT(c_mmot_cold_055++);
-		  goto fast_copyout;
+		}
+		dest_port = (ipc_port_t) hdr->msgh_remote_port;
+		HOT(c_mmot_cold_055++);
+		goto fast_copyout;
 
 	    slow_copyout:
 		/*

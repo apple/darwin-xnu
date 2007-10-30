@@ -1,24 +1,31 @@
 /*
  * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+
 /*
  * @OSF_COPYRIGHT@
  */
@@ -50,6 +57,7 @@
 
 #include <platforms.h>
 #include <mach_kdb.h>
+#include <mach_kdp.h>
 
 #include <i386/asm.h>
 #include <i386/proc_reg.h>
@@ -71,13 +79,24 @@ EXT(lowGlo):
 	.long   0			/* 0x2008 Double constant 0 */
 	.long   0
 	.long	0			/* 0x2010 Reserved */
-	.long	0			/* 0x2014 Reserved */
+	.long	0			/* 0x2014 Zero */
 	.long	0			/* 0x2018 Reserved */
 	.long	EXT(version)		/* 0x201C Pointer to kernel version string */
 	.fill	280, 4, 0		/* 0x2020 Reserved */
 	.long	EXT(kmod)		/* 0x2480 Pointer to kmod, debugging aid */
+#if MACH_KDP
 	.long	EXT(kdp_trans_off)	/* 0x2484 Pointer to kdp_trans_off, debugging aid */
+	.long	EXT(kdp_read_io)	/* 0x2488 Pointer to kdp_read_io, debugging aid */
+#else
+	.long	0			/* 0x2484 Reserved */
 	.long	0			/* 0x2488 Reserved */
+#endif
 	.long	0			/* 0x248C Reserved for developer use */
 	.long	0			/* 0x2490 Reserved for developer use */
-	.fill	731, 4, 0
+	.long	EXT(osversion)		/* 0x2494 Pointer to osversion string */
+#if MACH_KDP
+	.long	EXT(flag_kdp_trigger_reboot) /* 0x2498 Pointer to debugger reboot trigger */
+#else
+	.long	0			/* 0x2498 Reserved */
+#endif
+	.fill	729, 4, 0

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -56,8 +62,6 @@
  *	Non-ipc host functions.
  */
 
-#include <mach_host.h>
-
 #include <mach/mach_types.h>
 #include <mach/boolean.h>
 #include <mach/host_info.h>
@@ -83,11 +87,6 @@
 #include <kern/processor.h>
 
 #include <vm/vm_map.h>
-
-#if     DIPC
-#include <dipc/dipc_funcs.h>
-#include <dipc/special_ports.h>
-#endif
 
 host_data_t	realhost;
 
@@ -164,9 +163,9 @@ host_info(
 
 		basic_info = (host_basic_info_t) info;
 
-		basic_info->max_cpus = machine_info.max_cpus;
-		basic_info->avail_cpus = machine_info.avail_cpus;
 		basic_info->memory_size = machine_info.memory_size;
+		basic_info->max_cpus = machine_info.max_cpus;
+		basic_info->avail_cpus = processor_avail_count;
 		master_slot = PROCESSOR_DATA(master_processor, slot_num);
 		basic_info->cpu_type = slot_type(master_slot);
 		basic_info->cpu_subtype = slot_subtype(master_slot);
@@ -293,6 +292,7 @@ host_statistics(
 		register processor_t		processor;
 		register vm_statistics_t	stat;
 		vm_statistics_data_t		host_vm_stat;
+		mach_msg_type_number_t		original_count;
                 
 		if (*count < HOST_VM_INFO_REV0_COUNT)
 			return (KERN_FAILURE);
@@ -322,7 +322,7 @@ host_statistics(
 
 		stat = (vm_statistics_t) info;
 
-		stat->free_count = vm_page_free_count;
+		stat->free_count = vm_page_free_count + vm_page_speculative_count;
 		stat->active_count = vm_page_active_count;
 		stat->inactive_count = vm_page_inactive_count;
 		stat->wire_count = vm_page_wire_count;
@@ -335,13 +335,23 @@ host_statistics(
 		stat->lookups = host_vm_stat.lookups;
 		stat->hits = host_vm_stat.hits;
 
-		if (*count >= HOST_VM_INFO_COUNT) {
-			/* info that was not in revision 0 of that interface */
+		/*
+		 * Fill in extra info added in later revisions of the
+		 * vm_statistics data structure.  Fill in only what can fit
+		 * in the data structure the caller gave us !
+		 */
+		original_count = *count;
+		*count = HOST_VM_INFO_REV0_COUNT; /* rev0 already filled in */
+		if (original_count >= HOST_VM_INFO_REV1_COUNT) {
+			/* rev1 added "purgeable" info */
 			stat->purgeable_count = vm_page_purgeable_count;
 			stat->purges = vm_page_purged_count;
-			*count = HOST_VM_INFO_COUNT;
-		} else {
-			*count = HOST_VM_INFO_REV0_COUNT;
+			*count = HOST_VM_INFO_REV1_COUNT;
+		}
+		if (original_count >= HOST_VM_INFO_REV2_COUNT) {
+			/* rev2 added "speculative" info */
+			stat->speculative_count = vm_page_speculative_count;
+			*count = HOST_VM_INFO_REV2_COUNT;
 		}
 
 		return (KERN_SUCCESS);
@@ -351,43 +361,34 @@ host_statistics(
 	{
 		register processor_t	processor;
 		host_cpu_load_info_t	cpu_load_info;
-		unsigned long			ticks_value1, ticks_value2;
 
 		if (*count < HOST_CPU_LOAD_INFO_COUNT)
 			return (KERN_FAILURE);
 
-#define GET_TICKS_VALUE(processor, state)	 					\
-MACRO_BEGIN														\
-	do {														\
-		ticks_value1 = *(volatile integer_t *)					\
-			&PROCESSOR_DATA((processor), cpu_ticks[(state)]);	\
-		ticks_value2 = *(volatile integer_t *)					\
-			&PROCESSOR_DATA((processor), cpu_ticks[(state)]);	\
-	} while (ticks_value1 != ticks_value2);						\
-																\
-	cpu_load_info->cpu_ticks[(state)] += ticks_value1;			\
+#define GET_TICKS_VALUE(processor, state, timer)										\
+MACRO_BEGIN																				\
+	cpu_load_info->cpu_ticks[(state)] +=												\
+				timer_grab(&PROCESSOR_DATA(processor, timer)) / hz_tick_interval;		\
 MACRO_END
 
 		cpu_load_info = (host_cpu_load_info_t)info;
 		cpu_load_info->cpu_ticks[CPU_STATE_USER] = 0;
-		cpu_load_info->cpu_ticks[CPU_STATE_NICE] = 0;
 		cpu_load_info->cpu_ticks[CPU_STATE_SYSTEM] = 0;
 		cpu_load_info->cpu_ticks[CPU_STATE_IDLE] = 0;
+		cpu_load_info->cpu_ticks[CPU_STATE_NICE] = 0;
 
 		processor = processor_list;
-		GET_TICKS_VALUE(processor, CPU_STATE_USER);
-		GET_TICKS_VALUE(processor, CPU_STATE_NICE);
-		GET_TICKS_VALUE(processor, CPU_STATE_SYSTEM);
-		GET_TICKS_VALUE(processor, CPU_STATE_IDLE);
+		GET_TICKS_VALUE(processor, CPU_STATE_USER, user_state);
+		GET_TICKS_VALUE(processor, CPU_STATE_SYSTEM, system_state);
+		GET_TICKS_VALUE(processor, CPU_STATE_IDLE, idle_state);
 
 		if (processor_count > 1) {
 			simple_lock(&processor_list_lock);
 
 			while ((processor = processor->processor_list) != NULL) {
-				GET_TICKS_VALUE(processor, CPU_STATE_USER);
-				GET_TICKS_VALUE(processor, CPU_STATE_NICE);
-				GET_TICKS_VALUE(processor, CPU_STATE_SYSTEM);
-				GET_TICKS_VALUE(processor, CPU_STATE_IDLE);
+				GET_TICKS_VALUE(processor, CPU_STATE_USER, user_state);
+				GET_TICKS_VALUE(processor, CPU_STATE_SYSTEM, system_state);
+				GET_TICKS_VALUE(processor, CPU_STATE_IDLE, idle_state);
 			}
 
 			simple_unlock(&processor_list_lock);
@@ -416,7 +417,6 @@ host_priv_statistics(
 {
 	return(host_statistics((host_t)host_priv, flavor, info, count));
 }
-
 
 kern_return_t
 host_page_size(
@@ -465,7 +465,7 @@ host_processor_sets(
 	void *addr;
 
 	if (host_priv == HOST_PRIV_NULL)
-		return KERN_INVALID_ARGUMENT;
+		return (KERN_INVALID_ARGUMENT);
 
 	/*
 	 *	Allocate memory.  Can be pageable because it won't be
@@ -474,17 +474,15 @@ host_processor_sets(
 
 	addr = kalloc((vm_size_t) sizeof(mach_port_t));
 	if (addr == 0)
-		return KERN_RESOURCE_SHORTAGE;
+		return (KERN_RESOURCE_SHORTAGE);
 
-	/* take ref for convert_pset_name_to_port */
-	pset_reference(&default_pset);
 	/* do the conversion that Mig should handle */
-	*((ipc_port_t *) addr) = convert_pset_name_to_port(&default_pset);
+	*((ipc_port_t *) addr) = convert_pset_name_to_port(&pset0);
 
 	*pset_list = (processor_set_array_t)addr;
 	*count = 1;
 
-	return KERN_SUCCESS;
+	return (KERN_SUCCESS);
 }
 
 /*
@@ -498,14 +496,15 @@ host_processor_set_priv(
 	processor_set_t	pset_name,
 	processor_set_t	*pset)
 {
-    if ((host_priv == HOST_PRIV_NULL) || (pset_name == PROCESSOR_SET_NULL)) {
-	*pset = PROCESSOR_SET_NULL;
-	return(KERN_INVALID_ARGUMENT);
+    if (host_priv == HOST_PRIV_NULL || pset_name == PROCESSOR_SET_NULL) {
+		*pset = PROCESSOR_SET_NULL;
+
+		return (KERN_INVALID_ARGUMENT);
     }
 
     *pset = pset_name;
-    pset_reference(*pset);
-    return(KERN_SUCCESS);
+
+    return (KERN_SUCCESS);
 }
 
 /*
@@ -659,11 +658,6 @@ host_get_special_port(
 	if (host_priv == HOST_PRIV_NULL ||
 	    id == HOST_SECURITY_PORT || id > HOST_MAX_SPECIAL_PORT )
 		return KERN_INVALID_ARGUMENT;
-
-#if     DIPC
-	if (node != HOST_LOCAL_NODE)
-        	return norma_get_special_port(host_priv, node, id, portp);
-#endif
 
 	host_lock(host_priv);
 	port = realhost.special[id];

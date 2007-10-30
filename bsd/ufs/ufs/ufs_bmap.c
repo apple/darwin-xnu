@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -84,6 +90,7 @@
 #include <ufs/ufs/ufs_byte_order.h>
 #include <libkern/OSByteOrder.h>
 #endif /* REV_ENDIAN_FS */
+#include <libkern/OSAtomic.h>
 
 
 /*
@@ -210,7 +217,7 @@ ufs_bmaparray(vp, bn, bnp, ap, nump, runp)
 			buf_setblkno(bp, blkptrtodb(ump, (daddr64_t)((unsigned)daddr)));
 			buf_setflags(bp, B_READ);
 			VNOP_STRATEGY(bp);
-			current_proc()->p_stats->p_ru.ru_inblock++;	/* XXX */
+			OSIncrementAtomic(&current_proc()->p_stats->p_ru.ru_inblock);
 			if (error = (int)buf_biowait(bp)) {
 				buf_brelse(bp);
 				return (error);
@@ -363,63 +370,81 @@ ufs_blockmap(ap)
 	int	retsize = 0;
 	int	error = 0;
 	int	nblks;
+	int	lblk_offset;
 
 	ip = VTOI(vp);
 	fs = ip->i_fs;
 	
-	lbn = (ufs_daddr_t)lblkno(fs, ap->a_foffset);
 	devBlockSize = vfs_devblocksize(vnode_mount(vp));
 
-	if (blkoff(fs, ap->a_foffset))
-		panic("ufs_blockmap; allocation requested inside a block");
+	if (ap->a_foffset % devBlockSize)
+		panic("ufs_blockmap; allocation requested inside a device block");
 
 	if (size % devBlockSize)
 		panic("ufs_blockmap: size is not multiple of device block size\n");
 
+	/*
+	 * round down to the beginning of a filesystem block
+	 */
+	lbn = (ufs_daddr_t)lblkno(fs, ap->a_foffset);
+
+	lblk_offset = (int)(ap->a_foffset - lblktosize(fs, lbn));
+
 	if ((error = ufs_bmaparray(vp, lbn, &daddr, NULL, NULL, &nblks)))
 	        return (error);
-
-	if (bnp)
-		*bnp = (daddr64_t)daddr;
 
 	if (ap->a_poff) 
 		*(int *)ap->a_poff = 0;
 
-	if (runp) {
-	        if (lbn < 0) {
-		        /*
-			 * we're dealing with the indirect blocks
-			 * which are always fs_bsize in size
-			 */
-		        retsize = (nblks + 1) * fs->fs_bsize;
-		} else if (daddr == -1 || nblks == 0) {
-		        /*
-			 * we're dealing with a 'hole'... UFS doesn't
-			 * have a clean way to determine it's size
-			 * or
-			 * there's are no physically contiguous blocks
-			 * so
-			 * just return the size of the lbn we started with
-			 */
-		        retsize = blksize(fs, ip, lbn);
-		} else {
-		        /*
-			 * we have 1 or more blocks that are physically contiguous
-			 * to our starting block number... the orignal block + (nblks - 1)
-			 * blocks must be full sized since only the last block can be 
-			 * composed of fragments...
-			 */
-			 retsize = nblks * fs->fs_bsize;
+        if (lbn < 0) {
+	        /*
+		 * we're dealing with the indirect blocks
+		 * which are always fs_bsize in size
+		 */
+	        retsize = (nblks + 1) * fs->fs_bsize;
+	} else if (daddr == -1 || nblks == 0) {
+	        /*
+		 * we're dealing with a 'hole'... UFS doesn't
+		 * have a clean way to determine it's size
+		 * or
+		 * there's are no physically contiguous blocks
+		 * so
+		 * just return the size of the lbn we started with
+		 */
+	        retsize = blksize(fs, ip, lbn);
+	} else {
+	        /*
+		 * we have 1 or more blocks that are physically contiguous
+		 * to our starting block number... the orignal block + (nblks - 1)
+		 * blocks must be full sized since only the last block can be 
+		 * composed of fragments...
+		 */
+		 retsize = nblks * fs->fs_bsize;
 
-			 /*
-			  * now compute the size of the last block and add it in
-			  */
-			 retsize += blksize(fs, ip, (lbn + nblks));
+		 /*
+		  * now compute the size of the last block and add it in
+		  */
+		 retsize += blksize(fs, ip, (lbn + nblks));
+	}
+	if (lblk_offset) {
+	        if (daddr != -1)
+	                daddr += (lblk_offset / devBlockSize);
+
+		if (retsize > lblk_offset)
+		        retsize -= lblk_offset;
+		else {
+		        retsize = 0;
+			daddr = -1;
 		}
+	}
+	if (runp) {
 		if (retsize < size)
 		        *runp = retsize;
 		else
 		        *runp = size;
 	}
+	if (bnp)
+		*bnp = (daddr64_t)daddr;
+
 	return (0);
 }

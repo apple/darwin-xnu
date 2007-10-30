@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -78,27 +84,40 @@
 #if DEBUG
 #include <kern/simple_lock.h>
 
-static int				uio_t_count = 0;
+static uint32_t				uio_t_count = 0;
 #endif /* DEBUG */
 
 
+/*
+ * Returns:	0			Success
+ *	uiomove64:EFAULT
+ *
+ * Notes:	The first argument should be a caddr_t, but const poisoning
+ *		for typedef'ed types doesn't work in gcc.
+ */
 int
-uiomove(cp, n, uio)
-	register caddr_t cp;
-	register int n;
-	register uio_t uio;
+uiomove(const char * cp, int n, uio_t uio)
 {
-	return uiomove64((addr64_t)((unsigned int)cp), n, uio);
+	return uiomove64((const addr64_t)((const unsigned int)cp), n, uio);
 }
 
+/*
+ * Returns:	0			Success
+ *		EFAULT
+ *	copyout:EFAULT
+ *	copyin:EFAULT
+ *	copywithin:EFAULT
+ *	copypv:EFAULT
+ */
 	// LP64todo - fix this! 'n' should be int64_t?
 int
-uiomove64(addr64_t cp, int n, register struct uio *uio)
+uiomove64(const addr64_t c_cp, int n, struct uio *uio)
 {
+	addr64_t cp = c_cp;
 #if LP64KERN
-	register uint64_t acnt;
+	uint64_t acnt;
 #else
-	register u_int acnt;
+	u_int acnt;
 #endif
 	int error = 0;
 
@@ -301,9 +320,7 @@ uiomove64(addr64_t cp, int n, register struct uio *uio)
  * Give next character to user as result of read.
  */
 int
-ureadc(c, uio)
-	register int c;
-	register struct uio *uio;
+ureadc(int c, struct uio *uio)
 {
 	if (uio_resid(uio) <= 0)
 		panic("ureadc: non-positive resid");
@@ -355,10 +372,9 @@ again:
  * Get next character written in by user from uio.
  */
 int
-uwritec(uio)
-	uio_t uio;
+uwritec(uio_t uio)
 {
-	register int c = 0;
+	int c = 0;
 
 	if (uio_resid(uio) <= 0)
 		return (-1);
@@ -412,9 +428,7 @@ again:
  * General routine to allocate a hash table.
  */
 void *
-hashinit(elements, type, hashmask)
-	int elements, type;
-	u_long *hashmask;
+hashinit(int elements, int type, u_long *hashmask)
 {
 	long hashsize;
 	LIST_HEAD(generic, generic) *hashtbl;
@@ -442,7 +456,7 @@ user_ssize_t uio_resid( uio_t a_uio )
 {
 #if DEBUG
 	if (a_uio == NULL) {
-		panic("%s :%d - invalid uio_t\n", __FILE__, __LINE__); 
+		printf("%s :%d - invalid uio_t\n", __FILE__, __LINE__); 
 	}
 /* 	if (IS_VALID_UIO_SEGFLG(a_uio->uio_segflg) == 0) { */
 /* 		panic("%s :%d - invalid uio_segflg\n", __FILE__, __LINE__);  */
@@ -494,44 +508,6 @@ void uio_setresid( uio_t a_uio, user_ssize_t a_value )
 	}
 	return;
 }
-
-#if 0 // obsolete
-/*
- * uio_proc_t - return the proc_t for the given uio_t
- * WARNING - This call is going away.  Find another way to get the proc_t!!
- */
-__private_extern__ proc_t uio_proc_t( uio_t a_uio )
-{
-#if LP64_DEBUG
-	if (a_uio == NULL) {
-		panic("%s :%d - invalid uio_t\n", __FILE__, __LINE__); 
-	}
-#endif /* LP64_DEBUG */
-
-	/* return 0 if there are no active iovecs */
-	if (a_uio == NULL) {
-		return( NULL );
-	}
-	return( a_uio->uio_procp );
-}
-
-/*
- * uio_setproc_t - set the residual IO value for the given uio_t
- * WARNING - This call is going away. 
- */
-__private_extern__ void uio_setproc_t( uio_t a_uio, proc_t a_proc_t )
-{
-	if (a_uio == NULL) {
-#if LP64_DEBUG
-		panic("%s :%d - invalid uio_t\n", __FILE__, __LINE__); 
-#endif /* LP64_DEBUG */
-		return;
-	}
-
-	a_uio->uio_procp = a_proc_t;
-	return;
-}
-#endif // obsolete
 
 /*
  * uio_curriovbase - return the base address of the current iovec associated 
@@ -737,7 +713,7 @@ uio_t uio_create( int a_iovcount,		/* number of iovecs */
 	int					my_size;
 	uio_t				my_uio;
 	
-	my_size = sizeof(struct uio) + (sizeof(struct user_iovec) * a_iovcount);
+	my_size = UIO_SIZEOF(a_iovcount);
 	my_buf_p = kalloc(my_size);
 	my_uio = uio_createwithbuffer( a_iovcount, 
 									 a_offset,
@@ -749,7 +725,7 @@ uio_t uio_create( int a_iovcount,		/* number of iovecs */
 		/* leave a note that we allocated this uio_t */
 		my_uio->uio_flags |= UIO_FLAGS_WE_ALLOCED;
 #if DEBUG
-		hw_atomic_add(&uio_t_count, 1);
+		(void)hw_atomic_add(&uio_t_count, 1);
 #endif
 	}
 	
@@ -941,9 +917,8 @@ void uio_free( uio_t a_uio )
 
 	if (a_uio != NULL && (a_uio->uio_flags & UIO_FLAGS_WE_ALLOCED) != 0) {
 #if DEBUG
-		if ((int)(hw_atomic_sub(&uio_t_count, 1)) < 0) {
-			panic("%s :%d - uio_t_count has gone negative\n", __FILE__, __LINE__); 
-		}
+		if (hw_atomic_sub(&uio_t_count, 1) == UINT_MAX)
+			panic("%s :%d - uio_t_count underflow\n", __FILE__, __LINE__); 
 #endif
 		kfree(a_uio, a_uio->uio_size);
 	}
@@ -1256,6 +1231,8 @@ uio_t uio_duplicate( uio_t a_uio )
 			}
 		}
 	}
+
+	my_uio->uio_flags = UIO_FLAGS_WE_ALLOCED | UIO_FLAGS_INITED;
 
 	return(my_uio);
 }

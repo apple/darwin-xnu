@@ -7,18 +7,23 @@
 ;	.../xnu/bsd/sys/syscall.h 
 ;	.../xnu/bsd/sys/sysproto.h 
 
-; Columns -> | Number | Cancel | Funnel | Files | { Name and Args } | { Comments }
+; Columns -> | Number Files | { Name and Args } | { Comments }
 ;	Number:  	system call number, must be in order
-;	Cancel:  	type of thread cancel - "PRE", "POST" or "NONE"
-;	Funnel:  	type of funnel - "KERN" or  "NONE"
 ;	Files:		with files to generate - "ALL" or any combo of:
 ;					"T" for syscall table (in init_sysent.c)
 ;					"N" for syscall names (in syscalls.c)
 ;					"H" for syscall headers (in syscall.h)
 ;					"P" for syscall prototypes (in sysproto.h)
+;	Name and Args:	function prototype, optionally followed by
+;			NO_SYSCALL_STUB (which mean no system call stub will
+;			be generated in libSystem) and ending with a semicolon.
+;			(Note: functions prefixed by double-underbar are
+;			automatically given the NO_SYSCALL_STUB attribute.)
 ;	Comments:  	additional comments about the sys call copied to output files
 
 ; #ifdef's, #include's, #if's etc. are copied to all output files.
+; N.B.: makesyscalls.sh and createsyscalls.pl must be updated to account
+; for any new argument types.
 
 #include <sys/appleapiopts.h>
 #include <sys/param.h>
@@ -27,419 +32,587 @@
 #include <sys/sysent.h>
 #include <sys/sysproto.h>
 
-0	NONE	NONE	ALL	{ int nosys(void); }   { indirect syscall }
-1	NONE	KERN	ALL	{ void exit(int rval); } 
-2	NONE	KERN	ALL	{ int fork(void); } 
-3	PRE 	NONE	ALL	{ user_ssize_t read(int fd, user_addr_t cbuf, user_size_t nbyte); } 
-4	PRE 	NONE	ALL	{ user_ssize_t write(int fd, user_addr_t cbuf, user_size_t nbyte); } 
-5	PRE 	NONE	ALL	{ int open(user_addr_t path, int flags, int mode); } 
-6	PRE 	NONE	ALL	{ int close(int fd); } 
-7	PRE 	KERN	ALL	{ int wait4(int pid, user_addr_t status, int options, user_addr_t rusage); } 
-8	NONE	NONE	ALL	{ int nosys(void); }   { old creat }
-9	NONE	NONE	ALL	{ int link(user_addr_t path, user_addr_t link); } 
-10	NONE	NONE    ALL	{ int unlink(user_addr_t path); } 
-11	NONE	NONE	ALL	{ int nosys(void); }   { old execv }
-12	NONE	NONE	ALL	{ int chdir(user_addr_t path); } 
-13	NONE	NONE	ALL	{ int fchdir(int fd); } 
-14	NONE	NONE	ALL	{ int mknod(user_addr_t path, int mode, int dev); } 
-15	NONE	NONE	ALL	{ int chmod(user_addr_t path, int mode); } 
-16	NONE	NONE	ALL	{ int chown(user_addr_t path, int uid, int gid); } 
-17	NONE	NONE	UALL	{ int obreak(char *nsize); }   { old break }
+0	ALL	{ int nosys(void); }   { indirect syscall }
+1	ALL	{ void exit(int rval); } 
+2	ALL	{ int fork(void); } 
+3	ALL	{ user_ssize_t read(int fd, user_addr_t cbuf, user_size_t nbyte); } 
+4	ALL	{ user_ssize_t write(int fd, user_addr_t cbuf, user_size_t nbyte); } 
+5	ALL	{ int open(user_addr_t path, int flags, int mode); } 
+6	ALL	{ int close(int fd); } 
+7	ALL	{ int wait4(int pid, user_addr_t status, int options, user_addr_t rusage); } 
+8	ALL	{ int nosys(void); }   { old creat }
+9	ALL	{ int link(user_addr_t path, user_addr_t link); } 
+10	ALL	{ int unlink(user_addr_t path); } 
+11	ALL	{ int nosys(void); }   { old execv }
+12	ALL	{ int chdir(user_addr_t path); } 
+13	ALL	{ int fchdir(int fd); } 
+14	ALL	{ int mknod(user_addr_t path, int mode, int dev); } 
+15	ALL	{ int chmod(user_addr_t path, int mode); } 
+16	ALL	{ int chown(user_addr_t path, int uid, int gid); } 
+17	UALL	{ int obreak(char *nsize) NO_SYSCALL_STUB; }   { old break }
 
 #if COMPAT_GETFSSTAT
-18	NONE	NONE	ALL	{ int ogetfsstat(user_addr_t buf, int bufsize, int flags); } 
+18	ALL	{ int ogetfsstat(user_addr_t buf, int bufsize, int flags); } 
 #else
-18	NONE	NONE	ALL	{ int getfsstat(user_addr_t buf, int bufsize, int flags); } 
+18	ALL	{ int getfsstat(user_addr_t buf, int bufsize, int flags); } 
 #endif
 
-19	NONE	NONE	ALL	{ int nosys(void); }   { old lseek }
-20	NONE	NONE	ALL	{ int getpid(void); } 
-21	NONE	NONE	ALL	{ int nosys(void); }   { old mount }
-22	NONE	NONE	ALL	{ int nosys(void); }   { old umount }
-23	NONE	KERN	ALL	{ int setuid(uid_t uid); } 
-24	NONE	KERN	ALL	{ int getuid(void); } 
-25	NONE	KERN	ALL	{ int geteuid(void); } 
-26	NONE	KERN	ALL	{ int ptrace(int req, pid_t pid, caddr_t addr, int data); } 
-27	PRE 	NONE	ALL	{ int recvmsg(int s, struct msghdr *msg, int flags); } 
-28	PRE 	NONE	ALL	{ int sendmsg(int s, caddr_t msg, int flags); } 
-29	PRE 	NONE	ALL	{ int recvfrom(int s, void *buf, size_t len, int flags, struct sockaddr *from, int *fromlenaddr); } 
-30	PRE 	NONE	ALL	{ int accept(int s, caddr_t name, socklen_t	*anamelen); } 
-31	NONE	NONE	ALL	{ int getpeername(int fdes, caddr_t asa, socklen_t *alen); } 
-32	NONE	NONE	ALL	{ int getsockname(int fdes, caddr_t asa, socklen_t *alen); } 
-33	NONE	NONE	ALL	{ int access(user_addr_t path, int flags); } 
-34	NONE	NONE	ALL	{ int chflags(char *path, int flags); } 
-35	NONE	NONE	ALL	{ int fchflags(int fd, int flags); } 
-36	NONE	NONE	ALL	{ int sync(void); } 
-37	NONE	KERN	ALL	{ int kill(int pid, int signum); } 
-38	NONE	NONE	ALL	{ int nosys(void); }   { old stat  }
-39	NONE	KERN	ALL	{ int getppid(void); } 
-40	NONE	NONE	ALL	{ int nosys(void); }   { old lstat }
-41	NONE	NONE	ALL	{ int dup(u_int fd); } 
-42	NONE	NONE	ALL	{ int pipe(void); } 
-43	NONE	KERN	ALL	{ int getegid(void); } 
-44	NONE	KERN	ALL	{ int profil(short *bufbase, size_t bufsize, u_long pcoffset, u_int pcscale); } 
-45	NONE	KERN	ALL	{ int ktrace(const char *fname, int ops, int facs, int pid); } 
-46	NONE	KERN	ALL	{ int sigaction(int signum, struct __sigaction *nsa, struct sigaction *osa); } 
-47	NONE	KERN	ALL	{ int getgid(void); } 
-48	NONE	KERN	ALL	{ int sigprocmask(int how, user_addr_t mask, user_addr_t omask); } 
-49	NONE	KERN	ALL	{ int getlogin(char *namebuf, u_int namelen); } 
-50	NONE	KERN	ALL	{ int setlogin(char *namebuf); } 
-51	NONE	KERN	ALL	{ int acct(char *path); } 
-52	NONE	KERN	ALL	{ int sigpending(struct sigvec *osv); } 
-53	NONE	KERN	ALL	{ int sigaltstack(struct sigaltstack *nss, struct sigaltstack *oss); } 
-54	NONE	NONE	ALL	{ int ioctl(int fd, u_long com, caddr_t data); } 
-55	NONE	KERN	ALL	{ int reboot(int opt, char *command); } 
-56	NONE	NONE	ALL	{ int revoke(char *path); } 
-57	NONE	NONE	ALL	{ int symlink(char *path, char *link); } 
-58	NONE	NONE	ALL	{ int readlink(char *path, char *buf, int count); } 
-59	NONE	KERN	ALL	{ int execve(char *fname, char **argp, char **envp); } 
-60	NONE	KERN	ALL	{ int umask(int newmask); } 
-61	NONE	KERN	ALL	{ int chroot(user_addr_t path); } 
-62	NONE	NONE	ALL	{ int nosys(void); }   { old fstat }
-63	NONE	NONE	ALL	{ int nosys(void); }   { used internally, reserved }
-64	NONE	NONE	ALL	{ int nosys(void); }   { old getpagesize }
-65	PRE 	NONE	ALL	{ int msync(caddr_t addr, size_t len, int flags); } 
-66	NONE	KERN	ALL	{ int vfork(void); } 
-67	NONE	NONE	ALL	{ int nosys(void); }   { old vread }
-68	NONE	NONE	ALL	{ int nosys(void); }   { old vwrite }
-69	NONE	NONE	ALL	{ int sbrk(int incr); } 
-70	NONE	NONE	ALL	{ int sstk(int incr); } 
-71	NONE	NONE	ALL	{ int nosys(void); }   { old mmap }
-72	NONE	NONE	ALL	{ int ovadvise(void); }   { old vadvise }
-73	NONE	NONE	ALL	{ int munmap(caddr_t addr, size_t len); } 
-74	NONE	NONE	ALL	{ int mprotect(caddr_t addr, size_t len, int prot); } 
-75	NONE	NONE	ALL	{ int madvise(caddr_t addr, size_t len, int behav); } 
-76	NONE	NONE	ALL	{ int nosys(void); }   { old vhangup }
-77	NONE	NONE	ALL	{ int nosys(void); }   { old vlimit }
-78	NONE	NONE	ALL	{ int mincore(user_addr_t addr, user_size_t len, user_addr_t vec); } 
-79	NONE	KERN	ALL	{ int getgroups(u_int gidsetsize, gid_t *gidset); } 
-80	NONE	KERN	ALL	{ int setgroups(u_int gidsetsize, gid_t *gidset); } 
-81	NONE	KERN	ALL	{ int getpgrp(void); } 
-82	NONE	KERN	ALL	{ int setpgid(int pid, int pgid); } 
-83	NONE	KERN	ALL	{ int setitimer(u_int which, struct itimerval *itv, struct itimerval *oitv); } 
-84	NONE	NONE	ALL	{ int nosys(void); }   { old wait }
-85	NONE	NONE	ALL	{ int swapon(void); } 
-86	NONE	KERN	ALL	{ int getitimer(u_int which, struct itimerval *itv); } 
-87	NONE	NONE	ALL	{ int nosys(void); }   { old gethostname }
-88	NONE	NONE	ALL	{ int nosys(void); }   { old sethostname }
-89	NONE	NONE	ALL	{ int getdtablesize(void); } 
-90	NONE	NONE	ALL	{ int dup2(u_int from, u_int to); } 
-91	NONE	NONE	ALL	{ int nosys(void); }   { old getdopt }
-92	PRE 	NONE	ALL	{ int fcntl(int fd, int cmd, long arg); } 
-93	PRE 	KERN	ALL	{ int select(int nd, u_int32_t *in, u_int32_t *ou, u_int32_t *ex, struct timeval *tv); } 
-94	NONE	NONE	ALL	{ int nosys(void); }   { old setdopt }
-95	PRE 	NONE	ALL	{ int fsync(int fd); } 
-96	NONE	KERN	ALL	{ int setpriority(int which, int who, int prio); } 
-97	NONE	NONE	ALL	{ int socket(int domain, int type, int protocol); } 
-98	PRE 	NONE	ALL	{ int connect(int s, caddr_t name, socklen_t namelen); } 
-99	NONE	NONE	ALL	{ int nosys(void); }   { old accept }
-100	NONE	KERN	ALL	{ int getpriority(int which, int who); } 
-101	NONE	NONE	ALL	{ int nosys(void); }   { old send }
-102	NONE	NONE	ALL	{ int nosys(void); }   { old recv }
-103	NONE	NONE	ALL	{ int nosys(void); }   { old sigreturn }
-104	NONE	NONE	ALL	{ int bind(int s, caddr_t name, socklen_t namelen); } 
-105	NONE	NONE	ALL	{ int setsockopt(int s, int level, int name, caddr_t val, socklen_t valsize); } 
-106	NONE	NONE	ALL	{ int listen(int s, int backlog); } 
-107	NONE	NONE	ALL	{ int nosys(void); }   { old vtimes }
-108	NONE	NONE	ALL	{ int nosys(void); }   { old sigvec }
-109	NONE	NONE	ALL	{ int nosys(void); }   { old sigblock }
-110	NONE	NONE	ALL	{ int nosys(void); }   { old sigsetmask }
-111	PRE 	KERN	ALL	{ int sigsuspend(sigset_t mask); } 
-112	NONE	NONE	ALL	{ int nosys(void); }   { old sigstack }
-113	NONE	NONE	ALL	{ int nosys(void); }   { old recvmsg }
-114	NONE	NONE	ALL	{ int nosys(void); }   { old sendmsg }	
-115	NONE	NONE	ALL	{ int nosys(void); }   { old vtrace }
-116	NONE	NONE	ALL	{ int gettimeofday(struct timeval *tp, struct timezone *tzp); } 
-117	NONE	KERN	ALL	{ int getrusage(int who, struct rusage *rusage); } 
-118	NONE	NONE	ALL	{ int getsockopt(int s, int level, int name, caddr_t val, socklen_t *avalsize); } 
-119	NONE	NONE	ALL	{ int nosys(void); }   { old resuba }
-120	PRE 	NONE	ALL	{ user_ssize_t readv(int fd, struct iovec *iovp, u_int iovcnt); } 
-121	PRE 	NONE	ALL	{ user_ssize_t writev(int fd, struct iovec *iovp, u_int iovcnt); } 
-122	NONE	KERN	ALL	{ int settimeofday(struct timeval *tv, struct timezone *tzp); } 
-123	NONE	NONE	ALL	{ int fchown(int fd, int uid, int gid); } 
-124	NONE	NONE	ALL	{ int fchmod(int fd, int mode); } 
-125	NONE	NONE	ALL	{ int nosys(void); }   { old recvfrom }
-126	NONE	NONE	ALL	{ int nosys(void); }   { old setreuid }
-127	NONE	NONE	ALL	{ int nosys(void); }   { old setregid }
-128	NONE	NONE	ALL	{ int rename(char *from, char *to); } 
-129	NONE	NONE	ALL	{ int nosys(void); }   { old truncate }
-130	NONE	NONE	ALL	{ int nosys(void); }   { old ftruncate }
-131	NONE	NONE	ALL	{ int flock(int fd, int how); } 
-132	NONE	NONE	ALL	{ int mkfifo(user_addr_t path, int mode); } 
-133	PRE 	NONE	ALL	{ int sendto(int s, caddr_t buf, size_t len, int flags, caddr_t to, socklen_t tolen); } 
-134	NONE	NONE	ALL	{ int shutdown(int s, int how); } 
-135	NONE	NONE	ALL	{ int socketpair(int domain, int type, int protocol, int *rsv); } 
-136	NONE	NONE	ALL	{ int mkdir(user_addr_t path, int mode); } 
-137	NONE	NONE	ALL	{ int rmdir(char *path); } 
-138	NONE	NONE	ALL	{ int utimes(char *path, struct timeval *tptr); } 
-139	NONE	NONE	ALL	{ int futimes(int fd, struct timeval *tptr); } 
-140	NONE	KERN	ALL	{ int adjtime(struct timeval *delta, struct timeval *olddelta); } 
-141	NONE	NONE	ALL	{ int nosys(void); }   { old getpeername }
-142	NONE	NONE	ALL	{ int nosys(void); }   { old gethostid }
-143	NONE	NONE	ALL	{ int nosys(void); }   { old sethostid 	}
-144	NONE	NONE	ALL	{ int nosys(void); }   { old getrlimit }
-145	NONE	NONE	ALL	{ int nosys(void); }   { old setrlimit }
-146	NONE	NONE	ALL	{ int nosys(void); }   { old killpg }
-147	NONE	KERN	ALL	{ int setsid(void); } 
-148	NONE	NONE	ALL	{ int nosys(void); }   { old setquota }
-149	NONE	NONE	ALL	{ int nosys(void); }   { old qquota }
-150	NONE	NONE	ALL	{ int nosys(void); }   { old getsockname }
-151	NONE	KERN	ALL	{ int getpgid(pid_t pid); } 
-152	NONE	KERN	ALL	{ int setprivexec(int flag); } 
-153	PRE 	NONE	ALL	{ user_ssize_t pread(int fd, user_addr_t buf, user_size_t nbyte, off_t offset); } 
-154	PRE 	NONE	ALL	{ user_ssize_t pwrite(int fd, user_addr_t buf, user_size_t nbyte, off_t offset); } 
+19	ALL	{ int nosys(void); }   { old lseek }
+20	ALL	{ int getpid(void); } 
+21	ALL	{ int nosys(void); }   { old mount }
+22	ALL	{ int nosys(void); }   { old umount }
+23	ALL	{ int setuid(uid_t uid); } 
+24	ALL	{ int getuid(void); } 
+25	ALL	{ int geteuid(void); } 
+26	ALL	{ int ptrace(int req, pid_t pid, caddr_t addr, int data); } 
+#if SOCKETS
+27	ALL	{ int recvmsg(int s, struct msghdr *msg, int flags); } 
+28	ALL	{ int sendmsg(int s, caddr_t msg, int flags); } 
+29	ALL	{ int recvfrom(int s, void *buf, size_t len, int flags, struct sockaddr *from, int *fromlenaddr); } 
+30	ALL	{ int accept(int s, caddr_t name, socklen_t	*anamelen); } 
+31	ALL	{ int getpeername(int fdes, caddr_t asa, socklen_t *alen); } 
+32	ALL	{ int getsockname(int fdes, caddr_t asa, socklen_t *alen); } 
+#else
+27	ALL	{ int nosys(void); }
+28	ALL	{ int nosys(void); }
+29	ALL	{ int nosys(void); }
+30	ALL	{ int nosys(void); }
+31	ALL	{ int nosys(void); }
+32	ALL	{ int nosys(void); }
+#endif /* SOCKETS */
+33	ALL	{ int access(user_addr_t path, int flags); } 
+34	ALL	{ int chflags(char *path, int flags); } 
+35	ALL	{ int fchflags(int fd, int flags); } 
+36	ALL	{ int sync(void); } 
+37	ALL	{ int kill(int pid, int signum, int posix); } 
+38	ALL	{ int nosys(void); }   { old stat  }
+39	ALL	{ int getppid(void); } 
+40	ALL	{ int nosys(void); }   { old lstat }
+41	ALL	{ int dup(u_int fd); } 
+42	ALL	{ int pipe(void); } 
+43	ALL	{ int getegid(void); } 
+44	ALL	{ int profil(short *bufbase, size_t bufsize, u_long pcoffset, u_int pcscale); } 
+45	ALL	{ int nosys(void); } { old ktrace }
+46	ALL	{ int sigaction(int signum, struct __sigaction *nsa, struct sigaction *osa); } 
+47	ALL	{ int getgid(void); } 
+48	ALL	{ int sigprocmask(int how, user_addr_t mask, user_addr_t omask); } 
+49	ALL	{ int getlogin(char *namebuf, u_int namelen); } 
+50	ALL	{ int setlogin(char *namebuf); } 
+51	ALL	{ int acct(char *path); } 
+52	ALL	{ int sigpending(struct sigvec *osv); } 
+53	ALL	{ int sigaltstack(struct sigaltstack *nss, struct sigaltstack *oss); } 
+54	ALL	{ int ioctl(int fd, u_long com, caddr_t data); } 
+55	ALL	{ int reboot(int opt, char *command); } 
+56	ALL	{ int revoke(char *path); } 
+57	ALL	{ int symlink(char *path, char *link); } 
+58	ALL	{ int readlink(char *path, char *buf, int count); } 
+59	ALL	{ int execve(char *fname, char **argp, char **envp); } 
+60	ALL	{ int umask(int newmask); } 
+61	ALL	{ int chroot(user_addr_t path); } 
+62	ALL	{ int nosys(void); }   { old fstat }
+63	ALL	{ int nosys(void); }   { used internally, reserved }
+64	ALL	{ int nosys(void); }   { old getpagesize }
+65	ALL	{ int msync(caddr_t addr, size_t len, int flags); } 
+66	ALL	{ int vfork(void); } 
+67	ALL	{ int nosys(void); }   { old vread }
+68	ALL	{ int nosys(void); }   { old vwrite }
+69	ALL	{ int sbrk(int incr) NO_SYSCALL_STUB; } 
+70	ALL	{ int sstk(int incr) NO_SYSCALL_STUB; } 
+71	ALL	{ int nosys(void); }   { old mmap }
+72	ALL	{ int ovadvise(void) NO_SYSCALL_STUB; }   { old vadvise }
+73	ALL	{ int munmap(caddr_t addr, size_t len); } 
+74	ALL	{ int mprotect(caddr_t addr, size_t len, int prot); } 
+75	ALL	{ int madvise(caddr_t addr, size_t len, int behav); } 
+76	ALL	{ int nosys(void); }   { old vhangup }
+77	ALL	{ int nosys(void); }   { old vlimit }
+78	ALL	{ int mincore(user_addr_t addr, user_size_t len, user_addr_t vec); } 
+79	ALL	{ int getgroups(u_int gidsetsize, gid_t *gidset); } 
+80	ALL	{ int setgroups(u_int gidsetsize, gid_t *gidset); } 
+81	ALL	{ int getpgrp(void); } 
+82	ALL	{ int setpgid(int pid, int pgid); } 
+83	ALL	{ int setitimer(u_int which, struct itimerval *itv, struct itimerval *oitv); } 
+84	ALL	{ int nosys(void); }   { old wait }
+85	ALL	{ int swapon(void); } 
+86	ALL	{ int getitimer(u_int which, struct itimerval *itv); } 
+87	ALL	{ int nosys(void); }   { old gethostname }
+88	ALL	{ int nosys(void); }   { old sethostname }
+89	ALL	{ int getdtablesize(void); } 
+90	ALL	{ int dup2(u_int from, u_int to); } 
+91	ALL	{ int nosys(void); }   { old getdopt }
+92	ALL	{ int fcntl(int fd, int cmd, long arg); } 
+93	ALL	{ int select(int nd, u_int32_t *in, u_int32_t *ou, u_int32_t *ex, struct timeval *tv); } 
+94	ALL	{ int nosys(void); }   { old setdopt }
+95	ALL	{ int fsync(int fd); } 
+96	ALL	{ int setpriority(int which, id_t who, int prio); } 
+#if SOCKETS
+97	ALL	{ int socket(int domain, int type, int protocol); } 
+98	ALL	{ int connect(int s, caddr_t name, socklen_t namelen); } 
+#else
+97	ALL	{ int nosys(void); }
+98	ALL	{ int nosys(void); }
+#endif /* SOCKETS */
+99	ALL	{ int nosys(void); }   { old accept }
+100	ALL	{ int getpriority(int which, id_t who); } 
+101	ALL	{ int nosys(void); }   { old send }
+102	ALL	{ int nosys(void); }   { old recv }
+103	ALL	{ int nosys(void); }   { old sigreturn }
+#if SOCKETS
+104	ALL	{ int bind(int s, caddr_t name, socklen_t namelen); } 
+105	ALL	{ int setsockopt(int s, int level, int name, caddr_t val, socklen_t valsize); } 
+106	ALL	{ int listen(int s, int backlog); } 
+#else
+104	ALL	{ int nosys(void); }
+105	ALL	{ int nosys(void); }
+106	ALL	{ int nosys(void); }
+#endif /* SOCKETS */
+107	ALL	{ int nosys(void); }   { old vtimes }
+108	ALL	{ int nosys(void); }   { old sigvec }
+109	ALL	{ int nosys(void); }   { old sigblock }
+110	ALL	{ int nosys(void); }   { old sigsetmask }
+111	ALL	{ int sigsuspend(sigset_t mask); } 
+112	ALL	{ int nosys(void); }   { old sigstack }
+#if SOCKETS
+113	ALL	{ int nosys(void); }   { old recvmsg }
+114	ALL	{ int nosys(void); }   { old sendmsg }	
+#else
+113	ALL	{ int nosys(void); }
+114	ALL	{ int nosys(void); }
+#endif /* SOCKETS */
+115	ALL	{ int nosys(void); }   { old vtrace }
+116	ALL	{ int gettimeofday(struct timeval *tp, struct timezone *tzp); } 
+117	ALL	{ int getrusage(int who, struct rusage *rusage); } 
+#if SOCKETS
+118	ALL	{ int getsockopt(int s, int level, int name, caddr_t val, socklen_t *avalsize); } 
+#else
+118	ALL	{ int nosys(void); }
+#endif /* SOCKETS */
+119	ALL	{ int nosys(void); }   { old resuba }
+120	ALL	{ user_ssize_t readv(int fd, struct iovec *iovp, u_int iovcnt); } 
+121	ALL	{ user_ssize_t writev(int fd, struct iovec *iovp, u_int iovcnt); } 
+122	ALL	{ int settimeofday(struct timeval *tv, struct timezone *tzp); } 
+123	ALL	{ int fchown(int fd, int uid, int gid); } 
+124	ALL	{ int fchmod(int fd, int mode); } 
+125	ALL	{ int nosys(void); }   { old recvfrom }
+126	ALL	{ int setreuid(uid_t ruid, uid_t euid); }
+127	ALL	{ int setregid(gid_t rgid, gid_t egid); }
+128	ALL	{ int rename(char *from, char *to); } 
+129	ALL	{ int nosys(void); }   { old truncate }
+130	ALL	{ int nosys(void); }   { old ftruncate }
+131	ALL	{ int flock(int fd, int how); } 
+132	ALL	{ int mkfifo(user_addr_t path, int mode); } 
+#if SOCKETS
+133	ALL	{ int sendto(int s, caddr_t buf, size_t len, int flags, caddr_t to, socklen_t tolen); } 
+134	ALL	{ int shutdown(int s, int how); } 
+135	ALL	{ int socketpair(int domain, int type, int protocol, int *rsv); } 
+#else
+133	ALL	{ int nosys(void); }
+134	ALL	{ int nosys(void); }
+135	ALL	{ int nosys(void); }
+#endif /* SOCKETS */
+136	ALL	{ int mkdir(user_addr_t path, int mode); } 
+137	ALL	{ int rmdir(char *path); } 
+138	ALL	{ int utimes(char *path, struct timeval *tptr); } 
+139	ALL	{ int futimes(int fd, struct timeval *tptr); } 
+140	ALL	{ int adjtime(struct timeval *delta, struct timeval *olddelta); } 
+141	ALL	{ int nosys(void); }   { old getpeername }
+142	ALL	{ int gethostuuid(unsigned char *uuid_buf, const struct timespec *timeoutp); }
+143	ALL	{ int nosys(void); }   { old sethostid 	}
+144	ALL	{ int nosys(void); }   { old getrlimit }
+145	ALL	{ int nosys(void); }   { old setrlimit }
+146	ALL	{ int nosys(void); }   { old killpg }
+147	ALL	{ int setsid(void); } 
+148	ALL	{ int nosys(void); }   { old setquota }
+149	ALL	{ int nosys(void); }   { old qquota }
+150	ALL	{ int nosys(void); }   { old getsockname }
+151	ALL	{ int getpgid(pid_t pid); } 
+152	ALL	{ int setprivexec(int flag); } 
+153	ALL	{ user_ssize_t pread(int fd, user_addr_t buf, user_size_t nbyte, off_t offset); } 
+154	ALL	{ user_ssize_t pwrite(int fd, user_addr_t buf, user_size_t nbyte, off_t offset); } 
 
 #if NFSSERVER
-155	NONE	KERN	ALL	{ int nfssvc(int flag, caddr_t argp); } 
+155	ALL	{ int nfssvc(int flag, caddr_t argp); } 
 #else
-155	NONE	NONE	ALL	{ int nosys(void); } 
+155	ALL	{ int nosys(void); } 
 #endif
 
-156	NONE	NONE	ALL	{ int nosys(void); }   { old getdirentries }
-157	NONE	NONE	ALL	{ int statfs(char *path, struct statfs *buf); } 
-158	NONE	NONE	ALL	{ int fstatfs(int fd, struct statfs *buf); } 
-159	NONE	NONE	ALL	{ int unmount(user_addr_t path, int flags); } 
-160	NONE	NONE	ALL	{ int nosys(void); }   { old async_daemon }
+156	ALL	{ int nosys(void); }   { old getdirentries }
+157	ALL	{ int statfs(char *path, struct statfs *buf); } 
+158	ALL	{ int fstatfs(int fd, struct statfs *buf); } 
+159	ALL	{ int unmount(user_addr_t path, int flags); } 
+160	ALL	{ int nosys(void); }   { old async_daemon }
 
-#if NFSCLIENT
-161	NONE	KERN	ALL	{ int getfh(char *fname, fhandle_t *fhp); } 
+#if NFSSERVER
+161	ALL	{ int getfh(char *fname, fhandle_t *fhp); } 
 #else
-161	NONE	NONE	ALL	{ int nosys(void); } 
+161	ALL	{ int nosys(void); } 
 #endif
 
-162	NONE	NONE	ALL	{ int nosys(void); }   { old getdomainname }
-163	NONE	NONE	ALL	{ int nosys(void); }   { old setdomainname }
-164	NONE	NONE	ALL	{ int nosys(void); } 
-165	NONE	KERN	ALL	{ int quotactl(char *path, int cmd, int uid, caddr_t arg); } 
-166	NONE	NONE	ALL	{ int nosys(void); }   { old exportfs }
-167	NONE	NONE	ALL	{ int mount(char *type, char *path, int flags, caddr_t data); } 
-168	NONE	NONE	ALL	{ int nosys(void); }   { old ustat }
-169	NONE	NONE	ALL	{ int nosys(void); } 
-170	NONE	NONE	HN	{ int table(void); }   { old table }
-171	NONE	NONE	ALL	{ int nosys(void); }   { old wait3 }
-172	NONE	NONE	ALL	{ int nosys(void); }   { old rpause	}	
-173	PRE	KERN	ALL	{ int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options); } 
-174	NONE	NONE	ALL	{ int nosys(void); }   { old getdents }
-175	NONE	NONE	ALL	{ int nosys(void); }   { old gc_control }
-176	NONE	KERN	ALL	{ int add_profil(short *bufbase, size_t bufsize, u_long pcoffset, u_int pcscale); } 
-177	NONE	NONE	ALL	{ int nosys(void); } 
-178	NONE	NONE	ALL	{ int nosys(void); } 
-179	NONE	NONE	ALL	{ int nosys(void); } 
-180	NONE	NONE	UALL { int kdebug_trace(int code, int arg1, int arg2, int arg3, int arg4, int arg5); } 
-181	NONE	KERN	ALL	{ int setgid(gid_t gid); } 
-182	NONE	KERN	ALL	{ int setegid(gid_t egid); } 
-183	NONE	KERN	ALL	{ int seteuid(uid_t euid); } 
-184	NONE	KERN	ALL	{ int sigreturn(struct ucontext *uctx, int infostyle); } 
-185	NONE	NONE	UALL { int chud(int code, int arg1, int arg2, int arg3, int arg4, int arg5); } 
-186	NONE	NONE	ALL	{ int nosys(void); } 
-187	NONE	NONE	ALL	{ int nosys(void); } 
-188	NONE	NONE	ALL	{ int stat(user_addr_t path, user_addr_t ub); } 
-189	NONE	NONE	ALL	{ int fstat(int fd, user_addr_t ub); } 
-190	NONE	NONE	ALL	{ int lstat(user_addr_t path, user_addr_t ub); } 
-191	NONE	NONE	ALL	{ int pathconf(char *path, int name); } 
-192	NONE	NONE	ALL	{ int fpathconf(int fd, int name); } 
+162	ALL	{ int nosys(void); }   { old getdomainname }
+163	ALL	{ int nosys(void); }   { old setdomainname }
+164	ALL	{ int nosys(void); } 
+165	ALL	{ int quotactl(const char *path, int cmd, int uid, caddr_t arg); } 
+166	ALL	{ int nosys(void); }   { old exportfs }
+167	ALL	{ int mount(char *type, char *path, int flags, caddr_t data); } 
+168	ALL	{ int nosys(void); }   { old ustat }
+169	ALL	{ int csops(pid_t pid, uint32_t ops, user_addr_t useraddr, user_size_t usersize); } 
+170	HN	{ int table(void); }   { old table }
+171	ALL	{ int nosys(void); }   { old wait3 }
+172	ALL	{ int nosys(void); }   { old rpause	}	
+173	ALL	{ int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options); } 
+174	ALL	{ int nosys(void); }   { old getdents }
+175	ALL	{ int nosys(void); }   { old gc_control }
+176	ALL	{ int add_profil(short *bufbase, size_t bufsize, u_long pcoffset, u_int pcscale); } 
+177	ALL	{ int nosys(void); } 
+178	ALL	{ int nosys(void); } 
+179	ALL	{ int nosys(void); } 
+180	ALL 	{ int kdebug_trace(int code, int arg1, int arg2, int arg3, int arg4, int arg5) NO_SYSCALL_STUB; } 
+181	ALL	{ int setgid(gid_t gid); } 
+182	ALL	{ int setegid(gid_t egid); } 
+183	ALL	{ int seteuid(uid_t euid); } 
+184	ALL	{ int sigreturn(struct ucontext *uctx, int infostyle); } 
+185	UALL 	{ int chud(int code, int arg1, int arg2, int arg3, int arg4, int arg5) NO_SYSCALL_STUB; } 
+186	ALL	{ int nosys(void); } 
+187	ALL	{ int nosys(void); } 
+188	ALL	{ int stat(user_addr_t path, user_addr_t ub); } 
+189	ALL	{ int fstat(int fd, user_addr_t ub); } 
+190	ALL	{ int lstat(user_addr_t path, user_addr_t ub); } 
+191	ALL	{ int pathconf(char *path, int name); } 
+192	ALL	{ int fpathconf(int fd, int name); } 
+193	ALL	{ int nosys(void); } 
+194	ALL	{ int getrlimit(u_int which, struct rlimit *rlp); } 
+195	ALL	{ int setrlimit(u_int which, struct rlimit *rlp); } 
+196	ALL	{ int getdirentries(int fd, char *buf, u_int count, long *basep); } 
+197	ALL	{ user_addr_t mmap(caddr_t addr, size_t len, int prot, int flags, int fd, off_t pos); } 
+198	ALL	{ int nosys(void); } 	{ __syscall }
+199	ALL	{ off_t lseek(int fd, off_t offset, int whence); } 
+200	ALL	{ int truncate(char *path, off_t length); } 
+201	ALL	{ int ftruncate(int fd, off_t length); } 
+202	ALL 	{ int __sysctl(int *name, u_int namelen, void *old, size_t *oldlenp, void *new, size_t newlen); } 
+203	ALL	{ int mlock(caddr_t addr, size_t len); } 
+204	ALL	{ int munlock(caddr_t addr, size_t len); } 
+205	ALL	{ int undelete(user_addr_t path); } 
 
-#if COMPAT_GETFSSTAT
-193	NONE	NONE	ALL	{ int getfsstat(user_addr_t buf, user_long_t bufsize, int flags); } 
+#if NETAT
+206	ALL	{ int ATsocket(int proto); } 
+207	UALL	{ int ATgetmsg(int fd, void *ctlptr, void *datptr, int *flags); } 
+208	UALL	{ int ATputmsg(int fd, void *ctlptr, void *datptr, int flags); } 
+209	UALL	{ int ATPsndreq(int fd, unsigned char *buf, int len, int nowait); } 
+210	UALL	{ int ATPsndrsp(int fd, unsigned char *respbuff, int resplen, int datalen); } 
+211	UALL	{ int ATPgetreq(int fd, unsigned char *buf, int buflen); } 
+212	UALL	{ int ATPgetrsp(int fd, unsigned char *bdsp); } 
+213	ALL	{ int nosys(void); } 	{ Reserved for AppleTalk }
 #else
-193	NONE	NONE	ALL	{ int nosys(void); } 
-#endif
+206	ALL	{ int nosys(void); }
+207	ALL	{ int nosys(void); }
+208	ALL	{ int nosys(void); }
+209	ALL	{ int nosys(void); }
+210	ALL	{ int nosys(void); }
+211	ALL	{ int nosys(void); }
+212	ALL	{ int nosys(void); }
+213	ALL	{ int nosys(void); } 	{ Reserved for AppleTalk }
+#endif /* NETAT */
 
-194	NONE	KERN	ALL	{ int getrlimit(u_int which, struct rlimit *rlp); } 
-195	NONE	KERN	ALL	{ int setrlimit(u_int which, struct rlimit *rlp); } 
-196	NONE	NONE	ALL	{ int getdirentries(int fd, char *buf, u_int count, long *basep); } 
-197	NONE	NONE	ALL	{ user_addr_t mmap(caddr_t addr, size_t len, int prot, int flags, int fd, off_t pos); } 
-198	NONE	NONE	ALL	{ int nosys(void); } 	{ __syscall }
-199	NONE	NONE	ALL	{ off_t lseek(int fd, off_t offset, int whence); } 
-200	NONE	NONE	ALL	{ int truncate(char *path, off_t length); } 
-201	NONE	NONE	ALL	{ int ftruncate(int fd, off_t length); } 
-202	NONE	KERN    ALL { int __sysctl(int *name, u_int namelen, void *old, size_t *oldlenp, void *new, size_t newlen); } 
-203	NONE	NONE	ALL	{ int mlock(caddr_t addr, size_t len); } 
-204	NONE	NONE	ALL	{ int munlock(caddr_t addr, size_t len); } 
-205	NONE	NONE	ALL	{ int undelete(user_addr_t path); } 
-
-206	NONE	NONE	ALL	{ int ATsocket(int proto); } 
-207	NONE	NONE	UALL	{ int ATgetmsg(int fd, void *ctlptr, void *datptr, int *flags); } 
-208	NONE	NONE	UALL	{ int ATputmsg(int fd, void *ctlptr, void *datptr, int flags); } 
-209	NONE	NONE	UALL	{ int ATPsndreq(int fd, unsigned char *buf, int len, int nowait); } 
-210	NONE	NONE	UALL	{ int ATPsndrsp(int fd, unsigned char *respbuff, int resplen, int datalen); } 
-211	NONE	NONE	UALL	{ int ATPgetreq(int fd, unsigned char *buf, int buflen); } 
-212	NONE	NONE	UALL	{ int ATPgetrsp(int fd, unsigned char *bdsp); } 
-213	NONE	NONE	ALL	{ int nosys(void); } 	{ Reserved for AppleTalk }
-
-214	NONE	KERN	ALL	{ int kqueue_from_portset_np(int portset); } 
-215	NONE	KERN	ALL	{ int kqueue_portset_np(int fd); } 
+214	ALL	{ int kqueue_from_portset_np(int portset); } 
+215	ALL	{ int kqueue_portset_np(int fd); } 
 
 ; System Calls 216 - 230 are reserved for calls to support HFS/HFS Plus
 ; file system semantics. Currently, we only use 215-227.  The rest is 
 ; for future expansion in anticipation of new MacOS APIs for HFS Plus.
-; These calls are not conditionalized becuase while they are specific
+; These calls are not conditionalized because while they are specific
 ; to HFS semantics, they are not specific to the HFS filesystem.
 ; We expect all filesystems to recognize the call and report that it is
 ; not supported or to actually implement it.
-216	NONE	NONE	UHN	{ int mkcomplex(const char *path, mode_t mode, u_long type); } 	{ soon to be obsolete }
-217	NONE	NONE	UHN	{ int statv(const char *path, struct vstat *vsb); } 	{ soon to be obsolete }
-218	NONE	NONE	UHN	{ int lstatv(const char *path, struct vstat *vsb); } 	{ soon to be obsolete }
-219	NONE	NONE	UHN	{ int fstatv(int fd, struct vstat *vsb); } 	{ soon to be obsolete }
-220	NONE	NONE	ALL	{ int getattrlist(const char *path, struct attrlist *alist, void *attributeBuffer, size_t bufferSize, u_long options); } 
-221	NONE	NONE	ALL	{ int setattrlist(const char *path, struct attrlist *alist, void *attributeBuffer, size_t bufferSize, u_long options); } 
-222	NONE	NONE	ALL	{ int getdirentriesattr(int fd, struct attrlist *alist, void *buffer, size_t buffersize, u_long *count, u_long *basep, u_long *newstate, u_long options); } 
-223	NONE	NONE	ALL	{ int exchangedata(const char *path1, const char *path2, u_long options); } 
-
-#ifdef __APPLE_API_OBSOLETE
-224	NONE	NONE	UALL	{ int checkuseraccess(const char *path, uid_t userid, gid_t *groups, int ngroups, int accessrequired, u_long options); } 
-#else
-224	NONE	NONE	ALL	{ int nosys(void); } 	{ HFS checkuseraccess check access to a file }
-#endif /* __APPLE_API_OBSOLETE */
-225	NONE	KERN	ALL	{ int searchfs(const char *path, struct fssearchblock *searchblock, u_long *nummatches, u_long scriptcode, u_long options, struct searchstate *state); } 
-226	NONE	NONE    ALL	{ int delete(user_addr_t path); }       { private delete (Carbon semantics) }
-227	NONE	NONE	ALL	{ int copyfile(char *from, char *to, int mode, int flags); } 
-228	NONE	NONE	ALL	{ int nosys(void); } 
-229	NONE	NONE	ALL	{ int nosys(void); } 
-230	PRE 	NONE	ALL	{ int poll(struct pollfd *fds, u_int nfds, int timeout); } 
-231	NONE	NONE	UALL	{ int watchevent(struct eventreq *u_req, int u_eventmask); } 
-232	NONE	NONE	UALL	{ int waitevent(struct eventreq *u_req, struct timeval *tv); } 
-233	NONE	NONE	UALL	{ int modwatch(struct eventreq *u_req, int u_eventmask); } 
-234	NONE	NONE	ALL	{ user_ssize_t getxattr(user_addr_t path, user_addr_t attrname, user_addr_t value, size_t size, uint32_t position, int options); } 
-235	NONE	NONE	ALL	{ user_ssize_t fgetxattr(int fd, user_addr_t attrname, user_addr_t value, size_t size, uint32_t position, int options); } 
-236	NONE	NONE	ALL	{ int setxattr(user_addr_t path, user_addr_t attrname, user_addr_t value, size_t size, uint32_t position, int options); } 
-237	NONE	NONE	ALL	{ int fsetxattr(int fd, user_addr_t attrname, user_addr_t value, size_t size, uint32_t position, int options); } 
-238	NONE	NONE	ALL	{ int removexattr(user_addr_t path, user_addr_t attrname, int options); } 
-239	NONE	NONE	ALL	{ int fremovexattr(int fd, user_addr_t attrname, int options); } 
-240	NONE	NONE	ALL	{ user_ssize_t listxattr(user_addr_t path, user_addr_t namebuf, size_t bufsize, int options); } 
-241	NONE	NONE	ALL	{ user_ssize_t flistxattr(int fd, user_addr_t namebuf, size_t bufsize, int options); } 
-242	NONE	KERN	ALL	{ int fsctl(const char *path, u_long cmd, caddr_t data, u_long options); } 
-243	NONE	KERN	ALL	{ int initgroups(u_int gidsetsize, gid_t *gidset, int gmuid); } 
-244	NONE	NONE	ALL	{ int nosys(void); } 
-245	NONE	NONE	ALL	{ int nosys(void); } 
-246	NONE	NONE	ALL	{ int nosys(void); } 
+216	UHN	{ int mkcomplex(const char *path, mode_t mode, u_long type); } 	{ soon to be obsolete }
+217	UHN	{ int statv(const char *path, struct vstat *vsb); } 	{ soon to be obsolete }
+218	UHN	{ int lstatv(const char *path, struct vstat *vsb); } 	{ soon to be obsolete }
+219	UHN	{ int fstatv(int fd, struct vstat *vsb); } 	{ soon to be obsolete }
+220	ALL	{ int getattrlist(const char *path, struct attrlist *alist, void *attributeBuffer, size_t bufferSize, u_long options); } 
+221	ALL	{ int setattrlist(const char *path, struct attrlist *alist, void *attributeBuffer, size_t bufferSize, u_long options); } 
+222	ALL	{ int getdirentriesattr(int fd, struct attrlist *alist, void *buffer, size_t buffersize, u_long *count, u_long *basep, u_long *newstate, u_long options); } 
+223	ALL	{ int exchangedata(const char *path1, const char *path2, u_long options); } 
+224	ALL	{ int nosys(void); } { was checkuseraccess }
+225	ALL	{ int searchfs(const char *path, struct fssearchblock *searchblock, u_long *nummatches, u_long scriptcode, u_long options, struct searchstate *state); } 
+226	ALL	{ int delete(user_addr_t path) NO_SYSCALL_STUB; }       { private delete (Carbon semantics) }
+227	ALL	{ int copyfile(char *from, char *to, int mode, int flags) NO_SYSCALL_STUB; } 
+228	ALL	{ int nosys(void); } 
+229	ALL	{ int nosys(void); } 
+230	ALL	{ int poll(struct pollfd *fds, u_int nfds, int timeout); } 
+231	ALL	{ int watchevent(struct eventreq *u_req, int u_eventmask); } 
+232	ALL	{ int waitevent(struct eventreq *u_req, struct timeval *tv); } 
+233	ALL	{ int modwatch(struct eventreq *u_req, int u_eventmask); } 
+234	ALL	{ user_ssize_t getxattr(user_addr_t path, user_addr_t attrname, user_addr_t value, size_t size, uint32_t position, int options); } 
+235	ALL	{ user_ssize_t fgetxattr(int fd, user_addr_t attrname, user_addr_t value, size_t size, uint32_t position, int options); } 
+236	ALL	{ int setxattr(user_addr_t path, user_addr_t attrname, user_addr_t value, size_t size, uint32_t position, int options); } 
+237	ALL	{ int fsetxattr(int fd, user_addr_t attrname, user_addr_t value, size_t size, uint32_t position, int options); } 
+238	ALL	{ int removexattr(user_addr_t path, user_addr_t attrname, int options); } 
+239	ALL	{ int fremovexattr(int fd, user_addr_t attrname, int options); } 
+240	ALL	{ user_ssize_t listxattr(user_addr_t path, user_addr_t namebuf, size_t bufsize, int options); } 
+241	ALL	{ user_ssize_t flistxattr(int fd, user_addr_t namebuf, size_t bufsize, int options); } 
+242	ALL	{ int fsctl(const char *path, u_long cmd, caddr_t data, u_long options); } 
+243	ALL	{ int initgroups(u_int gidsetsize, gid_t *gidset, int gmuid); } 
+244	ALL	{ int posix_spawn(pid_t *pid, const char *path, const struct _posix_spawn_args_desc *adesc, char **argv, char **envp); } 
+245	ALL	{ int nosys(void); } 
+246	ALL	{ int nosys(void); } 
 
 #if NFSCLIENT
-247	NONE	KERN	ALL	{ int nfsclnt(int flag, caddr_t argp); } 
-248	NONE	KERN	ALL	{ int fhopen(const struct fhandle *u_fhp, int flags); } 
+247	ALL	{ int nfsclnt(int flag, caddr_t argp); } 
 #else
-247	NONE	NONE	ALL	{ int nosys(void); } 
-248	NONE	NONE	ALL	{ int nosys(void); } 
+247	ALL	{ int nosys(void); } 
+#endif
+#if NFSSERVER
+248	ALL	{ int fhopen(const struct fhandle *u_fhp, int flags); } 
+#else
+248	ALL	{ int nosys(void); } 
 #endif
 
-249	NONE	NONE	ALL	{ int nosys(void); } 
-250	NONE	NONE	ALL	{ int minherit(void *addr, size_t len, int inherit); } 
-251	NONE	NONE	ALL	{ int semsys(u_int which, int a2, int a3, int a4, int a5); } 
-252	NONE	NONE	ALL	{ int msgsys(u_int which, int a2, int a3, int a4, int a5); }
-253	NONE	NONE	ALL	{ int shmsys(u_int which, int a2, int a3, int a4); } 
-254	NONE	NONE	ALL	{ int semctl(int semid, int semnum, int cmd, semun_t arg); } 
-255	NONE	NONE	ALL	{ int semget(key_t key, int	nsems, int semflg); } 
-256	NONE	NONE	ALL	{ int semop(int semid, struct sembuf *sops, int nsops); } 
-257	NONE	NONE	ALL	{ int nosys(void); } 
-258	NONE	NONE	ALL	{ int msgctl(int msqid, int cmd, struct	msqid_ds *buf); } 
-259	NONE	NONE	ALL	{ int msgget(key_t key, int msgflg); } 
-260	PRE 	NONE	ALL	{ int msgsnd(int msqid, void *msgp, size_t msgsz, int msgflg); } 
-261	PRE 	NONE	ALL	{ user_ssize_t msgrcv(int msqid, void *msgp, size_t msgsz, long msgtyp, int msgflg); } 
-262	NONE	NONE	ALL	{ int shmat(int shmid, void *shmaddr, int shmflg); } 
-263	NONE	NONE	ALL	{ int shmctl(int shmid, int cmd, struct shmid_ds *buf); } 
-264	NONE	NONE	ALL	{ int shmdt(void *shmaddr); } 
-265	NONE	NONE	ALL	{ int shmget(key_t key, size_t size, int shmflg); } 
-266	NONE	NONE	ALL	{ int shm_open(const char *name, int oflag, int mode); } 
-267	NONE	NONE	ALL	{ int shm_unlink(const char *name); } 
-268	NONE	NONE	ALL	{ user_addr_t sem_open(const char *name, int oflag, int mode, int value); } 
-269	NONE	NONE	ALL	{ int sem_close(sem_t *sem); } 
-270	NONE	NONE	ALL	{ int sem_unlink(const char *name); } 
-271	PRE 	NONE	ALL	{ int sem_wait(sem_t *sem); } 
-272	NONE	NONE	ALL	{ int sem_trywait(sem_t *sem); } 
-273	NONE	NONE	ALL	{ int sem_post(sem_t *sem); } 
-274	NONE	NONE	ALL	{ int sem_getvalue(sem_t *sem, int *sval); } 
-275	NONE	NONE 	ALL	{ int sem_init(sem_t *sem, int phsared, u_int value); } 
-276	NONE	NONE	ALL	{ int sem_destroy(sem_t *sem); } 
-277	NONE	NONE	ALL	{ int open_extended(user_addr_t path, int flags, uid_t uid, gid_t gid, int mode, user_addr_t xsecurity); } 
-278	NONE	KERN	ALL	{ int umask_extended(int newmask, user_addr_t xsecurity); } 
-279	NONE	NONE	ALL	{ int stat_extended(user_addr_t path, user_addr_t ub, user_addr_t xsecurity, user_addr_t xsecurity_size); } 
-280	NONE	NONE	ALL	{ int lstat_extended(user_addr_t path, user_addr_t ub, user_addr_t xsecurity, user_addr_t xsecurity_size); } 
-281	NONE	NONE	ALL	{ int fstat_extended(int fd, user_addr_t ub, user_addr_t xsecurity, user_addr_t xsecurity_size); } 
-282	NONE	NONE	ALL	{ int chmod_extended(user_addr_t path, uid_t uid, gid_t gid, int mode, user_addr_t xsecurity); } 
-283	NONE	NONE	ALL	{ int fchmod_extended(int fd, uid_t uid, gid_t gid, int mode, user_addr_t xsecurity); } 
-284	NONE	NONE	ALL	{ int access_extended(user_addr_t entries, size_t size, user_addr_t results, uid_t uid); } 
-285	NONE	NONE	ALL	{ int settid(uid_t uid, gid_t gid); } 
-286	NONE	NONE	ALL	{ int gettid(uid_t *uidp, gid_t *gidp); } 
-287	NONE	NONE	ALL	{ int setsgroups(int setlen, user_addr_t guidset); } 
-288	NONE	NONE	ALL	{ int getsgroups(user_addr_t setlen, user_addr_t guidset); } 
-289	NONE	NONE	ALL	{ int setwgroups(int setlen, user_addr_t guidset); } 
-290	NONE	NONE	ALL	{ int getwgroups(user_addr_t setlen, user_addr_t guidset); }
-291	NONE	NONE	ALL	{ int mkfifo_extended(user_addr_t path, uid_t uid, gid_t gid, int mode, user_addr_t xsecurity); } 
-292	NONE	NONE	ALL	{ int mkdir_extended(user_addr_t path, uid_t uid, gid_t gid, int mode, user_addr_t xsecurity); } 
-293	NONE	NONE	ALL	{ int identitysvc(int opcode, user_addr_t message); } 
-294	NONE	NONE	ALL	{ int nosys(void); } 
-295	NONE	NONE	ALL	{ int nosys(void); } 
-296	NONE	KERN	UALL	{ int load_shared_file(char *filename, caddr_t mfa, u_long mfs, caddr_t *ba, int map_cnt, sf_mapping_t *mappings, int *flags); } 
-297	NONE	KERN	UALL	{ int reset_shared_file(caddr_t *ba, int map_cnt, sf_mapping_t *mappings); } 
-298	NONE	KERN	ALL	{ int new_system_shared_regions(void); } 
-299	NONE	KERN	UALL	{ int shared_region_map_file_np(int fd, uint32_t mappingCount, user_addr_t mappings, user_addr_t slide_p); } 
-300	NONE	KERN	UALL	{ int shared_region_make_private_np(uint32_t rangeCount, user_addr_t ranges); } 
-301	NONE	NONE	ALL	{ int nosys(void); } 
-302	NONE	NONE	ALL	{ int nosys(void); } 
-303	NONE	NONE	ALL	{ int nosys(void); } 
-304	NONE	NONE	ALL	{ int nosys(void); } 
-305	NONE	NONE	ALL	{ int nosys(void); } 
-306	NONE	NONE	ALL	{ int nosys(void); } 
-307	NONE	NONE	ALL	{ int nosys(void); } 
-308	NONE	NONE	ALL	{ int nosys(void); } 
-309	NONE	NONE	ALL	{ int nosys(void); } 
-310	NONE	KERN	ALL	{ int getsid(pid_t pid); } 
-311	NONE	NONE	ALL	{ int settid_with_pid(pid_t pid, int assume); } 
-312	NONE	NONE	ALL	{ int nosys(void); } 
-313	NONE	NONE	ALL	{ int aio_fsync(int op, user_addr_t aiocbp); } 
-314 NONE	NONE	ALL	{ user_ssize_t aio_return(user_addr_t aiocbp); } 
-315	PRE 	NONE	ALL	{ int aio_suspend(user_addr_t aiocblist, int nent, user_addr_t timeoutp); } 
-316 NONE	NONE	ALL	{ int aio_cancel(int fd, user_addr_t aiocbp); } 
-317	NONE	NONE	ALL	{ int aio_error(user_addr_t aiocbp); } 
-318	NONE	NONE	ALL	{ int aio_read(user_addr_t aiocbp); } 
-319 NONE	NONE	ALL	{ int aio_write(user_addr_t aiocbp); } 
-320 NONE	NONE	ALL	{ int lio_listio(int mode, user_addr_t aiocblist, int nent, user_addr_t sigp); } 
-321	NONE	NONE	ALL	{ int nosys(void); } 
-322	NONE	NONE	ALL	{ int nosys(void); } 
-323	NONE	NONE	ALL	{ int nosys(void); } 
-324	NONE	NONE	ALL	{ int mlockall(int how); } 
-325	NONE	NONE	ALL	{ int munlockall(int how); } 
-326	NONE	NONE	ALL	{ int nosys(void); } 
-327	NONE	KERN	ALL	{ int issetugid(void); } 
-328	NONE	KERN	ALL	{ int __pthread_kill(int thread_port, int sig); } 
-329	NONE	KERN	ALL	{ int pthread_sigmask(int how, user_addr_t set, user_addr_t oset); } 
-330	PRE 	KERN	ALL	{ int sigwait(user_addr_t set, user_addr_t sig); } 
-331	NONE	KERN	ALL	{ int __disable_threadsignal(int value); } 
-332	NONE	NONE	ALL	{ int __pthread_markcancel(int thread_port); } 
-333	NONE	NONE	ALL	{ int __pthread_canceled(int  action); } 
-334	POST	NONE	ALL	{ int __semwait_signal(int cond_sem, int mutex_sem, int timeout, int relative, time_t tv_sec, int32_t tv_nsec); } 
-335	NONE	KERN	ALL	{ int utrace(const void *addr, size_t len); } 
-336	NONE	NONE	ALL	{ int proc_info(int32_t callnum,int32_t pid,uint32_t flavor, uint64_t arg,user_addr_t buffer,int32_t buffersize); } 
-337	NONE	NONE	ALL	{ int nosys(void); } 
-338	NONE	NONE	ALL	{ int nosys(void); } 
-339	NONE	NONE	ALL	{ int nosys(void); } 
-340	NONE	NONE	ALL	{ int nosys(void); } 
-341	NONE	NONE	ALL	{ int nosys(void); } 
-342	NONE	NONE	ALL	{ int nosys(void); } 
-343	NONE	NONE	ALL	{ int nosys(void); } 
-344	NONE	NONE	ALL	{ int nosys(void); } 
-345	NONE	NONE	ALL	{ int nosys(void); } 
-346	NONE	NONE	ALL	{ int nosys(void); } 
-347	NONE	NONE	ALL	{ int nosys(void); } 
-348	NONE	NONE	ALL	{ int nosys(void); } 
-349	NONE	NONE	ALL	{ int nosys(void); } 
-350	NONE	KERN	ALL	{ int audit(void *record, int length); } 
-351	NONE	KERN	ALL	{ int auditon(int cmd, void *data, int length); } 
-352	NONE	KERN	ALL	{ int nosys(void); } 
-353	NONE	KERN	ALL	{ int getauid(au_id_t *auid); } 
-354	NONE	KERN	ALL	{ int setauid(au_id_t *auid); } 
-355	NONE	KERN	ALL	{ int getaudit(struct auditinfo *auditinfo); } 
-356	NONE	KERN	ALL	{ int setaudit(struct auditinfo *auditinfo); } 
-357	NONE	KERN	ALL	{ int getaudit_addr(struct auditinfo_addr *auditinfo_addr, int length); } 
-358	NONE	KERN	ALL	{ int setaudit_addr(struct auditinfo_addr *auditinfo_addr, int length); } 
-359	NONE	KERN	ALL	{ int auditctl(char *path); } 
-360	NONE	NONE	ALL	{ int nosys(void); } 
-361	NONE	NONE	ALL	{ int nosys(void); } 
-362	NONE	NONE	ALL	{ int kqueue(void); } 
-363	NONE	NONE	ALL	{ int kevent(int fd, const struct kevent *changelist, int nchanges, struct kevent *eventlist, int nevents, const struct timespec *timeout); } 
-364	NONE	NONE	ALL	{ int lchown(user_addr_t path, uid_t owner, gid_t group); }
-365	NONE	NONE	ALL	{ int stack_snapshot(pid_t pid, user_addr_t tracebuf, uint32_t tracebuf_size, uint32_t options); }
-366	NONE	NONE	ALL	{ int nosys(void); } 
-367	NONE	NONE	ALL	{ int nosys(void); } 
-368	NONE	NONE	ALL	{ int nosys(void); } 
-369	NONE	NONE	ALL	{ int nosys(void); } 
+249	ALL	{ int nosys(void); } 
+250	ALL	{ int minherit(void *addr, size_t len, int inherit); } 
+#if SYSV_SEM
+251	ALL	{ int semsys(u_int which, int a2, int a3, int a4, int a5); } 
+#else
+251	ALL	{ int nosys(void); } 
+#endif
+#if SYSV_MSG
+252	ALL	{ int msgsys(u_int which, int a2, int a3, int a4, int a5); }
+#else
+252	ALL	{ int nosys(void); } 
+#endif
+#if SYSV_SHM
+253	ALL	{ int shmsys(u_int which, int a2, int a3, int a4); } 
+#else
+253	ALL	{ int nosys(void); } 
+#endif
+#if SYSV_SEM
+254	ALL	{ int semctl(int semid, int semnum, int cmd, semun_t arg); } 
+255	ALL	{ int semget(key_t key, int	nsems, int semflg); } 
+256	ALL	{ int semop(int semid, struct sembuf *sops, int nsops); } 
+257	ALL	{ int nosys(void); } 
+#else
+254	ALL	{ int nosys(void); } 
+255	ALL	{ int nosys(void); } 
+256	ALL	{ int nosys(void); } 
+257	ALL	{ int nosys(void); } 
+#endif
+#if SYSV_MSG
+258	ALL	{ int msgctl(int msqid, int cmd, struct	msqid_ds *buf); } 
+259	ALL	{ int msgget(key_t key, int msgflg); } 
+260	ALL	{ int msgsnd(int msqid, void *msgp, size_t msgsz, int msgflg); } 
+261	ALL	{ user_ssize_t msgrcv(int msqid, void *msgp, size_t msgsz, long msgtyp, int msgflg); } 
+#else
+258	ALL	{ int nosys(void); } 
+259	ALL	{ int nosys(void); } 
+260	ALL	{ int nosys(void); } 
+261	ALL	{ int nosys(void); } 
+#endif
+#if SYSV_SHM
+262	ALL	{ user_addr_t shmat(int shmid, void *shmaddr, int shmflg); } 
+263	ALL	{ int shmctl(int shmid, int cmd, struct shmid_ds *buf); } 
+264	ALL	{ int shmdt(void *shmaddr); } 
+265	ALL	{ int shmget(key_t key, size_t size, int shmflg); } 
+#else
+262	ALL	{ int nosys(void); } 
+263	ALL	{ int nosys(void); } 
+264	ALL	{ int nosys(void); } 
+265	ALL	{ int nosys(void); } 
+#endif
+266	ALL	{ int shm_open(const char *name, int oflag, int mode); } 
+267	ALL	{ int shm_unlink(const char *name); } 
+268	ALL	{ user_addr_t sem_open(const char *name, int oflag, int mode, int value); } 
+269	ALL	{ int sem_close(sem_t *sem); } 
+270	ALL	{ int sem_unlink(const char *name); } 
+271	ALL	{ int sem_wait(sem_t *sem); } 
+272	ALL	{ int sem_trywait(sem_t *sem); } 
+273	ALL	{ int sem_post(sem_t *sem); } 
+274	ALL	{ int sem_getvalue(sem_t *sem, int *sval); } 
+275	ALL	{ int sem_init(sem_t *sem, int phsared, u_int value); } 
+276	ALL	{ int sem_destroy(sem_t *sem); } 
+277	ALL	{ int open_extended(user_addr_t path, int flags, uid_t uid, gid_t gid, int mode, user_addr_t xsecurity) NO_SYSCALL_STUB; } 
+278	ALL	{ int umask_extended(int newmask, user_addr_t xsecurity) NO_SYSCALL_STUB; } 
+279	ALL	{ int stat_extended(user_addr_t path, user_addr_t ub, user_addr_t xsecurity, user_addr_t xsecurity_size) NO_SYSCALL_STUB; } 
+280	ALL	{ int lstat_extended(user_addr_t path, user_addr_t ub, user_addr_t xsecurity, user_addr_t xsecurity_size) NO_SYSCALL_STUB; } 
+281	ALL	{ int fstat_extended(int fd, user_addr_t ub, user_addr_t xsecurity, user_addr_t xsecurity_size) NO_SYSCALL_STUB; } 
+282	ALL	{ int chmod_extended(user_addr_t path, uid_t uid, gid_t gid, int mode, user_addr_t xsecurity) NO_SYSCALL_STUB; } 
+283	ALL	{ int fchmod_extended(int fd, uid_t uid, gid_t gid, int mode, user_addr_t xsecurity) NO_SYSCALL_STUB; } 
+284	ALL	{ int access_extended(user_addr_t entries, size_t size, user_addr_t results, uid_t uid) NO_SYSCALL_STUB; } 
+285	ALL	{ int settid(uid_t uid, gid_t gid) NO_SYSCALL_STUB; } 
+286	ALL	{ int gettid(uid_t *uidp, gid_t *gidp) NO_SYSCALL_STUB; } 
+287	ALL	{ int setsgroups(int setlen, user_addr_t guidset) NO_SYSCALL_STUB; } 
+288	ALL	{ int getsgroups(user_addr_t setlen, user_addr_t guidset) NO_SYSCALL_STUB; } 
+289	ALL	{ int setwgroups(int setlen, user_addr_t guidset) NO_SYSCALL_STUB; } 
+290	ALL	{ int getwgroups(user_addr_t setlen, user_addr_t guidset) NO_SYSCALL_STUB; }
+291	ALL	{ int mkfifo_extended(user_addr_t path, uid_t uid, gid_t gid, int mode, user_addr_t xsecurity) NO_SYSCALL_STUB; } 
+292	ALL	{ int mkdir_extended(user_addr_t path, uid_t uid, gid_t gid, int mode, user_addr_t xsecurity) NO_SYSCALL_STUB; } 
+293	ALL	{ int identitysvc(int opcode, user_addr_t message) NO_SYSCALL_STUB; } 
+294	ALL	{ int shared_region_check_np(uint64_t *start_address) NO_SYSCALL_STUB; }
+295	ALL	{ int shared_region_map_np(int fd, uint32_t count, const struct shared_file_mapping_np *mappings) NO_SYSCALL_STUB; }
+296	ALL	{ int nosys(void); } { old load_shared_file }
+297	ALL	{ int nosys(void); } { old reset_shared_file }
+298	ALL	{ int nosys(void); } { old new_system_shared_regions }
+299	ALL	{ int enosys(void); } { old shared_region_map_file_np }
+300	ALL	{ int enosys(void); } { old shared_region_make_private_np }
+301	ALL	{ int __pthread_mutex_destroy(int mutexid); } 
+302	ALL	{ int __pthread_mutex_init(user_addr_t  mutex, user_addr_t attr); } 
+303	ALL	{ int __pthread_mutex_lock(int mutexid); } 
+304	ALL	{ int __pthread_mutex_trylock(int mutexid); } 
+305	ALL	{ int __pthread_mutex_unlock(int mutexid); } 
+306	ALL	{ int __pthread_cond_init(user_addr_t cond, user_addr_t attr); } 
+307	ALL	{ int __pthread_cond_destroy(int condid); } 
+308	ALL	{ int __pthread_cond_broadcast(int condid); } 
+309	ALL	{ int __pthread_cond_signal(int condid); } 
+310	ALL	{ int getsid(pid_t pid); } 
+311	ALL	{ int settid_with_pid(pid_t pid, int assume) NO_SYSCALL_STUB; } 
+312	ALL	{ int __pthread_cond_timedwait(int condid, int mutexid, user_addr_t abstime); } 
+313	ALL	{ int aio_fsync(int op, user_addr_t aiocbp); } 
+314 	ALL	{ user_ssize_t aio_return(user_addr_t aiocbp); } 
+315	ALL	{ int aio_suspend(user_addr_t aiocblist, int nent, user_addr_t timeoutp); } 
+316	ALL	{ int aio_cancel(int fd, user_addr_t aiocbp); } 
+317	ALL	{ int aio_error(user_addr_t aiocbp); } 
+318	ALL	{ int aio_read(user_addr_t aiocbp); } 
+319	ALL	{ int aio_write(user_addr_t aiocbp); } 
+320	ALL	{ int lio_listio(int mode, user_addr_t aiocblist, int nent, user_addr_t sigp); } 
+321	ALL	{ int __pthread_cond_wait(int condid, int mutexid); } 
+322	ALL	{ int iopolicysys(int cmd, void *arg) NO_SYSCALL_STUB; } 
+323	ALL	{ int nosys(void); } 
+324	ALL	{ int mlockall(int how); } 
+325	ALL	{ int munlockall(int how); } 
+326	ALL	{ int nosys(void); } 
+327	ALL	{ int issetugid(void); } 
+328	ALL	{ int __pthread_kill(int thread_port, int sig); } 
+329	ALL	{ int __pthread_sigmask(int how, user_addr_t set, user_addr_t oset); } 
+330	ALL	{ int __sigwait(user_addr_t set, user_addr_t sig); } 
+331	ALL	{ int __disable_threadsignal(int value); } 
+332	ALL	{ int __pthread_markcancel(int thread_port); } 
+333	ALL	{ int __pthread_canceled(int  action); } 
+334	ALL	{ int __semwait_signal(int cond_sem, int mutex_sem, int timeout, int relative, time_t tv_sec, int32_t tv_nsec); } 
+335	ALL	{ int nosys(void); }   { old utrace }
+336	ALL	{ int proc_info(int32_t callnum,int32_t pid,uint32_t flavor, uint64_t arg,user_addr_t buffer,int32_t buffersize) NO_SYSCALL_STUB; } 
+#if SENDFILE
+337	ALL	{ int sendfile(int fd, int s, off_t offset, off_t *nbytes, struct sf_hdtr *hdtr, int flags); } 
+#else /* !SENDFILE */
+337	ALL	{ int nosys(void); }
+#endif /* SENDFILE */
+338	ALL	{ int stat64(user_addr_t path, user_addr_t ub); } 
+339	ALL	{ int fstat64(int fd, user_addr_t ub); } 
+340	ALL	{ int lstat64(user_addr_t path, user_addr_t ub); } 
+341	ALL	{ int stat64_extended(user_addr_t path, user_addr_t ub, user_addr_t xsecurity, user_addr_t xsecurity_size) NO_SYSCALL_STUB; } 
+342	ALL	{ int lstat64_extended(user_addr_t path, user_addr_t ub, user_addr_t xsecurity, user_addr_t xsecurity_size) NO_SYSCALL_STUB; } 
+343	ALL	{ int fstat64_extended(int fd, user_addr_t ub, user_addr_t xsecurity, user_addr_t xsecurity_size) NO_SYSCALL_STUB; } 
+344	ALL	{ user_ssize_t getdirentries64(int fd, void *buf, user_size_t bufsize, off_t *position) NO_SYSCALL_STUB; } 
+345	ALL	{ int statfs64(char *path, struct statfs64 *buf); } 
+346	ALL	{ int fstatfs64(int fd, struct statfs64 *buf); } 
+347	ALL	{ int getfsstat64(user_addr_t buf, int bufsize, int flags); } 
+348	ALL	{ int __pthread_chdir(user_addr_t path); } 
+349	ALL	{ int __pthread_fchdir(int fd); } 
+
+#if AUDIT
+350	ALL	{ int audit(void *record, int length); } 
+351	ALL	{ int auditon(int cmd, void *data, int length); } 
+352	ALL	{ int nosys(void); } 
+353	ALL	{ int getauid(au_id_t *auid); } 
+354	ALL	{ int setauid(au_id_t *auid); } 
+355	ALL	{ int getaudit(struct auditinfo *auditinfo); } 
+356	ALL	{ int setaudit(struct auditinfo *auditinfo); } 
+357	ALL	{ int getaudit_addr(struct auditinfo_addr *auditinfo_addr, int length); } 
+358	ALL	{ int setaudit_addr(struct auditinfo_addr *auditinfo_addr, int length); } 
+359	ALL	{ int auditctl(char *path); } 
+#else
+350	ALL	{ int nosys(void); } 
+351	ALL	{ int nosys(void); } 
+352	ALL	{ int nosys(void); } 
+353	ALL	{ int nosys(void); } 
+354	ALL	{ int nosys(void); } 
+355	ALL	{ int nosys(void); } 
+356	ALL	{ int nosys(void); } 
+357	ALL	{ int nosys(void); } 
+358	ALL	{ int nosys(void); } 
+359	ALL	{ int nosys(void); } 
+#endif
+
+360	ALL	{ user_addr_t bsdthread_create(user_addr_t func, user_addr_t func_arg, user_addr_t stack, user_addr_t pthread, uint32_t flags) NO_SYSCALL_STUB; } 
+361	ALL	{ int bsdthread_terminate(user_addr_t stackaddr, size_t freesize, uint32_t port, uint32_t sem) NO_SYSCALL_STUB; } 
+362	ALL	{ int kqueue(void); } 
+363	ALL	{ int kevent(int fd, const struct kevent *changelist, int nchanges, struct kevent *eventlist, int nevents, const struct timespec *timeout); } 
+364	ALL	{ int lchown(user_addr_t path, uid_t owner, gid_t group); }
+365	ALL	{ int stack_snapshot(pid_t pid, user_addr_t tracebuf, uint32_t tracebuf_size, uint32_t options) NO_SYSCALL_STUB; }
+366	ALL	{ int bsdthread_register(user_addr_t threadstart, user_addr_t wqthread, int pthsize) NO_SYSCALL_STUB; } 
+367	ALL	{ int workq_open(void) NO_SYSCALL_STUB; }
+368	ALL	{ int workq_ops(int options, user_addr_t item, int prio) NO_SYSCALL_STUB; }
+369	ALL	{ int nosys(void); } 
+370	ALL	{ int nosys(void); } 
+371	ALL	{ int nosys(void); } 
+372	ALL	{ int nosys(void); } 
+373	ALL	{ int nosys(void); } 
+374	ALL	{ int nosys(void); } 
+375	ALL	{ int nosys(void); } 
+376	ALL	{ int nosys(void); } 
+377	ALL	{ int nosys(void); } 
+378	ALL	{ int nosys(void); } 
+379	ALL	{ int nosys(void); } 
+380	ALL	{ int __mac_execve(char *fname, char **argp, char **envp, struct mac *mac_p); } 
+381	ALL	{ int __mac_syscall(char *policy, int call, user_addr_t arg); } 
+382	ALL	{ int __mac_get_file(char *path_p, struct mac *mac_p); } 
+383	ALL	{ int __mac_set_file(char *path_p, struct mac *mac_p); } 
+384	ALL	{ int __mac_get_link(char *path_p, struct mac *mac_p); } 
+385	ALL	{ int __mac_set_link(char *path_p, struct mac *mac_p); } 
+386	ALL	{ int __mac_get_proc(struct mac *mac_p); } 
+387	ALL	{ int __mac_set_proc(struct mac *mac_p); } 
+388	ALL	{ int __mac_get_fd(int fd, struct mac *mac_p); } 
+389	ALL	{ int __mac_set_fd(int fd, struct mac *mac_p); } 
+390	ALL	{ int __mac_get_pid(pid_t pid, struct mac *mac_p); } 
+391	ALL	{ int __mac_get_lcid(pid_t lcid, struct mac *mac_p); }
+392	ALL	{ int __mac_get_lctx(struct mac *mac_p); }
+393	ALL	{ int __mac_set_lctx(struct mac *mac_p); }
+394	ALL	{ int setlcid(pid_t pid, pid_t lcid) NO_SYSCALL_STUB; }
+395	ALL	{ int getlcid(pid_t pid) NO_SYSCALL_STUB; }
+396	ALL	{ user_ssize_t read_nocancel(int fd, user_addr_t cbuf, user_size_t nbyte) NO_SYSCALL_STUB; } 
+397	ALL	{ user_ssize_t write_nocancel(int fd, user_addr_t cbuf, user_size_t nbyte) NO_SYSCALL_STUB; } 
+398	ALL	{ int open_nocancel(user_addr_t path, int flags, int mode) NO_SYSCALL_STUB; } 
+399	ALL	{ int close_nocancel(int fd) NO_SYSCALL_STUB; } 
+400	ALL	{ int wait4_nocancel(int pid, user_addr_t status, int options, user_addr_t rusage) NO_SYSCALL_STUB; } 
+#if SOCKETS
+401	ALL	{ int recvmsg_nocancel(int s, struct msghdr *msg, int flags) NO_SYSCALL_STUB; } 
+402	ALL	{ int sendmsg_nocancel(int s, caddr_t msg, int flags) NO_SYSCALL_STUB; } 
+403	ALL	{ int recvfrom_nocancel(int s, void *buf, size_t len, int flags, struct sockaddr *from, int *fromlenaddr) NO_SYSCALL_STUB; } 
+404	ALL	{ int accept_nocancel(int s, caddr_t name, socklen_t	*anamelen) NO_SYSCALL_STUB; } 
+#else
+401	ALL	{ int nosys(void); }
+402	ALL	{ int nosys(void); }
+403	ALL	{ int nosys(void); }
+404	ALL	{ int nosys(void); }
+#endif /* SOCKETS */
+405	ALL	{ int msync_nocancel(caddr_t addr, size_t len, int flags) NO_SYSCALL_STUB; } 
+406	ALL	{ int fcntl_nocancel(int fd, int cmd, long arg) NO_SYSCALL_STUB; } 
+407	ALL	{ int select_nocancel(int nd, u_int32_t *in, u_int32_t *ou, u_int32_t *ex, struct timeval *tv) NO_SYSCALL_STUB; } 
+408	ALL	{ int fsync_nocancel(int fd) NO_SYSCALL_STUB; } 
+#if SOCKETS
+409	ALL	{ int connect_nocancel(int s, caddr_t name, socklen_t namelen) NO_SYSCALL_STUB; } 
+#else
+409	ALL	{ int nosys(void); }
+#endif /* SOCKETS */
+410	ALL	{ int sigsuspend_nocancel(sigset_t mask) NO_SYSCALL_STUB; } 
+411	ALL	{ user_ssize_t readv_nocancel(int fd, struct iovec *iovp, u_int iovcnt) NO_SYSCALL_STUB; } 
+412	ALL	{ user_ssize_t writev_nocancel(int fd, struct iovec *iovp, u_int iovcnt) NO_SYSCALL_STUB; } 
+#if SOCKETS
+413	ALL	{ int sendto_nocancel(int s, caddr_t buf, size_t len, int flags, caddr_t to, socklen_t tolen) NO_SYSCALL_STUB; } 
+#else
+413	ALL	{ int nosys(void); }
+#endif /* SOCKETS */
+414	ALL	{ user_ssize_t pread_nocancel(int fd, user_addr_t buf, user_size_t nbyte, off_t offset) NO_SYSCALL_STUB; } 
+415	ALL	{ user_ssize_t pwrite_nocancel(int fd, user_addr_t buf, user_size_t nbyte, off_t offset) NO_SYSCALL_STUB; } 
+416	ALL	{ int waitid_nocancel(idtype_t idtype, id_t id, siginfo_t *infop, int options) NO_SYSCALL_STUB; } 
+417	ALL	{ int poll_nocancel(struct pollfd *fds, u_int nfds, int timeout) NO_SYSCALL_STUB; } 
+#if SYSV_MSG
+418	ALL	{ int msgsnd_nocancel(int msqid, void *msgp, size_t msgsz, int msgflg) NO_SYSCALL_STUB; } 
+419	ALL	{ user_ssize_t msgrcv_nocancel(int msqid, void *msgp, size_t msgsz, long msgtyp, int msgflg) NO_SYSCALL_STUB; } 
+#else
+418	ALL	{ int nosys(void); } 
+419	ALL	{ int nosys(void); } 
+#endif
+420	ALL	{ int sem_wait_nocancel(sem_t *sem) NO_SYSCALL_STUB; } 
+421	ALL	{ int aio_suspend_nocancel(user_addr_t aiocblist, int nent, user_addr_t timeoutp) NO_SYSCALL_STUB; } 
+422	ALL	{ int __sigwait_nocancel(user_addr_t set, user_addr_t sig) NO_SYSCALL_STUB; } 
+423	ALL	{ int __semwait_signal_nocancel(int cond_sem, int mutex_sem, int timeout, int relative, time_t tv_sec, int32_t tv_nsec) NO_SYSCALL_STUB; } 
+424	ALL	{ int __mac_mount(char *type, char *path, int flags, caddr_t data, struct mac *mac_p); } 
+425	ALL	{ int __mac_get_mount(char *path, struct mac *mac_p); } 
+426	ALL	{ int __mac_getfsstat(user_addr_t buf, int bufsize, user_addr_t mac, int macsize, int flags); } 
+

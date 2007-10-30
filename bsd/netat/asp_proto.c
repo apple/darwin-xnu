@@ -1,27 +1,31 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1995-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
- *	Copyright (c) 1995 Apple Computer, Inc. 
- *
  *  Change Log:
  *    Created February 20, 1995 by Tuyen Nguyen
  *    Modified for MP, 1996 by Tuyen Nguyen
@@ -46,8 +50,8 @@
 
 #include <net/if.h>
 
-#include <netat/appletalk.h>
 #include <netat/sysglue.h>
+#include <netat/appletalk.h>
 #include <netat/at_pcb.h>
 #include <netat/atp.h>
 #include <netat/ddp.h>
@@ -55,13 +59,6 @@
 #include <netat/at_var.h>
 #include <netat/debug.h>
 
-static int loop_cnt;
-#define CHK_LOOP(str) { \
-  if (loop_cnt++ > 100) { \
-     kprintf("%s", str); \
-     break; \
-  } \
-}
 
 #define atpBDSsize    (sizeof(struct atpBDS)*ATP_TRESP_MAX)
 #define aspCMDsize    (atpBDSsize+sizeof(struct atp_set_default)+TOTAL_ATP_HDR_SIZE)
@@ -76,31 +73,22 @@ static int loop_cnt;
 	&& ((scb->rem_addr.net != addr.net) \
 		|| (scb->rem_addr.node != addr.node)) )
 
-int  ASPputmsg();
-int  ASPgetmsg();
-void asp_init();
-void asp_ack_reply();
-void asp_nak_reply();
-void asp_clock();
-void asp_clock_locked(void *);
-int  asp_open();
-int  asp_close();
-int  asp_wput();
-StaticProc asp_scb_t *asp_find_scb();
-StaticProc asp_scb_t *asp_scb_alloc();
+StaticProc asp_scb_t *asp_find_scb(unsigned char, at_inet_t *);
+StaticProc asp_scb_t *asp_scb_alloc(void);
 
-StaticProc void asp_putnext();
-StaticProc void asp_iocack();
-StaticProc void asp_iocnak();
-StaticProc void asp_dequeue_scb();
-StaticProc void asp_scb_free();
-StaticProc void asp_timout();
-StaticProc void asp_untimout();
-StaticProc void asp_hangup();
-StaticProc void asp_send_tickle();
+StaticProc void asp_putnext(gref_t *, gbuf_t *);
+StaticProc void asp_iocack(gref_t *, gbuf_t *);
+StaticProc void asp_iocnak(gref_t *, gbuf_t *, int);
+StaticProc void asp_dequeue_scb(asp_scb_t *);
+StaticProc void asp_scb_free(asp_scb_t *);
+StaticProc void asp_timout(asp_tmo_func,  asp_scb_t *, int);
+StaticProc void asp_untimout(asp_tmo_func,  asp_scb_t *);
+StaticProc void asp_hangup(asp_scb_t *);
+StaticProc void asp_send_tickle(asp_scb_t *);
 StaticProc void asp_send_tickle_locked(void *);
-StaticProc void asp_accept();
-StaticProc int  asp_send_req();
+StaticProc void asp_accept(asp_scb_t *scb, asp_scb_t *sess_scb, gbuf_t *m);
+StaticProc int  asp_send_req(gref_t *, gbuf_t *, at_inet_t *, at_retry_t *, asp_word_t *, 
+							unsigned char , unsigned char, unsigned char);
 
 extern at_ifaddr_t *ifID_home;
 extern int atp_pidM[];
@@ -115,6 +103,8 @@ static unsigned char scb_tmo_cnt;
 asp_scb_t *scb_used_list;
 static asp_scb_t *scb_tmo_list;
 asp_scb_t *scb_free_list;
+
+int asp_readable(gref_t *);
 
 int
 asp_readable(gref)
@@ -265,7 +255,11 @@ asp_close(gref)
 	return 0;
 } /* asp_close */
 
-static char *aspStateStr(state)
+#ifdef DEBUG
+
+static const char *aspStateStr(int);
+
+static const char *aspStateStr(state)
      int state;
 {
   return ((state==ASPSTATE_Close)? "Close":
@@ -280,7 +274,9 @@ static char *aspStateStr(state)
 	  "unknown");
 }
 
-static char *aspCmdStr(aspCmd)
+static const char *aspCmdStr(int);
+
+static const char *aspCmdStr(aspCmd)
      int aspCmd;
 { 
 return ((aspCmd==ASPFUNC_CloseSess)? "CloseSess":
@@ -294,7 +290,9 @@ return ((aspCmd==ASPFUNC_CloseSess)? "CloseSess":
 	(aspCmd==ASPFUNC_CmdReply)? "CmdReply": "unknown");
 }
 
-static char *aspIOCStr(aspIOC)
+static const char *aspIOCStr(int);
+
+static const char *aspIOCStr(aspIOC)
      int aspIOC;
 {
 return (
@@ -314,6 +312,7 @@ return (
 	"unknown"
 	);
 }
+#endif /* DEBUG */
 
 #ifdef AT_MBUF_TRACE
 
@@ -893,8 +892,8 @@ void asp_clock(arg)
 	void *arg;
 {
 	asp_scb_t *scb;
-	void (*tmo_func)();
-
+	asp_tmo_func tmo_func;
+	
 	if (scb_tmo_list)
 		scb_tmo_list->tmo_delta--;
 	while (((scb = scb_tmo_list) != 0) && (scb_tmo_list->tmo_delta == 0)) {
@@ -1098,8 +1097,8 @@ asp_ack_reply(gref, mioc)
 			     || (scb->rcv_seq_num != ntohs(awp->param2))
 			     || BAD_REMADDR(rem_addr) ) {
 				char era[8], ra[8];
-				sprintf(era,"%d.%d", scb->rem_addr.node,scb->rem_addr.socket);
-				sprintf(ra,"%d.%d", rem_addr.node,rem_addr.socket);
+				snprintf(era, sizeof(era), "%d.%d", scb->rem_addr.node,scb->rem_addr.socket);
+				snprintf(ra, sizeof(ra), "%d.%d", rem_addr.node,rem_addr.socket);
 				dPrintf(D_M_ASP, D_L_WARNING,
 					("             : DROP, id=%d,esn=%d,sn=%d,erem=%s,rem=%s\n",
 					scb->sess_id,scb->rcv_seq_num,awp->param2,era,ra));
@@ -1604,7 +1603,7 @@ asp_find_scb(sock_num, rem_addr)
  */
 StaticProc void
 asp_timout(func, scb, seconds)
-	void (*func)();
+	asp_tmo_func func;
 	register asp_scb_t *scb;
 	int seconds;
 {
@@ -1660,9 +1659,9 @@ asp_timout(func, scb, seconds)
  * untimout routine
  */
 StaticProc void
-asp_untimout(func, scb)
-	void (*func)();
-	register asp_scb_t *scb;
+asp_untimout(
+	__unused asp_tmo_func tmo_func,
+	register asp_scb_t *scb)
 {
 
 	if ((scb->tmo_cnt == scb_tmo_cnt) || (scb->tmo_func == 0))
@@ -1690,8 +1689,6 @@ StaticProc void
 asp_hangup(scb)
 	asp_scb_t *scb;
 {
-	int s;
-
 	/*
 	 * set the state to Close
 	 */
@@ -1844,10 +1841,10 @@ asp_putnext(gref, mproto)
     2)  datptr->len = size of data
 */
 
-int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, int flags, int *errp)
+int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, __unused int flags, int *errp)
 {
     int i, err, len, offset, remain, size, copy_len;
-    gbuf_t *mioc, *mdata, *mx, *m0;
+    gbuf_t *mioc, *mdata, *mx;
     ioc_t *iocbp;
     strbuf_t ctlbuf;
     strbuf_t datbuf;
@@ -1894,7 +1891,7 @@ int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, in
             goto l_err;
      }
 
-     /* Radar 5423396: check for bogus length
+     /* Radar 5398072: check for bogus length
       * 	       Max ASP data is 8 ATP packets
       */
 
@@ -2015,7 +2012,7 @@ int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, in
         /*
          * build the command/write/write_continue request
          */
-        wptr = gbuf_rptr(mdata);
+        wptr = (unsigned char *)gbuf_rptr(mdata);
         atpBDS = (struct atpBDS *)wptr;
         wptr += atpBDSsize;
         for (i=0; i < ATP_TRESP_MAX; i++) {
@@ -2154,7 +2151,7 @@ l_err:
 
 
 /* bms:  make this callable from kernel.  reply date is passed back as a mbuf chain in *mreply  */
-int ASPgetmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t **mreply, int *flags, int *errp)
+int ASPgetmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t **mreply, __unused int *flags, int *errp)
 {
     int err, len, sum, rval;
     gbuf_t *mproto, *mdata;

@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -46,6 +52,13 @@
  * 
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
+ */
+/*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ * Copyright (c) 2005 SPARTA, Inc.
  */
 /*
  */
@@ -373,6 +386,27 @@ typedef struct
   audit_token_t			msgh_audit;
 } mach_msg_audit_trailer_t;
 
+typedef struct
+{
+  mach_port_name_t sender;
+} msg_labels_t;
+
+/* 
+   Trailer type to pass MAC policy label info as a mach message trailer.
+   
+*/
+
+typedef struct
+{
+  mach_msg_trailer_type_t       msgh_trailer_type;
+  mach_msg_trailer_size_t       msgh_trailer_size;
+  mach_port_seqno_t             msgh_seqno;
+  security_token_t              msgh_sender;
+  audit_token_t			msgh_audit;
+  msg_labels_t                  msgh_labels;
+  int				msgh_ad;
+} mach_msg_mac_trailer_t;
+
 #define MACH_MSG_TRAILER_MINIMUM_SIZE  sizeof(mach_msg_trailer_t)
 
 /*
@@ -384,7 +418,7 @@ typedef struct
  * another module may exceed the local modules notion of
  * MAX_TRAILER_SIZE.
  */
-typedef mach_msg_audit_trailer_t mach_msg_max_trailer_t;
+typedef mach_msg_mac_trailer_t mach_msg_max_trailer_t;
 #define MAX_TRAILER_SIZE sizeof(mach_msg_max_trailer_t)
 
 /*
@@ -395,6 +429,10 @@ typedef mach_msg_audit_trailer_t mach_msg_max_trailer_t;
  * REQUESTED_TRAILER_SIZE.
  */
 typedef mach_msg_security_trailer_t mach_msg_format_0_trailer_t;
+
+/*typedef mach_msg_mac_trailer_t mach_msg_format_0_trailer_t;
+*/
+
 #define MACH_MSG_TRAILER_FORMAT_0_SIZE sizeof(mach_msg_format_0_trailer_t)
 
 #define   KERNEL_SECURITY_TOKEN_VALUE  { {0, 1} }
@@ -535,17 +573,33 @@ typedef integer_t mach_msg_option_t;
  * NOTE: a 0x00------ RCV mask implies to ask for
  * a MACH_MSG_TRAILER_FORMAT_0 with 0 Elements, 
  * which is equivalent to a mach_msg_trailer_t.
+ *
+ * XXXMAC: unlike the rest of the MACH_RCV_* flags, MACH_RCV_TRAILER_LABELS
+ * and MACH_RCV_TRAILER_AV need their own private bit since we only calculate
+ * their fields when absolutely required.  This will cause us problems if
+ * Apple adds new trailers.
  */
 #define MACH_RCV_TRAILER_NULL   0
 #define MACH_RCV_TRAILER_SEQNO  1
 #define MACH_RCV_TRAILER_SENDER 2
 #define MACH_RCV_TRAILER_AUDIT  3
+#define MACH_RCV_TRAILER_LABELS 4
+#define MACH_RCV_TRAILER_AV     8
 
 #define MACH_RCV_TRAILER_TYPE(x)     (((x) & 0xf) << 28) 
 #define MACH_RCV_TRAILER_ELEMENTS(x) (((x) & 0xf) << 24)  
 #define MACH_RCV_TRAILER_MASK 	     ((0xff << 24))
 
 #define GET_RCV_ELEMENTS(y) (((y) >> 24) & 0xf)
+
+/* 
+ * XXXMAC: note that in the case of MACH_RCV_TRAILER_AV and
+ * MACH_RCV_TRAILER_LABELS, we just fall through to mach_msg_max_trailer_t.
+ * This is correct behavior since mach_msg_max_trailer_t is defined as
+ * mac_msg_mac_trailer_t which is used for the LABELS and AV trailers.
+ * It also makes things work properly if MACH_RCV_TRAILER_AV or
+ * MACH_RCV_TRAILER_LABELS are ORed with one of the other options.
+ */
 #define REQUESTED_TRAILER_SIZE(y) 				\
 	((mach_msg_trailer_size_t)				\
 	 ((GET_RCV_ELEMENTS(y) == MACH_RCV_TRAILER_NULL) ?	\
@@ -554,7 +608,10 @@ typedef integer_t mach_msg_option_t;
 	   sizeof(mach_msg_seqno_trailer_t) :			\
 	  ((GET_RCV_ELEMENTS(y) == MACH_RCV_TRAILER_SENDER) ?	\
 	   sizeof(mach_msg_security_trailer_t) :		\
-	   sizeof(mach_msg_audit_trailer_t)))))
+	   ((GET_RCV_ELEMENTS(y) == MACH_RCV_TRAILER_AUDIT) ?	\
+	    sizeof(mach_msg_audit_trailer_t) :      		\
+	    sizeof(mach_msg_max_trailer_t))))))
+
 /*
  *  Much code assumes that mach_msg_return_t == kern_return_t.
  *  This definition is useful for descriptive purposes.
@@ -703,3 +760,4 @@ extern mach_msg_return_t	mach_msg(
 __END_DECLS
 
 #endif	/* _MACH_MESSAGE_H_ */
+

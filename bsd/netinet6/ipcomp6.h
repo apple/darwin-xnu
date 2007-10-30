@@ -37,11 +37,12 @@
 #ifndef _NETINET6_IPCOMP6_H_
 #define _NETINET6_IPCOMP6_H_
 #include <sys/appleapiopts.h>
+#include <netinet6/ipsec.h>
 
 #ifdef KERNEL_PRIVATE
 extern int ipcomp6_input(struct mbuf **, int *);
 extern int ipcomp6_output(struct mbuf *, u_char *, struct mbuf *,
-	struct ipsecrequest *);
+	struct secasvar *);
 #endif KERNEL_PRIVATE
 
 #endif /*_NETINET6_IPCOMP6_H_*/

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -96,9 +102,9 @@ struct buf {
 	daddr64_t	b_lblkno;	/* Logical block number. */
 	daddr64_t	b_blkno;	/* Underlying physical block number. */
 	void	(*b_iodone)(buf_t, void *);	/* Function to call upon completion. */
-	vnode_t	b_vp;			/* Device vnode. */
-	struct	ucred *b_rcred;		/* Read credentials reference. */
-	struct	ucred *b_wcred;		/* Write credentials reference. */
+	vnode_t	b_vp;			/* File vnode for data, device vnode for metadata. */
+	kauth_cred_t b_rcred;		/* Read credentials reference. */
+	kauth_cred_t b_wcred;		/* Write credentials reference. */
 	void *	b_upl;			/* Pointer to UPL */
 	buf_t	b_real_bp;		/* used to track bp generated through cluster_bp */
 	TAILQ_ENTRY(buf)	b_act;	/* Device driver queue when active */
@@ -125,6 +131,7 @@ struct buf {
 #define b_trans_head b_freelist.tqe_prev
 #define b_trans_next b_freelist.tqe_next
 #define b_iostate    b_rcred
+#define b_cliodone   b_wcred
 
 /*
  * These flags are kept in b_lflags... 
@@ -133,17 +140,18 @@ struct buf {
 #define	BL_BUSY		0x00000001	/* I/O in progress. */
 #define	BL_WANTED	0x00000002	/* Process wants this buffer. */
 #define BL_IOBUF	0x00000004	/* buffer allocated via 'buf_alloc' */
-
+#define BL_CALLDONE	0x00000008	/* callback routine on B_CALL bp has completed */
 
 /*
  * mask used by buf_flags... these are the readable external flags
  */
-#define BUF_X_RDFLAGS (B_CLUSTER | B_PHYS | B_LOCKED | B_DELWRI | B_ASYNC |\
-                       B_READ | B_WRITE | B_META | B_PAGEIO)
+#define BUF_X_RDFLAGS (B_PHYS | B_RAW | B_LOCKED | B_ASYNC | B_READ | B_WRITE | B_PAGEIO |\
+		       B_META | B_CLUSTER | B_DELWRI | B_FUA | B_PASSIVE)
 /*
  * mask used by buf_clearflags/buf_setflags... these are the writable external flags
  */
-#define BUF_X_WRFLAGS (B_LOCKED | B_NOCACHE | B_ASYNC | B_READ | B_WRITE | B_PAGEIO)
+#define BUF_X_WRFLAGS (B_PHYS | B_RAW | B_LOCKED | B_ASYNC | B_READ | B_WRITE | B_PAGEIO |\
+		       B_NOCACHE | B_FUA | B_PASSIVE)
 
 /*
  * These flags are kept in b_flags... access is lockless
@@ -160,7 +168,7 @@ struct buf {
 #define	B_AGE		0x00200000	/* Move to age queue when I/O done. */
 #define B_FILTER	0x00400000	/* call b_iodone from biodone as an in-line filter */
 #define	B_CALL		0x00800000	/* Call b_iodone from biodone, assumes b_iodone consumes bp */
-#define	B_RAW		0x01000000	/* Set by physio for raw transfers. */
+#define B_EOT		0x01000000	/* last buffer in a transaction list created by cluster_io */
 #define	B_WASDIRTY	0x02000000	/* page was found dirty in the VM cache */
 #define	B_HDRALLOC	0x04000000	/* zone allocated buffer header */
 #define	B_ZALLOC	0x08000000	/* b_datap is zalloc()ed */
@@ -185,11 +193,11 @@ struct buf {
 #define B_NOBUFF	0x04	/* Do not allocate struct buf */
 
 
-extern int niobuf;		/* The number of IO buffer headers for cluster IO */
-extern int nbuf;		/* The number of buffer headers */
-extern struct buf *buf;		/* The buffer headers. */
+extern int niobuf_headers;		/* The number of IO buffer headers for cluster IO */
+extern int nbuf_headers;		/* The number of buffer headers */
 extern int max_nbuf_headers;		/* The max number of buffer headers */
 extern int nbuf_hashelements;		/* The number of elements in bufhash */
+extern struct buf *buf_headers;		/* The buffer headers. */
 
 
 /*
@@ -211,7 +219,7 @@ buf_t	alloc_io_buf(vnode_t, int);
 void	free_io_buf(buf_t);
 
 int	allocbuf(struct buf *, int);
-void	bufinit(void);
+void	bufinit(void) __attribute__((section("__TEXT, initcode")));
 
 void	buf_setfilter(buf_t, void (*)(buf_t, void *), void *, void **, void **);
 
@@ -223,7 +231,12 @@ void	buf_setfilter(buf_t, void (*)(buf_t, void *), void *, void **, void **);
 #define BAC_SKIP_NONLOCKED	0x04	/* Don't return LOCKED buffers */
 #define BAC_SKIP_LOCKED		0x08	/* Only return LOCKED buffers */
 
-void	cluster_init(void);
+void	buf_list_lock(void);
+void	buf_list_unlock(void);
+
+void	buf_biowait_callback(buf_t);
+
+void	cluster_init(void) __attribute__((section("__TEXT, initcode")));
 void	buf_drop(buf_t);
 errno_t	buf_acquire(buf_t, int, int, int);
 

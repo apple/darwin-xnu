@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2001-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 /*
@@ -39,6 +45,7 @@
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/reboot.h>
+#include <sys/kauth.h>
 #include <net/if.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
@@ -46,17 +53,15 @@
 #include <netinet/in.h>
 #include <netinet/if_ether.h>
 #include <netinet/dhcp_options.h>
-#include <pexpert/pexpert.h>
+#include <netinet/in_dhcp.h>
 
 #include <kern/kern_types.h>
 #include <kern/kalloc.h>
 
+#include <pexpert/pexpert.h>
+
 //#include <libkern/libkern.h>
 extern struct filedesc 	filedesc0;
-
-extern int	strncmp(const char *,const char *, size_t);
-extern unsigned long strtoul(const char *, char **, int);
-extern char *	strchr(const char *str, int ch);
 
 extern int 	nfs_mountroot(void); 	/* nfs_vfsops.c */
 extern int (*mountroot)(void);
@@ -84,12 +89,6 @@ extern int di_root_image(const char *path, char devname[], dev_t *dev_p);
 #define BSDP_RESPONSE	"bsdp-response"
 #define DHCP_RESPONSE	"dhcp-response"
 
-extern int 
-bootp(struct ifnet * ifp, struct in_addr * iaddr_p, int max_retry,
-      struct in_addr * netmask_p, struct in_addr * router_p,
-      struct proc * procp);
-
-
 /* forward declarations */
 int	inet_aton(char * cp, struct in_addr * pin);
 
@@ -97,7 +96,7 @@ boolean_t	netboot_iaddr(struct in_addr * iaddr_p);
 boolean_t	netboot_rootpath(struct in_addr * server_ip,
 				 char * name, int name_len, 
 				 char * path, int path_len);
-int	netboot_setup(struct proc * p);
+int	netboot_setup(void);
 int	netboot_mountroot(void);
 int	netboot_root(void);
 
@@ -132,7 +131,7 @@ struct netboot_info {
 int
 inet_aton(char * cp, struct in_addr * pin)
 {
-    u_char * b = (char *)pin;
+    u_char * b = (u_char *)pin;
     int	   i;
     char * p;
 
@@ -162,7 +161,7 @@ inet_aton(char * cp, struct in_addr * pin)
  *   "17.202.16.17:seaport:/release/.images/Image9/CurrentHera"
  */
 static __inline__ boolean_t
-parse_booter_path(char * path, struct in_addr * iaddr_p, char * * host,
+parse_booter_path(char * path, struct in_addr * iaddr_p, char const * * host,
 		  char * * mount_dir, char * * image_path)
 {
     char *	start;
@@ -249,7 +248,7 @@ find_colon(char * str)
  * nfs:17.202.42.112:/Volumes/Foo\:/Library/NetBoot/NetBootSP0:Jaguar/Jaguar.dmg
  */
 static __inline__ boolean_t
-parse_netboot_path(char * path, struct in_addr * iaddr_p, char * * host,
+parse_netboot_path(char * path, struct in_addr * iaddr_p, char const * * host,
 		   char * * mount_dir, char * * image_path)
 {
 	static char	tmp[MAX_IPv4_STR_LEN];	/* Danger - not thread safe */
@@ -291,7 +290,7 @@ parse_netboot_path(char * path, struct in_addr * iaddr_p, char * * host,
 }
 
 static boolean_t
-parse_image_path(char * path, struct in_addr * iaddr_p, char * * host,
+parse_image_path(char * path, struct in_addr * iaddr_p, char const * * host,
 		 char * * mount_dir, char * * image_path)
 {
     if (path[0] >= '0' && path[0] <= '9') {
@@ -328,16 +327,16 @@ get_root_path(char * root_path)
     if (pkt != NULL) {
 	int			len;
 	dhcpol_t 		options;
-	char *			path;
-	struct dhcp *		reply;
+	const char *		path;
+	const struct dhcp *	reply;
 
-	reply = (struct dhcp *)pkt;
-	(void)dhcpol_parse_packet(&options, reply, pkt_len, NULL);
+	reply = (const struct dhcp *)pkt;
+	(void)dhcpol_parse_packet(&options, reply, pkt_len);
 
-	path = (char *)dhcpol_find(&options, 
-				   dhcptag_root_path_e, &len, NULL);
+	path = (const char *)dhcpol_find(&options, 
+					 dhcptag_root_path_e, &len, NULL);
 	if (path) {
-	    bcopy(path, root_path, len);
+	    memcpy(root_path, path, len);
 	    root_path[len] = '\0';
 	    found = TRUE;
 	}
@@ -358,7 +357,7 @@ netboot_info_init(struct in_addr iaddr)
     MALLOC_ZONE(vndevice, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
     if (vndevice == NULL)
     	panic("netboot_info_init: M_NAMEI zone exhausted");
-    if (PE_parse_boot_arg("vndevice", vndevice) == TRUE) {
+    if (PE_parse_boot_argn("vndevice", vndevice, MAXPATHLEN) == TRUE) {
 	use_hdix = FALSE;
     }
     FREE_ZONE(vndevice, MAXPATHLEN, M_NAMEI);
@@ -373,10 +372,10 @@ netboot_info_init(struct in_addr iaddr)
     MALLOC_ZONE(root_path, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
     if (root_path  == NULL)
     	panic("netboot_info_init: M_NAMEI zone exhausted");
-    if (PE_parse_boot_arg("rp", root_path) == TRUE
-	|| PE_parse_boot_arg("rootpath", root_path) == TRUE
+    if (PE_parse_boot_argn("rp", root_path, MAXPATHLEN) == TRUE
+	|| PE_parse_boot_argn("rootpath", root_path, MAXPATHLEN) == TRUE
 	|| get_root_path(root_path) == TRUE) {
-	char * server_name = NULL;
+	const char * server_name = NULL;
 	char * mount_point = NULL;
 	char * image_path = NULL;
 	struct in_addr 	server_ip;
@@ -389,8 +388,8 @@ netboot_info_init(struct in_addr iaddr)
 	    info->server_name = (char *)kalloc(info->server_name_length);
 	    info->mount_point_length = strlen(mount_point) + 1;
 	    info->mount_point = (char *)kalloc(info->mount_point_length);
-	    strcpy(info->server_name, server_name);
-	    strcpy(info->mount_point, mount_point);
+	    strlcpy(info->server_name, server_name, info->server_name_length);
+	    strlcpy(info->mount_point, mount_point, info->mount_point_length);
 	    
 	    printf("Server %s Mount %s", 
 		   server_name, info->mount_point);
@@ -404,11 +403,12 @@ netboot_info_init(struct in_addr iaddr)
 		}
 		info->image_path = (char *)kalloc(info->image_path_length);
 		if (needs_slash) {
-		    info->image_path[0] = '/';
-		    strcpy(info->image_path + 1, image_path);
-		}
-		else {
-		    strcpy(info->image_path, image_path);
+			info->image_path[0] = '/';
+			strlcpy(info->image_path + 1, image_path,
+					info->image_path_length - 1);
+		} else {
+			strlcpy(info->image_path, image_path,
+					info->image_path_length);
 		}
 		printf(" Image %s", info->image_path);
 	    }
@@ -421,7 +421,7 @@ netboot_info_init(struct in_addr iaddr)
 	    info->use_hdix = TRUE;
 	    info->image_path_length = strlen(root_path) + 1;
 	    info->image_path = (char *)kalloc(info->image_path_length);
-	    strcpy(info->image_path, root_path);
+	    strlcpy(info->image_path, root_path, info->image_path_length);
 	}	    
 	else {
 	    printf("netboot: root path uses unrecognized format\n");
@@ -481,8 +481,8 @@ netboot_rootpath(struct in_addr * server_ip,
 	       path_len, S_netboot_info_p->mount_point_length);
 	return (FALSE);
     }
-    strcpy(path, S_netboot_info_p->mount_point);
-    strncpy(name, S_netboot_info_p->server_name, name_len);
+    strlcpy(path, S_netboot_info_p->mount_point, path_len);
+    strlcpy(name, S_netboot_info_p->server_name, name_len);
     *server_ip = S_netboot_info_p->server_ip;
     return (TRUE);
 }
@@ -512,21 +512,21 @@ get_ip_parameters(struct in_addr * iaddr_p, struct in_addr * netmask_p,
 	}
     }
     if (pkt != NULL) {
-	struct in_addr *	ip;
+	const struct in_addr *	ip;
 	int			len;
 	dhcpol_t 		options;
-	struct dhcp *		reply;
+	const struct dhcp *	reply;
 
-	reply = (struct dhcp *)pkt;
-	(void)dhcpol_parse_packet(&options, reply, pkt_len, NULL);
+	reply = (const struct dhcp *)pkt;
+	(void)dhcpol_parse_packet(&options, reply, pkt_len);
 	*iaddr_p = reply->dp_yiaddr;
-	ip = (struct in_addr *)
+	ip = (const struct in_addr *)
 	    dhcpol_find(&options, 
 			dhcptag_subnet_mask_e, &len, NULL);
 	if (ip) {
 	    *netmask_p = *ip;
 	}
-	ip = (struct in_addr *)
+	ip = (const struct in_addr *)
 	    dhcpol_find(&options, dhcptag_router_e, &len, NULL);
 	if (ip) {
 	    *router_p = *ip;
@@ -534,35 +534,6 @@ get_ip_parameters(struct in_addr * iaddr_p, struct in_addr * netmask_p,
     }
     IOBSDRegistryEntryRelease(entry);
     return (pkt != NULL);
-}
-
-static int
-inet_aifaddr(struct socket * so, char * name, const struct in_addr * addr, 
-	     const struct in_addr * mask,
-	     const struct in_addr * broadcast)
-{
-    struct sockaddr	blank_sin;
-    struct ifaliasreq	ifra;
-
-    bzero(&blank_sin, sizeof(blank_sin));
-    blank_sin.sa_len = sizeof(blank_sin);
-    blank_sin.sa_family = AF_INET;
-
-    bzero(&ifra, sizeof(ifra));
-    strncpy(ifra.ifra_name, name, sizeof(ifra.ifra_name));
-    if (addr) {
-	ifra.ifra_addr = blank_sin;
-	((struct sockaddr_in *)&ifra.ifra_addr)->sin_addr = *addr;
-    }
-    if (mask) {
-	ifra.ifra_mask = blank_sin;
-	((struct sockaddr_in *)&ifra.ifra_mask)->sin_addr = *mask;
-    }
-    if (broadcast) {
-	ifra.ifra_broadaddr = blank_sin;
-	((struct sockaddr_in *)&ifra.ifra_broadaddr)->sin_addr = *broadcast;
-    }
-    return (ifioctl(so, SIOCAIFADDR, (caddr_t)&ifra, current_proc()));
 }
 
 static int
@@ -624,7 +595,7 @@ find_interface(void)
     struct ifnet *		ifp = NULL;
 
     if (rootdevice[0]) {
-		ifp = ifunit(rootdevice);
+		ifp = ifunit((char *)rootdevice);
     }
     if (ifp == NULL) {
 		ifnet_head_lock_shared();
@@ -644,13 +615,12 @@ netboot_mountroot(void)
     struct ifreq 		ifr;
     struct ifnet *		ifp;
     struct in_addr		netmask = { 0 };
-    struct proc *		procp = current_proc();
+    proc_t			procp = current_proc();
     struct in_addr		router = { 0 };
     struct socket *		so = NULL;
     unsigned int		try;
 
     bzero(&ifr, sizeof(ifr));
-
 
     /* find the interface */
     ifp = find_interface();
@@ -659,7 +629,8 @@ netboot_mountroot(void)
 	error = ENXIO;
 	goto failed;
     }
-    sprintf(ifr.ifr_name, "%s%d", ifp->if_name, ifp->if_unit);
+    snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s%d", ifp->if_name,
+	     ifp->if_unit);
     printf("netboot: using network interface '%s'\n", ifr.ifr_name);
 
     /* bring it up */
@@ -676,10 +647,10 @@ netboot_mountroot(void)
 
     /* grab information from the registry */
     if (get_ip_parameters(&iaddr, &netmask, &router) == FALSE) {
-	/* use BOOTP to retrieve IP address, netmask and router */
-	error = bootp(ifp, &iaddr, 32, &netmask, &router, procp);
+	/* use DHCP to retrieve IP address, netmask and router */
+	error = dhcp(ifp, &iaddr, 64, &netmask, &router, procp);
 	if (error) {
-	    printf("netboot: BOOTP failed %d\n", error);
+	    printf("netboot: DHCP failed %d\n", error);
 	    goto failed;
 	}
     }
@@ -752,7 +723,7 @@ netboot_mountroot(void)
 	}
 	break;
     case kNetBootImageTypeHTTP:
-	error = netboot_setup(procp);
+	error = netboot_setup();
 	break;
     }
     if (error == 0) {
@@ -770,7 +741,7 @@ failed:
 }
 
 int
-netboot_setup(struct proc * p)
+netboot_setup()
 {
     dev_t 	dev;
     int 	error = 0;
@@ -782,7 +753,7 @@ netboot_setup(struct proc * p)
     if (S_netboot_info_p->use_hdix) {
 	printf("netboot_setup: calling di_root_image\n");
 	error = di_root_image(S_netboot_info_p->image_path, 
-			      rootdevice, &dev);
+			      (char *)rootdevice, &dev);
 	if (error) {
 	    printf("netboot_setup: di_root_image: failed %d\n", error);
 	    goto done;
@@ -791,7 +762,7 @@ netboot_setup(struct proc * p)
     else {
 	printf("netboot_setup: calling vndevice_root_image\n");
 	error = vndevice_root_image(S_netboot_info_p->image_path, 
-				    rootdevice, &dev);
+				    (char *)rootdevice, &dev);
 	if (error) {
 	    printf("netboot_setup: vndevice_root_image: failed %d\n", error);
 	    goto done;
@@ -804,13 +775,9 @@ netboot_setup(struct proc * p)
     if (error == 0 && rootvnode != NULL) {
         struct vnode *tvp;
         struct vnode *newdp;
-	struct vfs_context context;
-
-	context.vc_proc = p;
-	context.vc_ucred = kauth_cred_proc_ref(p);	/* XXX kauth_cred_get() ??? proxy */
 
 	/* Get the vnode for '/'.  Set fdp->fd_fd.fd_cdir to reference it. */
-	if (VFS_ROOT(mountlist.tqh_last, &newdp, &context))
+	if (VFS_ROOT(TAILQ_LAST(&mountlist,mntlist), &newdp, vfs_context_kernel()))
 		panic("netboot_setup: cannot find root vnode");
 	vnode_ref(newdp);
 	vnode_put(newdp);
@@ -822,7 +789,6 @@ netboot_setup(struct proc * p)
 	TAILQ_REMOVE(&mountlist, TAILQ_FIRST(&mountlist), mnt_list);
 	mount_list_unlock();
 	mountlist.tqh_first->mnt_flag |= MNT_ROOTFS;
-	kauth_cred_unref(&context.vc_ucred);
     }
  done:
     netboot_info_free(&S_netboot_info_p);

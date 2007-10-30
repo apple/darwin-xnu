@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -57,9 +63,11 @@
 #include <kern/misc_protos.h>
 #include <kern/mach_param.h>
 #include <kern/spl.h>
+#include <kern/machine.h>
 
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
+#include <vm/vm_protos.h>
 
 #include <ppc/misc_protos.h>
 #include <ppc/cpu_internal.h>
@@ -75,6 +83,7 @@
 #include <ppc/vmachmon.h>
 #include <ppc/low_trace.h>
 #include <ppc/lowglobals.h>
+#include <ppc/fpu_protos.h>
 
 #include <sys/kdebug.h>
 
@@ -97,16 +106,15 @@ int   vec_switch_count = 0;
  * consider_machine_collect: try to collect machine-dependent pages
  */
 void
-consider_machine_collect()
+consider_machine_collect(void)
 {
     /*
-     * none currently available
+     * XXX none currently available
      */
-	return;
 }
 
 void
-consider_machine_adjust()
+consider_machine_adjust(void)
 {
         consider_mapping_adjust();
 }
@@ -133,7 +141,6 @@ machine_switch_context(
 	ppinfo = getPerProc();								/* Get our processor block */
 
 	ppinfo->old_thread = (unsigned int)old;
-	ppinfo->cpu_flags &= ~traceBE; 						 /* disable branch tracing if on */
 	       
 	/* Our context might wake up on another processor, so we must
 	 * not keep hot state in our FPU, it must go back to the pcb
@@ -191,16 +198,8 @@ machine_switch_context(
 		hw_blow_seg(lowGlo.lgUMWvaddr + 0x10000000ULL);	/* Blow off the second segment */
 	}
 
-	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED,MACH_SCHED) | DBG_FUNC_NONE,
-		     old->reason, (int)new, old->sched_pri, new->sched_pri, 0);
-
 	retval = Switch_context(old, continuation, new);
 	assert(retval != NULL);
-
-	if (branch_tracing_enabled()) {
-		ppinfo = getPerProc();							/* Get our processor block */
-	  	ppinfo->cpu_flags |= traceBE;  					/* restore branch tracing */
-	}
 
 	/* We've returned from having switched context, so we should be
 	 * back in the original context.
@@ -217,16 +216,15 @@ machine_thread_create(
 	thread_t		thread,
 	task_t			task)
 {
-	savearea		*sv;									/* Pointer to newly allocated savearea */
-	unsigned int	*CIsTooLimited, i;
+	struct savearea		*sv;									/* Pointer to newly allocated savearea */
 
-	hw_atomic_add((uint32_t *)&saveanchor.savetarget, 4);	/* Account for the number of saveareas we think we "need"
+	(void)hw_atomic_add(&saveanchor.savetarget, 4);	/* Account for the number of saveareas we think we "need"
 															   for this activation */
-	assert(thread->machine.pcb == (savearea *)0);				/* Make sure there was no previous savearea */
+	assert(thread->machine.pcb == (struct savearea *)0);				/* Make sure there was no previous savearea */
 	
 	sv = save_alloc();										/* Go get us a savearea */
 		
-	bzero((char *)((unsigned int)sv + sizeof(savearea_comm)), (sizeof(savearea) - sizeof(savearea_comm)));	/* Clear it */
+	bzero((char *)((unsigned int)sv + sizeof(savearea_comm)), (sizeof(struct savearea) - sizeof(savearea_comm)));	/* Clear it */
 		
 	sv->save_hdr.save_prev = 0;								/* Clear the back pointer */
 	sv->save_hdr.save_flags = (sv->save_hdr.save_flags & ~SAVtype) | (SAVgeneral << SAVtypeshft);	/* Mark as in use */
@@ -264,11 +262,9 @@ void
 machine_thread_destroy(
 	thread_t		thread)
 {
-	register savearea *pcb, *ppsv;
-	register savearea_vec *vsv, *vpsv;
-	register savearea_fpu *fsv, *fpsv;
-	register savearea *svp;
-	register int i;
+	struct savearea *local_pcb, *ppsv;
+	savearea_vec *vsv, *vpsv;
+	savearea_fpu *fsv, *fpsv;
  	boolean_t intr;
 
 /*
@@ -291,11 +287,12 @@ machine_thread_destroy(
 	
 	while(vsv) {											/* Any VMX saved state? */
 		vpsv = vsv;											/* Remember so we can toss this */
+		/* XXX save_prev should be a void * 4425537 */
 		vsv = CAST_DOWN(savearea_vec *, vsv->save_hdr.save_prev);  /* Get one underneath our's */
-		save_release((savearea *)vpsv);						/* Release it */
+		save_release((struct savearea *)vpsv);						/* Release it */
 	}
 	
-	thread->machine.curctx->VMXsave = 0;					/* Kill chain */
+	thread->machine.curctx->VMXsave = NULL;					/* Kill chain */
  
  	toss_live_fpu(thread->machine.curctx);					/* Dump live float */
 
@@ -303,25 +300,27 @@ machine_thread_destroy(
 	
 	while(fsv) {											/* Any float saved state? */
 		fpsv = fsv;											/* Remember so we can toss this */
+		/* XXX save_prev should be a void * 4425537 */
 		fsv = CAST_DOWN(savearea_fpu *, fsv->save_hdr.save_prev);   /* Get one underneath our's */
-		save_release((savearea *)fpsv);						/* Release it */
+		save_release((struct savearea *)fpsv);						/* Release it */
 	}
 	
-	thread->machine.curctx->FPUsave = 0;					/* Kill chain */
+	thread->machine.curctx->FPUsave = NULL;					/* Kill chain */
 
 /*
  * free all regular saveareas.
  */
 
-	pcb = thread->machine.pcb;								/* Get the general savearea */
+	local_pcb = thread->machine.pcb;								/* Get the general savearea */
 	
-	while(pcb) {											/* Any float saved state? */
-		ppsv = pcb;											/* Remember so we can toss this */
-		pcb = CAST_DOWN(savearea *, pcb->save_hdr.save_prev);  /* Get one underneath our's */ 
+	while(local_pcb) {											/* Any float saved state? */
+		ppsv = local_pcb;											/* Remember so we can toss this */
+		/* XXX save_prev should be a void * 4425537 */
+		local_pcb = CAST_DOWN(struct savearea *, local_pcb->save_hdr.save_prev);  /* Get one underneath our's */ 
 		save_release(ppsv);									/* Release it */
 	}
 	
-	hw_atomic_sub((uint32_t *)&saveanchor.savetarget, 4);	/* Unaccount for the number of saveareas we think we "need" */
+	(void)hw_atomic_sub(&saveanchor.savetarget, 4);	/* Unaccount for the number of saveareas we think we "need" */
 
 	(void) ml_set_interrupts_enabled(intr);					/* Restore interrupts if enabled */
 
@@ -329,21 +328,20 @@ machine_thread_destroy(
 
 /*
  * act_machine_sv_free
- * release saveareas associated with an act. if flag is true, release
+ * release saveareas associated with a thread. if flag is true, release
  * user level savearea(s) too, else don't
  *
- * This code must run with interruptions disabled because an interrupt handler could use
- * floating point and/or vectors.  If this happens and the thread we are blowing off owns
- * the facility, we can deadlock.
+ * This code must run with interruptions disabled because an interrupt handler
+ * could use floating point and/or vectors.  If this happens and the thread we
+ * are blowing off owns the facility, we can deadlock.
  */
 void
-act_machine_sv_free(thread_t act)
+act_machine_sv_free(thread_t act,  __unused int flag)
 {
-	register savearea *pcb, *userpcb;
+	struct savearea *local_pcb, *userpcb;
 	register savearea_vec *vsv, *vpst, *vsvt;
 	register savearea_fpu *fsv, *fpst, *fsvt;
-	register savearea *svp;
-	register int i;
+	struct savearea *svp;
  	boolean_t intr;
 
 /*
@@ -376,18 +374,22 @@ act_machine_sv_free(thread_t act)
 		}
 	
 		vsv = act->machine.curctx->VMXsave;					/* Get the top vector savearea */
-		while(vsv && vsv->save_hdr.save_level) vsv = (savearea_vec *)vsv->save_hdr.save_prev;	/* Find user context if any */
+		while(vsv && vsv->save_hdr.save_level)	/* Find user context if any */
+			/* XXX save_prev should be a void * 4425537 */
+			vsv = CAST_DOWN(savearea_vec *,
+					vsv->save_hdr.save_prev);
 		
 		vsvt = act->machine.curctx->VMXsave;				/* Get the top of the chain */
 		act->machine.curctx->VMXsave = vsv;					/* Point to the user context */
-		act->machine.curctx->VMXlevel = 0;					/* Set the level to user */
+		act->machine.curctx->VMXlevel = NULL;					/* Set the level to user */
 		hw_lock_unlock((hw_lock_t)&act->machine.curctx->VMXsync);	/* Unlock */
 		
 		while(vsvt) {										/* Clear any VMX saved state */
 			if (vsvt == vsv) break;   						/* Done when hit user if any */
 			vpst = vsvt;									/* Remember so we can toss this */
-			vsvt = (savearea_vec *)vsvt->save_hdr.save_prev;	/* Get one underneath our's */		
-			save_ret((savearea *)vpst);						/* Release it */
+			/* XXX save_prev should be a void * 4425537 */
+			vsvt = CAST_DOWN(savearea_vec *, vsvt->save_hdr.save_prev);	/* Get one underneath our's */		
+			save_ret((struct savearea *)vpst);						/* Release it */
 		}
 		
 	}
@@ -401,18 +403,21 @@ act_machine_sv_free(thread_t act)
 		}
 		
 		fsv = act->machine.curctx->FPUsave;					/* Get the top floats savearea */
-		while(fsv && fsv->save_hdr.save_level) fsv = (savearea_fpu *)fsv->save_hdr.save_prev;	/* Find user context if any */
+		while(fsv && fsv->save_hdr.save_level)	/* Find user context if any */
+			/* XXX save_prev should be a void * */
+			fsv = CAST_DOWN(savearea_fpu *, fsv->save_hdr.save_prev);
 		
 		fsvt = act->machine.curctx->FPUsave;				/* Get the top of the chain */
 		act->machine.curctx->FPUsave = fsv;					/* Point to the user context */
-		act->machine.curctx->FPUlevel = 0;					/* Set the level to user */
+		act->machine.curctx->FPUlevel = NULL;					/* Set the level to user */
 		hw_lock_unlock((hw_lock_t)&act->machine.curctx->FPUsync);	/* Unlock */
 		
 		while(fsvt) {										/* Clear any VMX saved state */
 			if (fsvt == fsv) break;   						/* Done when hit user if any */
 			fpst = fsvt;									/* Remember so we can toss this */
-			fsvt = (savearea_fpu *)fsvt->save_hdr.save_prev;	/* Get one underneath our's */		
-			save_ret((savearea *)fpst);						/* Release it */
+			/* XXX save_prev should be a void * 4425537 */
+			fsvt = CAST_DOWN(savearea_fpu *, fsvt->save_hdr.save_prev);	/* Get one underneath our's */		
+			save_ret((struct savearea *)fpst);						/* Release it */
 		}
 		
 	}
@@ -421,16 +426,17 @@ act_machine_sv_free(thread_t act)
  * free all regular saveareas except a user savearea, if any
  */
 
-	pcb = act->machine.pcb;									/* Get the general savearea */
-	userpcb = 0;											/* Assume no user context for now */
+	local_pcb = act->machine.pcb;									/* Get the general savearea */
+	userpcb = NULL;											/* Assume no user context for now */
 	
-	while(pcb) {											/* Any float saved state? */
-		if (pcb->save_srr1 & MASK(MSR_PR)) {				/* Is this a user savearea? */
-			userpcb = pcb;									/* Remember so we can toss this */
+	while(local_pcb) {											/* Any float saved state? */
+		if (local_pcb->save_srr1 & MASK(MSR_PR)) {				/* Is this a user savearea? */
+			userpcb = local_pcb;									/* Remember so we can toss this */
 			break;
 		}
-		svp = pcb;											/* Remember this */
-		pcb = CAST_DOWN(savearea *, pcb->save_hdr.save_prev);  /* Get one underneath our's */ 
+		svp = local_pcb;											/* Remember this */
+		/* XXX save_prev should be a void * 4425537 */
+		local_pcb = CAST_DOWN(struct savearea *, local_pcb->save_hdr.save_prev);  /* Get one underneath our's */ 
 		save_ret(svp);										/* Release it */
 	}
 	
@@ -469,33 +475,15 @@ machine_thread_init(void)
 }
 
 #if MACH_ASSERT
-
 void
 dump_thread(thread_t th)
 {
-	printf(" thread @ 0x%x:\n", th);
+	printf(" thread @ %p:\n", th);
 }
-
-int
-    dump_act(thread_t thr_act)
-{
-    if (!thr_act)
-	return(0);
-
-    printf("thread(0x%x)(%d): task=%x(%d)\n",
-	   thr_act, thr_act->ref_count,
-	   thr_act->task,   thr_act->task   ? thr_act->task->ref_count : 0);
-
-    printf("\tsusp=%x active=%x\n",
-	   thr_act->suspend_count, thr_act->active);
-
-    return((int)thr_act);
-}
-
-#endif
+#endif /* MACH_ASSERT */
 
 user_addr_t 
-get_useraddr()
+get_useraddr(void)
 {
 	return(current_thread()->machine.upcb->save_srr0);
 }
@@ -514,7 +502,7 @@ machine_stack_detach(
 											thread, thread->priority,
 											thread->sched_pri, 0, 0);
 
-  act_machine_sv_free(thread);
+  act_machine_sv_free(thread, 0);	/* XXX flag == 0 OK? */
 
   stack = thread->kernel_stack;
   thread->kernel_stack = 0;
@@ -601,8 +589,6 @@ machine_stack_handoff(
 
 	ppinfo = getPerProc();								/* Get our processor block */
 
-	ppinfo->cpu_flags &= ~traceBE;						/* Turn off special branch trace */
-
 	if(real_ncpus > 1) {								/* This is potentially slow, so only do when actually SMP */
 		fowner = ppinfo->FPU_owner;						/* Cache this because it may change */
 		if(fowner) {									/* Is there any live context? */
@@ -629,10 +615,6 @@ machine_stack_handoff(
 	old->machine.specFlags &= ~OnProc;
 	new->machine.specFlags |= OnProc;
 
-	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED,MACH_STACK_HANDOFF) | DBG_FUNC_NONE,
-		     old->reason, (int)new, old->sched_pri, new->sched_pri, 0);
-
-
 	if(new->machine.specFlags & runningVM) {	/* Is the new guy running a VM? */
 		pmap_switch(new->machine.vmmCEntry->vmmPmap);	/* Switch to the VM's pmap */
 		ppinfo->VMMareaPhys = new->machine.vmmCEntry->vmmContextPhys;
@@ -656,13 +638,12 @@ machine_stack_handoff(
 	mp = (mapping_t *)&ppinfo->ppUMWmp;
 	mp->mpSpace = invalSpace;						/* Since we can't handoff in the middle of copy in/out, just invalidate */
 
-	if (branch_tracing_enabled()) 
-		ppinfo->cpu_flags |= traceBE;
-    
 	if(trcWork.traceMask) dbgTrace(0x9903, (unsigned int)old, (unsigned int)new, 0, 0);	/* Cut trace entry if tracing */    
     
   return;
 }
+
+void Call_continuation(thread_continue_t, void *, wait_result_t, vm_offset_t);
 
 /*
  * clean and initialize the current kernel stack and go to

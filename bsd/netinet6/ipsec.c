@@ -49,6 +49,7 @@
 #include <sys/sysctl.h>
 #include <kern/locks.h>
 #include <sys/kauth.h>
+#include <libkern/OSAtomic.h>
 
 #include <net/if.h>
 #include <net/route.h>
@@ -130,6 +131,8 @@ int ip4_esp_randpad = -1;
 int	esp_udp_encap_port = 0;
 static int sysctl_def_policy SYSCTL_HANDLER_ARGS;
 extern u_int32_t natt_now;
+
+struct ipsec_tag;
 
 SYSCTL_DECL(_net_inet_ipsec);
 #if INET6
@@ -226,7 +229,6 @@ static int ipsec_set_policy(struct secpolicy **pcb_sp,
 static int ipsec_get_policy(struct secpolicy *pcb_sp, struct mbuf **mp);
 static void vshiftl(unsigned char *, int, int);
 static int ipsec_in_reject(struct secpolicy *, struct mbuf *);
-static size_t ipsec_hdrsiz(struct secpolicy *);
 #if INET
 static struct mbuf *ipsec4_splithdr(struct mbuf *);
 #endif
@@ -238,10 +240,11 @@ static int ipsec4_encapsulate(struct mbuf *, struct secasvar *);
 #endif
 #if INET6
 static int ipsec6_encapsulate(struct mbuf *, struct secasvar *);
+static int ipsec64_encapsulate(struct mbuf *, struct secasvar *);
 #endif
-static struct mbuf *ipsec_addaux(struct mbuf *);
-static struct mbuf *ipsec_findaux(struct mbuf *);
-static void ipsec_optaux(struct mbuf *, struct mbuf *);
+static struct ipsec_tag *ipsec_addaux(struct mbuf *);
+static struct ipsec_tag *ipsec_findaux(struct mbuf *);
+static void ipsec_optaux(struct mbuf *, struct ipsec_tag *);
 void ipsec_send_natt_keepalive(struct secasvar *sav);
 
 static int
@@ -286,7 +289,7 @@ ipsec4_getpolicybysock(m, dir, so, error)
 	struct secpolicy *currsp = NULL;	/* policy on socket */
 	struct secpolicy *kernsp = NULL;	/* policy on kernel */
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	/* sanity check */
 	if (m == NULL || so == NULL || error == NULL)
 		panic("ipsec4_getpolicybysock: NULL pointer was passed.\n");
@@ -356,7 +359,9 @@ ipsec4_getpolicybysock(m, dir, so, error)
 	if (pcbsp->priv) {
 		switch (currsp->policy) {
 		case IPSEC_POLICY_BYPASS:
+			lck_mtx_lock(sadb_mutex);
 			currsp->refcnt++;
+			lck_mtx_unlock(sadb_mutex);
 			*error = 0;
 			KERNEL_DEBUG(DBG_FNC_GETPOL_SOCK | DBG_FUNC_END, 2,*error,0,0,0);
 			return currsp;
@@ -376,6 +381,7 @@ ipsec4_getpolicybysock(m, dir, so, error)
 			}
 
 			/* no SP found */
+			lck_mtx_lock(sadb_mutex);
 			if (ip4_def_policy.policy != IPSEC_POLICY_DISCARD
 			 && ip4_def_policy.policy != IPSEC_POLICY_NONE) {
 				ipseclog((LOG_INFO,
@@ -384,12 +390,15 @@ ipsec4_getpolicybysock(m, dir, so, error)
 				ip4_def_policy.policy = IPSEC_POLICY_NONE;
 			}
 			ip4_def_policy.refcnt++;
+			lck_mtx_unlock(sadb_mutex);
 			*error = 0;
 			KERNEL_DEBUG(DBG_FNC_GETPOL_SOCK | DBG_FUNC_END, 4,*error,0,0,0);
 			return &ip4_def_policy;
 			
 		case IPSEC_POLICY_IPSEC:
+			lck_mtx_lock(sadb_mutex);
 			currsp->refcnt++;
+			lck_mtx_unlock(sadb_mutex);
 			*error = 0;
 			KERNEL_DEBUG(DBG_FNC_GETPOL_SOCK | DBG_FUNC_END, 5,*error,0,0,0);
 			return currsp;
@@ -429,6 +438,7 @@ ipsec4_getpolicybysock(m, dir, so, error)
 		return NULL;
 
 	case IPSEC_POLICY_ENTRUST:
+		lck_mtx_lock(sadb_mutex);
 		if (ip4_def_policy.policy != IPSEC_POLICY_DISCARD
 		 && ip4_def_policy.policy != IPSEC_POLICY_NONE) {
 			ipseclog((LOG_INFO,
@@ -437,12 +447,15 @@ ipsec4_getpolicybysock(m, dir, so, error)
 			ip4_def_policy.policy = IPSEC_POLICY_NONE;
 		}
 		ip4_def_policy.refcnt++;
+		lck_mtx_unlock(sadb_mutex);
 		*error = 0;
 		KERNEL_DEBUG(DBG_FNC_GETPOL_SOCK | DBG_FUNC_END, 9,*error,0,0,0);
 		return &ip4_def_policy;
 
 	case IPSEC_POLICY_IPSEC:
+		lck_mtx_lock(sadb_mutex);
 		currsp->refcnt++;
+		lck_mtx_unlock(sadb_mutex);
 		*error = 0;
 		KERNEL_DEBUG(DBG_FNC_GETPOL_SOCK | DBG_FUNC_END, 10,*error,0,0,0);
 		return currsp;
@@ -479,8 +492,8 @@ ipsec4_getpolicybyaddr(m, dir, flag, error)
 	if (ipsec_bypass != 0)
 		return 0;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	
 	/* sanity check */
 	if (m == NULL || error == NULL)
 		panic("ipsec4_getpolicybyaddr: NULL pointer was passed.\n");
@@ -514,6 +527,7 @@ ipsec4_getpolicybyaddr(m, dir, flag, error)
 	}
 
 	/* no SP found */
+	lck_mtx_lock(sadb_mutex);
 	if (ip4_def_policy.policy != IPSEC_POLICY_DISCARD
 	 && ip4_def_policy.policy != IPSEC_POLICY_NONE) {
 		ipseclog((LOG_INFO, "fixed system default policy:%d->%d\n",
@@ -522,6 +536,7 @@ ipsec4_getpolicybyaddr(m, dir, flag, error)
 		ip4_def_policy.policy = IPSEC_POLICY_NONE;
 	}
 	ip4_def_policy.refcnt++;
+	lck_mtx_unlock(sadb_mutex);
 	*error = 0;
 	KERNEL_DEBUG(DBG_FNC_GETPOL_ADDR | DBG_FUNC_END, 3,*error,0,0,0);
 	return &ip4_def_policy;
@@ -549,8 +564,8 @@ ipsec6_getpolicybysock(m, dir, so, error)
 	struct secpolicy *currsp = NULL;	/* policy on socket */
 	struct secpolicy *kernsp = NULL;	/* policy on kernel */
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	
 	/* sanity check */
 	if (m == NULL || so == NULL || error == NULL)
 		panic("ipsec6_getpolicybysock: NULL pointer was passed.\n");
@@ -592,7 +607,9 @@ ipsec6_getpolicybysock(m, dir, so, error)
 	if (pcbsp->priv) {
 		switch (currsp->policy) {
 		case IPSEC_POLICY_BYPASS:
+			lck_mtx_lock(sadb_mutex);
 			currsp->refcnt++;
+			lck_mtx_unlock(sadb_mutex);
 			*error = 0;
 			return currsp;
 
@@ -610,6 +627,7 @@ ipsec6_getpolicybysock(m, dir, so, error)
 			}
 
 			/* no SP found */
+			lck_mtx_lock(sadb_mutex);
 			if (ip6_def_policy.policy != IPSEC_POLICY_DISCARD
 			 && ip6_def_policy.policy != IPSEC_POLICY_NONE) {
 				ipseclog((LOG_INFO,
@@ -618,11 +636,14 @@ ipsec6_getpolicybysock(m, dir, so, error)
 				ip6_def_policy.policy = IPSEC_POLICY_NONE;
 			}
 			ip6_def_policy.refcnt++;
+			lck_mtx_unlock(sadb_mutex);
 			*error = 0;
 			return &ip6_def_policy;
 			
 		case IPSEC_POLICY_IPSEC:
+			lck_mtx_lock(sadb_mutex);
 			currsp->refcnt++;
+			lck_mtx_unlock(sadb_mutex);
 			*error = 0;
 			return currsp;
 
@@ -658,6 +679,7 @@ ipsec6_getpolicybysock(m, dir, so, error)
 		return NULL;
 
 	case IPSEC_POLICY_ENTRUST:
+		lck_mtx_lock(sadb_mutex);
 		if (ip6_def_policy.policy != IPSEC_POLICY_DISCARD
 		 && ip6_def_policy.policy != IPSEC_POLICY_NONE) {
 			ipseclog((LOG_INFO,
@@ -666,11 +688,14 @@ ipsec6_getpolicybysock(m, dir, so, error)
 			ip6_def_policy.policy = IPSEC_POLICY_NONE;
 		}
 		ip6_def_policy.refcnt++;
+		lck_mtx_unlock(sadb_mutex);
 		*error = 0;
 		return &ip6_def_policy;
 
 	case IPSEC_POLICY_IPSEC:
+		lck_mtx_lock(sadb_mutex);
 		currsp->refcnt++;
+		lck_mtx_unlock(sadb_mutex);
 		*error = 0;
 		return currsp;
 
@@ -709,8 +734,8 @@ ipsec6_getpolicybyaddr(m, dir, flag, error)
 {
 	struct secpolicy *sp = NULL;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	
 	/* sanity check */
 	if (m == NULL || error == NULL)
 		panic("ipsec6_getpolicybyaddr: NULL pointer was passed.\n");
@@ -740,6 +765,7 @@ ipsec6_getpolicybyaddr(m, dir, flag, error)
 	}
 
 	/* no SP found */
+	lck_mtx_lock(sadb_mutex);
 	if (ip6_def_policy.policy != IPSEC_POLICY_DISCARD
 	 && ip6_def_policy.policy != IPSEC_POLICY_NONE) {
 		ipseclog((LOG_INFO, "fixed system default policy: %d->%d\n",
@@ -747,6 +773,7 @@ ipsec6_getpolicybyaddr(m, dir, flag, error)
 		ip6_def_policy.policy = IPSEC_POLICY_NONE;
 	}
 	ip6_def_policy.refcnt++;
+	lck_mtx_unlock(sadb_mutex);
 	*error = 0;
 	return &ip6_def_policy;
 }
@@ -763,11 +790,12 @@ ipsec6_getpolicybyaddr(m, dir, flag, error)
  *	other:	failure, and set errno.
  */
 int
-ipsec_setspidx_mbuf(spidx, dir, family, m, needport)
-	struct secpolicyindex *spidx;
-	u_int dir, family;
-	struct mbuf *m;
-	int needport;
+ipsec_setspidx_mbuf(
+	struct secpolicyindex *spidx,
+	u_int dir,
+	__unused u_int family,
+	struct mbuf *m,
+	int needport)
 {
 	int error;
 
@@ -937,7 +965,7 @@ ipsec_setspidx(m, spidx, needport)
 			return error;
 		ipsec4_get_ulp(m, spidx, needport);
 		return 0;
-#ifdef INET6
+#if INET6
 	case 6:
 		if (m->m_pkthdr.len < sizeof(struct ip6_hdr)) {
 			KEYDEBUG(KEYDEBUG_IPSEC_DUMP,
@@ -1194,8 +1222,6 @@ ipsec_init_policy(so, pcb_sp)
 {
 	struct inpcbpolicy *new;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-
 	/* sanity check. */
 	if (so == NULL || pcb_sp == NULL)
 		panic("ipsec_init_policy: NULL pointer was passed.\n");
@@ -1224,7 +1250,7 @@ ipsec_init_policy(so, pcb_sp)
 	new->sp_in->policy = IPSEC_POLICY_ENTRUST;
 
 	if ((new->sp_out = key_newsp()) == NULL) {
-		key_freesp(new->sp_in);
+		key_freesp(new->sp_in, KEY_SADB_UNLOCKED);
 		ipsec_delpcbpolicy(new);
 		return ENOBUFS;
 	}
@@ -1246,18 +1272,16 @@ ipsec_copy_policy(old, new)
 	if (ipsec_bypass != 0)
 		return 0;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-
 	sp = ipsec_deepcopy_policy(old->sp_in);
 	if (sp) {
-		key_freesp(new->sp_in);
+		key_freesp(new->sp_in, KEY_SADB_UNLOCKED);
 		new->sp_in = sp;
 	} else
 		return ENOBUFS;
 
 	sp = ipsec_deepcopy_policy(old->sp_out);
 	if (sp) {
-		key_freesp(new->sp_out);
+		key_freesp(new->sp_out, KEY_SADB_UNLOCKED);
 		new->sp_out = sp;
 	} else
 		return ENOBUFS;
@@ -1278,8 +1302,10 @@ ipsec_deepcopy_policy(src)
 	struct ipsecrequest *r;
 	struct secpolicy *dst;
 
+	if (src == NULL)
+		return NULL;
 	dst = key_newsp();
-	if (src == NULL || dst == NULL)
+	if (dst == NULL)
 		return NULL;
 
 	/*
@@ -1303,7 +1329,6 @@ ipsec_deepcopy_policy(src)
 		bcopy(&p->saidx.src, &(*q)->saidx.src, sizeof((*q)->saidx.src));
 		bcopy(&p->saidx.dst, &(*q)->saidx.dst, sizeof((*q)->saidx.dst));
 
-		(*q)->sav = NULL;
 		(*q)->sp = dst;
 
 		q = &((*q)->next);
@@ -1322,23 +1347,22 @@ fail:
 		FREE(p, M_SECA);
 		p = NULL;
 	}
+	key_freesp(dst, KEY_SADB_UNLOCKED);
 	return NULL;
 }
 
 /* set policy and ipsec request if present. */
 static int
-ipsec_set_policy(pcb_sp, optname, request, len, priv)
-	struct secpolicy **pcb_sp;
-	int optname;
-	caddr_t request;
-	size_t len;
-	int priv;
+ipsec_set_policy(
+	struct secpolicy **pcb_sp,
+	__unused int optname,
+	caddr_t request,
+	size_t len,
+	int priv)
 {
 	struct sadb_x_policy *xpl;
 	struct secpolicy *newsp = NULL;
 	int error;
-
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 
 	/* sanity check. */
 	if (pcb_sp == NULL || *pcb_sp == NULL || request == NULL)
@@ -1368,7 +1392,7 @@ ipsec_set_policy(pcb_sp, optname, request, len, priv)
 	newsp->state = IPSEC_SPSTATE_ALIVE;
 
 	/* clear old SP and set new SP */
-	key_freesp(*pcb_sp);
+	key_freesp(*pcb_sp, KEY_SADB_UNLOCKED);
 	*pcb_sp = newsp;
 	KEYDEBUG(KEYDEBUG_IPSEC_DUMP,
 		printf("ipsec_set_policy: new policy\n");
@@ -1383,7 +1407,6 @@ ipsec_get_policy(pcb_sp, mp)
 	struct mbuf **mp;
 {
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 
 	/* sanity check. */
 	if (pcb_sp == NULL || mp == NULL)
@@ -1395,7 +1418,7 @@ ipsec_get_policy(pcb_sp, mp)
 		return ENOBUFS;
 	}
 
-	(*mp)->m_type = MT_DATA;
+	m_mchtype(*mp, MT_DATA);
 	KEYDEBUG(KEYDEBUG_IPSEC_DUMP,
 		printf("ipsec_get_policy:\n");
 		kdebug_mbuf(*mp));
@@ -1414,8 +1437,6 @@ ipsec4_set_policy(inp, optname, request, len, priv)
 	struct sadb_x_policy *xpl;
 	struct secpolicy **pcb_sp;
 	int	error = 0;
-
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 
 	/* sanity check. */
 	if (inp == NULL || request == NULL)
@@ -1462,7 +1483,7 @@ ipsec4_get_policy(inp, request, len, mp)
 	struct secpolicy *pcb_sp;
 	int	error = 0;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 
 	/* sanity check. */
 	if (inp == NULL || request == NULL || mp == NULL)
@@ -1499,7 +1520,6 @@ int
 ipsec4_delete_pcbpolicy(inp)
 	struct inpcb *inp;
 {
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 
 	/* sanity check. */
 	if (inp == NULL)
@@ -1509,12 +1529,12 @@ ipsec4_delete_pcbpolicy(inp)
 		return 0;
 
 	if (inp->inp_sp->sp_in != NULL) {
-		key_freesp(inp->inp_sp->sp_in);
+		key_freesp(inp->inp_sp->sp_in, KEY_SADB_UNLOCKED);
 		inp->inp_sp->sp_in = NULL;
 	}
 
 	if (inp->inp_sp->sp_out != NULL) {
-		key_freesp(inp->inp_sp->sp_out);
+		key_freesp(inp->inp_sp->sp_out, KEY_SADB_UNLOCKED);
 		inp->inp_sp->sp_out = NULL;
 	}
 
@@ -1536,8 +1556,6 @@ ipsec6_set_policy(in6p, optname, request, len, priv)
 	struct sadb_x_policy *xpl;
 	struct secpolicy **pcb_sp;
 	int error = 0;
-
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 
 	/* sanity check. */
 	if (in6p == NULL || request == NULL)
@@ -1584,8 +1602,6 @@ ipsec6_get_policy(in6p, request, len, mp)
 	struct secpolicy *pcb_sp;
 	int error = 0;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-
 	/* sanity check. */
 	if (in6p == NULL || request == NULL || mp == NULL)
 		return EINVAL;
@@ -1620,7 +1636,6 @@ int
 ipsec6_delete_pcbpolicy(in6p)
 	struct in6pcb *in6p;
 {
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 
 	/* sanity check. */
 	if (in6p == NULL)
@@ -1630,12 +1645,12 @@ ipsec6_delete_pcbpolicy(in6p)
 		return 0;
 
 	if (in6p->in6p_sp->sp_in != NULL) {
-		key_freesp(in6p->in6p_sp->sp_in);
+		key_freesp(in6p->in6p_sp->sp_in, KEY_SADB_UNLOCKED);
 		in6p->in6p_sp->sp_in = NULL;
 	}
 
 	if (in6p->in6p_sp->sp_out != NULL) {
-		key_freesp(in6p->in6p_sp->sp_out);
+		key_freesp(in6p->in6p_sp->sp_out, KEY_SADB_UNLOCKED);
 		in6p->in6p_sp->sp_out = NULL;
 	}
 
@@ -1655,9 +1670,7 @@ ipsec_get_reqlevel(isr)
 	struct ipsecrequest *isr;
 {
 	u_int level = 0;
-	u_int esp_trans_deflev, esp_net_deflev, ah_trans_deflev, ah_net_deflev;
-
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	u_int esp_trans_deflev = 0, esp_net_deflev = 0, ah_trans_deflev = 0, ah_net_deflev = 0;
 
 	/* sanity check */
 	if (isr == NULL || isr->sp == NULL)
@@ -1768,11 +1781,10 @@ ipsec_in_reject(sp, m)
 		printf("ipsec_in_reject: using SP\n");
 		kdebug_secpolicy(sp));
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-
 	/* check policy */
 	switch (sp->policy) {
 	case IPSEC_POLICY_DISCARD:
+	case IPSEC_POLICY_GENERATE:
 		return 1;
 	case IPSEC_POLICY_BYPASS:
 	case IPSEC_POLICY_NONE:
@@ -1802,10 +1814,22 @@ ipsec_in_reject(sp, m)
 			if (level == IPSEC_LEVEL_REQUIRE) {
 				need_conf++;
 
+#if 0
+		/* this won't work with multiple input threads - isr->sav would change 
+		 * with every packet and is not necessarily related to the current packet 
+		 * being processed.  If ESP processing is required - the esp code should
+		 * make sure that the integrity check is present and correct.  I don't see
+		 * why it would be necessary to check for the presence of the integrity
+		 * check value here.  I think this is just wrong.
+		 * isr->sav has been removed.
+		 * %%%%%% this needs to be re-worked at some point but I think the code below can 
+		 * be ignored for now.
+		 */
 				if (isr->sav != NULL
 				 && isr->sav->flags == SADB_X_EXT_NONE
 				 && isr->sav->alg_auth != SADB_AALG_NONE)
 					need_icv++;
+#endif
 			}
 			break;
 		case IPPROTO_AH:
@@ -1850,8 +1874,7 @@ ipsec4_in_reject_so(m, so)
 	int error;
 	int result;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	/* sanity check */
 	if (m == NULL)
 		return 0;	/* XXX should be panic ? */
@@ -1872,7 +1895,7 @@ ipsec4_in_reject_so(m, so)
 	result = ipsec_in_reject(sp, m);
 	KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
 		printf("DP ipsec4_in_reject_so call free SP:%p\n", sp));
-	key_freesp(sp);
+	key_freesp(sp, KEY_SADB_UNLOCKED);
 
 	return result;
 }
@@ -1882,8 +1905,8 @@ ipsec4_in_reject(m, inp)
 	struct mbuf *m;
 	struct inpcb *inp;
 {
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-
+	
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	if (inp == NULL)
 		return ipsec4_in_reject_so(m, NULL);
 	if (inp->inp_socket)
@@ -1910,8 +1933,7 @@ ipsec6_in_reject_so(m, so)
 	int error;
 	int result;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	/* sanity check */
 	if (m == NULL)
 		return 0;	/* XXX should be panic ? */
@@ -1931,7 +1953,7 @@ ipsec6_in_reject_so(m, so)
 	result = ipsec_in_reject(sp, m);
 	KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
 		printf("DP ipsec6_in_reject_so call free SP:%p\n", sp));
-	key_freesp(sp);
+	key_freesp(sp, KEY_SADB_UNLOCKED);
 
 	return result;
 }
@@ -1941,8 +1963,8 @@ ipsec6_in_reject(m, in6p)
 	struct mbuf *m;
 	struct in6pcb *in6p;
 {
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	if (in6p == NULL)
 		return ipsec6_in_reject_so(m, NULL);
 	if (in6p->in6p_socket)
@@ -1960,22 +1982,22 @@ ipsec6_in_reject(m, in6p)
  * in case it is tunneled, it includes the size of outer IP header.
  * NOTE: SP passed is free in this function.
  */
-static size_t
+size_t
 ipsec_hdrsiz(sp)
 	struct secpolicy *sp;
 {
 	struct ipsecrequest *isr;
 	size_t siz, clen;
 
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	KEYDEBUG(KEYDEBUG_IPSEC_DATA,
 		printf("ipsec_hdrsiz: using SP\n");
 		kdebug_secpolicy(sp));
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-
 	/* check policy */
 	switch (sp->policy) {
 	case IPSEC_POLICY_DISCARD:
+	case IPSEC_POLICY_GENERATE:
 	case IPSEC_POLICY_BYPASS:
 	case IPSEC_POLICY_NONE:
 		return 0;
@@ -2044,8 +2066,7 @@ ipsec4_hdrsiz(m, dir, inp)
 	int error;
 	size_t size;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	/* sanity check */
 	if (m == NULL)
 		return 0;	/* XXX should be panic ? */
@@ -2069,7 +2090,7 @@ ipsec4_hdrsiz(m, dir, inp)
 		printf("DP ipsec4_hdrsiz call free SP:%p\n", sp));
 	KEYDEBUG(KEYDEBUG_IPSEC_DATA,
 		printf("ipsec4_hdrsiz: size:%lu.\n", (unsigned long)size));
-	key_freesp(sp);
+	key_freesp(sp, KEY_SADB_UNLOCKED);
 
 	return size;
 }
@@ -2088,8 +2109,7 @@ ipsec6_hdrsiz(m, dir, in6p)
 	int error;
 	size_t size;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	/* sanity check */
 	if (m == NULL)
 		return 0;	/* XXX shoud be panic ? */
@@ -2110,7 +2130,7 @@ ipsec6_hdrsiz(m, dir, in6p)
 		printf("DP ipsec6_hdrsiz call free SP:%p\n", sp));
 	KEYDEBUG(KEYDEBUG_IPSEC_DATA,
 		printf("ipsec6_hdrsiz: size:%lu.\n", (unsigned long)size));
-	key_freesp(sp);
+	key_freesp(sp, KEY_SADB_UNLOCKED);
 
 	return size;
 }
@@ -2130,8 +2150,6 @@ ipsec4_encapsulate(m, sav)
 	struct ip *ip;
 	size_t hlen;
 	size_t plen;
-
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 
 	/* can't tunnel between different AFs */
 	if (((struct sockaddr *)&sav->sah->saidx.src)->sa_family
@@ -2252,8 +2270,6 @@ ipsec6_encapsulate(m, sav)
 	struct ip6_hdr *ip6;
 	size_t plen;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-
 	/* can't tunnel between different AFs */
 	if (((struct sockaddr *)&sav->sah->saidx.src)->sa_family
 		!= ((struct sockaddr *)&sav->sah->saidx.dst)->sa_family
@@ -2322,6 +2338,92 @@ ipsec6_encapsulate(m, sav)
 
 	return 0;
 }
+
+static int
+ipsec64_encapsulate(m, sav)
+	struct mbuf *m;
+	struct secasvar *sav;
+{
+	struct ip6_hdr *ip6, *ip6i;
+	struct ip *ip;
+	size_t plen;
+	u_int8_t hlim;
+
+	/* tunneling over IPv4 */
+	if (((struct sockaddr *)&sav->sah->saidx.src)->sa_family
+		!= ((struct sockaddr *)&sav->sah->saidx.dst)->sa_family
+	 || ((struct sockaddr *)&sav->sah->saidx.src)->sa_family != AF_INET) {
+		m_freem(m);
+		return EINVAL;
+	}
+#if 0
+	/* XXX if the dst is myself, perform nothing. */
+	if (key_ismyaddr((struct sockaddr *)&sav->sah->saidx.dst)) {
+		m_freem(m);
+		return EINVAL;
+	}
+#endif
+
+	plen = m->m_pkthdr.len;
+	ip6 = mtod(m, struct ip6_hdr *);
+	hlim = ip6->ip6_hlim; 
+	/*
+	 * grow the mbuf to accomodate the new IPv4 header.
+	 */
+	if (m->m_len != sizeof(struct ip6_hdr))
+		panic("ipsec6_encapsulate: assumption failed (first mbuf length)");
+	if (M_LEADINGSPACE(m->m_next) < sizeof(struct ip6_hdr)) {
+		struct mbuf *n;
+		MGET(n, M_DONTWAIT, MT_DATA);
+		if (!n) {
+			m_freem(m);
+			return ENOBUFS;
+		}
+		n->m_len = sizeof(struct ip6_hdr);
+		n->m_next = m->m_next;
+		m->m_next = n;
+		m->m_pkthdr.len += sizeof(struct ip);
+		ip6i = mtod(n, struct ip6_hdr *);
+	} else {
+		m->m_next->m_len += sizeof(struct ip6_hdr);
+		m->m_next->m_data -= sizeof(struct ip6_hdr);
+		m->m_pkthdr.len += sizeof(struct ip);
+		ip6i = mtod(m->m_next, struct ip6_hdr *);
+	}
+	/* construct new IPv4 header. see RFC 2401 5.1.2.1 */
+	/* ECN consideration. */
+	/* XXX To be fixed later if needed */
+	// ip_ecn_ingress(ip4_ipsec_ecn, &ip->ip_tos, &oip->ip_tos);	
+
+	bcopy(ip6, ip6i, sizeof(struct ip6_hdr));
+	ip = mtod(m, struct ip *);
+	m->m_len = sizeof(struct ip);
+	/* 
+	 * Fill in some of the IPv4 fields - we don't need all of them
+	 * because the rest will be filled in by ip_output
+	 */
+	ip->ip_v = IPVERSION;
+	ip->ip_hl = sizeof(struct ip) >> 2;
+	ip->ip_id = 0;
+	ip->ip_sum = 0;
+	ip->ip_tos = 0; 
+	ip->ip_off = 0;
+	ip->ip_ttl = hlim;
+	ip->ip_p = IPPROTO_IPV6;
+	if (plen + sizeof(struct ip) < IP_MAXPACKET)
+		ip->ip_len = htons(plen + sizeof(struct ip));
+	else {
+		ip->ip_len = htons(plen);
+		ipseclog((LOG_ERR, "IPv4 ipsec: size exceeds limit: "
+			"leave ip_len as is (invalid packet)\n"));
+	}
+	bcopy(&((struct sockaddr_in *)&sav->sah->saidx.src)->sin_addr,
+		&ip->ip_src, sizeof(ip->ip_src));
+	bcopy(&((struct sockaddr_in *)&sav->sah->saidx.dst)->sin_addr,
+		&ip->ip_dst, sizeof(ip->ip_dst));
+
+	return 0;
+}
 #endif /*INET6*/
 
 /*
@@ -2345,47 +2447,59 @@ ipsec_chkreplay(seq, sav)
 	u_int32_t wsizeb;	/* constant: bits of window size */
 	int frlast;		/* constant: last frame */
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-
+	
 	/* sanity check */
 	if (sav == NULL)
 		panic("ipsec_chkreplay: NULL pointer was passed.\n");
 
+	lck_mtx_lock(sadb_mutex);
 	replay = sav->replay;
 
-	if (replay->wsize == 0)
+	if (replay->wsize == 0) {
+		lck_mtx_unlock(sadb_mutex);
 		return 1;	/* no need to check replay. */
+	}
 
 	/* constant */
 	frlast = replay->wsize - 1;
 	wsizeb = replay->wsize << 3;
 
 	/* sequence number of 0 is invalid */
-	if (seq == 0)
+	if (seq == 0) {
+		lck_mtx_unlock(sadb_mutex);
 		return 0;
+	}
 
 	/* first time is always okay */
-	if (replay->count == 0)
+	if (replay->count == 0) {
+		lck_mtx_unlock(sadb_mutex);
 		return 1;
+	}
 
 	if (seq > replay->lastseq) {
 		/* larger sequences are okay */
+		lck_mtx_unlock(sadb_mutex);
 		return 1;
 	} else {
 		/* seq is equal or less than lastseq. */
 		diff = replay->lastseq - seq;
 
 		/* over range to check, i.e. too old or wrapped */
-		if (diff >= wsizeb)
+		if (diff >= wsizeb) {
+			lck_mtx_unlock(sadb_mutex);
 			return 0;
+		}
 
 		fr = frlast - diff / 8;
 
 		/* this packet already seen ? */
-		if ((replay->bitmap)[fr] & (1 << (diff % 8)))
+		if ((replay->bitmap)[fr] & (1 << (diff % 8))) {
+			lck_mtx_unlock(sadb_mutex);
 			return 0;
+		}
 
 		/* out of order but good */
+		lck_mtx_unlock(sadb_mutex);
 		return 1;
 	}
 }
@@ -2405,13 +2519,12 @@ ipsec_updatereplay(seq, sav)
 	int fr;
 	u_int32_t wsizeb;	/* constant: bits of window size */
 	int frlast;		/* constant: last frame */
-
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-
+	
 	/* sanity check */
 	if (sav == NULL)
 		panic("ipsec_chkreplay: NULL pointer was passed.\n");
 
+	lck_mtx_lock(sadb_mutex);
 	replay = sav->replay;
 
 	if (replay->wsize == 0)
@@ -2441,7 +2554,7 @@ ipsec_updatereplay(seq, sav)
 		if (diff < wsizeb) {
 			/* In window */
 			/* set bit for this packet */
-			vshiftl(replay->bitmap, diff, replay->wsize);
+			vshiftl((unsigned char *) replay->bitmap, diff, replay->wsize);
 			(replay->bitmap)[frlast] |= 1;
 		} else {
 			/* this packet has a "way larger" */
@@ -2456,14 +2569,18 @@ ipsec_updatereplay(seq, sav)
 		diff = replay->lastseq - seq;
 
 		/* over range to check, i.e. too old or wrapped */
-		if (diff >= wsizeb)
+		if (diff >= wsizeb) {
+			lck_mtx_unlock(sadb_mutex);
 			return 1;
+		}
 
 		fr = frlast - diff / 8;
 
 		/* this packet already seen ? */
-		if ((replay->bitmap)[fr] & (1 << (diff % 8)))
+		if ((replay->bitmap)[fr] & (1 << (diff % 8))) {
+			lck_mtx_unlock(sadb_mutex);
 			return 1;
+		}
 
 		/* mark as seen */
 		(replay->bitmap)[fr] |= (1 << (diff % 8));
@@ -2478,15 +2595,18 @@ ok:
 		replay->overflow++;
 
 		/* don't increment, no more packets accepted */
-		if ((sav->flags & SADB_X_EXT_CYCSEQ) == 0)
+		if ((sav->flags & SADB_X_EXT_CYCSEQ) == 0) {
+			lck_mtx_unlock(sadb_mutex);
 			return 1;
+		}
 
 		ipseclog((LOG_WARNING, "replay counter made %d cycle. %s\n",
 		    replay->overflow, ipsec_logsastr(sav)));
 	}
 
 	replay->count++;
-
+	
+	lck_mtx_unlock(sadb_mutex);
 	return 0;
 }
 
@@ -2581,8 +2701,6 @@ ipsec_logsastr(sav)
 	char *p;
 	struct secasindex *saidx = &sav->sah->saidx;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-
 	/* validity check */
 	if (((struct sockaddr *)&sav->sah->saidx.src)->sa_family
 			!= ((struct sockaddr *)&sav->sah->saidx.dst)->sa_family)
@@ -2649,18 +2767,21 @@ ipsec_dumpmbuf(m)
  * IPsec output logic for IPv4.
  */
 int
-ipsec4_output(state, sp, flags)
-	struct ipsec_output_state *state;
-	struct secpolicy *sp;
-	int flags;
+ipsec4_output(
+	struct ipsec_output_state *state,
+	struct secpolicy *sp,
+	__unused int flags)
 {
 	struct ip *ip = NULL;
 	struct ipsecrequest *isr = NULL;
 	struct secasindex saidx;
-	int error;
+	struct secasvar *sav = NULL;
+	int error = 0;
 	struct sockaddr_in *dst4;
 	struct sockaddr_in *sin;
 
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	
 	if (!state)
 		panic("state == NULL in ipsec4_output");
 	if (!state->m)
@@ -2669,8 +2790,6 @@ ipsec4_output(state, sp, flags)
 		panic("state->ro == NULL in ipsec4_output");
 	if (!state->dst)
 		panic("state->dst == NULL in ipsec4_output");
-
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 
 	KERNEL_DEBUG(DBG_FNC_IPSEC_OUT | DBG_FUNC_START, 0,0,0,0,0);
 
@@ -2709,11 +2828,42 @@ ipsec4_output(state, sp, flags)
 			sin->sin_len = sizeof(*sin);
 			sin->sin_family = AF_INET;
 			sin->sin_port = IPSEC_PORT_ANY;
+			/* 
+			* Get port from packet if upper layer is UDP and nat traversal 
+			* is enabled and transport mode.			
+			*/
+
+			if ((esp_udp_encap_port & 0xFFFF) != 0 &&
+				isr->saidx.mode == IPSEC_MODE_TRANSPORT) {	
+				
+				if (ip->ip_p == IPPROTO_UDP) {
+					struct udphdr  *udp;
+					size_t hlen;
+#ifdef _IP_VHL
+					hlen = IP_VHL_HL(ip->ip_vhl) << 2;
+#else
+					hlen = ip->ip_hl << 2;
+#endif
+					if (state->m->m_len < hlen + sizeof(struct udphdr)) {
+						state->m = m_pullup(state->m, hlen + sizeof(struct udphdr));
+						if (!state->m) {
+							ipseclog((LOG_DEBUG,
+								"IPv4 output: can't pullup UDP header\n"));
+							IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
+							goto bad;
+						}
+						ip = mtod(state->m, struct ip *);
+					}
+					udp = (struct udphdr *)(((u_int8_t *)ip) + hlen);
+					sin->sin_port = udp->uh_dport;
+				}
+			}
+
 			bcopy(&ip->ip_dst, &sin->sin_addr,
 			    sizeof(sin->sin_addr));
 		}
 
-		if ((error = key_checkrequest(isr, &saidx)) != 0) {
+		if ((error = key_checkrequest(isr, &saidx, &sav)) != 0) {
 			/*
 			 * IPsec processing is required, but no SA found.
 			 * I assume that key_acquire() had been called
@@ -2721,12 +2871,12 @@ ipsec4_output(state, sp, flags)
 			 * this packet because it is responsibility for
 			 * upper layer to retransmit the packet.
 			 */
-			ipsecstat.out_nosa++;
+			IPSEC_STAT_INCREMENT(ipsecstat.out_nosa);
 			goto bad;
 		}
 
 		/* validity check */
-		if (isr->sav == NULL) {
+		if (sav == NULL) {
 			switch (ipsec_get_reqlevel(isr)) {
 			case IPSEC_LEVEL_USE:
 				continue;
@@ -2743,9 +2893,9 @@ ipsec4_output(state, sp, flags)
 		 * send to the receiver by dead SA, the receiver can
 		 * not decode a packet because SA has been dead.
 		 */
-		if (isr->sav->state != SADB_SASTATE_MATURE
-		 && isr->sav->state != SADB_SASTATE_DYING) {
-			ipsecstat.out_nosa++;
+		if (sav->state != SADB_SASTATE_MATURE
+		 && sav->state != SADB_SASTATE_DYING) {
+			IPSEC_STAT_INCREMENT(ipsecstat.out_nosa);
 			error = EINVAL;
 			goto bad;
 		}
@@ -2760,10 +2910,10 @@ ipsec4_output(state, sp, flags)
 			 * build IPsec tunnel.
 			 */
 			/* XXX should be processed with other familiy */
-			if (((struct sockaddr *)&isr->sav->sah->saidx.src)->sa_family != AF_INET) {
+			if (((struct sockaddr *)&sav->sah->saidx.src)->sa_family != AF_INET) {
 				ipseclog((LOG_ERR, "ipsec4_output: "
 				    "family mismatched between inner and outer spi=%u\n",
-				    (u_int32_t)ntohl(isr->sav->spi)));
+				    (u_int32_t)ntohl(sav->spi)));
 				error = EAFNOSUPPORT;
 				goto bad;
 			}
@@ -2773,14 +2923,14 @@ ipsec4_output(state, sp, flags)
 				error = ENOMEM;
 				goto bad;
 			}
-			error = ipsec4_encapsulate(state->m, isr->sav);
+			error = ipsec4_encapsulate(state->m, sav);
 			if (error) {
 				state->m = NULL;
 				goto bad;
 			}
 			ip = mtod(state->m, struct ip *);
 
-			state->ro = &isr->sav->sah->sa_route;
+			state->ro = &sav->sah->sa_route;
 			state->dst = (struct sockaddr *)&state->ro->ro_dst;
 			dst4 = (struct sockaddr_in *)state->dst;
 			if (state->ro->ro_rt
@@ -2796,7 +2946,7 @@ ipsec4_output(state, sp, flags)
 				rtalloc(state->ro);
 			}
 			if (state->ro->ro_rt == 0) {
-				ipstat.ips_noroute++;
+				OSAddAtomic(1, (SInt32*)&ipstat.ips_noroute);
 				error = EHOSTUNREACH;
 				goto bad;
 			}
@@ -2816,7 +2966,7 @@ ipsec4_output(state, sp, flags)
 		switch (isr->saidx.proto) {
 		case IPPROTO_ESP:
 #if IPSEC_ESP
-			if ((error = esp4_output(state->m, isr)) != 0) {
+			if ((error = esp4_output(state->m, sav)) != 0) {
 				state->m = NULL;
 				goto bad;
 			}
@@ -2828,13 +2978,13 @@ ipsec4_output(state, sp, flags)
 			goto bad;
 #endif
 		case IPPROTO_AH:
-			if ((error = ah4_output(state->m, isr)) != 0) {
+			if ((error = ah4_output(state->m, sav)) != 0) {
 				state->m = NULL;
 				goto bad;
 			}
 			break;
 		case IPPROTO_IPCOMP:
-			if ((error = ipcomp4_output(state->m, isr)) != 0) {
+			if ((error = ipcomp4_output(state->m, sav)) != 0) {
 				state->m = NULL;
 				goto bad;
 			}
@@ -2857,9 +3007,13 @@ ipsec4_output(state, sp, flags)
 	}
 
 	KERNEL_DEBUG(DBG_FNC_IPSEC_OUT | DBG_FUNC_END, 0,0,0,0,0);
+	if (sav)
+		key_freesav(sav, KEY_SADB_UNLOCKED);
 	return 0;
 
 bad:
+	if (sav)
+		key_freesav(sav, KEY_SADB_UNLOCKED);
 	m_freem(state->m);
 	state->m = NULL;
 	KERNEL_DEBUG(DBG_FNC_IPSEC_OUT | DBG_FUNC_END, error,0,0,0,0);
@@ -2872,13 +3026,13 @@ bad:
  * IPsec output logic for IPv6, transport mode.
  */
 int
-ipsec6_output_trans(state, nexthdrp, mprev, sp, flags, tun)
-	struct ipsec_output_state *state;
-	u_char *nexthdrp;
-	struct mbuf *mprev;
-	struct secpolicy *sp;
-	int flags;
-	int *tun;
+ipsec6_output_trans(
+	struct ipsec_output_state *state,
+	u_char *nexthdrp,
+	struct mbuf *mprev,
+	struct secpolicy *sp,
+	__unused int flags,
+	int *tun)
 {
 	struct ip6_hdr *ip6;
 	struct ipsecrequest *isr = NULL;
@@ -2886,7 +3040,10 @@ ipsec6_output_trans(state, nexthdrp, mprev, sp, flags, tun)
 	int error = 0;
 	int plen;
 	struct sockaddr_in6 *sin6;
+	struct secasvar *sav = NULL;
 
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	
 	if (!state)
 		panic("state == NULL in ipsec6_output_trans");
 	if (!state->m)
@@ -2904,7 +3061,6 @@ ipsec6_output_trans(state, nexthdrp, mprev, sp, flags, tun)
 		printf("ipsec6_output_trans: applyed SP\n");
 		kdebug_secpolicy(sp));
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	*tun = 0;
 	for (isr = sp->req; isr; isr = isr->next) {
 		if (isr->saidx.mode == IPSEC_MODE_TUNNEL) {
@@ -2944,7 +3100,7 @@ ipsec6_output_trans(state, nexthdrp, mprev, sp, flags, tun)
 			}
 		}
 
-		if (key_checkrequest(isr, &saidx) == ENOENT) {
+		if (key_checkrequest(isr, &saidx, &sav) == ENOENT) {
 			/*
 			 * IPsec processing is required, but no SA found.
 			 * I assume that key_acquire() had been called
@@ -2952,7 +3108,7 @@ ipsec6_output_trans(state, nexthdrp, mprev, sp, flags, tun)
 			 * this packet because it is responsibility for
 			 * upper layer to retransmit the packet.
 			 */
-			ipsec6stat.out_nosa++;
+			IPSEC_STAT_INCREMENT(ipsec6stat.out_nosa);
 			error = ENOENT;
 
 			/*
@@ -2963,16 +3119,14 @@ ipsec6_output_trans(state, nexthdrp, mprev, sp, flags, tun)
 			 * XXX: should we directly notify sockets via
 			 *      pfctlinputs?
 			 */
-			lck_mtx_unlock(sadb_mutex);
 			icmp6_error(state->m, ICMP6_DST_UNREACH,
 				    ICMP6_DST_UNREACH_ADMIN, 0);
-			lck_mtx_lock(sadb_mutex);
 			state->m = NULL; /* icmp6_error freed the mbuf */
 			goto bad;
 		}
 
 		/* validity check */
-		if (isr->sav == NULL) {
+		if (sav == NULL) {
 			switch (ipsec_get_reqlevel(isr)) {
 			case IPSEC_LEVEL_USE:
 				continue;
@@ -2986,9 +3140,9 @@ ipsec6_output_trans(state, nexthdrp, mprev, sp, flags, tun)
 		 * If there is no valid SA, we give up to process.
 		 * see same place at ipsec4_output().
 		 */
-		if (isr->sav->state != SADB_SASTATE_MATURE
-		 && isr->sav->state != SADB_SASTATE_DYING) {
-			ipsec6stat.out_nosa++;
+		if (sav->state != SADB_SASTATE_MATURE
+		 && sav->state != SADB_SASTATE_DYING) {
+			IPSEC_STAT_INCREMENT(ipsec6stat.out_nosa);
 			error = EINVAL;
 			goto bad;
 		}
@@ -2996,23 +3150,23 @@ ipsec6_output_trans(state, nexthdrp, mprev, sp, flags, tun)
 		switch (isr->saidx.proto) {
 		case IPPROTO_ESP:
 #if IPSEC_ESP
-			error = esp6_output(state->m, nexthdrp, mprev->m_next, isr);
+			error = esp6_output(state->m, nexthdrp, mprev->m_next, sav);
 #else
 			m_freem(state->m);
 			error = EINVAL;
 #endif
 			break;
 		case IPPROTO_AH:
-			error = ah6_output(state->m, nexthdrp, mprev->m_next, isr);
+			error = ah6_output(state->m, nexthdrp, mprev->m_next, sav);
 			break;
 		case IPPROTO_IPCOMP:
-			error = ipcomp6_output(state->m, nexthdrp, mprev->m_next, isr);
+			error = ipcomp6_output(state->m, nexthdrp, mprev->m_next, sav);
 			break;
 		default:
 			ipseclog((LOG_ERR, "ipsec6_output_trans: "
 			    "unknown ipsec protocol %d\n", isr->saidx.proto));
 			m_freem(state->m);
-			ipsec6stat.out_inval++;
+			IPSEC_STAT_INCREMENT(ipsec6stat.out_inval);
 			error = EINVAL;
 			break;
 		}
@@ -3024,7 +3178,7 @@ ipsec6_output_trans(state, nexthdrp, mprev, sp, flags, tun)
 		if (plen > IPV6_MAXPACKET) {
 			ipseclog((LOG_ERR, "ipsec6_output_trans: "
 			    "IPsec with IPv6 jumbogram is not supported\n"));
-			ipsec6stat.out_inval++;
+			IPSEC_STAT_INCREMENT(ipsec6stat.out_inval);
 			error = EINVAL;	/*XXX*/
 			goto bad;
 		}
@@ -3036,9 +3190,13 @@ ipsec6_output_trans(state, nexthdrp, mprev, sp, flags, tun)
 	if (isr != NULL)
 		*tun = 1;
 
+	if (sav)
+		key_freesav(sav, KEY_SADB_UNLOCKED);
 	return 0;
 
 bad:
+	if (sav)
+		key_freesav(sav, KEY_SADB_UNLOCKED);
 	m_freem(state->m);
 	state->m = NULL;
 	return error;
@@ -3048,26 +3206,30 @@ bad:
  * IPsec output logic for IPv6, tunnel mode.
  */
 int
-ipsec6_output_tunnel(state, sp, flags)
-	struct ipsec_output_state *state;
-	struct secpolicy *sp;
-	int flags;
+ipsec6_output_tunnel(
+	struct ipsec_output_state *state,
+	struct secpolicy *sp,
+	__unused int flags,
+	int *tunneledv4)
 {
 	struct ip6_hdr *ip6;
 	struct ipsecrequest *isr = NULL;
 	struct secasindex saidx;
+	struct secasvar *sav = NULL;
 	int error = 0;
 	int plen;
 	struct sockaddr_in6* dst6;
 
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	
+	*tunneledv4 = 0;
+	
 	if (!state)
 		panic("state == NULL in ipsec6_output_tunnel");
 	if (!state->m)
 		panic("state->m == NULL in ipsec6_output_tunnel");
 	if (!sp)
 		panic("sp == NULL in ipsec6_output_tunnel");
-
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 
 	KEYDEBUG(KEYDEBUG_IPSEC_DATA,
 		printf("ipsec6_output_tunnel: applyed SP\n");
@@ -3124,7 +3286,7 @@ ipsec6_output_tunnel(state, sp, flags)
 			}
 		}
 
-		if (key_checkrequest(isr, &saidx) == ENOENT) {
+		if (key_checkrequest(isr, &saidx, &sav) == ENOENT) {
 			/*
 			 * IPsec processing is required, but no SA found.
 			 * I assume that key_acquire() had been called
@@ -3132,13 +3294,13 @@ ipsec6_output_tunnel(state, sp, flags)
 			 * this packet because it is responsibility for
 			 * upper layer to retransmit the packet.
 			 */
-			ipsec6stat.out_nosa++;
+			IPSEC_STAT_INCREMENT(ipsec6stat.out_nosa);
 			error = ENOENT;
 			goto bad;
 		}
 
 		/* validity check */
-		if (isr->sav == NULL) {
+		if (sav == NULL) {
 			switch (ipsec_get_reqlevel(isr)) {
 			case IPSEC_LEVEL_USE:
 				continue;
@@ -3152,46 +3314,138 @@ ipsec6_output_tunnel(state, sp, flags)
 		 * If there is no valid SA, we give up to process.
 		 * see same place at ipsec4_output().
 		 */
-		if (isr->sav->state != SADB_SASTATE_MATURE
-		 && isr->sav->state != SADB_SASTATE_DYING) {
-			ipsec6stat.out_nosa++;
+		if (sav->state != SADB_SASTATE_MATURE
+		 && sav->state != SADB_SASTATE_DYING) {
+			IPSEC_STAT_INCREMENT(ipsec6stat.out_nosa);
 			error = EINVAL;
 			goto bad;
 		}
-
-		/*
-		 * There may be the case that SA status will be changed when
-		 * we are refering to one. So calling splsoftnet().
-		 */
 
 		if (isr->saidx.mode == IPSEC_MODE_TUNNEL) {
 			/*
 			 * build IPsec tunnel.
 			 */
-			/* XXX should be processed with other familiy */
-			if (((struct sockaddr *)&isr->sav->sah->saidx.src)->sa_family != AF_INET6) {
-				ipseclog((LOG_ERR, "ipsec6_output_tunnel: "
-				    "family mismatched between inner and outer, spi=%u\n",
-				    (u_int32_t)ntohl(isr->sav->spi)));
-				ipsec6stat.out_inval++;
-				error = EAFNOSUPPORT;
-				goto bad;
-			}
-
 			state->m = ipsec6_splithdr(state->m);
 			if (!state->m) {
-				ipsec6stat.out_nomem++;
+				IPSEC_STAT_INCREMENT(ipsec6stat.out_nomem);
 				error = ENOMEM;
 				goto bad;
 			}
-			error = ipsec6_encapsulate(state->m, isr->sav);
-			if (error) {
-				state->m = 0;
+
+			if (((struct sockaddr *)&sav->sah->saidx.src)->sa_family == AF_INET6) {			
+				error = ipsec6_encapsulate(state->m, sav);
+				if (error) {
+					state->m = 0;
+					goto bad;
+				}
+				ip6 = mtod(state->m, struct ip6_hdr *);
+			} else if (((struct sockaddr *)&sav->sah->saidx.src)->sa_family == AF_INET) {
+			
+				struct ip *ip;
+				struct sockaddr_in* dst4;
+				struct route *ro4 = NULL;
+
+				/*
+				 * must be last isr because encapsulated IPv6 packet
+				 * will be sent by calling ip_output
+				 */
+				if (isr->next) {
+					ipseclog((LOG_ERR, "ipsec6_output_tunnel: "
+				    	"IPv4 must be outer layer, spi=%u\n",
+				    	(u_int32_t)ntohl(sav->spi)));
+					error = EINVAL;
+					goto bad;
+				}
+				*tunneledv4 = 1; /* must not process any further in ip6_output */
+				error = ipsec64_encapsulate(state->m, sav);
+				if (error) {
+					state->m = 0;
+					goto bad;
+				}
+				/* Now we have an IPv4 packet */
+				ip = mtod(state->m, struct ip *);
+
+				ro4 = &sav->sah->sa_route;
+				dst4 = (struct sockaddr_in *)&ro4->ro_dst;
+				if (ro4->ro_rt
+				 && ((ro4->ro_rt->rt_flags & RTF_UP) == 0
+				  || dst4->sin_addr.s_addr != ip->ip_dst.s_addr)) {
+					rtfree(ro4->ro_rt);
+					ro4->ro_rt = NULL;
+				}
+				if (ro4->ro_rt == NULL) {
+					dst4->sin_family = AF_INET;
+					dst4->sin_len = sizeof(*dst4);
+					dst4->sin_addr = ip->ip_dst;
+					rtalloc(ro4);
+				}
+				if (ro4->ro_rt == NULL) {
+					OSAddAtomic(1, (SInt32*)&ipstat.ips_noroute);
+					error = EHOSTUNREACH;
+					goto bad;
+				}
+	
+				state->m = ipsec4_splithdr(state->m);
+				if (!state->m) {
+					error = ENOMEM;
+					goto bad;
+				}
+				switch (isr->saidx.proto) {
+				case IPPROTO_ESP:
+#if IPSEC_ESP
+					if ((error = esp4_output(state->m, sav)) != 0) {
+						state->m = NULL;
+						goto bad;
+					}
+					break;
+
+#else
+					m_freem(state->m);
+					state->m = NULL;
+					error = EINVAL;
+					goto bad;
+#endif
+				case IPPROTO_AH:
+					if ((error = ah4_output(state->m, sav)) != 0) {
+						state->m = NULL;
+						goto bad;
+					}
+					break;
+				case IPPROTO_IPCOMP:
+					if ((error = ipcomp4_output(state->m, sav)) != 0) {
+						state->m = NULL;
+						goto bad;
+					}
+					break;
+				default:
+					ipseclog((LOG_ERR,
+						"ipsec4_output: unknown ipsec protocol %d\n",
+						isr->saidx.proto));
+					m_freem(state->m);
+					state->m = NULL;
+					error = EINVAL;
+					goto bad;
+				}
+		
+				if (state->m == 0) {
+					error = ENOMEM;
+					goto bad;
+				}
+				ip = mtod(state->m, struct ip *);
+				ip->ip_len = ntohs(ip->ip_len);  /* flip len field before calling ip_output */
+				ip_output(state->m, NULL, ro4, 0, NULL, NULL);
+				state->m = NULL;
+				goto done;
+			} else {
+				ipseclog((LOG_ERR, "ipsec6_output_tunnel: "
+				    "unsupported inner family, spi=%u\n",
+				    (u_int32_t)ntohl(sav->spi)));
+				IPSEC_STAT_INCREMENT(ipsec6stat.out_inval);
+				error = EAFNOSUPPORT;
 				goto bad;
 			}
-			ip6 = mtod(state->m, struct ip6_hdr *);
-
-			state->ro = &isr->sav->sah->sa_route;
+			
+			state->ro = &sav->sah->sa_route;
 			state->dst = (struct sockaddr *)&state->ro->ro_dst;
 			dst6 = (struct sockaddr_in6 *)state->dst;
 			if (state->ro->ro_rt
@@ -3209,7 +3463,7 @@ ipsec6_output_tunnel(state, sp, flags)
 			}
 			if (state->ro->ro_rt == 0) {
 				ip6stat.ip6s_noroute++;
-				ipsec6stat.out_noroute++;
+				IPSEC_STAT_INCREMENT(ipsec6stat.out_noroute);
 				error = EHOSTUNREACH;
 				goto bad;
 			}
@@ -3223,7 +3477,7 @@ ipsec6_output_tunnel(state, sp, flags)
 
 		state->m = ipsec6_splithdr(state->m);
 		if (!state->m) {
-			ipsec6stat.out_nomem++;
+			IPSEC_STAT_INCREMENT(ipsec6stat.out_nomem);
 			error = ENOMEM;
 			goto bad;
 		}
@@ -3231,14 +3485,14 @@ ipsec6_output_tunnel(state, sp, flags)
 		switch (isr->saidx.proto) {
 		case IPPROTO_ESP:
 #if IPSEC_ESP
-			error = esp6_output(state->m, &ip6->ip6_nxt, state->m->m_next, isr);
+			error = esp6_output(state->m, &ip6->ip6_nxt, state->m->m_next, sav);
 #else
 			m_freem(state->m);
 			error = EINVAL;
 #endif
 			break;
 		case IPPROTO_AH:
-			error = ah6_output(state->m, &ip6->ip6_nxt, state->m->m_next, isr);
+			error = ah6_output(state->m, &ip6->ip6_nxt, state->m->m_next, sav);
 			break;
 		case IPPROTO_IPCOMP:
 			/* XXX code should be here */
@@ -3247,7 +3501,7 @@ ipsec6_output_tunnel(state, sp, flags)
 			ipseclog((LOG_ERR, "ipsec6_output_tunnel: "
 			    "unknown ipsec protocol %d\n", isr->saidx.proto));
 			m_freem(state->m);
-			ipsec6stat.out_inval++;
+			IPSEC_STAT_INCREMENT(ipsec6stat.out_inval);
 			error = EINVAL;
 			break;
 		}
@@ -3259,18 +3513,23 @@ ipsec6_output_tunnel(state, sp, flags)
 		if (plen > IPV6_MAXPACKET) {
 			ipseclog((LOG_ERR, "ipsec6_output_tunnel: "
 			    "IPsec with IPv6 jumbogram is not supported\n"));
-			ipsec6stat.out_inval++;
+			IPSEC_STAT_INCREMENT(ipsec6stat.out_inval);
 			error = EINVAL;	/*XXX*/
 			goto bad;
 		}
 		ip6 = mtod(state->m, struct ip6_hdr *);
 		ip6->ip6_plen = htons(plen);
 	}
-
+done:
+	if (sav)
+		key_freesav(sav, KEY_SADB_UNLOCKED);
 	return 0;
 
 bad:
-	m_freem(state->m);
+	if (sav)
+		key_freesav(sav, KEY_SADB_UNLOCKED);
+	if (state->m)
+		m_freem(state->m);
 	state->m = NULL;
 	return error;
 }
@@ -3297,7 +3556,7 @@ ipsec4_splithdr(m)
 	hlen = ip->ip_hl << 2;
 #endif
 	if (m->m_len > hlen) {
-		MGETHDR(mh, M_DONTWAIT, MT_HEADER);
+		MGETHDR(mh, M_DONTWAIT, MT_HEADER);	/* MAC-OK */
 		if (!mh) {
 			m_freem(m);
 			return NULL;
@@ -3305,6 +3564,7 @@ ipsec4_splithdr(m)
 		M_COPY_PKTHDR(mh, m);
 		MH_ALIGN(mh, hlen);
 		m->m_flags &= ~M_PKTHDR;
+		m_mchtype(m, MT_DATA);
 		m->m_len -= hlen;
 		m->m_data += hlen;
 		mh->m_next = m;
@@ -3334,7 +3594,7 @@ ipsec6_splithdr(m)
 	ip6 = mtod(m, struct ip6_hdr *);
 	hlen = sizeof(struct ip6_hdr);
 	if (m->m_len > hlen) {
-		MGETHDR(mh, M_DONTWAIT, MT_HEADER);
+		MGETHDR(mh, M_DONTWAIT, MT_HEADER);	/* MAC-OK */
 		if (!mh) {
 			m_freem(m);
 			return NULL;
@@ -3342,6 +3602,7 @@ ipsec6_splithdr(m)
 		M_COPY_PKTHDR(mh, m);
 		MH_ALIGN(mh, hlen);
 		m->m_flags &= ~M_PKTHDR;
+		m_mchtype(m, MT_DATA);
 		m->m_len -= hlen;
 		m->m_data += hlen;
 		mh->m_next = m;
@@ -3359,26 +3620,28 @@ ipsec6_splithdr(m)
 
 /* validate inbound IPsec tunnel packet. */
 int
-ipsec4_tunnel_validate(m, off, nxt0, sav)
+ipsec4_tunnel_validate(m, off, nxt0, sav, ifamily)
 	struct mbuf *m;		/* no pullup permitted, m->m_len >= ip */
 	int off;
 	u_int nxt0;
 	struct secasvar *sav;
+	sa_family_t *ifamily;
 {
 	u_int8_t nxt = nxt0 & 0xff;
 	struct sockaddr_in *sin;
-	struct sockaddr_in osrc, odst, isrc, idst;
+	struct sockaddr_in osrc, odst, i4src, i4dst;
+	struct sockaddr_in6 i6src, i6dst;
 	int hlen;
 	struct secpolicy *sp;
 	struct ip *oip;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 
 #if DIAGNOSTIC
 	if (m->m_len < sizeof(struct ip))
 		panic("too short mbuf on ipsec4_tunnel_validate");
 #endif
-	if (nxt != IPPROTO_IPV4)
+	if (nxt != IPPROTO_IPV4 && nxt != IPPROTO_IPV6)
 		return 0;
 	if (m->m_pkthdr.len < off + sizeof(struct ip))
 		return 0;
@@ -3395,7 +3658,6 @@ ipsec4_tunnel_validate(m, off, nxt0, sav)
 	if (hlen != sizeof(struct ip))
 		return 0;
 
-	/* AF_INET6 should be supported, but at this moment we don't. */
 	sin = (struct sockaddr_in *)&sav->sah->saidx.dst;
 	if (sin->sin_family != AF_INET)
 		return 0;
@@ -3405,19 +3667,10 @@ ipsec4_tunnel_validate(m, off, nxt0, sav)
 	/* XXX slow */
 	bzero(&osrc, sizeof(osrc));
 	bzero(&odst, sizeof(odst));
-	bzero(&isrc, sizeof(isrc));
-	bzero(&idst, sizeof(idst));
-	osrc.sin_family = odst.sin_family = isrc.sin_family = idst.sin_family = 
-	    AF_INET;
-	osrc.sin_len = odst.sin_len = isrc.sin_len = idst.sin_len = 
-	    sizeof(struct sockaddr_in);
+	osrc.sin_family = odst.sin_family = AF_INET;
+	osrc.sin_len = odst.sin_len = sizeof(struct sockaddr_in);
 	osrc.sin_addr = oip->ip_src;
 	odst.sin_addr = oip->ip_dst;
-	m_copydata(m, off + offsetof(struct ip, ip_src), sizeof(isrc.sin_addr),
-	    (caddr_t)&isrc.sin_addr);
-	m_copydata(m, off + offsetof(struct ip, ip_dst), sizeof(idst.sin_addr),
-	    (caddr_t)&idst.sin_addr);
-
 	/*
 	 * RFC2401 5.2.1 (b): (assume that we are using tunnel mode)
 	 * - if the inner destination is multicast address, there can be
@@ -3438,13 +3691,35 @@ ipsec4_tunnel_validate(m, off, nxt0, sav)
 	 *
 	 * therefore, we do not do anything special about inner source.
 	 */
+	if (nxt == IPPROTO_IPV4) {
+		bzero(&i4src, sizeof(struct sockaddr_in));
+		bzero(&i4dst, sizeof(struct sockaddr_in));
+		i4src.sin_family = i4dst.sin_family = *ifamily = AF_INET;
+		i4src.sin_len = i4dst.sin_len = sizeof(struct sockaddr_in);
+		m_copydata(m, off + offsetof(struct ip, ip_src), sizeof(i4src.sin_addr),
+			   (caddr_t)&i4src.sin_addr);
+		m_copydata(m, off + offsetof(struct ip, ip_dst), sizeof(i4dst.sin_addr),
+			   (caddr_t)&i4dst.sin_addr);
+		sp = key_gettunnel((struct sockaddr *)&osrc, (struct sockaddr *)&odst,
+				   (struct sockaddr *)&i4src, (struct sockaddr *)&i4dst);
+	} else if (nxt == IPPROTO_IPV6) {
+		bzero(&i6src, sizeof(struct sockaddr_in6));
+		bzero(&i6dst, sizeof(struct sockaddr_in6));
+		i6src.sin6_family = i6dst.sin6_family = *ifamily = AF_INET6;
+		i6src.sin6_len = i6dst.sin6_len = sizeof(struct sockaddr_in6);
+		m_copydata(m, off + offsetof(struct ip6_hdr, ip6_src), sizeof(i6src.sin6_addr),
+			   (caddr_t)&i6src.sin6_addr);
+		m_copydata(m, off + offsetof(struct ip6_hdr, ip6_dst), sizeof(i6dst.sin6_addr),
+			   (caddr_t)&i6dst.sin6_addr);
+		sp = key_gettunnel((struct sockaddr *)&osrc, (struct sockaddr *)&odst,
+				   (struct sockaddr *)&i6src, (struct sockaddr *)&i6dst);
+	} else 
+		return 0;	/* unsupported family */
 
-	sp = key_gettunnel((struct sockaddr *)&osrc, (struct sockaddr *)&odst,
-	    (struct sockaddr *)&isrc, (struct sockaddr *)&idst);
-	if (!sp) {
+	if (!sp) 
 		return 0;
-	}
-	key_freesp(sp);
+
+	key_freesp(sp, KEY_SADB_UNLOCKED);
 
 	return 1;
 }
@@ -3464,8 +3739,8 @@ ipsec6_tunnel_validate(m, off, nxt0, sav)
 	struct secpolicy *sp;
 	struct ip6_hdr *oip6;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	
 #if DIAGNOSTIC
 	if (m->m_len < sizeof(struct ip6_hdr))
 		panic("too short mbuf on ipsec6_tunnel_validate");
@@ -3519,7 +3794,7 @@ ipsec6_tunnel_validate(m, off, nxt0, sav)
 	 */
 	if (!sp)
 		return 0;
-	key_freesp(sp);
+	key_freesp(sp, KEY_SADB_UNLOCKED);
 
 	return 1;
 }
@@ -3554,17 +3829,10 @@ ipsec_copypkt(m)
 				struct mbuf *mm;
 
 				if (n->m_flags & M_PKTHDR) {
-					MGETHDR(mnew, M_DONTWAIT, MT_HEADER);
+					MGETHDR(mnew, M_DONTWAIT, MT_HEADER); /* MAC-OK */
 					if (mnew == NULL)
 						goto fail;
 					mnew->m_pkthdr = n->m_pkthdr;
-#if 0
-					if (n->m_pkthdr.aux) {
-						mnew->m_pkthdr.aux =
-						    m_copym(n->m_pkthdr.aux,
-						    0, M_COPYALL, M_DONTWAIT);
-					}
-#endif
 					M_COPY_PKTHDR(mnew, n);
 					mnew->m_flags = n->m_flags & M_COPYFLAGS;
 				}
@@ -3613,7 +3881,7 @@ ipsec_copypkt(m)
 						break;
 
 					/* need another mbuf */
-					MGETHDR(mn, M_DONTWAIT, MT_HEADER);
+					MGETHDR(mn, M_DONTWAIT, MT_HEADER);	/* XXXMAC: tags copied next time in loop? */
 					if (mn == NULL)
 						goto fail;
 					mn->m_pkthdr.rcvif = NULL;
@@ -3640,148 +3908,172 @@ ipsec_copypkt(m)
 	return(NULL);
 }
 
-static struct mbuf *
-ipsec_addaux(m)
-	struct mbuf *m;
-{
-	struct mbuf *n;
+/*
+ * Tags are allocated as mbufs for now, since our minimum size is MLEN, we
+ * should make use of up to that much space.
+ */
+#define	IPSEC_TAG_HEADER \
 
-	n = m_aux_find(m, AF_INET, IPPROTO_ESP);
-	if (!n)
-		n = m_aux_add(m, AF_INET, IPPROTO_ESP);
-	if (!n)
-		return n;	/* ENOBUFS */
-	n->m_len = sizeof(struct socket *);
-	bzero(mtod(n, void *), n->m_len);
-	return n;
+struct ipsec_tag {
+	struct socket			*socket;
+	u_int32_t				history_count;
+	struct ipsec_history	history[];
+};
+
+#define	IPSEC_TAG_SIZE		(MLEN - sizeof(struct m_tag))
+#define	IPSEC_TAG_HDR_SIZE	(offsetof(struct ipsec_tag, history[0]))
+#define IPSEC_HISTORY_MAX	((IPSEC_TAG_SIZE - IPSEC_TAG_HDR_SIZE) / \
+							 sizeof(struct ipsec_history))
+
+static struct ipsec_tag *
+ipsec_addaux(
+	struct mbuf *m)
+{
+	struct m_tag		*tag;
+	
+	/* Check if the tag already exists */
+	tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_IPSEC, NULL);
+	
+	if (tag == NULL) {
+		struct ipsec_tag	*itag;
+		
+		/* Allocate a tag */
+		tag = m_tag_alloc(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_IPSEC,
+						  IPSEC_TAG_SIZE, M_DONTWAIT);
+		
+		if (tag) {
+			itag = (struct ipsec_tag*)(tag + 1);
+			itag->socket = 0;
+			itag->history_count = 0;
+			
+			m_tag_prepend(m, tag);
+		}
+	}
+	
+	return tag ? (struct ipsec_tag*)(tag + 1) : NULL;
 }
 
-static struct mbuf *
-ipsec_findaux(m)
-	struct mbuf *m;
+static struct ipsec_tag *
+ipsec_findaux(
+	struct mbuf *m)
 {
-	struct mbuf *n;
-
-	n = m_aux_find(m, AF_INET, IPPROTO_ESP);
-#if DIAGNOSTIC
-	if (n && n->m_len < sizeof(struct socket *))
-		panic("invalid ipsec m_aux");
-#endif
-	return n;
+	struct m_tag	*tag;
+	
+	tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_IPSEC, NULL);
+	
+	return tag ? (struct ipsec_tag*)(tag + 1) : NULL;
 }
 
 void
-ipsec_delaux(m)
-	struct mbuf *m;
+ipsec_delaux(
+	struct mbuf *m)
 {
-	struct mbuf *n;
-
-	n = m_aux_find(m, AF_INET, IPPROTO_ESP);
-	if (n)
-		m_aux_delete(m, n);
+	struct m_tag	*tag;
+	
+	tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_IPSEC, NULL);
+	
+	if (tag) {
+		m_tag_delete(m, tag);
+	}
 }
 
 /* if the aux buffer is unnecessary, nuke it. */
 static void
-ipsec_optaux(m, n)
-	struct mbuf *m;
-	struct mbuf *n;
+ipsec_optaux(
+	struct mbuf			*m,
+	struct ipsec_tag	*itag)
 {
-
-	if (!n)
-		return;
-	if (n->m_len == sizeof(struct socket *) && !*mtod(n, struct socket **))
-		ipsec_delaux(m);
+	if (itag && itag->socket == NULL && itag->history_count == 0) {
+		m_tag_delete(m, ((struct m_tag*)itag) - 1);
+	}
 }
 
 int
-ipsec_setsocket(m, so)
-	struct mbuf *m;
-	struct socket *so;
+ipsec_setsocket(
+	struct mbuf *m,
+	struct socket *so)
 {
-	struct mbuf *n;
+	struct ipsec_tag	*tag;
 
 	/* if so == NULL, don't insist on getting the aux mbuf */
 	if (so) {
-		n = ipsec_addaux(m);
-		if (!n)
+		tag = ipsec_addaux(m);
+		if (!tag)
 			return ENOBUFS;
 	} else
-		n = ipsec_findaux(m);
-	if (n && n->m_len >= sizeof(struct socket *))
-		*mtod(n, struct socket **) = so;
-	ipsec_optaux(m, n);
+		tag = ipsec_findaux(m);
+	if (tag) {
+		tag->socket = so;
+		ipsec_optaux(m, tag);
+	}
 	return 0;
 }
 
 struct socket *
-ipsec_getsocket(m)
-	struct mbuf *m;
+ipsec_getsocket(
+	struct mbuf *m)
 {
-	struct mbuf *n;
-
-	n = ipsec_findaux(m);
-	if (n && n->m_len >= sizeof(struct socket *))
-		return *mtod(n, struct socket **);
+	struct ipsec_tag	*itag;
+	
+	itag = ipsec_findaux(m);
+	if (itag)
+		return itag->socket;
 	else
 		return NULL;
 }
 
 int
-ipsec_addhist(m, proto, spi)
-	struct mbuf *m;
-	int proto;
-	u_int32_t spi;
+ipsec_addhist(
+	struct mbuf *m,
+	int proto,
+	u_int32_t spi)
 {
-	struct mbuf *n;
-	struct ipsec_history *p;
-
-	n = ipsec_addaux(m);
-	if (!n)
+	struct ipsec_tag		*itag;
+	struct ipsec_history	*p;
+	itag = ipsec_addaux(m);
+	if (!itag)
 		return ENOBUFS;
-	if (M_TRAILINGSPACE(n) < sizeof(*p))
+	if (itag->history_count == IPSEC_HISTORY_MAX)
 		return ENOSPC;	/* XXX */
-	p = (struct ipsec_history *)(mtod(n, caddr_t) + n->m_len);
-	n->m_len += sizeof(*p);
+	
+	p = &itag->history[itag->history_count];
+	itag->history_count++;
+	
 	bzero(p, sizeof(*p));
 	p->ih_proto = proto;
 	p->ih_spi = spi;
+	
 	return 0;
 }
 
 struct ipsec_history *
-ipsec_gethist(m, lenp)
-	struct mbuf *m;
-	int *lenp;
+ipsec_gethist(
+	struct mbuf *m,
+	int *lenp)
 {
-	struct mbuf *n;
-	int l;
-
-	n = ipsec_findaux(m);
-	if (!n)
+	struct ipsec_tag	*itag;
+	
+	itag = ipsec_findaux(m);
+	if (!itag)
 		return NULL;
-	l = n->m_len;
-	if (sizeof(struct socket *) > l)
+	if (itag->history_count == 0)
 		return NULL;
-	if ((l - sizeof(struct socket *)) % sizeof(struct ipsec_history))
-		return NULL;
-	/* XXX does it make more sense to divide by sizeof(ipsec_history)? */
 	if (lenp)
-		*lenp = l - sizeof(struct socket *);
-	return (struct ipsec_history *)
-	    (mtod(n, caddr_t) + sizeof(struct socket *));
+		*lenp = (int)(itag->history_count * sizeof(struct ipsec_history));
+	return itag->history;
 }
 
 void
-ipsec_clearhist(m)
-	struct mbuf *m;
+ipsec_clearhist(
+	struct mbuf *m)
 {
-	struct mbuf *n;
-
-	n = ipsec_findaux(m);
-	if ((n) && n->m_len > sizeof(struct socket *))
-		n->m_len = sizeof(struct socket *);
-	ipsec_optaux(m, n);
+	struct ipsec_tag	*itag;
+	
+	itag = ipsec_findaux(m);
+	if (itag) {
+		itag->history_count = 0;
+	}
+	ipsec_optaux(m, itag);
 }
 
 __private_extern__ void
@@ -3793,10 +4085,10 @@ ipsec_send_natt_keepalive(
 	struct ip *ip;
 	int error;
 
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	
 	if ((esp_udp_encap_port & 0xFFFF) == 0 || sav->remote_ike_port == 0) return;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-
 	m = m_gethdr(M_NOWAIT, MT_DATA);
 	if (m == NULL) return;
 	
@@ -3824,9 +4116,7 @@ ipsec_send_natt_keepalive(
 	uh->uh_sum = 0;
 	*(u_int8_t*)((char*)m_mtod(m) + sizeof(struct ip) + sizeof(struct udphdr)) = 0xFF;
 	
-	lck_mtx_unlock(sadb_mutex);
-	error = ip_output(m, NULL, &sav->sah->sa_route, IP_NOIPSEC, NULL);
-	lck_mtx_lock(sadb_mutex);
+	error = ip_output(m, NULL, &sav->sah->sa_route, IP_NOIPSEC, NULL, NULL);
 	if (error == 0)
 		sav->natt_last_activity = natt_now;
 

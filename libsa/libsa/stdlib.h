@@ -10,11 +10,15 @@ typedef __darwin_size_t	size_t;
 #endif
 
 #ifndef NULL
-#define NULL   (0)
+#if defined (__cplusplus)
+#define NULL 0
+#else
+#define NULL ((void *)0)
+#endif
 #endif
 
 
-__private_extern__ char *kld_basefile_name;
+__private_extern__ const char *kld_basefile_name;
 
 
 __BEGIN_DECLS
@@ -27,6 +31,7 @@ __private_extern__ void   malloc_reset(void); // Destroy all memory regions
 __private_extern__ void * realloc(void * address, size_t new_size);
 
 __private_extern__ char * strrchr(const char *cp, int ch);
+__private_extern__ char * strstr(const char *in, const char *str);
 
 __private_extern__ void qsort(
     void * array,
@@ -34,18 +39,12 @@ __private_extern__ void qsort(
     size_t member_size,
     int (*)(const void *, const void *));
 
-__private_extern__ void * bsearch(
+__private_extern__ const void * bsearch(
     register const void *key,
     const void *base0,
     size_t nmemb,
     register size_t size,
     register int (*compar)(const void *, const void *));
-
-
-/* These are defined in the kernel.
- */
-extern long     strtol(const char *, char **, int);
-extern unsigned long strtoul(const char *, char **, int);
 
 __END_DECLS
 

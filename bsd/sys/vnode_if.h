@@ -2,23 +2,29 @@
 /*
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved
@@ -53,7 +59,12 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 /*
  * Warning: This file is generated automatically.
@@ -89,8 +100,6 @@ extern struct vnodeop_desc vnop_close_desc;
 extern struct vnodeop_desc vnop_access_desc;
 extern struct vnodeop_desc vnop_getattr_desc;
 extern struct vnodeop_desc vnop_setattr_desc;
-extern struct vnodeop_desc vnop_getattrlist_desc;
-extern struct vnodeop_desc vnop_setattrlist_desc;
 extern struct vnodeop_desc vnop_read_desc;
 extern struct vnodeop_desc vnop_write_desc;
 extern struct vnodeop_desc vnop_ioctl_desc;
@@ -125,6 +134,16 @@ extern struct vnodeop_desc vnop_offtoblk_desc;
 extern struct vnodeop_desc vnop_blockmap_desc;
 extern struct vnodeop_desc vnop_strategy_desc;
 extern struct vnodeop_desc vnop_bwrite_desc;
+
+#ifdef __APPLE_API_UNSTABLE
+
+#if NAMEDSTREAMS
+extern struct vnodeop_desc vnop_getnamedstream_desc;
+extern struct vnodeop_desc vnop_makenamedstream_desc;
+extern struct vnodeop_desc vnop_removenamedstream_desc;
+#endif
+
+#endif
 
 __BEGIN_DECLS
 /*
@@ -256,37 +275,6 @@ struct vnop_setattr_args {
 	vfs_context_t a_context;
 };
 extern errno_t VNOP_SETATTR(vnode_t, struct vnode_attr *, vfs_context_t);
-
-/*
- *#
- *#% getattrlist  vp      = = =
- *#
- */
-struct vnop_getattrlist_args {
-	struct vnodeop_desc *a_desc;
-	vnode_t a_vp;
-	struct attrlist *a_alist;
-	struct uio *a_uio;
-	int a_options;
-	vfs_context_t a_context;
-};
-extern errno_t VNOP_GETATTRLIST(vnode_t, struct attrlist *, struct uio *, int, vfs_context_t);
-
-
-/*
- *#
- *#% setattrlist  vp      L L L
- *#
- */
-struct vnop_setattrlist_args {
-	struct vnodeop_desc *a_desc;
-	vnode_t a_vp;
-	struct attrlist *a_alist;
-	struct uio *a_uio;
-	int a_options;
-	vfs_context_t a_context;
-};
-extern errno_t VNOP_SETATTRLIST(vnode_t, struct attrlist *, struct uio *, int, vfs_context_t);
 
 
 /*
@@ -750,7 +738,7 @@ extern errno_t VNOP_COPYFILE(vnode_t, vnode_t, vnode_t, struct componentname *, 
 struct vnop_getxattr_args {
 	struct vnodeop_desc *a_desc;
 	vnode_t a_vp;
-	char * a_name;
+	const char * a_name;
 	uio_t a_uio;
 	size_t *a_size;
 	int a_options;
@@ -762,7 +750,7 @@ extern errno_t VNOP_GETXATTR(vnode_t, const char *, uio_t, size_t *, int, vfs_co
 struct vnop_setxattr_args {
 	struct vnodeop_desc *a_desc;
 	vnode_t a_vp;
-	char * a_name;
+	const char * a_name;
 	uio_t a_uio;
 	int a_options;
 	vfs_context_t a_context;
@@ -773,7 +761,7 @@ extern errno_t VNOP_SETXATTR(vnode_t, const char *, uio_t, int, vfs_context_t);
 struct vnop_removexattr_args {
 	struct vnodeop_desc *a_desc;
 	vnode_t a_vp;
-	char * a_name;
+	const char * a_name;
 	int a_options;
 	vfs_context_t a_context;
 };
@@ -869,6 +857,56 @@ struct vnop_kqfilt_remove_args {
 };
 extern struct vnodeop_desc vnop_kqfilt_remove_desc;
 errno_t VNOP_KQFILT_REMOVE(vnode_t , uintptr_t , vfs_context_t);
+
+struct label;
+struct vnop_setlabel_args {
+	struct vnodeop_desc *a_desc;
+	struct vnode *a_vp;
+	struct label *a_vl;
+	vfs_context_t a_context;
+};
+extern struct vnodeop_desc vnop_setlabel_desc;
+errno_t VNOP_SETLABEL(vnode_t, struct label *, vfs_context_t);
+
+#ifdef __APPLE_API_UNSTABLE
+
+#if NAMEDSTREAMS
+
+enum nsoperation	{ NS_OPEN, NS_CREATE, NS_DELETE };
+
+struct vnop_getnamedstream_args {
+	struct vnodeop_desc *a_desc;
+	vnode_t a_vp;
+	vnode_t *a_svpp;
+	const char *a_name;
+	enum nsoperation a_operation;
+	int a_flags;
+	vfs_context_t a_context;
+};
+extern errno_t VNOP_GETNAMEDSTREAM(vnode_t, vnode_t *, const char *, enum nsoperation, int flags, vfs_context_t);
+
+struct vnop_makenamedstream_args {
+	struct vnodeop_desc *a_desc;
+	vnode_t *a_svpp;
+	vnode_t a_vp;
+	const char *a_name;
+	int a_flags;
+	vfs_context_t a_context;
+};
+extern errno_t VNOP_MAKENAMEDSTREAM(vnode_t, vnode_t *, const char *, int flags, vfs_context_t);
+
+struct vnop_removenamedstream_args {
+	struct vnodeop_desc *a_desc;
+	vnode_t a_vp;
+	vnode_t a_svp;
+	const char *a_name;
+	int a_flags;
+	vfs_context_t a_context;
+};
+extern errno_t VNOP_REMOVENAMEDSTREAM(vnode_t, vnode_t, const char *, int flags, vfs_context_t);
+#endif
+
+#endif
 
 __END_DECLS
 

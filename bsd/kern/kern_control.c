@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 1999-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 /*
@@ -42,6 +48,7 @@
 #include <sys/sys_domain.h>
 #include <sys/kern_event.h>
 #include <sys/kern_control.h>
+#include <sys/kauth.h>
 #include <net/if_var.h>
 
 #include <mach/vm_types.h>
@@ -60,8 +67,6 @@
  * Definitions and vars for we support
  */
 
-static u_int32_t		ctl_last_id = 0;
-static u_int32_t		ctl_max = 256;
 static u_int32_t		ctl_maxunit = 65536;
 static lck_grp_attr_t	*ctl_lck_grp_attr = 0;
 static lck_attr_t		*ctl_lck_attr = 0;
@@ -70,7 +75,7 @@ static lck_mtx_t 		*ctl_mtx;
 
 
 /* all the controllers are chained */
-TAILQ_HEAD(, kctl) 	ctl_head;
+TAILQ_HEAD(kctl_list, kctl) 	ctl_head;
 
 static int ctl_attach(struct socket *, int, struct proc *);
 static int ctl_detach(struct socket *);
@@ -84,7 +89,6 @@ static int ctl_send(struct socket *, int, struct mbuf *,
 static int ctl_ctloutput(struct socket *, struct sockopt *);
 static int ctl_peeraddr(struct socket *so, struct sockaddr **nam);
 
-static struct kctl *ctl_find_by_id(u_int32_t);
 static struct kctl *ctl_find_by_name(const char *);
 static struct kctl *ctl_find_by_id_unit(u_int32_t id, u_int32_t unit);
 
@@ -281,6 +285,7 @@ ctl_connect(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
     int					error = 0;
     struct sockaddr_ctl	sa;
     struct ctl_cb		*kcb = (struct ctl_cb *)so->so_pcb;
+    struct ctl_cb		*kcb_next = NULL;
     
     if (kcb == 0)
     	panic("ctl_connect so_pcb null\n");
@@ -308,9 +313,9 @@ ctl_connect(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
             lck_mtx_unlock(ctl_mtx);
             return(EINVAL);
         }
-        if ((error = proc_suser(p))) {
+        if (kauth_cred_issuser(kauth_cred_get()) == 0) {
             lck_mtx_unlock(ctl_mtx);
-            return error;
+            return EPERM;
         }
     }
 
@@ -320,25 +325,35 @@ ctl_connect(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 			return EBUSY;
 		}
 	} else {
-    	u_int32_t	unit = kctl->lastunit + 1;
+		/* Find an unused ID, assumes control IDs are listed in order */
+    	u_int32_t	unit = 1;
     	
-    	while (1) {
-    	    if (unit == ctl_maxunit)
-    	    	unit = 1;
-		    if (kcb_find(kctl, unit) == NULL) {
-		    	kctl->lastunit = sa.sc_unit = unit;
-		    	break;
-		    }
-	    	if (unit++ == kctl->lastunit) {
-	    	    lck_mtx_unlock(ctl_mtx);
-    	    	return EBUSY;
-    	    }
-	    }
+    	TAILQ_FOREACH(kcb_next, &kctl->kcb_head, next) {
+    		if (kcb_next->unit > unit) {
+    			/* Found a gap, lets fill it in */
+    			break;
+    		}
+    		unit = kcb_next->unit + 1;
+    		if (unit == ctl_maxunit)
+    			break;
+    	}
+    	
+		if (unit == ctl_maxunit) {
+			lck_mtx_unlock(ctl_mtx);
+			return EBUSY;
+		}
+		
+		sa.sc_unit = unit;
     }
 
 	kcb->unit = sa.sc_unit;
     kcb->kctl = kctl;
-    TAILQ_INSERT_TAIL(&kctl->kcb_head, kcb, next);
+    if (kcb_next != NULL) {
+    	TAILQ_INSERT_BEFORE(kcb_next, kcb, next);
+    }
+    else {
+		TAILQ_INSERT_TAIL(&kctl->kcb_head, kcb, next);
+	}
     lck_mtx_unlock(ctl_mtx);
 
     error = soreserve(so, kctl->sendbufsize, kctl->recvbufsize);
@@ -494,7 +509,7 @@ ctl_enqueuedata(void *kctlref, u_int32_t unit, void *data, size_t len, u_int32_t
 		return EINVAL;
 	
 	socket_lock(so, 1);
-	if ((size_t)sbspace(&so->so_rcv) < len) {
+	if (sbspace(&so->so_rcv) < (long)len) {
 		error = ENOBUFS;
 		goto bye;
 	}
@@ -534,6 +549,7 @@ ctl_getenqueuespace(kern_ctl_ref kctlref, u_int32_t unit, size_t *space)
 	struct ctl_cb 	*kcb;
 	struct kctl		*kctl = (struct kctl *)kctlref;
 	struct socket 	*so;
+	long avail;
 	
 	if (kctlref == NULL || space == NULL)
 		return EINVAL;
@@ -547,7 +563,8 @@ ctl_getenqueuespace(kern_ctl_ref kctlref, u_int32_t unit, size_t *space)
 		return EINVAL;
 	
 	socket_lock(so, 1);
-	*space = sbspace(&so->so_rcv);
+	avail = sbspace(&so->so_rcv);
+	*space = (avail < 0) ? 0 : avail;
 	socket_unlock(so, 1);
 
 	return 0;
@@ -576,10 +593,14 @@ ctl_ctloutput(struct socket *so, struct sockopt *sopt)
 		case SOPT_SET:
 			if (kctl->setopt == NULL)
 				return(ENOTSUP);
-			MALLOC(data, void *, sopt->sopt_valsize, M_TEMP, M_WAITOK);
-			if (data == NULL)
-				return(ENOMEM);
-			error = sooptcopyin(sopt, data, sopt->sopt_valsize, sopt->sopt_valsize);
+			if (sopt->sopt_valsize == 0) {
+				data = NULL;
+			} else {
+				MALLOC(data, void *, sopt->sopt_valsize, M_TEMP, M_WAITOK);
+				if (data == NULL)
+					return(ENOMEM);
+				error = sooptcopyin(sopt, data, sopt->sopt_valsize, sopt->sopt_valsize);
+			}
 			if (error == 0) {
 				socket_unlock(so, 0);
 				error = (*kctl->setopt)(kcb->kctl, kcb->unit, kcb->userdata, sopt->sopt_name, 
@@ -672,10 +693,10 @@ ctl_ioctl(__unused struct socket *so, u_long cmd, caddr_t data,
  */
 errno_t
 ctl_register(struct kern_ctl_reg *userkctl, kern_ctl_ref *kctlref)
-{	
-	struct kctl 	*kctl = 0;
-	u_int32_t		id = -1;
-	u_int32_t		n;
+{
+	struct kctl 	*kctl = NULL;
+	struct kctl 	*kctl_next = NULL;
+	u_int32_t		id = 1;
 	size_t			name_len;
 	
 	if (userkctl == NULL)	/* sanity check */
@@ -693,29 +714,64 @@ ctl_register(struct kern_ctl_reg *userkctl, kern_ctl_ref *kctlref)
 	
 	lck_mtx_lock(ctl_mtx);
 	
-	if ((userkctl->ctl_flags & CTL_FLAG_REG_ID_UNIT) == 0) {    
+	/*
+	 * Kernel Control IDs
+	 *
+	 * CTL_FLAG_REG_ID_UNIT indicates the control ID and unit number are
+	 * static. If they do not exist, add them to the list in order. If the
+	 * flag is not set, we must find a new unique value. We assume the
+	 * list is in order. We find the last item in the list and add one. If
+	 * this leads to wrapping the id around, we start at the front of the
+	 * list and look for a gap.
+	 */
+	
+	if ((userkctl->ctl_flags & CTL_FLAG_REG_ID_UNIT) == 0) {
+		/* Must dynamically assign an unused ID */
+		
+		/* Verify the same name isn't already registered */
 		if (ctl_find_by_name(userkctl->ctl_name) != NULL) {
 			lck_mtx_unlock(ctl_mtx);
 			FREE(kctl, M_TEMP);
 			return(EEXIST);
 		}
-		for (n = 0, id = ctl_last_id + 1; n < ctl_max; id++, n++) {
+		
+		/* Start with 1 in case the list is empty */
+		id = 1;
+		kctl_next = TAILQ_LAST(&ctl_head, kctl_list);
+		
+		if (kctl_next != NULL) {
+			/* List was not empty, add one to the last item in the list */
+			id = kctl_next->id + 1;
+			kctl_next = NULL;
+			
+			/*
+			 * If this wrapped the id number, start looking at the front
+			 * of the list for an unused id.
+			 */
 			if (id == 0) {
-				n--;
-				continue;
+				/* Find the next unused ID */
+				id = 1;
+				
+				TAILQ_FOREACH(kctl_next, &ctl_head, next) {
+					if (kctl_next->id > id) {
+						/* We found a gap */
+						break;
+					}
+					
+					id = kctl_next->id + 1;
+				}
 			}
-			if (ctl_find_by_id(id) == 0)
-				break;
 		}
-		if (id == ctl_max) {
-			lck_mtx_unlock(ctl_mtx);
-			FREE(kctl, M_TEMP);
-			return(ENOBUFS);
-		}
-		userkctl->ctl_id =id;
+		
+		userkctl->ctl_id = id;
 		kctl->id = id;
 		kctl->reg_unit = -1;
 	} else {
+		TAILQ_FOREACH(kctl_next, &ctl_head, next) {
+			if (kctl_next->id > userkctl->ctl_id)
+				break;
+		}
+		
 		if (ctl_find_by_id_unit(userkctl->ctl_id, userkctl->ctl_unit) != NULL) {
 			lck_mtx_unlock(ctl_mtx);
 			FREE(kctl, M_TEMP);
@@ -724,7 +780,7 @@ ctl_register(struct kern_ctl_reg *userkctl, kern_ctl_ref *kctlref)
 		kctl->id = userkctl->ctl_id;
 		kctl->reg_unit = userkctl->ctl_unit;
 	}
-	strcpy(kctl->name, userkctl->ctl_name);
+	strlcpy(kctl->name, userkctl->ctl_name, MAX_KCTL_NAME);
 	kctl->flags = userkctl->ctl_flags;
 
 	/* Let the caller know the default send and receive sizes */
@@ -744,8 +800,10 @@ ctl_register(struct kern_ctl_reg *userkctl, kern_ctl_ref *kctlref)
 	
 	TAILQ_INIT(&kctl->kcb_head);
 	
-	TAILQ_INSERT_TAIL(&ctl_head, kctl, next);
-	ctl_max++;
+	if (kctl_next)
+		TAILQ_INSERT_BEFORE(kctl_next, kctl, next);
+	else
+		TAILQ_INSERT_TAIL(&ctl_head, kctl, next);
 	
 	lck_mtx_unlock(ctl_mtx);
 	
@@ -778,28 +836,12 @@ ctl_deregister(void *kctlref)
 	}
 
     TAILQ_REMOVE(&ctl_head, kctl, next);
-    ctl_max--;
 
     lck_mtx_unlock(ctl_mtx);
     
     ctl_post_msg(KEV_CTL_DEREGISTERED, kctl->id);
     FREE(kctl, M_TEMP);
     return(0);
-}
-
-/*
- * Must be called with global lock taked
- */
-static struct kctl *
-ctl_find_by_id(u_int32_t id)
-{	
-    struct kctl 	*kctl;
-
-    TAILQ_FOREACH(kctl, &ctl_head, next)
-        if (kctl->id == id)
-            return kctl;
-
-    return NULL;
 }
 
 /*
@@ -811,7 +853,7 @@ ctl_find_by_name(const char *name)
     struct kctl 	*kctl;
 
     TAILQ_FOREACH(kctl, &ctl_head, next)
-        if (strcmp(kctl->name, name) == 0)
+        if (strncmp(kctl->name, name, sizeof(kctl->name)) == 0)
             return kctl;
 
     return NULL;
@@ -879,7 +921,7 @@ ctl_post_msg(u_long event_code, u_int32_t id)
 static int
 ctl_lock(struct socket *so, int refcount, int lr)
  {
-	int lr_saved;
+	uint32_t lr_saved;
 	if (lr == 0) 
 		lr_saved = (unsigned int) __builtin_return_address(0);
 	else lr_saved = lr;
@@ -887,18 +929,18 @@ ctl_lock(struct socket *so, int refcount, int lr)
 	if (so->so_pcb) {
 		lck_mtx_lock(((struct ctl_cb *)so->so_pcb)->mtx);
 	} else  {
-		panic("ctl_lock: so=%x NO PCB! lr=%x\n", so, lr_saved);
+		panic("ctl_lock: so=%p NO PCB! lr=%x\n", so, lr_saved);
 		lck_mtx_lock(so->so_proto->pr_domain->dom_mtx);
 	}
 	
 	if (so->so_usecount < 0)
-		panic("ctl_lock: so=%x so_pcb=%x lr=%x ref=%x\n",
+		panic("ctl_lock: so=%p so_pcb=%p lr=%x ref=%x\n",
 		so, so->so_pcb, lr_saved, so->so_usecount);
 	
 	if (refcount)
 		so->so_usecount++;
 
-	so->lock_lr[so->next_lock_lr] = (void *)lr_saved;
+	so->lock_lr[so->next_lock_lr] = lr_saved;
 	so->next_lock_lr = (so->next_lock_lr+1) % SO_LCKDBG_MAX;
 	return (0);
 }
@@ -906,7 +948,7 @@ ctl_lock(struct socket *so, int refcount, int lr)
 static int
 ctl_unlock(struct socket *so, int refcount, int lr)
 {
-	int lr_saved;
+	uint32_t lr_saved;
 	lck_mtx_t * mutex_held;
 	
 	if (lr == 0) 
@@ -921,15 +963,15 @@ ctl_unlock(struct socket *so, int refcount, int lr)
 		so->so_usecount--;
 	
 	if (so->so_usecount < 0)
-		panic("ctl_unlock: so=%x usecount=%x\n", so, so->so_usecount);
+		panic("ctl_unlock: so=%p usecount=%x\n", so, so->so_usecount);
 	if (so->so_pcb == NULL) {
-		panic("ctl_unlock: so=%x NO PCB usecount=%x lr=%x\n", so, so->so_usecount, lr_saved);
+		panic("ctl_unlock: so=%p NO PCB usecount=%x lr=%x\n", so, so->so_usecount, lr_saved);
 		mutex_held = so->so_proto->pr_domain->dom_mtx;
 	} else {
 		mutex_held = ((struct ctl_cb *)so->so_pcb)->mtx;
 	}
 	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
-	so->unlock_lr[so->next_unlock_lr] = (void *)lr_saved;
+	so->unlock_lr[so->next_unlock_lr] = lr_saved;
 	so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
 	lck_mtx_unlock(mutex_held);
 	
@@ -946,10 +988,10 @@ ctl_getlock(struct socket *so, __unused int locktype)
 	
 	if (so->so_pcb)  {
 		if (so->so_usecount < 0)
-			panic("ctl_getlock: so=%x usecount=%x\n", so, so->so_usecount);
+			panic("ctl_getlock: so=%p usecount=%x\n", so, so->so_usecount);
 		return(kcb->mtx);
 	} else {
-		panic("ctl_getlock: so=%x NULL so_pcb\n", so);
+		panic("ctl_getlock: so=%p NULL so_pcb\n", so);
 		return (so->so_proto->pr_domain->dom_mtx);
 	}
 }

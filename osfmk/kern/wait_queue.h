@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #ifdef	KERNEL_PRIVATE
@@ -117,7 +123,7 @@ typedef WaitQueueElement *wait_queue_element_t;
  *	with that port may wake up any thread from any of those portsets,
  *	or one that was waiting locally on the port itself.
  */
-typedef struct wait_queue_link {
+typedef struct _wait_queue_link {
 	WaitQueueElement		wql_element;	/* element on master */
 	queue_chain_t			wql_setlinks;	/* element on set */
     wait_queue_set_t		wql_setqueue;	/* set queue */
@@ -140,9 +146,16 @@ typedef struct wait_queue_link {
 	(((wq)->wq_type & ~1) == _WAIT_QUEUE_inited)
 
 #define wait_queue_empty(wq)	(queue_empty(&(wq)->wq_queue))
+
 #define wait_queue_held(wq)		(hw_lock_held(&(wq)->wq_interlock))
 #define wait_queue_lock_try(wq) (hw_lock_try(&(wq)->wq_interlock))
 
+/* For x86, the hardware timeout is in TSC units. */
+#if defined(i386)
+#define	hwLockTimeOut LockTimeOutTSC
+#else
+#define	hwLockTimeOut LockTimeOut
+#endif
 /*
  * Double the standard lock timeout, because wait queues tend
  * to iterate over a number of threads - locking each.  If there is
@@ -151,20 +164,21 @@ typedef struct wait_queue_link {
  */
 
 static inline void wait_queue_lock(wait_queue_t wq) {
-	if (!hw_lock_to(&(wq)->wq_interlock, LockTimeOut * 2))
-		panic("wait queue deadlock - wq=0x%x, cpu=%d\n", wq, cpu_number());
+	if (!hw_lock_to(&(wq)->wq_interlock, hwLockTimeOut * 2))
+		panic("wait queue deadlock - wq=%p, cpu=%d\n", wq, cpu_number(
+));
 }
-
+ 
 static inline void wait_queue_unlock(wait_queue_t wq) {
 	assert(wait_queue_held(wq));
 #if defined(__i386__)
-	/* On certain x86 systems, this spinlock is susceptible to
+	/* DRK: On certain x86 systems, this spinlock is susceptible to
 	 * lock starvation. Hence use an unlock variant which performs
 	 * a cacheline flush to minimize cache affinity on acquisition.
 	 */
 	i386_lock_unlock_with_flush(&(wq)->wq_interlock);
 #else
-        hw_lock_unlock(&(wq)->wq_interlock);
+	hw_lock_unlock(&(wq)->wq_interlock);
 #endif
 }
 
@@ -185,14 +199,7 @@ __private_extern__ wait_result_t wait_queue_assert_wait64_locked(
 			uint64_t deadline,
 			thread_t thread);
 
-/* peek to see which thread would be chosen for a wakeup - but keep on queue */
-__private_extern__ void wait_queue_peek64_locked(
-			wait_queue_t wait_queue,
-			event64_t event,
-			thread_t *thread,
-			wait_queue_t *found_queue);
-
-/* peek to see which thread would be chosen for a wakeup - but keep on queue */
+/* pull a thread from its wait queue */
 __private_extern__ void wait_queue_pull_thread_locked(
 			wait_queue_t wait_queue,
 			thread_t thread,

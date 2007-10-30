@@ -56,15 +56,17 @@
 #include <netkey/key_debug.h>
 
 extern lck_mtx_t *raw_mtx;
-extern lck_mtx_t *sadb_mutex;
-extern void key_init(void);
+extern void key_init(void) __attribute__((section("__TEXT, initcode")));
 
-struct sockaddr key_dst = { 2, PF_KEY, };
-struct sockaddr key_src = { 2, PF_KEY, };
+struct sockaddr key_dst = { 2, PF_KEY, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,} };
+struct sockaddr key_src = { 2, PF_KEY, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,} };
 
 static int key_sendup0(struct rawcb *, struct mbuf *, int);
 
 struct pfkeystat pfkeystat;
+
+
+extern lck_mtx_t *pfkey_stat_mutex;
 
 /*
  * key_output()
@@ -98,16 +100,17 @@ key_output(m, va_alist)
 		panic("key_output: NULL pointer was passed.\n");
 
 	socket_unlock(so, 0);
-	lck_mtx_lock(sadb_mutex);
+	lck_mtx_lock(pfkey_stat_mutex);
 	pfkeystat.out_total++;
 	pfkeystat.out_bytes += m->m_pkthdr.len;
+	lck_mtx_unlock(pfkey_stat_mutex);
 
 	len = m->m_pkthdr.len;
 	if (len < sizeof(struct sadb_msg)) {
 #if IPSEC_DEBUG
 		printf("key_output: Invalid message length.\n");
 #endif
-		pfkeystat.out_tooshort++;
+		PFKEY_STAT_INCREMENT(pfkeystat.out_tooshort);
 		error = EINVAL;
 		goto end;
 	}
@@ -117,7 +120,7 @@ key_output(m, va_alist)
 #if IPSEC_DEBUG
 			printf("key_output: can't pullup mbuf\n");
 #endif
-			pfkeystat.out_nomem++;
+			PFKEY_STAT_INCREMENT(pfkeystat.out_nomem);
 			error = ENOBUFS;
 			goto end;
 		}
@@ -131,12 +134,12 @@ key_output(m, va_alist)
 #endif /* defined(IPSEC_DEBUG) */
 
 	msg = mtod(m, struct sadb_msg *);
-	pfkeystat.out_msgtype[msg->sadb_msg_type]++;
+	PFKEY_STAT_INCREMENT(pfkeystat.out_msgtype[msg->sadb_msg_type]);
 	if (len != PFKEY_UNUNIT64(msg->sadb_msg_len)) {
 #if IPSEC_DEBUG
 		printf("key_output: Invalid message length.\n");
 #endif
-		pfkeystat.out_invlen++;
+		PFKEY_STAT_INCREMENT(pfkeystat.out_invlen);
 		error = EINVAL;
 		goto end;
 	}
@@ -147,7 +150,6 @@ key_output(m, va_alist)
 end:
 	if (m)
 		m_freem(m);
-	lck_mtx_unlock(sadb_mutex);
 	socket_lock(so, 0);
 	return error;
 }
@@ -163,7 +165,6 @@ key_sendup0(rp, m, promisc)
 {
 	int error;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	if (promisc) {
 		struct sadb_msg *pmsg;
 
@@ -174,7 +175,7 @@ key_sendup0(rp, m, promisc)
 #if IPSEC_DEBUG
 			printf("key_sendup0: cannot pullup\n");
 #endif
-			pfkeystat.in_nomem++;
+			PFKEY_STAT_INCREMENT(pfkeystat.in_nomem);
 			m_freem(m);
 			return ENOBUFS;
 		}
@@ -187,7 +188,7 @@ key_sendup0(rp, m, promisc)
 		pmsg->sadb_msg_len = PFKEY_UNIT64(m->m_pkthdr.len);
 		/* pid and seq? */
 
-		pfkeystat.in_msgtype[pmsg->sadb_msg_type]++;
+		PFKEY_STAT_INCREMENT(pfkeystat.in_msgtype[pmsg->sadb_msg_type]);
 	}
 
 	if (!sbappendaddr(&rp->rcb_socket->so_rcv, (struct sockaddr *)&key_src,
@@ -195,7 +196,7 @@ key_sendup0(rp, m, promisc)
 #if IPSEC_DEBUG
 		printf("key_sendup0: sbappendaddr failed\n");
 #endif
-		pfkeystat.in_nomem++;
+		PFKEY_STAT_INCREMENT(pfkeystat.in_nomem);
 	}
 	else {
 		sorwakeup(rp->rcb_socket);
@@ -217,19 +218,20 @@ key_sendup_mbuf(so, m, target)
 	struct rawcb *rp;
 	int error = 0;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	if (m == NULL)
 		panic("key_sendup_mbuf: NULL pointer was passed.\n");
 	if (so == NULL && target == KEY_SENDUP_ONE)
 		panic("key_sendup_mbuf: NULL pointer was passed.\n");
 
+	lck_mtx_lock(pfkey_stat_mutex);
 	pfkeystat.in_total++;
 	pfkeystat.in_bytes += m->m_pkthdr.len;
+	lck_mtx_unlock(pfkey_stat_mutex);
 	if (m->m_len < sizeof(struct sadb_msg)) {
 #if 1
 		m = m_pullup(m, sizeof(struct sadb_msg));
 		if (m == NULL) {
-			pfkeystat.in_nomem++;
+			PFKEY_STAT_INCREMENT(pfkeystat.in_nomem);
 			return ENOBUFS;
 		}
 #else
@@ -239,7 +241,7 @@ key_sendup_mbuf(so, m, target)
 	if (m->m_len >= sizeof(struct sadb_msg)) {
 		struct sadb_msg *msg;
 		msg = mtod(m, struct sadb_msg *);
-		pfkeystat.in_msgtype[msg->sadb_msg_type]++;
+		PFKEY_STAT_INCREMENT(pfkeystat.in_msgtype[msg->sadb_msg_type]);
 	}
 	
 	lck_mtx_lock(raw_mtx);
@@ -286,7 +288,7 @@ key_sendup_mbuf(so, m, target)
 				sendup++;
 			break;
 		}
-		pfkeystat.in_msgtarget[target]++;
+		PFKEY_STAT_INCREMENT(pfkeystat.in_msgtarget[target]);
 
 		if (!sendup) {
 			socket_unlock(rp->rcb_socket, 1);
@@ -300,7 +302,7 @@ key_sendup_mbuf(so, m, target)
 			printf("key_sendup: m_copy fail\n");
 #endif
 			m_freem(m);
-			pfkeystat.in_nomem++;
+			PFKEY_STAT_INCREMENT(pfkeystat.in_nomem);
 			socket_unlock(rp->rcb_socket, 1);
 			lck_mtx_unlock(raw_mtx);
 			return ENOBUFS;
@@ -422,9 +424,7 @@ key_detach(struct socket *so)
 			key_cb.key_count--;
 		key_cb.any_count--;
 		socket_unlock(so, 0);
-		lck_mtx_lock(sadb_mutex);
 		key_freereg(so);
-		lck_mtx_unlock(sadb_mutex);
 		socket_lock(so, 0);
 	}
 	error = raw_usrreqs.pru_detach(so);
@@ -503,7 +503,7 @@ struct pr_usrreqs key_usrreqs = {
 };
 
 /* sysctl */
-SYSCTL_NODE(_net, PF_KEY, key, CTLFLAG_RW, 0, "Key Family");
+SYSCTL_NODE(_net, PF_KEY, key, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "Key Family");
 
 /*
  * Definitions of protocols supported in the KEY domain.
@@ -513,20 +513,21 @@ extern struct domain keydomain;
 
 struct protosw keysw[] = {
 { SOCK_RAW,	&keydomain,	PF_KEY_V2,	PR_ATOMIC|PR_ADDR,
-  0,		key_output,	raw_ctlinput,	0,
-  0,
-  key_init,	0,		0,		0,
-  0,
+  NULL,		key_output,	raw_ctlinput,	NULL,
+  NULL,
+  key_init,	NULL,		NULL,		NULL,
+  NULL,
   &key_usrreqs,
-  0,		0,		0,
+  NULL,		NULL,		NULL,
+  { NULL, NULL }, NULL, { 0 }
 }
 };
 
-struct domain keydomain =
-    { PF_KEY, "key", key_domain_init, 0, 0,
-      keysw, 0,
-      0,0,
-      sizeof(struct key_cb), 0
-    };
+struct domain keydomain = { PF_KEY, "key", key_domain_init, NULL, NULL,
+      keysw, NULL,
+      NULL, 0,
+      sizeof(struct key_cb), 0, 0,
+      NULL, 0, { 0, 0}
+};
 
 DOMAIN_SET(key);

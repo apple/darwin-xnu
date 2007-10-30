@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1988, 1990, 1993, 1995
@@ -54,6 +60,12 @@
  *	@(#)tcp_output.c	8.4 (Berkeley) 5/24/95
  * $FreeBSD: src/sys/netinet/tcp_output.c,v 1.39.2.10 2001/07/07 04:30:38 silby Exp $
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 #define	_IP_VHL
 
@@ -69,9 +81,11 @@
 #include <sys/socketvar.h>
 
 #include <net/route.h>
+#include <net/if_var.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
+#include <netinet/in_var.h>
 #include <netinet/ip.h>
 #include <netinet/in_pcb.h>
 #include <netinet/ip_var.h>
@@ -96,6 +110,10 @@
 #include <netinet6/ipsec.h>
 #endif /*IPSEC*/
 
+#if CONFIG_MACF_NET
+#include <security/mac_framework.h>
+#endif /* MAC_SOCKET */
+
 #define DBG_LAYER_BEG		NETDBG_CODE(DBG_NETTCP, 1)
 #define DBG_LAYER_END		NETDBG_CODE(DBG_NETTCP, 3)
 #define DBG_FNC_TCP_OUTPUT	NETDBG_CODE(DBG_NETTCP, (4 << 8) | 1)
@@ -105,7 +123,7 @@
 extern struct mbuf *m_copypack();
 #endif
 
-static int path_mtu_discovery = 1;
+int path_mtu_discovery = 1;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, path_mtu_discovery, CTLFLAG_RW,
 	&path_mtu_discovery, 1, "Enable Path MTU Discovery");
 
@@ -113,7 +131,7 @@ int ss_fltsz = 1;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, slowstart_flightsize, CTLFLAG_RW,
 	&ss_fltsz, 1, "Slow start flight size");
 
-int ss_fltsz_local = 4; /* starts with four segments max */
+int ss_fltsz_local = 8; /* starts with eight segments max */
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, local_slowstart_flightsize, CTLFLAG_RW,
 	&ss_fltsz_local, 1, "Slow start flight size for local networks");
 
@@ -121,11 +139,22 @@ int     tcp_do_newreno = 0;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, newreno, CTLFLAG_RW, &tcp_do_newreno,
         0, "Enable NewReno Algorithms");
 
+int     tcp_ecn_outbound = 0;
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, ecn_initiate_out, CTLFLAG_RW, &tcp_ecn_outbound,
+        0, "Initiate ECN for outbound connections");
+
+int     tcp_ecn_inbound = 0;
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, ecn_negotiate_in, CTLFLAG_RW, &tcp_ecn_inbound,
+        0, "Allow ECN negotiation for inbound connections");
+
 int	tcp_packet_chaining = 50;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, packetchain, CTLFLAG_RW, &tcp_packet_chaining,
         0, "Enable TCP output packet chaining");
 
-struct	mbuf *m_copym_with_hdrs(struct mbuf*, int, int, int, struct mbuf**, int*);
+int	tcp_output_unlocked = 1;
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, socket_unlocked_on_output, CTLFLAG_RW, &tcp_output_unlocked,
+        0, "Unlock TCP when sending packets down to IP");
+
 static long packchain_newlist = 0;
 static long packchain_looped = 0;
 static long packchain_sent = 0;
@@ -138,10 +167,13 @@ extern int ipsec_bypass;
 
 extern int slowlink_wsize;	/* window correction for slow links */
 extern u_long  route_generation;
-extern int fw_enable; 		/* firewall is on: disable packet chaining */
-extern int ipsec_bypass;
+extern int fw_enable; 		/* firewall check for packet chaining */
+extern int fw_bypass; 		/* firewall check: disable packet chaining if there is rules */
 
 extern vm_size_t	so_cache_zone_element_size;
+
+static int tcp_ip_output(struct socket *, struct tcpcb *, struct mbuf *, int,
+    struct mbuf *, int);
 
 static __inline__ u_int16_t
 get_socket_id(struct socket * s)
@@ -160,6 +192,22 @@ get_socket_id(struct socket * s)
 
 /*
  * Tcp output routine: figure out what should be sent and send it.
+ *
+ * Returns:	0			Success
+ *		EADDRNOTAVAIL
+ *		ENOBUFS
+ *		EMSGSIZE
+ *		EHOSTUNREACH
+ *		ENETDOWN
+ *	ip_output_list:ENOMEM
+ *	ip_output_list:EADDRNOTAVAIL
+ *	ip_output_list:ENETUNREACH
+ *	ip_output_list:EHOSTUNREACH
+ *	ip_output_list:EACCES
+ *	ip_output_list:EMSGSIZE
+ *	ip_output_list:ENOBUFS
+ *	ip_output_list:???		[ignorable: mostly IPSEC/firewall/DLIL]
+ *	ip6_output:???			[IPV6 only]
  */
 int
 tcp_output(struct tcpcb *tp)
@@ -176,26 +224,26 @@ tcp_output(struct tcpcb *tp)
 	register struct tcphdr *th;
 	u_char opt[TCP_MAXOLEN];
 	unsigned ipoptlen, optlen, hdrlen;
-	int idle, sendalot, howmuchsent = 0;
+	int idle, sendalot, lost = 0;
 	int i, sack_rxmit;
 	int sack_bytes_rxmt;
 	struct sackhole *p;
 
 	int maxburst = TCP_MAXBURST;
-	struct rmxp_tao *taop;
-	struct rmxp_tao tao_noncached;
 	int    last_off = 0;
 	int    m_off;
-	struct mbuf *m_last = 0;
-	struct mbuf *m_head = 0;
-	struct mbuf *packetlist = 0;
-	struct mbuf *lastpacket = 0;
+	struct mbuf *m_last = NULL;
+	struct mbuf *m_head = NULL;
+	struct mbuf *packetlist = NULL;
+	struct mbuf *tp_inp_options = tp->t_inpcb->inp_depend4.inp4_options;
 #if INET6
 	int isipv6 = tp->t_inpcb->inp_vflag & INP_IPV6 ;
+	struct ip6_pktopts *inp6_pktopts = tp->t_inpcb->inp_depend6.inp6_outputopts;
 #endif
 	short packchain_listadd = 0;
 	u_int16_t	socket_id = get_socket_id(so);
-
+	int so_options = so->so_options;
+	struct rtentry *rt;
 
 	/*
 	 * Determine length of data that should be transmitted,
@@ -261,13 +309,18 @@ again:
 	 * return error or silently do nothing (assuming the address will
 	 * come back before the TCP connection times out).
 	 */
+	rt = tp->t_inpcb->inp_route.ro_rt;
+	if (rt != NULL && rt->generation_id != route_generation) {
+		struct ifnet *ifp;
 
-      if ((tp->t_inpcb->inp_route.ro_rt != NULL &&
-           (tp->t_inpcb->inp_route.ro_rt->generation_id != route_generation)) || (tp->t_inpcb->inp_route.ro_rt == NULL)) {
+		/* disable multipages at the socket */
+		somultipages(so, FALSE);
+
 		/* check that the source address is still valid */
 		if (ifa_foraddr(tp->t_inpcb->inp_laddr.s_addr) == 0) {
+
 			if (tp->t_state >= TCPS_CLOSE_WAIT) {
-				tcp_close(tp);
+				tcp_drop(tp, EADDRNOTAVAIL);
 				return(EADDRNOTAVAIL);
 			}
 
@@ -284,16 +337,44 @@ again:
 				}
 			}
 
-			if (packetlist) {
-				error = ip_output_list(packetlist, packchain_listadd, tp->t_inpcb->inp_options, &tp->t_inpcb->inp_route,
-    					(so->so_options & SO_DONTROUTE), 0);
-				tp->t_lastchain = 0;
-			}
-			if (so->so_flags & SOF_NOADDRAVAIL)
+			if (tp->t_pktlist_head != NULL)
+				m_freem_list(tp->t_pktlist_head);
+			TCP_PKTLIST_CLEAR(tp);
+
+			/* drop connection if source address isn't available */
+			if (so->so_flags & SOF_NOADDRAVAIL) { 
+				tcp_drop(tp, EADDRNOTAVAIL);
 				return(EADDRNOTAVAIL);
+			}
 			else
-				return(0); /* silently ignore and keep data in socket */
+				return(0); /* silently ignore, keep data in socket: address may be back */
 		}
+
+		/*
+		 * Address is still valid; check for multipages capability
+		 * again in case the outgoing interface has changed.
+		 */
+		lck_mtx_lock(rt_mtx);
+		rt = tp->t_inpcb->inp_route.ro_rt;
+		if (rt != NULL && (ifp = rt->rt_ifp) != NULL)
+			somultipages(so, (ifp->if_hwassist & IFNET_MULTIPAGES));
+		if (rt != NULL && rt->generation_id != route_generation)
+			rt->generation_id = route_generation;
+		/*
+		 * See if we should do MTU discovery. Don't do it if:
+		 *	1) it is disabled via the sysctl
+		 *	2) the route isn't up
+		 *	3) the MTU is locked (if it is, then discovery has been
+		 *	   disabled)
+		 */
+
+	    	if (!path_mtu_discovery || ((rt != NULL) && 
+		    (!(rt->rt_flags & RTF_UP) || (rt->rt_rmx.rmx_locks & RTV_MTU)))) 
+			tp->t_flags &= ~TF_PMTUD;
+		else
+			tp->t_flags |= TF_PMTUD;
+
+		lck_mtx_unlock(rt_mtx);
         }
 	}
 
@@ -463,13 +544,29 @@ after_sack_rexmit:
 		flags &= ~TH_SYN;
 		off--, len++;
 		if (len > 0 && tp->t_state == TCPS_SYN_SENT) {
-			if (packetlist) {
-				error = ip_output_list(packetlist, packchain_listadd, tp->t_inpcb->inp_options, &tp->t_inpcb->inp_route,
-    				(so->so_options & SO_DONTROUTE), 0);
-				tp->t_lastchain = 0;
+			while (!(tp->t_flags & TF_SENDINPROG) &&
+			    tp->t_pktlist_head != NULL) {
+				packetlist = tp->t_pktlist_head;
+				packchain_listadd = tp->t_lastchain;
+				packchain_sent++;
+				TCP_PKTLIST_CLEAR(tp);
+				tp->t_flags |= TF_SENDINPROG;
+
+				error = tcp_ip_output(so, tp, packetlist,
+				    packchain_listadd, tp_inp_options,
+				    (so_options & SO_DONTROUTE));
+
+				tp->t_flags &= ~TF_SENDINPROG;
 			}
-		  KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END, 0,0,0,0,0);
-		  return 0;
+			/* tcp was closed while we were in ip; resume close */
+			if ((tp->t_flags &
+			    (TF_CLOSING|TF_SENDINPROG)) == TF_CLOSING) {
+				tp->t_flags &= ~TF_CLOSING;
+				(void) tcp_close(tp);
+			}
+			KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END,
+			    0,0,0,0,0);
+			return 0;
 		}
 	}
 
@@ -511,7 +608,6 @@ after_sack_rexmit:
 	 */
 	if (len > tp->t_maxseg) {
 		len = tp->t_maxseg;
-		howmuchsent += len;
 		sendalot = 1;
 	}
 	if (sack_rxmit) {
@@ -522,10 +618,7 @@ after_sack_rexmit:
 			flags &= ~TH_FIN;
 	}
 
-	if (tp->t_flags & TF_SLOWLINK && slowlink_wsize > 0 )	/* Clips window size for slow links */
-		recwin = min(sbspace(&so->so_rcv), slowlink_wsize);
-	else
-		recwin = sbspace(&so->so_rcv);
+	recwin = tcp_sbspace(tp);
 
 	/*
 	 * Sender silly window avoidance.   We transmit under the following
@@ -540,19 +633,29 @@ after_sack_rexmit:
 	 *	- we need to retransmit
 	 */
 	if (len) {
-		if (len == tp->t_maxseg)
+		if (len == tp->t_maxseg) {
+			tp->t_flags |= TF_MAXSEGSNT;
 			goto send;
+		}
 		if (!(tp->t_flags & TF_MORETOCOME) &&
-		    (idle || tp->t_flags & TF_NODELAY) &&
+		    (idle || tp->t_flags & TF_NODELAY || tp->t_flags & TF_MAXSEGSNT) &&
 		    (tp->t_flags & TF_NOPUSH) == 0 &&
-		    len + off >= so->so_snd.sb_cc)
+		    len + off >= so->so_snd.sb_cc) {
+			tp->t_flags &= ~TF_MAXSEGSNT;
 			goto send;
-		if (tp->t_force)
+		}
+		if (tp->t_force) {
+			tp->t_flags &= ~TF_MAXSEGSNT;
 			goto send;
-		if (len >= tp->max_sndwnd / 2 && tp->max_sndwnd > 0)
+		}
+		if (len >= tp->max_sndwnd / 2 && tp->max_sndwnd > 0) {
+			tp->t_flags &= ~TF_MAXSEGSNT;
 			goto send;
-		if (SEQ_LT(tp->snd_nxt, tp->snd_max))	/* retransmit case */
+		}
+		if (SEQ_LT(tp->snd_nxt, tp->snd_max)) {
+			tp->t_flags &= ~TF_MAXSEGSNT;
 			goto send;
+		}
 		if (sack_rxmit)
 			goto send;
 	}
@@ -571,7 +674,7 @@ after_sack_rexmit:
 		 * taking into account that we are limited by
 		 * TCP_MAXWIN << tp->rcv_scale.
 		 */
-		long adv = min(recwin, (long)TCP_MAXWIN << tp->rcv_scale) -
+		long adv = lmin(recwin, (long)TCP_MAXWIN << tp->rcv_scale) -
 			(tp->rcv_adv - tp->rcv_nxt);
 
 		if (adv >= (long) (2 * tp->t_maxseg))
@@ -641,9 +744,22 @@ just_return:
 	 * If there is no reason to send a segment, just return.
 	 * but if there is some packets left in the packet list, send them now.
 	 */
-	if (packetlist) {
-		error = ip_output_list(packetlist, packchain_listadd, tp->t_inpcb->inp_options, &tp->t_inpcb->inp_route,
-    			(so->so_options & SO_DONTROUTE), 0);
+	while (!(tp->t_flags & TF_SENDINPROG) && tp->t_pktlist_head != NULL) {
+		packetlist = tp->t_pktlist_head;
+		packchain_listadd = tp->t_lastchain;
+		packchain_sent++;
+		TCP_PKTLIST_CLEAR(tp);
+		tp->t_flags |= TF_SENDINPROG;
+
+		error = tcp_ip_output(so, tp, packetlist, packchain_listadd,
+		    tp_inp_options, (so_options & SO_DONTROUTE));
+
+		tp->t_flags &= ~TF_SENDINPROG;
+	}
+	/* tcp was closed while we were in ip; resume close */
+	if ((tp->t_flags & (TF_CLOSING|TF_SENDINPROG)) == TF_CLOSING) {
+		tp->t_flags &= ~TF_CLOSING;
+		(void) tcp_close(tp);
 	}
 	KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END, 0,0,0,0,0);
 	return (0);
@@ -686,7 +802,90 @@ send:
 				optlen += 4;
 			}
 		}
+		
  	}
+ 	
+ 	/*
+ 	  RFC 3168 states that:
+ 	   - If you ever sent an ECN-setup SYN/SYN-ACK you must be prepared
+ 	   to handle the TCP ECE flag, even if you also later send a
+ 	   non-ECN-setup SYN/SYN-ACK.
+ 	   - If you ever send a non-ECN-setup SYN/SYN-ACK, you must not set
+ 	   the ip ECT flag.
+ 	   
+ 	   It is not clear how the ECE flag would ever be set if you never
+ 	   set the IP ECT flag on outbound packets. All the same, we use
+ 	   the TE_SETUPSENT to indicate that we have committed to handling
+ 	   the TCP ECE flag correctly. We use the TE_SENDIPECT to indicate
+ 	   whether or not we should set the IP ECT flag on outbound packets.
+ 	 */
+	/*
+	 * For a SYN-ACK, send an ECN setup SYN-ACK
+	 */
+	if (tcp_ecn_inbound && (flags & (TH_SYN | TH_ACK)) == (TH_SYN | TH_ACK)) {
+		if ((tp->ecn_flags & TE_SETUPRECEIVED) != 0) {
+			if ((tp->ecn_flags & TE_SETUPSENT) == 0) {
+				/* Setting TH_ECE makes this an ECN-setup SYN-ACK */
+				flags |= TH_ECE;
+				
+				/*
+				 * Record that we sent the ECN-setup and default to
+				 * setting IP ECT.
+				 */
+				tp->ecn_flags |= (TE_SETUPSENT | TE_SENDIPECT);
+			}
+			else {
+				/*
+				 * We sent an ECN-setup SYN-ACK but it was dropped.
+				 * Fallback to non-ECN-setup SYN-ACK and clear flag
+				 * that to indicate we should not send data with IP ECT set.
+				 *
+				 * Pretend we didn't receive an ECN-setup SYN.
+				 */
+				tp->ecn_flags &= ~TE_SETUPRECEIVED;
+			}
+		}
+	}
+	else if (tcp_ecn_outbound && (flags & (TH_SYN | TH_ACK)) == TH_SYN) {
+		if ((tp->ecn_flags & TE_SETUPSENT) == 0) {
+			/* Setting TH_ECE and TH_CWR makes this an ECN-setup SYN */
+			flags |= (TH_ECE | TH_CWR);
+			
+			/*
+			 * Record that we sent the ECN-setup and default to
+			 * setting IP ECT.
+			 */
+			tp->ecn_flags |= (TE_SETUPSENT | TE_SENDIPECT);
+		}
+		else {
+			/*
+			 * We sent an ECN-setup SYN but it was dropped.
+			 * Fall back to no ECN and clear flag indicating
+			 * we should send data with IP ECT set.
+			 */
+			tp->ecn_flags &= ~TE_SENDIPECT;
+		}
+	}
+	
+	/*
+	 * Check if we should set the TCP CWR flag.
+	 * CWR flag is sent when we reduced the congestion window because
+	 * we received a TCP ECE or we performed a fast retransmit. We
+	 * never set the CWR flag on retransmitted packets. We only set
+	 * the CWR flag on data packets. Pure acks don't have this set.
+	 */
+	if ((tp->ecn_flags & TE_SENDCWR) != 0 && len != 0 &&
+		!SEQ_LT(tp->snd_nxt, tp->snd_max)) {
+		flags |= TH_CWR;
+		tp->ecn_flags &= ~TE_SENDCWR;
+	}
+	
+	/*
+	 * Check if we should set the TCP ECE flag.
+	 */
+	if ((tp->ecn_flags & TE_SENDECE) != 0 && len == 0) {
+		flags |= TH_ECE;
+	}
 
  	/*
 	 * Send a timestamp and echo-reply if this is a SYN and our side
@@ -798,8 +997,8 @@ send:
 	else
 #endif
 	{
-		if (tp->t_inpcb->inp_options) {
-			ipoptlen = tp->t_inpcb->inp_options->m_len -
+		if (tp_inp_options) {
+			ipoptlen = tp_inp_options->m_len -
 				offsetof(struct ipoption, ipopt_list);
 		} else
 			ipoptlen = 0;
@@ -821,7 +1020,6 @@ send:
 		 */
 		flags &= ~TH_FIN;
 		len = tp->t_maxopd - optlen - ipoptlen;
-		howmuchsent += len;
 		sendalot = 1;
 	}
 
@@ -877,7 +1075,7 @@ send:
 		m = NULL;
 #if INET6
  		if (MHLEN < hdrlen + max_linkhdr) {
-		        MGETHDR(m, M_DONTWAIT, MT_HEADER);
+		        MGETHDR(m, M_DONTWAIT, MT_HEADER);	/* MAC-OK */
 			if (m == NULL) {
 			        error = ENOBUFS;
 				goto out;
@@ -894,7 +1092,7 @@ send:
 #endif
 		if (len <= MHLEN - hdrlen - max_linkhdr) {
 		        if (m == NULL) {
-			        MGETHDR(m, M_DONTWAIT, MT_HEADER);
+			        MGETHDR(m, M_DONTWAIT, MT_HEADER);	/* MAC-OK */
 				if (m == NULL) {
 				        error = ENOBUFS;
 					goto out;
@@ -972,7 +1170,7 @@ send:
 		else
 			tcpstat.tcps_sndwinup++;
 
-		MGETHDR(m, M_DONTWAIT, MT_HEADER);
+		MGETHDR(m, M_DONTWAIT, MT_HEADER);	/* MAC-OK */
 		if (m == NULL) {
 			error = ENOBUFS;
 			goto out;
@@ -987,6 +1185,9 @@ send:
 		m->m_len = hdrlen;
 	}
 	m->m_pkthdr.rcvif = 0;
+#if CONFIG_MACF_NET
+	mac_mbuf_label_associate_inpcb(tp->t_inpcb, m);
+#endif
 #if INET6
 	if (isipv6) {
 		ip6 = mtod(m, struct ip6_hdr *);
@@ -1000,6 +1201,10 @@ send:
 		th = (struct tcphdr *)(ip + 1);
 		/* this picks up the pseudo header (w/o the length) */
 		tcp_fillheaders(tp, ip, th);
+		if ((tp->ecn_flags & TE_SENDIPECT) != 0 && len &&
+			!SEQ_LT(tp->snd_nxt, tp->snd_max)) {
+			ip->ip_tos = IPTOS_ECN_ECT0;
+		}
 	}
 
 	/*
@@ -1053,8 +1258,8 @@ send:
 			th->th_win = htons((u_short) (recwin>>tp->rcv_scale));
 	}
 	else {
-		if (recwin > (long)TCP_MAXWIN << tp->rcv_scale)
-			recwin = (long)TCP_MAXWIN << tp->rcv_scale;
+		if (recwin > (long)(TCP_MAXWIN << tp->rcv_scale))
+			recwin = (long)(TCP_MAXWIN << tp->rcv_scale);
 		th->th_win = htons((u_short) (recwin>>tp->rcv_scale));
 	}
 
@@ -1103,7 +1308,7 @@ send:
 		if (len + optlen)
 			th->th_sum = in_addword(th->th_sum, 
 				htons((u_short)(optlen + len)));
-      }
+	}
 
 	/*
 	 * In transmit state, time the transmission and arrange for
@@ -1177,7 +1382,7 @@ timer:
 	/*
 	 * Trace.
 	 */
-	if (so->so_options & SO_DEBUG)
+	if (so_options & SO_DEBUG)
 		tcp_trace(TA_OUTPUT, tp->t_state, tp, mtod(m, void *), th, 0);
 #endif
 
@@ -1214,13 +1419,12 @@ timer:
 #endif /*IPSEC*/
 		m->m_pkthdr.socket_id = socket_id;
 		error = ip6_output(m,
-			    tp->t_inpcb->in6p_outputopts,
+			    inp6_pktopts,
 			    &tp->t_inpcb->in6p_route,
-			    (so->so_options & SO_DONTROUTE), NULL, NULL, 0);
+			    (so_options & SO_DONTROUTE), NULL, NULL, 0);
 	} else
 #endif /* INET6 */
     {
-	struct rtentry *rt;
 	ip->ip_len = m->m_pkthdr.len;
 #if INET6
  	if (isipv6)
@@ -1231,7 +1435,7 @@ timer:
  	else
 #endif /* INET6 */
 	ip->ip_ttl = tp->t_inpcb->inp_ip_ttl;	/* XXX */
-	ip->ip_tos = tp->t_inpcb->inp_ip_tos;	/* XXX */
+	ip->ip_tos |= (tp->t_inpcb->inp_ip_tos & ~IPTOS_ECN_MASK);	/* XXX */
 
 
 #if INET6
@@ -1253,18 +1457,18 @@ timer:
 	}
 
 	/*
-	 * See if we should do MTU discovery.  We do it only if the following
-	 * are true:
-	 *	1) we have a valid route to the destination
-	 *	2) the MTU is not locked (if it is, then discovery has been
-	 *	   disabled)
+	 * See if we should do MTU discovery.
+	 * Look at the flag updated on the following criterias:
+	 *	1) Path MTU discovery is authorized by the sysctl
+	 *	2) The route isn't set yet (unlikely but could happen)
+	 *	3) The route is up
+	 *	4) the MTU is not locked (if it is, then discovery has been
+	 *	   disabled for that route)
 	 */
-	if (path_mtu_discovery
-	    && (rt = tp->t_inpcb->inp_route.ro_rt)
-	    && rt->rt_flags & RTF_UP
-	    && !(rt->rt_rmx.rmx_locks & RTV_MTU)) {
+
+	if (path_mtu_discovery && (tp->t_flags & TF_PMTUD))
 		ip->ip_off |= IP_DF;
-	}
+
 #if IPSEC
 	if (ipsec_bypass == 0)
  		ipsec_setsocket(m, so);
@@ -1273,38 +1477,63 @@ timer:
 	/*
 	 * The socket is kept locked while sending out packets in ip_output, even if packet chaining is not active.
 	 */
-
+	lost = 0;
 	m->m_pkthdr.socket_id = socket_id;
-	if (packetlist) {
-		m->m_nextpkt = NULL;
-		lastpacket->m_nextpkt = m;
-		lastpacket = m;
-		packchain_listadd++;
-	}
-	else {
-		m->m_nextpkt = NULL;
+	m->m_nextpkt = NULL;
+	tp->t_pktlist_sentlen += len;
+	tp->t_lastchain++;
+	if (tp->t_pktlist_head != NULL) {
+		tp->t_pktlist_tail->m_nextpkt = m;
+		tp->t_pktlist_tail = m;
+	} else {
 		packchain_newlist++;
-		packetlist = lastpacket = m;
-		packchain_listadd=0;
+		tp->t_pktlist_head = tp->t_pktlist_tail = m;
 	}
 
-       if ((ipsec_bypass == 0) || fw_enable || sendalot == 0 || (tp->t_state != TCPS_ESTABLISHED) || 
-		      (tp->snd_cwnd <= (tp->snd_wnd / 4)) || 
-		      (tp->t_flags & (TH_PUSH | TF_ACKNOW)) || tp->t_force != 0 ||
-		      packchain_listadd >= tcp_packet_chaining) {
-	       	lastpacket->m_nextpkt = 0;
-		error = ip_output_list(packetlist, packchain_listadd, tp->t_inpcb->inp_options, &tp->t_inpcb->inp_route,
-    			(so->so_options & SO_DONTROUTE), 0);
-		tp->t_lastchain = packchain_listadd;
-		packchain_sent++;
-		packetlist = NULL;
-		if (error == 0)
-			howmuchsent = 0;
+	if (sendalot == 0 || (tp->t_state != TCPS_ESTABLISHED) ||
+	      (tp->snd_cwnd <= (tp->snd_wnd / 8)) ||
+	      (tp->t_flags & (TH_PUSH | TF_ACKNOW)) || tp->t_force != 0 ||
+	      tp->t_lastchain >= tcp_packet_chaining) {
+		error = 0;
+		while (!(tp->t_flags & TF_SENDINPROG) &&
+		    tp->t_pktlist_head != NULL) {
+			packetlist = tp->t_pktlist_head;
+			packchain_listadd = tp->t_lastchain;
+			packchain_sent++;
+			lost = tp->t_pktlist_sentlen;
+			TCP_PKTLIST_CLEAR(tp);
+			tp->t_flags |= TF_SENDINPROG;
+
+			error = tcp_ip_output(so, tp, packetlist,
+			    packchain_listadd, tp_inp_options,
+			    (so_options & SO_DONTROUTE));
+
+			tp->t_flags &= ~TF_SENDINPROG;
+			if (error) {
+				/*
+				 * Take into account the rest of unsent
+				 * packets in the packet list for this tcp
+				 * into "lost", since we're about to free
+				 * the whole list below.
+				 */
+				lost += tp->t_pktlist_sentlen;
+				break;
+			} else {
+				lost = 0;
+			}
+		}
+		/* tcp was closed while we were in ip; resume close */
+		if ((tp->t_flags & (TF_CLOSING|TF_SENDINPROG)) == TF_CLOSING) {
+			tp->t_flags &= ~TF_CLOSING;
+			(void) tcp_close(tp);
+			return (0);
+		}
 	}
 	else {
 		error = 0;
 		packchain_looped++;
 		tcpstat.tcps_sndtotal++;
+
 		if (recwin > 0 && SEQ_GT(tp->rcv_nxt+recwin, tp->rcv_adv))
 			tp->rcv_adv = tp->rcv_nxt + recwin;
 		tp->last_ack_sent = tp->rcv_nxt;
@@ -1313,10 +1542,12 @@ timer:
 	}
    }
 	if (error) {
-
 		/*
-		 * We know that the packet was lost, so back out the
-		 * sequence number advance, if any.
+		 * Assume that the packets were lost, so back out the
+		 * sequence number advance, if any.  Note that the "lost"
+		 * variable represents the amount of user data sent during
+		 * the recent call to ip_output_list() plus the amount of
+		 * user data in the packet list for this tcp at the moment.
 		 */
 		if (tp->t_force == 0 || tp->t_timer[TCPT_PERSIST] == 0) {
 			/*
@@ -1325,22 +1556,22 @@ timer:
 			 */
 			if ((flags & TH_SYN) == 0) {
 				if (sack_rxmit) {
-					p->rxmit -= howmuchsent;
-					tp->sackhint.sack_bytes_rexmit -= howmuchsent;
+					p->rxmit -= lost;
+					tp->sackhint.sack_bytes_rexmit -= lost;
 				} else
-					tp->snd_nxt -= howmuchsent;
+					tp->snd_nxt -= lost;
 			}
 		}
-		howmuchsent = 0;
 out:
+		if (tp->t_pktlist_head != NULL)
+			m_freem_list(tp->t_pktlist_head);
+		TCP_PKTLIST_CLEAR(tp);
+
 		if (error == ENOBUFS) {
                         if (!tp->t_timer[TCPT_REXMT] &&
                              !tp->t_timer[TCPT_PERSIST])
                                 tp->t_timer[TCPT_REXMT] = tp->t_rxtcur;
 			tcp_quench(tp->t_inpcb, 0);
-			if (packetlist)
-				m_freem_list(packetlist);
-			tp->t_lastchain = 0;
 			KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END, 0,0,0,0,0);
 			return (0);
 		}
@@ -1352,28 +1583,19 @@ out:
 			 * not do so here.
 			 */
 			tcp_mtudisc(tp->t_inpcb, 0);
-			if (packetlist)
-				m_freem_list(packetlist);
-			tp->t_lastchain = 0;
 			KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END, 0,0,0,0,0);
 			return 0;
 		}
 		if ((error == EHOSTUNREACH || error == ENETDOWN)
 		    && TCPS_HAVERCVDSYN(tp->t_state)) {
 			tp->t_softerror = error;
-			if (packetlist)
-				m_freem_list(packetlist);
-			tp->t_lastchain = 0;
 			KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END, 0,0,0,0,0);
 			return (0);
 		}
-		if (packetlist)
-			m_freem_list(packetlist);
-		tp->t_lastchain = 0;
 		KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END, 0,0,0,0,0);
 		return (error);
 	}
-sentit:
+
 	tcpstat.tcps_sndtotal++;
 
 	/*
@@ -1391,6 +1613,83 @@ sentit:
 	if (sendalot && (!tcp_do_newreno || --maxburst))
 		goto again;
 	return (0);
+}
+
+static int
+tcp_ip_output(struct socket *so, struct tcpcb *tp, struct mbuf *pkt,
+    int cnt, struct mbuf *opt, int flags)
+{
+	int error = 0;
+	boolean_t chain;
+	boolean_t unlocked = FALSE;
+
+	/*
+	 * If allowed, unlock TCP socket while in IP 
+	 * but only if the connection is established and
+	 * if we're not sending from an upcall.
+	 */ 
+
+	if (tcp_output_unlocked && ((so->so_flags & SOF_UPCALLINUSE) == 0) &&
+	    (tp->t_state == TCPS_ESTABLISHED)) {
+			unlocked = TRUE;
+			socket_unlock(so, 0);
+	}
+
+	/*
+	 * Don't send down a chain of packets when:
+	 * - TCP chaining is disabled
+	 * - there is an IPsec rule set
+	 * - there is a non default rule set for the firewall
+	 */
+
+	chain = tcp_packet_chaining > 1 &&
+#if IPSEC
+		ipsec_bypass &&
+#endif
+		(fw_enable == 0 || fw_bypass);
+
+	while (pkt != NULL) {
+		struct mbuf *npkt = pkt->m_nextpkt;
+
+		if (!chain) {
+			pkt->m_nextpkt = NULL;
+			/*
+			 * If we are not chaining, make sure to set the packet
+			 * list count to 0 so that IP takes the right path;
+			 * this is important for cases such as IPSec where a
+			 * single mbuf might result in multiple mbufs as part
+			 * of the encapsulation.  If a non-zero count is passed
+			 * down to IP, the head of the chain might change and
+			 * we could end up skipping it (thus generating bogus
+			 * packets).  Fixing it in IP would be desirable, but
+			 * for now this would do it.
+			 */
+			cnt = 0;
+		}
+#if CONFIG_FORCE_OUT_IFP
+		error = ip_output_list(pkt, cnt, opt, &tp->t_inpcb->inp_route,
+		    flags, 0, tp->t_inpcb->pdp_ifp);
+#else
+		error = ip_output_list(pkt, cnt, opt, &tp->t_inpcb->inp_route,
+		    flags, 0, NULL);
+#endif
+		if (chain || error) {
+			/*
+			 * If we sent down a chain then we are done since
+			 * the callee had taken care of everything; else
+			 * we need to free the rest of the chain ourselves.
+			 */
+			if (!chain)
+				m_freem_list(npkt);
+			break;
+		}
+		pkt = npkt;
+	}
+
+	if (unlocked)
+		socket_lock(so, 0);
+
+	return (error);
 }
 
 void

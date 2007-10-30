@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
 	File:		BTreesPrivate.h
@@ -185,50 +191,51 @@ typedef enum {
 
 typedef struct BTreeControlBlock {					// fields specific to BTree CBs
 
-	UInt8		keyCompareType;   /* Key string Comparison Type */
-	UInt8						 btreeType;
-	UInt16						 treeDepth;
+	u_int8_t		keyCompareType;   /* Key string Comparison Type */
+	u_int8_t					 btreeType;
+	u_int16_t					 treeDepth;
 	FileReference				 fileRefNum;		// refNum of btree file
 	KeyCompareProcPtr			 keyCompareProc;
-	UInt32						 rootNode;
-	UInt32						 leafRecords;
-	UInt32						 firstLeafNode;
-	UInt32						 lastLeafNode;
-	UInt16						 nodeSize;
-	UInt16						 maxKeyLength;
-	UInt32						 totalNodes;
-	UInt32						 freeNodes;
+	u_int32_t					 rootNode;
+	u_int32_t					 leafRecords;
+	u_int32_t					 firstLeafNode;
+	u_int32_t					 lastLeafNode;
+	u_int16_t					 nodeSize;
+	u_int16_t					 maxKeyLength;
+	u_int32_t					 totalNodes;
+	u_int32_t					 freeNodes;
 
-	UInt16						 reserved3;			// 4-byte alignment
+	u_int16_t					 reserved3;			// 4-byte alignment
 
 	// new fields
-	SInt16						 version;
-	UInt32						 flags;				// dynamic flags
-	UInt32						 attributes;		// persistent flags
-	UInt32						 writeCount;
-	UInt32						 lastfsync;		/* Last time that this was fsynced  */
+	int16_t						 version;
+	u_int32_t					 flags;				// dynamic flags
+	u_int32_t					 attributes;		// persistent flags
+	u_int32_t					 writeCount;
+	u_int32_t					 lastfsync;		/* Last time that this was fsynced  */
 
 	GetBlockProcPtr			 	 getBlockProc;
 	ReleaseBlockProcPtr			 releaseBlockProc;
 	SetEndOfForkProcPtr			 setEndOfForkProc;
 
 	// statistical information
-	UInt32						 numGetNodes;
-	UInt32						 numGetNewNodes;
-	UInt32						 numReleaseNodes;
-	UInt32						 numUpdateNodes;
-	UInt32						 numMapNodesRead;	// map nodes beyond header node
-	UInt32						 numHintChecks;
-	UInt32						 numPossibleHints;	// Looks like a formated hint
-	UInt32						 numValidHints;		// Hint used to find correct record.
-	UInt32					reservedNodes;
+	u_int32_t					 numGetNodes;
+	u_int32_t					 numGetNewNodes;
+	u_int32_t					 numReleaseNodes;
+	u_int32_t					 numUpdateNodes;
+	u_int32_t					 numMapNodesRead;	// map nodes beyond header node
+	u_int32_t					 numHintChecks;
+	u_int32_t					 numPossibleHints;	// Looks like a formated hint
+	u_int32_t					 numValidHints;		// Hint used to find correct record.
+	u_int32_t					reservedNodes;
+	BTreeIterator   iterator; // useable when holding exclusive b-tree lock
 } BTreeControlBlock, *BTreeControlBlockPtr;
 
 
-UInt32 CalcKeySize(const BTreeControlBlock *btcb, const BTreeKey *key);
+u_int32_t CalcKeySize(const BTreeControlBlock *btcb, const BTreeKey *key);
 #define CalcKeySize(btcb, key)			( ((btcb)->attributes & kBTBigKeysMask) ? ((key)->length16 + 2) : ((key)->length8 + 1) )
 
-UInt32 KeyLength(const BTreeControlBlock *btcb, const BTreeKey *key);
+u_int32_t KeyLength(const BTreeControlBlock *btcb, const BTreeKey *key);
 #define KeyLength(btcb, key)			( ((btcb)->attributes & kBTBigKeysMask) ? (key)->length16 : (key)->length8 )
 
 
@@ -238,7 +245,7 @@ typedef enum {
 }	BTreeFlags;
 
 
-typedef	SInt8				*NodeBuffer;
+typedef	int8_t				*NodeBuffer;
 typedef BlockDescriptor		 NodeRec, *NodePtr;		//€€ remove this someday...
 
 
@@ -247,9 +254,9 @@ typedef BlockDescriptor		 NodeRec, *NodePtr;		//€€ remove this someday...
 //// Tree Path Table - constructed by SearchTree, used by InsertTree and DeleteTree
 
 typedef struct {
-	UInt32				node;				// node number
-	UInt16				index;
-	UInt16				reserved;			// align size to a power of 2
+	u_int32_t				node;				// node number
+	u_int16_t				index;
+	u_int16_t				reserved;			// align size to a power of 2
 } TreePathRecord, *TreePathRecordPtr;
 
 typedef TreePathRecord		TreePathTable [kMaxTreeDepth];
@@ -259,9 +266,9 @@ typedef TreePathRecord		TreePathTable [kMaxTreeDepth];
 
 struct InsertKey {
 	BTreeKeyPtr		keyPtr;
-	UInt8 *			recPtr;
-	UInt16			keyLength;
-	UInt16			recSize;
+	u_int8_t *		recPtr;
+	u_int16_t		keyLength;
+	u_int16_t		recSize;
 	Boolean			replacingKey;
 	Boolean			skipRotate;
 };
@@ -272,7 +279,7 @@ typedef struct InsertKey InsertKey;
 //// For Notational Convenience
 
 typedef	BTNodeDescriptor*	 NodeDescPtr;
-typedef UInt8				*RecordPtr;
+typedef u_int8_t			*RecordPtr;
 typedef BTreeKeyPtr			 KeyPtr;
 
 
@@ -283,46 +290,45 @@ typedef BTreeKeyPtr			 KeyPtr;
 
 #if DEBUG_BUILD
 	#define Panic( message )					DebugStr( (ConstStr255Param) message )
-	#define PanicIf( condition, message )		if ( condition != 0 )	DebugStr( message )
+	#define PanicIf( condition, message )		do { if ( condition != 0 )	DebugStr( message ); } while(0)
 #else
-	#define Panic( message )
-	#define PanicIf( condition, message )
+	#define Panic( message )				do { } while(0)
+	#define PanicIf( condition, message )	do { } while(0)
 #endif
 
 //	Exit function on error
-#define M_ExitOnError( result )	if ( ( result ) != noErr )	goto ErrorExit; else ;
+#define M_ExitOnError( result )	do { if ( ( result ) != noErr )	goto ErrorExit; } while(0)
 
 //	Test for passed condition and return if true
-#define	M_ReturnErrorIf( condition, error )	if ( condition )	return( error )
+#define	M_ReturnErrorIf( condition, error )	do { if ( condition )	return( error ); } while(0)
 
 //////////////////////////////// Key Operations /////////////////////////////////
 
-SInt32		CompareKeys				(BTreeControlBlockPtr	 btreePtr,
+int32_t		CompareKeys				(BTreeControlBlockPtr	 btreePtr,
 									 KeyPtr					 searchKey,
 									 KeyPtr					 trialKey );
 
 //////////////////////////////// Map Operations /////////////////////////////////
 
 OSStatus	AllocateNode			(BTreeControlBlockPtr	 btreePtr,
-									 UInt32					*nodeNum);
+									 u_int32_t				*nodeNum);
 
 OSStatus	FreeNode				(BTreeControlBlockPtr	 btreePtr,
-									 UInt32					 nodeNum);
+									 u_int32_t				 nodeNum);
 
 OSStatus	ExtendBTree				(BTreeControlBlockPtr	 btreePtr,
-									 UInt32					 nodes );
+									 u_int32_t				 nodes );
 
-UInt32		CalcMapBits				(BTreeControlBlockPtr	 btreePtr);
+u_int32_t	CalcMapBits				(BTreeControlBlockPtr	 btreePtr);
 
-SInt32		BTAvailableNodes			(BTreeControlBlock *btree);
 
 void 		BTUpdateReserve				(BTreeControlBlockPtr btreePtr,
                                                          int nodes);
 
 //////////////////////////////// Misc Operations ////////////////////////////////
 
-UInt16		CalcKeyRecordSize		(UInt16					 keySize,
-									 UInt16					 recSize );
+u_int16_t	CalcKeyRecordSize		(u_int16_t				 keySize,
+									 u_int16_t				 recSize );
 
 OSStatus	VerifyHeader			(FCB					*filePtr,
 									 BTHeaderRec				*header );
@@ -335,32 +341,34 @@ OSStatus	FindIteratorPosition	(BTreeControlBlockPtr	 btreePtr,
 									 BlockDescriptor		*left,
 									 BlockDescriptor		*middle,
 									 BlockDescriptor		*right,
-									 UInt32					*nodeNum,
-									 UInt16					*index,
+									 u_int32_t				*nodeNum,
+									 u_int16_t				*index,
 									 Boolean				*foundRecord );
 
 OSStatus	CheckInsertParams		(FCB					*filePtr,
 									 BTreeIterator			*iterator,
 									 FSBufferDescriptor		*record,
-									 UInt16					 recordLen );
+									 u_int16_t				 recordLen );
 
 OSStatus	TrySimpleReplace		(BTreeControlBlockPtr	 btreePtr,
 									 NodeDescPtr			 nodePtr,
 									 BTreeIterator			*iterator,
 									 FSBufferDescriptor		*record,
-									 UInt16					 recordLen,
+									 u_int16_t				 recordLen,
 									 Boolean				*recordInserted );
 
 OSStatus	IsItAHint				(BTreeControlBlockPtr 	 btreePtr, 
 									 BTreeIterator 			*iterator, 
 									 Boolean 				*answer );
 
+extern OSStatus TreeIsDirty(BTreeControlBlockPtr btreePtr);
+
 //////////////////////////////// Node Operations ////////////////////////////////
 
 //// Node Operations
 
 OSStatus	GetNode					(BTreeControlBlockPtr	 btreePtr,
-									 UInt32					 nodeNum,
+									 u_int32_t				 nodeNum,
 									 NodeRec				*returnNodePtr );
 
 OSStatus	GetLeftSiblingNode		(BTreeControlBlockPtr	 btreePtr,
@@ -377,7 +385,7 @@ OSStatus	GetRightSiblingNode		(BTreeControlBlockPtr	 btreePtr,
 
 
 OSStatus	GetNewNode				(BTreeControlBlockPtr	 btreePtr,
-									 UInt32					 nodeNum,
+									 u_int32_t				 nodeNum,
 									 NodeRec				*returnNodePtr );
 
 OSStatus	ReleaseNode				(BTreeControlBlockPtr	 btreePtr,
@@ -386,29 +394,20 @@ OSStatus	ReleaseNode				(BTreeControlBlockPtr	 btreePtr,
 OSStatus	TrashNode				(BTreeControlBlockPtr	 btreePtr,
 									 NodePtr				 nodePtr );
 
-// XXXdbg
-void ModifyBlockStart(FileReference vp, BlockDescPtr blockPtr);
-// XXXdbg
-
 OSStatus	UpdateNode				(BTreeControlBlockPtr	 btreePtr,
 									 NodePtr				 nodePtr,
-									 UInt32					 transactionID,
-									 UInt32					 flags );
-
-OSStatus	GetMapNode				(BTreeControlBlockPtr	 btreePtr,
-									 BlockDescriptor		 *nodePtr,
-									 UInt16					 **mapPtr,
-									 UInt16					 *mapSize );
+									 u_int32_t				 transactionID,
+									 u_int32_t				 flags );
 
 //// Node Buffer Operations
 
 void		ClearNode				(BTreeControlBlockPtr	 btreePtr,
 									 NodeDescPtr			 node );
 
-UInt16		GetNodeDataSize			(BTreeControlBlockPtr	 btreePtr,
+u_int16_t	GetNodeDataSize			(BTreeControlBlockPtr	 btreePtr,
 									 NodeDescPtr			 node );
 
-UInt16		GetNodeFreeSize			(BTreeControlBlockPtr	 btreePtr,
+u_int16_t	GetNodeFreeSize			(BTreeControlBlockPtr	 btreePtr,
 									 NodeDescPtr			 node );
 
 
@@ -416,59 +415,59 @@ UInt16		GetNodeFreeSize			(BTreeControlBlockPtr	 btreePtr,
 
 Boolean		InsertRecord			(BTreeControlBlockPtr	 btreePtr,
 									 NodeDescPtr	 		 node,
-									 UInt16	 				 index,
+									 u_int16_t	 			 index,
 									 RecordPtr				 recPtr,
-									 UInt16					 recSize );
+									 u_int16_t				 recSize );
 
 Boolean		InsertKeyRecord			(BTreeControlBlockPtr	 btreePtr,
 									 NodeDescPtr 			 node,
-									 UInt16	 				 index,
+									 u_int16_t	 			 index,
 									 KeyPtr					 keyPtr,
-									 UInt16					 keyLength,
+									 u_int16_t				 keyLength,
 									 RecordPtr				 recPtr,
-									 UInt16					 recSize );
+									 u_int16_t				 recSize );
 
 void		DeleteRecord			(BTreeControlBlockPtr	btree,
 									 NodeDescPtr	 		node,
-									 UInt16	 				index );
+									 u_int16_t	 			index );
 
 
 Boolean		SearchNode				(BTreeControlBlockPtr	 btree,
 									 NodeDescPtr			 node,
 									 KeyPtr					 searchKey,
-									 UInt16					*index );
+									 u_int16_t				*index );
 
 OSStatus	GetRecordByIndex		(BTreeControlBlockPtr	 btree,
 									 NodeDescPtr			 node,
-									 UInt16					 index,
+									 u_int16_t				 index,
 									 KeyPtr					*keyPtr,
-									 UInt8 *				*dataPtr,
-									 UInt16					*dataSize );
+									 u_int8_t *				*dataPtr,
+									 u_int16_t				*dataSize );
 
-UInt8 *		GetRecordAddress		(BTreeControlBlockPtr	 btree,
+u_int8_t *	GetRecordAddress		(BTreeControlBlockPtr	 btree,
 									 NodeDescPtr			 node,
-									 UInt16					 index );
+									 u_int16_t				 index );
 
-#define GetRecordAddress(btreePtr,node,index)		((UInt8 *)(node) + (*(short *) ((UInt8 *)(node) + (btreePtr)->nodeSize - ((index) << 1) - kOffsetSize)))
+#define GetRecordAddress(btreePtr,node,index)		((u_int8_t *)(node) + (*(short *) ((u_int8_t *)(node) + (btreePtr)->nodeSize - ((index) << 1) - kOffsetSize)))
 
 
-UInt16		GetRecordSize			(BTreeControlBlockPtr	 btree,
+u_int16_t	GetRecordSize			(BTreeControlBlockPtr	 btree,
 									 NodeDescPtr			 node,
-									 UInt16					 index );
+									 u_int16_t				 index );
 
-UInt32		GetChildNodeNum			(BTreeControlBlockPtr	 btreePtr,
+u_int32_t	GetChildNodeNum			(BTreeControlBlockPtr	 btreePtr,
 									 NodeDescPtr			 nodePtr,
-									 UInt16					 index );
+									 u_int16_t				 index );
 
-void		MoveRecordsLeft			(UInt8 *				 src,
-									 UInt8 *				 dst,
-									 UInt16					 bytesToMove );
+void		MoveRecordsLeft			(u_int8_t *				 src,
+									 u_int8_t *				 dst,
+									 u_int16_t				 bytesToMove );
 
 #define		MoveRecordsLeft(src,dst,bytes)			bcopy((src),(dst),(bytes))
 
-void		MoveRecordsRight		(UInt8 *				 src,
-									 UInt8 *				 dst,
-									 UInt16					 bytesToMove );
+void		MoveRecordsRight		(u_int8_t *				 src,
+									 u_int8_t *				 dst,
+									 u_int16_t				 bytesToMove );
 
 #define		MoveRecordsRight(src,dst,bytes)			bcopy((src),(dst),(bytes))
 
@@ -478,26 +477,26 @@ void		MoveRecordsRight		(UInt8 *				 src,
 OSStatus	SearchTree				(BTreeControlBlockPtr	 btreePtr,
 									 BTreeKeyPtr			 keyPtr,
 									 TreePathTable			 treePathTable,
-									 UInt32					*nodeNum,
+									 u_int32_t				*nodeNum,
 									 BlockDescriptor		*nodePtr,
-									 UInt16					*index );
+									 u_int16_t				*index );
 
 OSStatus	InsertTree				(BTreeControlBlockPtr	 btreePtr,
 									 TreePathTable			 treePathTable,
 									 KeyPtr					 keyPtr,
-									 UInt8 *				 recPtr,
-									 UInt16					 recSize,
+									 u_int8_t *				 recPtr,
+									 u_int16_t				 recSize,
 									 BlockDescriptor		*targetNode,
-									 UInt16					 index,
-									 UInt16					 level,
+									 u_int16_t				 index,
+									 u_int16_t				 level,
 									 Boolean				 replacingKey,
-									 UInt32					*insertNode );
+									 u_int32_t				*insertNode );
 
 OSStatus	DeleteTree				(BTreeControlBlockPtr	 btreePtr,
 									 TreePathTable			 treePathTable,
 									 BlockDescriptor		*targetNode,
-									 UInt16					 index,
-									 UInt16					 level );
+									 u_int16_t				 index,
+									 u_int16_t				 level );
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */

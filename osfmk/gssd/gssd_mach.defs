@@ -1,0 +1,92 @@
+/*
+ * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
+#include <mach/std_types.defs>
+#include <mach/mach_types.defs>
+
+#ifdef KERNEL
+import <gssd/gssd_mach_types.h>;
+#else
+import <gssd_mach_types.h>;
+#endif
+
+type mechtype = int32_t;
+type string_t = c_string[*:1024];
+type byte_buffer = array [] of uint8_t;
+type gssd_verifier =  uint64_t;
+type gid_list = array [*:16] of uint32_t;
+
+subsystem
+#if KERNEL_USER
+KernelUser
+#endif
+gssd_mach  999;
+
+serverprefix svc_;
+
+routine mach_gss_init_sec_context(
+	server			: mach_port_t;
+	in  mech		: mechtype;
+	in  intoken		: byte_buffer;
+	in  uid			: uint32_t;
+	in  princ_namestr	: string_t;
+	in  svc_namestr		: string_t;
+	in  flags		: uint32_t;
+	inout verifier		: gssd_verifier;
+	inout context		: uint32_t;
+	inout cred_handle	: uint32_t;
+	out  key		: byte_buffer, dealloc;
+	out outtoken		: byte_buffer, dealloc;
+	out major_stat		: uint32_t;
+	out minor_stat		: uint32_t
+);
+
+routine mach_gss_accept_sec_context(
+	server			: mach_port_t;
+	in  intoken		: byte_buffer;
+	in  svc_namestr		: string_t;
+	in  flags		: uint32_t;
+	inout verifier		: gssd_verifier;
+	inout context		: uint32_t;
+	inout cred_handle	: uint32_t;
+	out uid			: uint32_t;
+	out gids		: gid_list;
+	out  key		: byte_buffer, dealloc;
+	out outtoken		: byte_buffer, dealloc;
+	out major_stat		: uint32_t;
+	out minor_stat		: uint32_t
+);
+
+simpleroutine mach_gss_log_error(
+	server			: mach_port_t;
+	in  mnt			: string_t;
+	in  uid			: uint32_t;
+	in  source		: string_t;
+	in  major_stat		: uint32_t;
+	in  minor_stat		: uint32_t
+);

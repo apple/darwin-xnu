@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *	Kernel stack management routines.
@@ -52,7 +58,6 @@ decl_simple_lock_data(static,stack_lock_data)
 
 #define STACK_CACHE_SIZE	2
 
-static vm_map_t			stack_map;
 static vm_offset_t		stack_free_list;
 
 static unsigned int		stack_free_count, stack_free_hiwat;		/* free list count */
@@ -75,27 +80,12 @@ static vm_offset_t		stack_addr_mask;
 void
 stack_init(void)
 {
-	vm_offset_t			stacks, boundary;
-	vm_map_offset_t		map_addr;
-
 	simple_lock_init(&stack_lock_data, 0);
 	
 	if (KERNEL_STACK_SIZE < round_page(KERNEL_STACK_SIZE))
 		panic("stack_init: stack size %d not a multiple of page size %d\n",	KERNEL_STACK_SIZE, PAGE_SIZE);
 	
-	for (boundary = PAGE_SIZE; boundary <= KERNEL_STACK_SIZE; )
-		boundary <<= 1;
-
-	stack_addr_mask = boundary - 1;
-
-	if (kmem_suballoc(kernel_map, &stacks, (boundary * (2 * THREAD_MAX + 64)),
-								FALSE, VM_FLAGS_ANYWHERE, &stack_map) != KERN_SUCCESS)
-		panic("stack_init: kmem_suballoc");
-
-	map_addr = vm_map_min(stack_map);
-	if (vm_map_enter(stack_map, &map_addr, vm_map_round_page(PAGE_SIZE), 0, (VM_MAKE_TAG(VM_MEMORY_STACK) | VM_FLAGS_FIXED),
-						VM_OBJECT_NULL, 0, FALSE, VM_PROT_NONE, VM_PROT_NONE, VM_INHERIT_DEFAULT) != KERN_SUCCESS)
-		panic("stack_init: vm_map_enter");
+	stack_addr_mask = KERNEL_STACK_SIZE - 1;
 }
 
 /*
@@ -110,6 +100,7 @@ stack_alloc(
 {
 	vm_offset_t		stack;
 	spl_t			s;
+	int			guard_flags;
 
 	assert(thread->kernel_stack == 0);
 
@@ -130,8 +121,27 @@ stack_alloc(
 	splx(s);
 		
 	if (stack == 0) {
-		if (kernel_memory_allocate(stack_map, &stack, KERNEL_STACK_SIZE, stack_addr_mask, KMA_KOBJECT) != KERN_SUCCESS)
+
+		/*
+		 * Request guard pages on either side of the stack.  Ask
+		 * kernel_memory_allocate() for two extra pages to account
+		 * for these.
+		 */
+
+		guard_flags = KMA_GUARD_FIRST | KMA_GUARD_LAST;
+		if (kernel_memory_allocate(kernel_map, &stack,
+					   KERNEL_STACK_SIZE + (2*PAGE_SIZE),
+					   stack_addr_mask,
+					   KMA_KOBJECT | guard_flags)
+		    != KERN_SUCCESS)
 			panic("stack_alloc: kernel_memory_allocate");
+
+		/*
+		 * The stack address that comes back is the address of the lower
+		 * guard page.  Skip past it to get the actual stack base address.
+		 */
+
+		stack += PAGE_SIZE;
 	}
 
 	machine_stack_attach(thread, stack);
@@ -149,28 +159,8 @@ stack_free(
     vm_offset_t		stack = machine_stack_detach(thread);
 
 	assert(stack);
-	if (stack != thread->reserved_stack) {
-		struct stack_cache	*cache;
-		spl_t				s;
-
-		s = splsched();
-		cache = &PROCESSOR_DATA(current_processor(), stack_cache);
-		if (cache->count < STACK_CACHE_SIZE) {
-			stack_next(stack) = cache->free;
-			cache->free = stack;
-			cache->count++;
-		}
-		else {
-			stack_lock();
-			stack_next(stack) = stack_free_list;
-			stack_free_list = stack;
-			if (++stack_free_count > stack_free_hiwat)
-				stack_free_hiwat = stack_free_count;
-			stack_free_delta++;
-			stack_unlock();
-		}
-		splx(s);
-	}
+	if (stack != thread->reserved_stack)
+		stack_free_stack(stack);
 }
 
 void
@@ -272,9 +262,24 @@ stack_collect(void)
 			stack_unlock();
 			splx(s);
 
-			if (vm_map_remove(stack_map, vm_map_trunc_page(stack),
-								vm_map_round_page(stack + KERNEL_STACK_SIZE), VM_MAP_REMOVE_KUNWIRE) != KERN_SUCCESS)
+			/*
+			 * Get the stack base address, then decrement by one page
+			 * to account for the lower guard page.  Add two extra pages
+			 * to the size to account for the guard pages on both ends
+			 * that were originally requested when the stack was allocated
+			 * back in stack_alloc().
+			 */
+
+			stack = vm_map_trunc_page(stack);
+			stack -= PAGE_SIZE;
+			if (vm_map_remove(
+				    kernel_map,
+				    stack,
+				    stack + KERNEL_STACK_SIZE+(2*PAGE_SIZE),
+				    VM_MAP_REMOVE_KUNWIRE)
+			    != KERN_SUCCESS)
 				panic("stack_collect: vm_map_remove");
+			stack = 0;
 
 			s = splsched();
 			stack_lock();
@@ -377,7 +382,7 @@ processor_set_stack_usage(
 	vm_size_t maxusage;
 	vm_offset_t maxstack;
 
-	register thread_t *threads;
+	register thread_t *thread_list;
 	register thread_t thread;
 
 	unsigned int actual;	/* this many things */
@@ -386,19 +391,16 @@ processor_set_stack_usage(
 	vm_size_t size, size_needed;
 	void *addr;
 
-	if (pset == PROCESSOR_SET_NULL)
+	if (pset == PROCESSOR_SET_NULL || pset != &pset0)
 		return KERN_INVALID_ARGUMENT;
 
-	size = 0; addr = 0;
+	size = 0;
+	addr = NULL;
 
 	for (;;) {
-		pset_lock(pset);
-		if (!pset->active) {
-			pset_unlock(pset);
-			return KERN_INVALID_ARGUMENT;
-		}
+		mutex_lock(&tasks_threads_lock);
 
-		actual = pset->thread_count;
+		actual = threads_count;
 
 		/* do we have the memory we need? */
 
@@ -406,8 +408,7 @@ processor_set_stack_usage(
 		if (size_needed <= size)
 			break;
 
-		/* unlock the pset and allocate more memory */
-		pset_unlock(pset);
+		mutex_unlock(&tasks_threads_lock);
 
 		if (size != 0)
 			kfree(addr, size);
@@ -420,18 +421,17 @@ processor_set_stack_usage(
 			return KERN_RESOURCE_SHORTAGE;
 	}
 
-	/* OK, have memory and the processor_set is locked & active */
-	threads = (thread_t *) addr;
-	for (i = 0, thread = (thread_t) queue_first(&pset->threads);
-					!queue_end(&pset->threads, (queue_entry_t) thread);
-					thread = (thread_t) queue_next(&thread->pset_threads)) {
+	/* OK, have memory and list is locked */
+	thread_list = (thread_t *) addr;
+	for (i = 0, thread = (thread_t) queue_first(&threads);
+					!queue_end(&threads, (queue_entry_t) thread);
+					thread = (thread_t) queue_next(&thread->threads)) {
 		thread_reference_internal(thread);
-		threads[i++] = thread;
+		thread_list[i++] = thread;
 	}
 	assert(i <= actual);
 
-	/* can unlock processor set now that we have the thread refs */
-	pset_unlock(pset);
+	mutex_unlock(&tasks_threads_lock);
 
 	/* calculate maxusage and free thread references */
 
@@ -439,7 +439,7 @@ processor_set_stack_usage(
 	maxusage = 0;
 	maxstack = 0;
 	while (i > 0) {
-		thread_t threadref = threads[--i];
+		thread_t threadref = thread_list[--i];
 
 		if (threadref->kernel_stack != 0)
 			total++;
@@ -461,10 +461,10 @@ processor_set_stack_usage(
 
 vm_offset_t min_valid_stack_address(void)
 {
-	return vm_map_min(stack_map);
+	return vm_map_min(kernel_map);
 }
 
 vm_offset_t max_valid_stack_address(void)
 {
-	return vm_map_max(stack_map);
+	return vm_map_max(kernel_map);
 }

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1998, Apple Computer, Inc. All rights reserved. */
 /*
@@ -81,37 +87,39 @@ static int synthfs_insertnode(struct synthfsnode *newnode_sp, struct synthfsnode
 
 
 
-static int synthfs_newnode(mount_t mp, vnode_t dp, const char *name, unsigned long nodeid,
-			   mode_t mode, __unused proc_t p, enum vtype vtype, vnode_t *vpp) {
+static int
+synthfs_newnode(mount_t mp, vnode_t dp, const char *name, unsigned long nodeid,
+		 mode_t mode, __unused proc_t p, enum vtype vtype, vnode_t *vpp)
+{
 	int result;
-    struct synthfsnode *sp;
+	struct synthfsnode *sp;
 	struct vnode *vp;
-    struct timeval now;
-    char *nodename;
+	struct timeval now;
+	char *nodename;
 	struct vnode_fsparam vfsp;
 
-     MALLOC(sp, struct synthfsnode *, sizeof(struct synthfsnode), M_SYNTHFS, M_WAITOK);
-    
-    if (name == NULL) {
-        MALLOC(nodename, char *, 1, M_TEMP, M_WAITOK);
-        nodename[0] = 0;
-    } else {
-        MALLOC(nodename, char *, strlen(name) + 1, M_TEMP, M_WAITOK);
-        strcpy(nodename, name);
-    };
+	MALLOC(sp, struct synthfsnode *, sizeof(struct synthfsnode), M_SYNTHFS, M_WAITOK);
 
-    /* Initialize the relevant synthfsnode fields: */
-    bzero(sp, sizeof(*sp));
-    sp->s_nodeid = nodeid;
-    
-    /* Initialize all times from a consistent snapshot of the clock: */
+	if (name == NULL) {
+		MALLOC(nodename, char *, 1, M_TEMP, M_WAITOK);
+		nodename[0] = 0;
+	} else {
+		MALLOC(nodename, char *, strlen(name) + 1, M_TEMP, M_WAITOK);
+		strlcpy(nodename, name, strlen(name) + 1);
+	};
+
+	/* Initialize the relevant synthfsnode fields: */
+	bzero(sp, sizeof(*sp));
+	sp->s_nodeid = nodeid;
+
+	/* Initialize all times from a consistent snapshot of the clock: */
 	microtime(&now);
-    sp->s_createtime = now;
-    sp->s_accesstime = now;
-    sp->s_modificationtime = now;
-    sp->s_changetime = now;
-    sp->s_name = nodename;
-    sp->s_mode = mode;
+	sp->s_createtime = now;
+	sp->s_accesstime = now;
+	sp->s_modificationtime = now;
+	sp->s_changetime = now;
+	sp->s_name = nodename;
+	sp->s_mode = mode;
 
 
 	//bzero(&vfsp, sizeof(struct vnode_fsparam));
@@ -130,23 +138,23 @@ static int synthfs_newnode(mount_t mp, vnode_t dp, const char *name, unsigned lo
 
 	result = vnode_create(VNCREATE_FLAVOR, VCREATESIZE, &vfsp, &vp); 
 	if (result != 0) {
-	    DBG_VOP(("getnewvnode failed with error code %d\n", result));
-	    FREE(nodename, M_TEMP);
-	    FREE(sp, M_TEMP);
-	    return result;
+		DBG_VOP(("getnewvnode failed with error code %d\n", result));
+		FREE(nodename, M_TEMP);
+		FREE(sp, M_TEMP);
+		return result;
 	}
 	vnode_ref(vp);
 
-    sp->s_vp = vp;
+	sp->s_vp = vp;
 
-    /* If there's a parent directory, update its subnode structures to insert this new node: */
-    if (dp) {
-    	result = synthfs_insertnode(sp, VTOS(dp));
-    };
+	/* If there's a parent directory, update its subnode structures to insert this new node: */
+	if (dp) {
+		result = synthfs_insertnode(sp, VTOS(dp));
+	};
 
-    *vpp = vp;
+	*vpp = vp;
 
-    return result;
+	return result;
 }
 
 
@@ -184,7 +192,7 @@ int synthfs_move_rename_entry(struct vnode *source_vp, struct vnode *newparent_v
 	if (new_name) {
 		FREE(source_sp->s_name, M_TEMP);
 		MALLOC(new_name_ptr, char *, strlen(new_name) + 1, M_TEMP, M_WAITOK);
-		strcpy(new_name_ptr, new_name);
+		strlcpy(new_name_ptr, new_name, strlen(new_name) + 1);
 		source_sp->s_name = new_name_ptr;
 	};
 	
@@ -240,35 +248,37 @@ int synthfs_remove_directory(struct vnode *vp) {
 
 
 
-int synthfs_new_symlink(
+int
+synthfs_new_symlink(
 		struct mount *mp,
 		struct vnode *dp,
 		const char *name,
 		unsigned long nodeid,
 		char *targetstring,
 		struct proc *p,
-		struct vnode **vpp) {
-	
+		struct vnode **vpp)
+{
 	int result;
 	struct vnode *vp;
 	struct synthfsnode *sp;
-	
+
 	result = synthfs_newnode(mp, dp, name, nodeid, 0, p, VLNK,  &vp);
-	if (result) {
+	if (result)
 		return result;
-	};
-    sp = VTOS(vp);
-    sp->s_linkcount = 1;
-	
-    /* Set up the symlink-specific fields: */
-    sp->s_type = SYNTHFS_SYMLINK;
-    sp->s_u.s.s_length = strlen(targetstring);
-    MALLOC(sp->s_u.s.s_symlinktarget, char *, sp->s_u.s.s_length + 1, M_TEMP, M_WAITOK);
-    strcpy(sp->s_u.s.s_symlinktarget, targetstring);
-    
-    *vpp = vp;
-    
-    return 0;
+	sp = VTOS(vp);
+	sp->s_linkcount = 1;
+
+	/* Set up the symlink-specific fields: */
+	sp->s_type = SYNTHFS_SYMLINK;
+	sp->s_u.s.s_length = strlen(targetstring);
+	MALLOC(sp->s_u.s.s_symlinktarget, char *, sp->s_u.s.s_length + 1,
+	       M_TEMP, M_WAITOK);
+	strlcpy(sp->s_u.s.s_symlinktarget, targetstring,
+		sp->s_u.s.s_lenghth + 1);
+
+	*vpp = vp;
+
+	return 0;
 }
 
 

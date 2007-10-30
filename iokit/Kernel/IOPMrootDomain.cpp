@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 1998-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOCommandGate.h>
@@ -34,12 +40,29 @@
 #include "IOKit/pwr_mgt/IOPowerConnection.h"
 #include "IOPMPowerStateQueue.h"
 #include <IOKit/IOCatalogue.h>
+#if HIBERNATION
 #include <IOKit/IOHibernatePrivate.h>
-#include "IOPMWorkArbiter.h"
-
-#ifdef __ppc__
-#include <ppc/pms.h>
 #endif
+#include <sys/syslog.h>
+#include <sys/sysctl.h>
+#include <sys/time.h>
+#include "IOServicePrivate.h"	// _IOServiceInterestNotifier
+
+
+#if __i386__
+__BEGIN_DECLS
+#include "IOPMrootDomainInternal.h"
+__END_DECLS
+#endif
+
+
+//#define DEBUG   1
+#if DEBUG
+#define DEBUG_LOG(x...) do { kprintf(x); } while (0)
+#else
+#define DEBUG_LOG(x...)
+#endif
+#define HaltRestartLog(x...)  do { kprintf(x); } while (0)
 
 extern "C" {
 IOReturn OSMetaClassSystemSleepOrWake( UInt32 );
@@ -50,6 +73,7 @@ extern const IORegistryPlane * gIOPowerPlane;
 IOReturn broadcast_aggressiveness ( OSObject *, void *, void *, void *, void * );
 static void sleepTimerExpired(thread_call_param_t);
 static void wakeupClamshellTimerExpired ( thread_call_param_t us);
+static void notifySystemShutdown( IOService * root, unsigned long event );
 
 // "IOPMSetSleepSupported"  callPlatformFunction name
 static const OSSymbol *sleepSupportedPEFunction = NULL;
@@ -72,6 +96,14 @@ static const OSSymbol *sleepSupportedPEFunction = NULL;
 #define SLEEP_POWER kIOPMAuxPowerOn
 #define DOZE_POWER kIOPMDoze
 
+enum 
+{
+    // not idle around autowake time, secs
+    kAutoWakePreWindow  = 45,
+    kAutoWakePostWindow = 15
+};
+
+
 #define kLocalEvalClamshellCommand        (1 << 15)
 
 static IOPMPowerState ourPowerStates[number_of_power_states] = {
@@ -90,6 +122,16 @@ static IOPMPowerState ourPowerStates[number_of_power_states] = {
 static IOPMrootDomain * gRootDomain;
 static UInt32           gSleepOrShutdownPending = 0;
 
+struct timeval gIOLastSleepTime;
+struct timeval gIOLastWakeTime;
+
+// Constants used as arguments to IOPMrootDomain::informCPUStateChange
+#define kCPUUnknownIndex    9999999
+enum {
+    kInformAC = 0,
+    kInformLid = 1,
+    kInformableCount = 2
+};
 
 class PMSettingObject : public OSObject
 {
@@ -116,6 +158,32 @@ public:
     void free(void);
 };
 
+/*
+ * Internal helper object for Shutdown/Restart notifications.
+ */
+#define kPMHaltMaxWorkers   8
+#define kPMHaltTimeoutMS    100
+
+class PMHaltWorker : public OSObject
+{
+    OSDeclareDefaultStructors( PMHaltWorker )
+
+public:
+    IOService *  service;    // service being worked on
+    AbsoluteTime startTime;  // time when work started
+    int          depth;      // work on nubs at this PM-tree depth
+    int          visits;     // number of nodes visited (debug)
+    IOLock *     lock;
+    bool         timeout;    // service took too long
+
+    static  PMHaltWorker * worker( void );
+    static  void main( void * arg );
+    static  void work( PMHaltWorker * me );
+    static  void checkTimeout( PMHaltWorker * me, AbsoluteTime * now );
+    virtual void free( void );
+};
+
+OSDefineMetaClassAndStructors( PMHaltWorker, OSObject )
 
 
 #define super IOService
@@ -206,7 +274,7 @@ one power state from Sleep to Doze, and any objects in the tree for which this i
 ADB will turn on again so that they can wake the system out of Doze (keyboard/mouse activity will cause the Display Wrangler
 to be tickled)).
 */
-    
+
 // **********************************************************************************
 
 IOPMrootDomain * IOPMrootDomain::construct( void )
@@ -224,20 +292,35 @@ IOPMrootDomain * IOPMrootDomain::construct( void )
 
 static void disk_sync_callout(thread_call_param_t p0, thread_call_param_t p1)
 {
-    IOService                               *rootDomain = (IOService *) p0;
-    unsigned long                           pmRef = (unsigned long) p1;
+    IOService       *rootDomain = (IOService *) p0;
+    unsigned long   pmRef = (unsigned long) p1;
 
+    DEBUG_LOG("disk_sync_callout: start\n");
+
+#if	HIBERNATION
     IOHibernateSystemSleep();
+#endif
     sync_internal();
     rootDomain->allowPowerChange(pmRef);
+    DEBUG_LOG("disk_sync_callout: finish\n");
 }
 
 // **********************************************************************************
-IOPMWorkArbiter *IOPMrootDomain::getPMArbiter(void)
-{
-    return pmArbiter;
-}
 
+static UInt32 computeDeltaTimeMS( const AbsoluteTime * startTime )
+{
+	AbsoluteTime	endTime;
+	UInt64			nano = 0;
+
+	clock_get_uptime(&endTime);
+	if (CMP_ABSOLUTETIME(&endTime, startTime) > 0)
+	{
+		SUB_ABSOLUTETIME(&endTime, startTime);
+		absolutetime_to_nanoseconds(endTime, &nano);
+	}
+
+	return (UInt32)(nano / 1000000ULL);
+}
 
 // **********************************************************************************
 // start
@@ -246,16 +329,29 @@ IOPMWorkArbiter *IOPMrootDomain::getPMArbiter(void)
 // expert informs us we are the root.
 // **********************************************************************************
 
-#define kRootDomainSettingsCount        13
+#define kRootDomainSettingsCount        14
+
+static SYSCTL_STRUCT(_kern, OID_AUTO, sleeptime, 
+		     CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN, 
+		     &gIOLastSleepTime, timeval, "");
+
+static SYSCTL_STRUCT(_kern, OID_AUTO, waketime, 
+		     CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN, 
+		     &gIOLastWakeTime, timeval, "");
+
+static const OSSymbol * gIOPMSettingAutoWakeSecondsKey;
 
 bool IOPMrootDomain::start ( IOService * nub )
 {
     OSIterator      *psIterator;
     OSDictionary    *tmpDict;
+
+    gIOPMSettingAutoWakeSecondsKey = OSSymbol::withCString(kIOPMSettingAutoWakeSecondsKey);
+
     const OSSymbol  *settingsArr[kRootDomainSettingsCount] = 
         {
             OSSymbol::withCString(kIOPMSettingSleepOnPowerButtonKey),
-            OSSymbol::withCString(kIOPMSettingAutoWakeSecondsKey),
+            gIOPMSettingAutoWakeSecondsKey,
             OSSymbol::withCString(kIOPMSettingAutoPowerSecondsKey),
             OSSymbol::withCString(kIOPMSettingAutoWakeCalendarKey),
             OSSymbol::withCString(kIOPMSettingAutoPowerCalendarKey),
@@ -266,6 +362,7 @@ bool IOPMrootDomain::start ( IOService * nub )
             OSSymbol::withCString(kIOPMSettingWakeOnClamshellKey),
             OSSymbol::withCString(kIOPMSettingWakeOnACChangeKey),
             OSSymbol::withCString(kIOPMSettingTimeZoneOffsetKey),
+            OSSymbol::withCString(kIOPMSettingDisplaySleepUsesDimKey),
             OSSymbol::withCString(kIOPMSettingMobileMotionModuleKey)
         };
     
@@ -285,6 +382,7 @@ bool IOPMrootDomain::start ( IOService * nub )
     canSleep = true;
     setProperty(kIOSleepSupportedKey,true);
 
+    userDisabledAllSleep = false;
     allowSleep = true;
     sleepIsSupported = true;
     systemBooting = true;
@@ -297,7 +395,10 @@ bool IOPMrootDomain::start ( IOService * nub )
     ignoringClamshell = true;
     ignoringClamshellDuringWakeup = false;
     acAdaptorConnect = true;
-    
+
+    idxPMCPUClamshell = kCPUUnknownIndex;
+    idxPMCPULimitedPower = kCPUUnknownIndex;
+        
     tmpDict = OSDictionary::withCapacity(1);
     setProperty(kRootDomainSupportedFeatures, tmpDict);
     tmpDict->release();
@@ -313,14 +414,8 @@ bool IOPMrootDomain::start ( IOService * nub )
                     
     fPMSettingsDict = OSDictionary::withCapacity(5);
             
-    pm_vars->PMworkloop = IOWorkLoop::workLoop();				
     pmPowerStateQueue = IOPMPowerStateQueue::PMPowerStateQueue(this);
-    pm_vars->PMworkloop->addEventSource(pmPowerStateQueue);
-    
-    /* Initialize PM arbiter */
-    pmArbiter = IOPMWorkArbiter::pmWorkArbiter(this);
-    arbiterWorkLoop = IOWorkLoop::workLoop();
-    arbiterWorkLoop->addEventSource(pmArbiter);
+    getPMworkloop()->addEventSource(pmPowerStateQueue);
     
     featuresDictLock = IOLockAlloc();
     settingsCtrlLock = IORecursiveLockAlloc();
@@ -340,8 +435,6 @@ bool IOPMrootDomain::start ( IOService * nub )
     patriarch->init();
     patriarch->attach(this);
     patriarch->start(this);
-    patriarch->youAreRoot();
-    patriarch->wakeSystem();
     patriarch->addPowerChild(this);
         
     registerPowerDriver(this,ourPowerStates,number_of_power_states);
@@ -353,10 +446,12 @@ bool IOPMrootDomain::start ( IOService * nub )
     // install power change handler
     registerPrioritySleepWakeInterest( &sysPowerDownHandler, this, 0);
 
+#if !NO_KERNEL_HID
     // Register for a notification when IODisplayWrangler is published
     _displayWranglerNotifier = addNotification( 
                 gIOPublishNotification, serviceMatching("IODisplayWrangler"), 
                 &displayWranglerPublished, this, 0);
+#endif
 
     // Battery location published - ApplePMU support only
     _batteryPublishNotifier = addNotification( 
@@ -382,7 +477,13 @@ bool IOPMrootDomain::start ( IOService * nub )
         psIterator->release();
     }
 
+
+    sysctl_register_oid(&sysctl__kern_sleeptime);
+    sysctl_register_oid(&sysctl__kern_waketime);
+
+#if	HIBERNATION
     IOHibernateSystemInit(this);
+#endif
 
     registerService();						// let clients find us
 
@@ -412,6 +513,11 @@ IOReturn IOPMrootDomain::setProperties ( OSObject *props_obj)
                 OSSymbol::withCString("System Shutdown");
     const OSSymbol *stall_halt_string = 
                 OSSymbol::withCString("StallSystemAtHalt");
+    const OSSymbol *battery_warning_disabled_string = 
+                OSSymbol::withCString("BatteryWarningsDisabled");
+    const OSSymbol *idle_seconds_string = 
+                OSSymbol::withCString("System Idle Seconds");
+#if	HIBERNATION
     const OSSymbol *hibernatemode_string = 
                 OSSymbol::withCString(kIOHibernateModeKey);
     const OSSymbol *hibernatefile_string = 
@@ -420,11 +526,20 @@ IOReturn IOPMrootDomain::setProperties ( OSObject *props_obj)
                 OSSymbol::withCString(kIOHibernateFreeRatioKey);
     const OSSymbol *hibernatefreetime_string = 
                 OSSymbol::withCString(kIOHibernateFreeTimeKey);
+#endif
+    const OSSymbol *sleepdisabled_string =
+                OSSymbol::withCString("SleepDisabled");
     
     if(!dict) 
     {
         return_value = kIOReturnBadArgument;
         goto exit;
+    }
+
+    if ((n = OSDynamicCast(OSNumber, dict->getObject(idle_seconds_string))))
+    {
+        setProperty(idle_seconds_string, n);
+	idleSeconds = n->unsigned32BitValue();
     }
 
     if( systemBooting 
@@ -440,6 +555,13 @@ IOReturn IOPMrootDomain::setProperties ( OSObject *props_obj)
         {
             this->receivePowerNotification(kLocalEvalClamshellCommand);
         }
+    }
+    
+    if( battery_warning_disabled_string
+        && dict->getObject(battery_warning_disabled_string))
+    {
+        setProperty( battery_warning_disabled_string, 
+                        dict->getObject(battery_warning_disabled_string));
     }
     
     if( sys_shutdown_string 
@@ -475,6 +597,7 @@ IOReturn IOPMrootDomain::setProperties ( OSObject *props_obj)
         setProperty(stall_halt_string, b);
     }
 
+#if	HIBERNATION
     if ( hibernatemode_string
     && (n = OSDynamicCast(OSNumber, dict->getObject(hibernatemode_string))))
     {
@@ -495,6 +618,15 @@ IOReturn IOPMrootDomain::setProperties ( OSObject *props_obj)
     {
         setProperty(hibernatefile_string, str);
     }
+#endif
+    
+    if( sleepdisabled_string
+        && (b = OSDynamicCast(OSBoolean, dict->getObject(sleepdisabled_string))) )
+    {
+        setProperty(sleepdisabled_string, b);
+        
+        userDisabledAllSleep = (kOSBooleanTrue == b);
+    }
 
     // Relay our allowed PM settings onto our registered PM clients
     for(i = 0; i < allowedPMSettings->getCount(); i++) {
@@ -504,15 +636,36 @@ IOReturn IOPMrootDomain::setProperties ( OSObject *props_obj)
 
         obj = dict->getObject(type);
         if(!obj) continue;
+
+	if ((gIOPMSettingAutoWakeSecondsKey == type) && ((n = OSDynamicCast(OSNumber, obj))))
+	{
+	    UInt32 rsecs = n->unsigned32BitValue();
+	    if (!rsecs)
+		autoWakeStart = autoWakeEnd = 0;
+	    else
+	    {
+		AbsoluteTime deadline;
+		clock_interval_to_deadline(rsecs + kAutoWakePostWindow, kSecondScale, &deadline);
+		autoWakeEnd = AbsoluteTime_to_scalar(&deadline);
+		if (rsecs > kAutoWakePreWindow)
+		    rsecs -= kAutoWakePreWindow;
+		else
+		    rsecs = 0;
+		clock_interval_to_deadline(rsecs, kSecondScale, &deadline);
+		autoWakeStart = AbsoluteTime_to_scalar(&deadline);
+	    }
+	}
         
         return_value = setPMSetting(type, obj);
         
         if(kIOReturnSuccess != return_value) goto exit;
     }
 
-    exit:
+exit:
+    if(sleepdisabled_string) sleepdisabled_string->release();
     if(boot_complete_string) boot_complete_string->release();
     if(stall_halt_string) stall_halt_string->release();
+    if(idle_seconds_string) idle_seconds_string->release();
     return return_value;
 }
 
@@ -566,14 +719,50 @@ void IOPMrootDomain::broadcast_it (unsigned long type, unsigned long value)
     if( type == kPMMinutesToSpinDown ) user_spindown = value;
 
     // Use longestNonSleepSlider to calculate dimming adjust idle sleep timer
-    longestNonSleepSlider = pm_vars->current_aggressiveness_values[kPMMinutesToDim];
-
+	if (getAggressiveness(kPMMinutesToDim, (unsigned long *)&longestNonSleepSlider)
+		!= kIOReturnSuccess)
+		longestNonSleepSlider = 0;
 
     if ( type == kPMMinutesToSleep ) {
+        DEBUG_LOG("PM idle time -> %ld secs (ena %d)\n", idleSeconds, (value != 0));
+        if (0x7fffffff == value)
+            value = idleSeconds;
+
         if ( (sleepSlider == 0) && (value != 0) ) {
-            sleepSlider = value;
-            // idle sleep is now enabled, maybe sleep now
-            adjustPowerState();
+            if (!wrangler)
+            {
+                sleepASAP = false;
+                changePowerStateToPriv(ON_STATE);
+                if (idleSeconds)
+                {
+                    AbsoluteTime deadline;
+                    // stay awake for at least idleSeconds
+                    clock_interval_to_deadline(idleSeconds, kSecondScale, &deadline);	
+                    thread_call_enter_delayed(extraSleepTimer, deadline);
+                    // this gets turned off when we sleep again
+                    idleSleepPending = true;
+                }
+            }
+            else
+            {
+                // If sleepASAP is already set, then calling adjustPowerState() here
+                // will put the system to sleep immediately which is bad.  Note that
+                // this aggressiveness change can occur without waking up the display
+                // by (dis)connecting the AC adapter. To get around this, the power
+                // clamp is restore to ON state then dropped after waiting for the
+                // sleep timer to expire.
+
+                if (sleepASAP)
+                {
+                    AbsoluteTime deadline;
+                    // stay awake for at least sleepSlider minutes
+                    clock_interval_to_deadline(value * 60, kSecondScale, &deadline);	
+                    thread_call_enter_delayed(extraSleepTimer, deadline);
+                    // this gets turned off when we sleep again
+                    idleSleepPending = true;
+                    sleepASAP = false;
+                }
+            }
         }
         sleepSlider = value;
         if ( sleepSlider == 0 ) {			
@@ -616,6 +805,17 @@ static void wakeupClamshellTimerExpired ( thread_call_param_t us)
 // **********************************************************************************
 void IOPMrootDomain::handleSleepTimerExpiration ( void )
 {
+    DEBUG_LOG("SleepTimerExpired\n");
+
+    AbsoluteTime time;
+
+    clock_get_uptime(&time);
+    if ((AbsoluteTime_to_scalar(&time) > autoWakeStart) && (AbsoluteTime_to_scalar(&time) < autoWakeEnd))
+    {
+	thread_call_enter_delayed(extraSleepTimer, *((AbsoluteTime *) &autoWakeEnd));
+	return;
+    }
+
     // accelerate disk spin down if spin down timer is non-zero (zero = never spin down)  
     if(0 != user_spindown)
         setQuickSpinDownTimeout();
@@ -644,28 +844,12 @@ void IOPMrootDomain::stopIgnoringClamshellEventsDuringWakeup(void)
 // same thread.
 //*********************************************************************************
 
-static int pmsallsetup = 0;
-
 IOReturn IOPMrootDomain::setAggressiveness ( unsigned long type, unsigned long newLevel )
 {
-#ifdef __ppc__
-	if(pmsExperimental & 3) kprintf("setAggressiveness: type = %08X, newlevel = %08X\n", type, newLevel);
-	if(pmsExperimental & 1) {						/* Is experimental mode enabled? */
-		if(pmsInstalled && (type == kPMSetProcessorSpeed)) {	/* We want to look at all processor speed changes if stepper is installed */
-			if(pmsallsetup) return kIOReturnSuccess;	/* If already running, just eat this */
-			kprintf("setAggressiveness: starting stepper...\n");
-			pmsallsetup = 1;						/* Remember we did this */
-			pmsPark();
-			pmsStart();								/* Get it all started up... */
-			return kIOReturnSuccess;				/* Leave now... */
-		}
-	}
-#endif
+    IOWorkLoop * pmWorkLoop = getPMworkloop();
+    if (pmWorkLoop)
+        pmWorkLoop->runAction(broadcast_aggressiveness,this,(void *)type,(void *)newLevel);
 
-    if ( pm_vars->PMcommandGate ) {
-        pm_vars->PMcommandGate->runAction(broadcast_aggressiveness,(void *)type,(void *)newLevel);
-    }
-    
     return kIOReturnSuccess;
 }
 
@@ -674,20 +858,69 @@ IOReturn IOPMrootDomain::setAggressiveness ( unsigned long type, unsigned long n
 // sleepSystem
 //
 // **********************************************************************************
+/* public */
 IOReturn IOPMrootDomain::sleepSystem ( void )
 {
+    return sleepSystemOptions (NULL);
+}
+
+/* private */
+IOReturn IOPMrootDomain::sleepSystemOptions ( OSDictionary *options )
+{
+	/* sleepSystem is a public function, and may be called by any kernel driver.
+     * And that's bad - drivers should sleep the system by calling 
+     * receivePowerNotification() instead. Drivers should not use sleepSystem.
+     *
+     * Note that user space app calls to IOPMSleepSystem() will also travel
+     * this code path and thus be correctly identified as software sleeps.
+     */
+          
+    if (options && options->getObject("OSSwitch")) 
+    {
+
+        // Log specific sleep cause for OS Switch hibernation
+        return privateSleepSystem( kIOPMOSSwitchHibernationKey) ;
+
+    } else {
+
+        return privateSleepSystem( kIOPMSoftwareSleepKey);
+
+    }
+}
+
+/* private */
+IOReturn IOPMrootDomain::privateSleepSystem ( const char *sleepReason )
+{
+    // Record sleep cause in IORegistry
+    if (sleepReason) {
+        setProperty(kRootDomainSleepReasonKey, sleepReason);
+    }
+
     if(systemShutdown) {
         kprintf("Preventing system sleep on grounds of systemShutdown.\n");
     }
+    
+    if( userDisabledAllSleep )
+    {
+        /* Prevent sleep of all kinds if directed to by user space */
+        return kIOReturnNotPermitted;
+    }
 
-    if ( !systemBooting && !systemShutdown && allowSleep ) {
-        if ( !sleepIsSupported )
+    if ( !systemBooting 
+      && !systemShutdown 
+      && allowSleep)
+    {
+        if ( !sleepIsSupported ) {
             setSleepSupported( kPCICantSleep );
-
+            kprintf("Sleep prevented by kIOPMPreventSystemSleep flag\n");
+        }
         patriarch->sleepSystem();
         return kIOReturnSuccess;
+    } else {
+        // Unable to sleep because system is in the process of booting or shutting down,
+        // or sleep has otherwise been disallowed.
+        return kIOReturnError;
     }
-    return kIOReturnError;
 }
 
 
@@ -729,26 +962,43 @@ void IOPMrootDomain::powerChangeDone ( unsigned long previousState )
 {
     OSNumber *		propertyPtr;
     unsigned short	theProperty;
-    AbsoluteTime        deadline;
-    
-    switch ( pm_vars->myCurrentState ) {
+    AbsoluteTime    deadline;
+
+    DEBUG_LOG("PowerChangeDone: %ld -> %ld\n", previousState, getPowerState());
+
+    switch ( getPowerState() ) {
         case SLEEP_STATE:
+			if ( previousState != ON_STATE )
+				break;
+
             if ( canSleep && sleepIsSupported ) 
             {
                 // re-enable this timer for next sleep
                 idleSleepPending = false;			
 
+                uint32_t secs, microsecs;
+                clock_get_calendar_microtime(&secs, &microsecs);
+                logtime(secs);
+                gIOLastSleepTime.tv_sec  = secs;
+                gIOLastSleepTime.tv_usec = microsecs;
+
+#if	HIBERNATION
                 IOLog("System %sSleep\n", gIOHibernateState ? "Safe" : "");
 
                 IOHibernateSystemHasSlept();
+#else
+                IOLog("System Sleep\n");
+#endif
 
-                pm_vars->thePlatform->sleepKernel();
+                getPlatform()->sleepKernel();
 
                 // The CPU(s) are off at this point. When they're awakened by CPU interrupt,
                 // code will resume execution here.
 
                 // Now we're waking...
+#if	HIBERNATION
                 IOHibernateSystemWake();
+#endif
 
                 // stay awake for at least 30 seconds
                 clock_interval_to_deadline(30, kSecondScale, &deadline);	
@@ -763,8 +1013,8 @@ void IOPMrootDomain::powerChangeDone ( unsigned long previousState )
                 // sleep transition complete
                 gSleepOrShutdownPending = 0;
 
-				// trip the reset of the calendar clock
-				clock_wakeup_calendar();
+                // trip the reset of the calendar clock
+                clock_wakeup_calendar();
 
                 // get us some power
                 patriarch->wakeSystem();
@@ -773,7 +1023,9 @@ void IOPMrootDomain::powerChangeDone ( unsigned long previousState )
                 tellClients(kIOMessageSystemWillPowerOn);
 
                 // tell the tree we're waking
+#if	HIBERNATION
                 IOLog("System %sWake\n", gIOHibernateState ? "SafeSleep " : "");
+#endif
                 systemWake();
                 
                 // Allow drivers to request extra processing time before clamshell
@@ -789,7 +1041,7 @@ void IOPMrootDomain::powerChangeDone ( unsigned long previousState )
                 
                 // Find out what woke us
                 propertyPtr = OSDynamicCast(OSNumber,getProperty("WakeEvent"));
-                if ( propertyPtr ) {				
+                if ( propertyPtr ) {
                     theProperty = propertyPtr->unsigned16BitValue();
                     IOLog("Wake event %04x\n",theProperty);
                     if ( (theProperty & 0x0008) ||	//lid
@@ -805,12 +1057,13 @@ void IOPMrootDomain::powerChangeDone ( unsigned long previousState )
                 }
                             
                 // Wake for thirty seconds
-                changePowerStateToPriv(ON_STATE);		
-                powerOverrideOffPriv();
+                changePowerStateToPriv(ON_STATE);
             } else {
                 // allow us to step up a power state
                 patriarch->sleepToDoze();
-                // and do it
+
+                // ignore children's request for higher power during doze.
+                powerOverrideOnPriv();
                 changePowerStateToPriv(DOZE_STATE);
             }
             break;
@@ -847,13 +1100,14 @@ void IOPMrootDomain::powerChangeDone ( unsigned long previousState )
 // **********************************************************************************
 void IOPMrootDomain::wakeFromDoze( void )
 {
-    if ( pm_vars->myCurrentState == DOZE_STATE ) 
+    if ( getPowerState() == DOZE_STATE ) 
     {
         // Reset sleep support till next sleep attempt.
         // A machine's support of sleep vs. doze can change over the course of
         // a running system, so we recalculate it before every sleep.
         setSleepSupported(0);
 
+        changePowerStateToPriv(ON_STATE);
         powerOverrideOffPriv();
 
         // early wake notification
@@ -903,6 +1157,8 @@ void IOPMrootDomain::publishFeature(
     uint32_t            feature_value = 0;
 
     supportedWhere &= kRD_AllPowerSources; // mask off any craziness!
+
+//    kprintf("IOPMrootDomain::publishFeature [\"%s\":%0x01x]\n", feature, supportedWhere);
 
     if(!supportedWhere) {
         // Feature isn't supported anywhere!
@@ -967,11 +1223,14 @@ void IOPMrootDomain::publishFeature(
 
     features->release();
 
-    // Notify EnergySaver and all those in user space so they might
-    // re-populate their feature specific UI
-    messageClients(kIOPMMessageFeatureChange, this);
-
     if(featuresDictLock) IOLockUnlock(featuresDictLock);    
+
+    // Notify EnergySaver and all those in user space so they might
+    // re-populate their feature specific UI    
+    if(pmPowerStateQueue) {
+        pmPowerStateQueue->featureChangeOccurred( 
+                            kIOPMMessageFeatureChange, this);
+    }
 }
 
 // *****************************************************************************
@@ -1083,8 +1342,11 @@ IOReturn IOPMrootDomain::removePublishedFeature( uint32_t removeFeatureID )
         setProperty(kRootDomainSupportedFeatures, features);
     
         // Notify EnergySaver and all those in user space so they might
-        // re-populate their feature specific UI
-        messageClients(kIOPMMessageFeatureChange, this);
+        // re-populate their feature specific UI    
+        if(pmPowerStateQueue) {
+            pmPowerStateQueue->featureChangeOccurred( 
+                                kIOPMMessageFeatureChange, this);
+        }
     } else {
         ret = kIOReturnNotFound;
     }
@@ -1249,7 +1511,6 @@ IOReturn IOPMrootDomain::registerPMSettingController(
         return kIOReturnBadArgument;
     }
 
-
     pmso = PMSettingObject::pmSettingObject(
                 (IOPMrootDomain *)this, func, target, 
                 refcon, supportedPowerSources, settings);
@@ -1274,12 +1535,12 @@ IOReturn IOPMrootDomain::registerPMSettingController(
         list->setObject(pmso);
     }
 
+    IORecursiveLockUnlock(settingsCtrlLock);
+    
     ret = kIOReturnSuccess;
 
     // Track this instance by its OSData ptr from now on  
     *handle = pmso;
-    
-    IORecursiveLockUnlock(settingsCtrlLock);
 
 bail_no_unlock:
     if(kIOReturnSuccess != ret) 
@@ -1290,6 +1551,7 @@ bail_no_unlock:
     }
     return ret;
 }
+
 
 //******************************************************************************
 // sleepOnClamshellClosed
@@ -1318,15 +1580,79 @@ void IOPMrootDomain::sendClientClamshellNotification ( void )
        shouldSleepOnClamshellClosed() ? kOSBooleanTrue : kOSBooleanFalse);
 
 
-    /* Argument to message is a bitfield of 
+    /* Argument to message is a bitfiel of 
      *      ( kClamshellStateBit | kClamshellSleepBit )
-     * Carry on the clamshell state change notification from an 
-     * independent thread.
      */
-    pmArbiter->clamshellStateChangeOccurred(
-            (uint32_t) ( (clamshellIsClosed ? kClamshellStateBit : 0)
-             | ( shouldSleepOnClamshellClosed() ? kClamshellSleepBit : 0)));
+    messageClients(kIOPMMessageClamshellStateChange,
+        (void *) ( (clamshellIsClosed ? kClamshellStateBit : 0)
+             | ( shouldSleepOnClamshellClosed() ? kClamshellSleepBit : 0)) );
 }
+
+//******************************************************************************
+// informCPUStateChange
+//
+// Call into PM CPU code so that CPU power savings may dynamically adjust for
+// running on battery, with the lid closed, etc.
+//
+// informCPUStateChange is a no-op on non x86 systems
+// only x86 has explicit support in the IntelCPUPowerManagement kext
+//******************************************************************************
+
+void IOPMrootDomain::informCPUStateChange(
+    uint32_t type, 
+    uint32_t value )
+{
+#ifdef __i386__
+
+    pmioctlVariableInfo_t varInfoStruct;                            
+    int                 pmCPUret = 0;
+    const char          *varNameStr = NULL;
+    int32_t             *varIndex   = NULL;
+
+    if (kInformAC == type) {
+        varNameStr = kIOPMRootDomainBatPowerCString;
+        varIndex = &idxPMCPULimitedPower;
+    } else if (kInformLid == type) {
+        varNameStr = kIOPMRootDomainLidCloseCString;
+        varIndex = &idxPMCPUClamshell;
+    } else {
+        return;
+    }
+    
+    // Set the new value!
+    // pmCPUControl will assign us a new ID if one doesn't exist yet
+    bzero(&varInfoStruct, sizeof(pmioctlVariableInfo_t));
+    varInfoStruct.varID         = *varIndex;
+    varInfoStruct.varType       = vBool;
+    varInfoStruct.varInitValue  = value;
+    varInfoStruct.varCurValue   = value;
+    strncpy( (char *)varInfoStruct.varName,
+             (const char *)varNameStr,
+             strlen(varNameStr) + 1 );                 
+    
+    // Set!
+    pmCPUret = pmCPUControl( PMIOCSETVARINFO, (void *)&varInfoStruct );
+
+    // pmCPU only assigns numerical id's when a new varName is specified
+    if ((0 == pmCPUret)
+        && (*varIndex == kCPUUnknownIndex))
+    {
+        // pmCPUControl has assigned us a new variable ID. 
+        // Let's re-read the structure we just SET to learn that ID.
+        pmCPUret = pmCPUControl( PMIOCGETVARNAMEINFO, (void *)&varInfoStruct );
+
+        if (0 == pmCPUret) 
+        {        
+            // Store it in idxPMCPUClamshell or idxPMCPULimitedPower
+            *varIndex = varInfoStruct.varID;
+        }
+    } 
+    
+    return;
+    
+#endif __i386__
+}
+
 
 //******************************************************************************
 // receivePowerNotification
@@ -1354,7 +1680,8 @@ IOReturn IOPMrootDomain::receivePowerNotification (UInt32 msg)
     if (msg & kIOPMOverTemp) 
     {
         IOLog("PowerManagement emergency overtemp signal. Going to sleep!");
-        (void) sleepSystem ();
+        
+        privateSleepSystem (kIOPMThermalEmergencySleepKey);
     }
 
     /*
@@ -1364,7 +1691,7 @@ IOReturn IOPMrootDomain::receivePowerNotification (UInt32 msg)
     {
         IOService *pmu = waitForService(serviceMatching("ApplePMU"));
         pmu->callPlatformFunction("prepareForSleep", false, 0, 0, 0, 0);
-        pm_vars->thePlatform->sleepKernel();
+        getPlatform()->sleepKernel();
         pmu->callPlatformFunction("recoverFromSleep", false, 0, 0, 0, 0);
     }
 
@@ -1373,7 +1700,7 @@ IOReturn IOPMrootDomain::receivePowerNotification (UInt32 msg)
      */
     if (msg & kIOPMSleepNow) 
     {
-      (void) sleepSystem ();
+        privateSleepSystem (kIOPMSoftwareSleepKey);
     }
     
     /*
@@ -1381,7 +1708,7 @@ IOReturn IOPMrootDomain::receivePowerNotification (UInt32 msg)
      */
     if (msg & kIOPMPowerEmergency) 
     {
-      (void) sleepSystem ();
+        privateSleepSystem (kIOPMLowPowerSleepKey);
     }
 
     
@@ -1395,6 +1722,10 @@ IOReturn IOPMrootDomain::receivePowerNotification (UInt32 msg)
         clamshellIsClosed = false;
         clamshellExists = true;
                 
+        // Tell PMCPU
+        informCPUStateChange(kInformLid, 0);
+
+        // Tell general interest clients        
         sendClientClamshellNotification();
     } 
 
@@ -1409,6 +1740,10 @@ IOReturn IOPMrootDomain::receivePowerNotification (UInt32 msg)
         clamshellIsClosed = true;
         clamshellExists = true;
 
+        // Tell PMCPU
+        informCPUStateChange(kInformLid, 1);
+
+        // Tell general interest clients
         sendClientClamshellNotification();
         
         // And set eval_clamshell = so we can attempt 
@@ -1443,6 +1778,9 @@ IOReturn IOPMrootDomain::receivePowerNotification (UInt32 msg)
     {
         acAdaptorConnect = (0 != (msg & kIOPMSetValue));
         msg &= ~(kIOPMSetACAdaptorConnected | kIOPMSetValue);
+
+        // Tell PMCPU
+        informCPUStateChange(kInformAC, !acAdaptorConnect);
 
         sendClientClamshellNotification();
 
@@ -1494,29 +1832,29 @@ IOReturn IOPMrootDomain::receivePowerNotification (UInt32 msg)
 
 
         // SLEEP!
-        sleepSystem();
+        privateSleepSystem (kIOPMClamshellSleepKey);
     }
 
     /*
      * Power Button
      */
     if (msg & kIOPMPowerButton) 
-    {				
+    {
         // toggle state of sleep/wake
         // are we dozing?
-        if ( pm_vars->myCurrentState == DOZE_STATE ) 
+        if ( getPowerState() == DOZE_STATE ) 
         {
             // yes, tell the tree we're waking 
             systemWake();
             // wake the Display Wrangler
-            reportUserInput();					
+            reportUserInput();
         }
         else {
             OSString *pbs = OSString::withCString("DisablePowerButtonSleep");
             // Check that power button sleep is enabled
             if( pbs ) {
                 if( kOSBooleanTrue != getProperty(pbs))
-                sleepSystem();
+                privateSleepSystem (kIOPMPowerButtonSleepKey);
             }
         }
     }
@@ -1538,7 +1876,7 @@ IOReturn IOPMrootDomain::receivePowerNotification (UInt32 msg)
     if (msg & kIOPMPreventSleep) {
         allowSleep = false;
 	    // are we dozing?
-        if ( pm_vars->myCurrentState == DOZE_STATE ) {
+        if ( getPowerState() == DOZE_STATE ) {
             // yes, tell the tree we're waking 
             systemWake();
             adjustPowerState();
@@ -1578,6 +1916,7 @@ void IOPMrootDomain::setSleepSupported( IOOptionBits flags )
 // requestPowerDomainState
 //
 // The root domain intercepts this call to the superclass.
+// Called on the PM work loop thread.
 //
 // If the clamp bit is not set in the desire, then the child doesn't need the power
 // state it's requesting; it just wants it.  The root ignores desires but not needs.
@@ -1586,63 +1925,122 @@ void IOPMrootDomain::setSleepSupported( IOOptionBits flags )
 // no power, we are on our way to idle sleep.
 //*********************************************************************************
 
-IOReturn IOPMrootDomain::requestPowerDomainState ( IOPMPowerFlags desiredState, IOPowerConnection * whichChild, unsigned long specification )
+IOReturn IOPMrootDomain::requestPowerDomainState (
+    IOPMPowerFlags      desiredState,
+    IOPowerConnection * whichChild,
+    unsigned long       specification )
 {
-    OSIterator                              *iter;
-    OSObject                                *next;
-    IOPowerConnection                       *connection;
-    unsigned long                           powerRequestFlag = 0;
-    IOPMPowerFlags                          editedDesire = desiredState;
+    OSIterator          *iter;
+    OSObject            *next;
+    IOPowerConnection   *connection;
+    unsigned long       powerRequestFlag = 0;
+    IOPMPowerFlags      editedDesire;
 
-    // if they don't really need it, they don't get it
-    if ( !(desiredState & kIOPMPreventIdleSleep) ) {
+#if DEBUG
+    IOService           *powerChild;
+    powerChild = (IOService *) whichChild->getChildEntry(gIOPowerPlane);
+#endif
+
+    DEBUG_LOG("RequestPowerDomainState: flags %lx, child %p [%s], spec %lx\n",
+        desiredState, powerChild, powerChild ? powerChild->getName() : "?",
+        specification);
+    
+    // Force the child's input power requirements to 0 unless the prevent
+    // idle-sleep flag is set. No input power flags map to our state 0.
+    // Our power clamp (deviceDesire) keeps the minimum power state at 2.
+
+    if (desiredState & kIOPMPreventIdleSleep)
+        editedDesire = desiredState;
+    else
         editedDesire = 0;
-    }
 
-
-    IOLockLock(pm_vars->childLock);
-
-    // recompute sleepIsSupported and see if all children are asleep
-    iter = getChildIterator(gIOPowerPlane);
+    // Recompute sleep supported flag (doze if not supported)
     sleepIsSupported = true;
+
+    iter = getChildIterator(gIOPowerPlane);
     if ( iter ) 
     {
         while ( (next = iter->getNextObject()) ) 
         {
-            if ( (connection = OSDynamicCast(IOPowerConnection,next)) ) 
+            if ( (connection = OSDynamicCast(IOPowerConnection, next)) ) 
             {
+                // Ignore child that are in the process of joining.
+				if (connection->getReadyFlag() == false)
+					continue;
+
+                // Is this connection attached to the child that called
+                // requestPowerDomainState()?
+
                 if ( connection == whichChild ) 
                 {
-                    powerRequestFlag += editedDesire;
-                    if ( desiredState & kIOPMPreventSystemSleep ) 
-                    {
+                    // Yes, OR in the child's input power requirements.
+                    powerRequestFlag |= editedDesire;
+
+                    if ( desiredState & kIOPMPreventSystemSleep )
                         sleepIsSupported = false;
-                    }
-                } else {
-                    powerRequestFlag += connection->getDesiredDomainState();
-                    if ( connection->getPreventSystemSleepFlag() ) 
-                    {
+                }
+                else
+                {
+#if DEBUG
+                    powerChild = (IOService *) connection->getChildEntry(gIOPowerPlane);
+#endif
+                    DEBUG_LOG("  child %p, PState %ld, noIdle %d, noSleep %d, valid %d  %s\n",
+                        powerChild,
+                        connection->getDesiredDomainState(),
+                        connection->getPreventIdleSleepFlag(),
+                        connection->getPreventSystemSleepFlag(),
+                        connection->getReadyFlag(),
+                        powerChild ? powerChild->getName() : "?");
+
+                    // No, OR in the child's desired power domain state.
+                    // Which is our power state desired by this child.
+                    powerRequestFlag |= connection->getDesiredDomainState();
+
+                    if ( connection->getPreventSystemSleepFlag() )
                         sleepIsSupported = false;
-                    }
                 }
             }
         }
         iter->release();
     }
     
-    if ( (extraSleepDelay == 0) &&  (powerRequestFlag == 0) ) 
+    if ( !powerRequestFlag && !systemBooting ) 
     {
-        sleepASAP = true;
+	if (!wrangler)
+	{
+	    sleepASAP = false;
+	    changePowerStateToPriv(ON_STATE);
+	    if (idleSeconds)
+	    {
+		AbsoluteTime deadline;
+		// stay awake for at least idleSeconds
+		clock_interval_to_deadline(idleSeconds, kSecondScale, &deadline);	
+		thread_call_enter_delayed(extraSleepTimer, deadline);
+		// this gets turned off when we sleep again
+		idleSleepPending = true;
+	    }
+	}
+	else if (extraSleepDelay == 0)
+	{
+	    sleepASAP = true;
+	}
     }
     
-    // this may put the system to sleep
+    DEBUG_LOG("  sleepDelay %lx, mergedFlags %lx, sleepASAP %x, booting %x\n",
+        extraSleepDelay, powerRequestFlag, sleepASAP, systemBooting);
+
+    // Drop our power clamp to SLEEP_STATE when all devices become idle.
+    // Needed when the system sleep and display sleep timeouts are the same.
+    // Otherwise, the extra sleep timer will also drop our power clamp.
+
     adjustPowerState();
-    
-    IOLockUnlock(pm_vars->childLock);
 
-    editedDesire |= desiredState & kIOPMPreventSystemSleep;
+    editedDesire |= (desiredState & kIOPMPreventSystemSleep);
 
-    return super::requestPowerDomainState(editedDesire,whichChild,specification);
+    // If our power clamp has already dropped to SLEEP_STATE, and no child
+    // is keeping us at max power, then this will trigger idle sleep.
+
+    return super::requestPowerDomainState(editedDesire, whichChild, specification);
 }
 
 
@@ -1654,6 +2052,99 @@ IOReturn IOPMrootDomain::requestPowerDomainState ( IOPMPowerFlags desiredState, 
 IOOptionBits IOPMrootDomain::getSleepSupported( void )
 {
     return( platformSleepSupport );
+}
+
+
+//*********************************************************************************
+// handlePlatformHaltRestart
+//
+//*********************************************************************************
+
+struct HaltRestartApplierContext {
+	IOPMrootDomain *	RootDomain;
+	unsigned long		PowerState;
+	IOPMPowerFlags		PowerFlags;
+	UInt32				MessageType;
+	UInt32				Counter;
+};
+
+static void
+platformHaltRestartApplier( OSObject * object, void * context )
+{
+	IOPowerStateChangeNotification	notify;
+	HaltRestartApplierContext *		ctx;
+	AbsoluteTime					startTime;
+	UInt32							deltaTime;
+
+	ctx = (HaltRestartApplierContext *) context;
+	
+	memset(&notify, 0, sizeof(notify));
+    notify.powerRef    = (void *)ctx->Counter;
+    notify.returnValue = 0;
+    notify.stateNumber = ctx->PowerState;
+    notify.stateFlags  = ctx->PowerFlags;
+
+	clock_get_uptime(&startTime);
+    ctx->RootDomain->messageClient( ctx->MessageType, object, (void *)&notify );
+	deltaTime = computeDeltaTimeMS(&startTime);
+
+	if ((deltaTime > kPMHaltTimeoutMS) || (gIOKitDebug & kIOLogDebugPower))
+	{
+		_IOServiceInterestNotifier * notifier;
+		notifier = OSDynamicCast(_IOServiceInterestNotifier, object);
+
+		// IOService children of IOPMrootDomain are not instrumented.
+		// Only IORootParent currently falls under that group.
+
+		if (notifier)
+		{
+			HaltRestartLog("%s handler %p took %lu ms\n",
+				(ctx->MessageType == kIOMessageSystemWillPowerOff) ?
+					"PowerOff" : "Restart",
+				notifier->handler, deltaTime );
+		}
+	}
+
+	ctx->Counter++;
+}
+
+void IOPMrootDomain::handlePlatformHaltRestart( UInt32 pe_type )
+{
+	HaltRestartApplierContext	ctx;
+	AbsoluteTime				startTime;
+	UInt32						deltaTime;
+
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.RootDomain = this;
+
+	clock_get_uptime(&startTime);
+	switch (pe_type)
+	{
+		case kPEHaltCPU:
+			ctx.PowerState  = OFF_STATE;
+			ctx.MessageType = kIOMessageSystemWillPowerOff;
+			break;
+		
+		case kPERestartCPU:
+			ctx.PowerState  = RESTART_STATE;
+			ctx.MessageType = kIOMessageSystemWillRestart;
+			break;
+
+		default:
+			return;
+	}
+
+	// Notify legacy clients
+	applyToInterested(gIOPriorityPowerStateInterest, platformHaltRestartApplier, &ctx);
+
+	// Notify in power tree order
+	notifySystemShutdown(this, ctx.MessageType);
+
+	deltaTime = computeDeltaTimeMS(&startTime);
+	HaltRestartLog("%s all drivers took %lu ms\n",
+		(ctx.MessageType == kIOMessageSystemWillPowerOff) ?
+			"PowerOff" : "Restart",
+		deltaTime );
 }
 
 
@@ -1675,20 +2166,7 @@ bool IOPMrootDomain::tellChangeDown ( unsigned long stateNum )
             OSMetaClassSystemSleepOrWake( kIOMessageSystemWillSleep );
 
             return super::tellClientsWithResponse(kIOMessageSystemWillSleep);
-        case RESTART_STATE:
-            // Unsupported shutdown ordering hack on RESTART only
-            // For Bluetooth and USB (4368327)
-            super::tellClients(iokit_common_msg(0x759));
-
-            return super::tellClientsWithResponse(kIOMessageSystemWillRestart);
-        case OFF_STATE:
-            // Unsupported shutdown ordering hack on SHUTDOWN only
-            // For Bluetooth and USB (4554440)
-            super::tellClients(iokit_common_msg(0x749));
-
-            return super::tellClientsWithResponse(kIOMessageSystemWillPowerOff);
     }
-    // this shouldn't execute
     return super::tellChangeDown(stateNum);
 }
 
@@ -1722,6 +2200,16 @@ bool IOPMrootDomain::askChangeDown ( unsigned long )
 
 void IOPMrootDomain::tellNoChangeDown ( unsigned long )
 {
+    if (idleSeconds && !wrangler)
+    {
+	AbsoluteTime deadline;
+	sleepASAP = false;
+	// stay awake for at least idleSeconds
+	clock_interval_to_deadline(idleSeconds, kSecondScale, &deadline);	
+	thread_call_enter_delayed(extraSleepTimer, deadline);
+	// this gets turned off when we sleep again
+	idleSleepPending = true;
+    }
     return tellClients(kIOMessageSystemWillNotSleep);
 }
 
@@ -1739,11 +2227,13 @@ void IOPMrootDomain::tellChangeUp ( unsigned long stateNum)
 {
     if ( stateNum == ON_STATE ) 
     {
+#if	HIBERNATION
         // Direct callout into OSMetaClass so it can disable kmod unloads
         // during sleep/wake to prevent deadlocks.
         OSMetaClassSystemSleepOrWake( kIOMessageSystemHasPoweredOn );
 
 	IOHibernateSystemPostWake();
+#endif
         return tellClients(kIOMessageSystemHasPoweredOn);
     }
 }
@@ -1755,6 +2245,7 @@ void IOPMrootDomain::tellChangeUp ( unsigned long stateNum)
 
 void IOPMrootDomain::reportUserInput ( void )
 {
+#if !NO_KERNEL_HID
     OSIterator * iter;
 
     if(!wrangler) 
@@ -1769,6 +2260,7 @@ void IOPMrootDomain::reportUserInput ( void )
 
     if(wrangler)
         wrangler->activityTickle(0,0);
+#endif
 }
 
 //*********************************************************************************
@@ -1806,9 +2298,18 @@ IOReturn IOPMrootDomain::changePowerStateToPriv ( unsigned long ordinal )
 {
     IOReturn    ret;
 
-    if( (systemBooting || systemShutdown) && (ordinal == SLEEP_STATE) )
+    DEBUG_LOG("ChangePowerStateToPriv: power state %ld\n", ordinal);
+
+	if ( (getPowerState() == DOZE_STATE) && (ordinal != ON_STATE) )
+	{
+		return kIOReturnSuccess;
+	}
+
+    if( (userDisabledAllSleep || systemBooting || systemShutdown) 
+        && (ordinal == SLEEP_STATE) )
     {
-        kprintf("DANGER DANGER DANGER unexpected code path. aborting SLEEPSTATE change.\n");
+        DEBUG_LOG("  sleep denied: disableAllSleep %d, booting %d, shutdown %d\n",
+            userDisabledAllSleep, systemBooting, systemShutdown);
         super::changePowerStateToPriv(ON_STATE);
     }
 
@@ -1821,7 +2322,7 @@ IOReturn IOPMrootDomain::changePowerStateToPriv ( unsigned long ordinal )
                             NULL, NULL, NULL, NULL);
     
         // If the machine only supports doze, the callPlatformFunction call
-        // boils down toIOPMrootDomain::setSleepSupported(kPCICantSleep), 
+        // boils down to IOPMrootDomain::setSleepSupported(kPCICantSleep), 
         // otherwise nothing.
     }
 
@@ -1852,8 +2353,7 @@ IOReturn IOPMrootDomain::sysPowerDownHandler( void * target, void * refCon,
 
     switch (messageType) {
         case kIOMessageSystemWillSleep:
-            rootDomain->powerOverrideOnPriv();		// start ignoring children's requests
-                                                        // (fall through to other cases)
+            DEBUG_LOG("SystemWillSleep\n");
 
             // Interested applications have been notified of an impending power
             // change and have acked (when applicable).
@@ -1864,8 +2364,10 @@ IOReturn IOPMrootDomain::sysPowerDownHandler( void * target, void * refCon,
 
             // We will ack within 20 seconds
             params->returnValue = 20 * 1000 * 1000;
+#if	HIBERNATION
             if (gIOHibernateState)
                 params->returnValue += gIOHibernateFreeTime * 1000; 	//add in time we could spend freeing pages
+#endif
 
             if ( ! OSCompareAndSwap( 0, 1, &gSleepOrShutdownPending ) )
             {
@@ -1902,77 +2404,110 @@ IOReturn IOPMrootDomain::sysPowerDownHandler( void * target, void * refCon,
 //
 // Allows us to take action on display dim/undim.
 //
-// When the display goes dim we:
+// When the display sleeps we:
 // - Start the idle sleep timer
 // - set the quick spin down timeout
 //
-// On wake from display dim:
+// On wake from display sleep:
 // - Cancel the idle sleep timer
 // - restore the user's chosen spindown timer from the "quick" spin down value
 //*********************************************************************************
 
-IOReturn IOPMrootDomain::displayWranglerNotification( void * target, void * refCon,
-                                    UInt32 messageType, IOService * service,
-                                    void * messageArgument, vm_size_t argSize )
+IOReturn IOPMrootDomain::displayWranglerNotification(
+    void * target, void * refCon,
+    UInt32 messageType, IOService * service,
+    void * messageArgument, vm_size_t argSize )
 {
-    IOPMrootDomain *                rootDomain = OSDynamicCast(IOPMrootDomain, (IOService *)target);
-    AbsoluteTime                 deadline;
-    static bool                  deviceAlreadyPoweredOff = false;
+#if !NO_KERNEL_HID
+    IOPMrootDomain *    rootDomain = OSDynamicCast(IOPMrootDomain, (IOService *)target);
+    AbsoluteTime        deadline;
+    static int          displayPowerState = 4;
 
-    if(!rootDomain)
+    if (!rootDomain)
         return kIOReturnUnsupported;
 
     switch (messageType) {
        case kIOMessageDeviceWillPowerOff:
-            // The IODisplayWrangler has powered off either because of idle display sleep
-            // or force system sleep.
-            
-            // The display wrangler will send the DeviceWillPowerOff message 4 times until
-            // it gets into its lowest state. We only want to act on the first of those 4.
-            if( deviceAlreadyPoweredOff ) return kIOReturnUnsupported;
+            DEBUG_LOG("DisplayWranglerWillPowerOff: new p-state %d\n",
+                displayPowerState - 1);
 
-           deviceAlreadyPoweredOff = true;
+            // The display wrangler has dropped power because of idle display sleep
+            // or force system sleep. We will receive 4 messages before the display
+            // wrangler reaches its lowest state. Act only when going to state 2.
+            //
+            // 4->3 Display Dim
+            // 3->2 Display Sleep
+            // 2->1 Not visible to user
+            // 1->0 Not visible to user
 
-           if( rootDomain->extraSleepDelay ) 
-           {
-                // start the extra sleep timer
-                clock_interval_to_deadline(rootDomain->extraSleepDelay*60, kSecondScale, &deadline );
+            displayPowerState--;
+            if ( 2 != displayPowerState )
+                return kIOReturnUnsupported;
+
+            // We start a timer here if the System Sleep timer is greater than the
+            // Display Sleep timer. We kick off this timer when the display sleeps.
+            //
+            // Note that, although Display Dim timings may change adaptively accordingly
+            // to the user's activity patterns, Display Sleep _always_ occurs at the
+            // specified interval since last user activity.
+
+            if ( rootDomain->extraSleepDelay )
+            {
+                clock_interval_to_deadline(rootDomain->extraSleepDelay*60, kSecondScale, &deadline);
                 thread_call_enter_delayed(rootDomain->extraSleepTimer, deadline);
                 rootDomain->idleSleepPending = true;
+                DEBUG_LOG("  sleep timer set to expire in %ld min\n",
+                    rootDomain->extraSleepDelay);
             } else {
-                // accelerate disk spin down if spin down timer is non-zero (zero = never spin down)
-                // and if system sleep is non-Never
-                if( (0 != rootDomain->user_spindown) && (0 != rootDomain->sleepSlider) )
+                // Accelerate disk spindown if system sleep and display sleep
+                // sliders are set to the same value (e.g. both set to 5 min),
+                // and display is about to go dark. Check that spin down timer
+                // is non-zero (zero = never spin down) and system sleep is
+                // not set to never sleep.
+
+                if ( (0 != rootDomain->user_spindown) && (0 != rootDomain->sleepSlider) )
+                {
+                    DEBUG_LOG("  accelerate quick disk spindown, was %d min\n",
+                        rootDomain->user_spindown);
                     rootDomain->setQuickSpinDownTimeout();
+                }
             }
 
-             break;
+            break;
 
         case kIOMessageDeviceHasPoweredOn:
+            DEBUG_LOG("DisplayWranglerHasPoweredOn: previous p-state %d\n",
+                displayPowerState);
 
-            // The display has powered on either because of UI activity or wake from sleep/doze
-            deviceAlreadyPoweredOff = false;
+            // The display wrangler has powered on either because of user activity 
+            // or wake from sleep/doze.
+
+            displayPowerState = 4;
             rootDomain->adjustPowerState();
-            
 
-            // cancel any pending idle sleep
-            if(rootDomain->idleSleepPending) 
+            // cancel any pending idle sleep timers
+            if (rootDomain->idleSleepPending) 
             {
+                DEBUG_LOG("  extra-sleep timer stopped\n");
                 thread_call_cancel(rootDomain->extraSleepTimer);
                 rootDomain->idleSleepPending = false;
             }
 
-            // Change the spindown value back to the user's selection from our accelerated setting
-            if(0 != rootDomain->user_spindown)
+            // Change the spindown value back to the user's selection from our
+            // accelerated setting.
+            if (0 != rootDomain->user_spindown)
+            {
+                DEBUG_LOG("  restoring disk spindown to %d min\n",
+                    rootDomain->user_spindown);
                 rootDomain->restoreUserSpinDownTimeout();
-
-            // Put on the policy maker's on clamp.
+            }
 
             break;
 
          default:
              break;
      }
+#endif
      return kIOReturnUnsupported;
  }
 
@@ -1989,6 +2524,7 @@ bool IOPMrootDomain::displayWranglerPublished(
     void * refCon,
     IOService * newService)
 {
+#if !NO_KERNEL_HID
     IOPMrootDomain *rootDomain = 
             OSDynamicCast(IOPMrootDomain, (IOService *)target);
 
@@ -2003,10 +2539,9 @@ bool IOPMrootDomain::displayWranglerPublished(
     {
         return false;
     }
-    
+#endif
     return true;
 }
-
 
 //*********************************************************************************
 // batteryPublished
@@ -2029,8 +2564,6 @@ bool IOPMrootDomain::batteryPublished(
 
     return (true);
 }
-
-
 
 //*********************************************************************************
 // adjustPowerState
@@ -2059,23 +2592,477 @@ void IOPMrootDomain::adjustPowerState( void )
     if ( (sleepSlider == 0) 
         || !allowSleep 
         || systemBooting 
-        || systemShutdown )
+        || systemShutdown
+        || userDisabledAllSleep )
     {
-        if(systemBooting || systemShutdown) {
-            kprintf("adjusting power state to ON_STATE [2063] on grounds of systemBooting.\n");
-        }
-        
+        DEBUG_LOG("AdjustPowerState %ld -> ON: slider %ld, allowSleep %d, "
+            "booting %d, shutdown %d, userDisabled %d\n",
+            getPowerState(), sleepSlider, allowSleep, systemBooting,
+            systemShutdown, userDisabledAllSleep);
+
         changePowerStateToPriv(ON_STATE);
     } else {
         if ( sleepASAP ) 
         {
+            DEBUG_LOG("AdjustPowerState SLEEP\n");
+
+            /* Convenient place to run any code at idle sleep time
+             * IOPMrootDomain initiates an  idle sleep here
+             *
+             * Set last sleep cause accordingly.
+             */
+            setProperty(kRootDomainSleepReasonKey, kIOPMIdleSleepKey);
+        
             sleepASAP = false;
-            if ( !sleepIsSupported )
+            if ( !sleepIsSupported ) 
+            {
                 setSleepSupported( kPCICantSleep );
+                kprintf("Sleep prevented by kIOPMPreventSystemSleep flag\n");
+            }
             changePowerStateToPriv(SLEEP_STATE);
         }
     }
 }
+
+//*********************************************************************************
+// PMHaltWorker Class
+//
+//*********************************************************************************
+
+static unsigned int		gPMHaltBusyCount;
+static unsigned int		gPMHaltIdleCount;
+static int				gPMHaltDepth;
+static unsigned long    gPMHaltEvent;
+static IOLock *			gPMHaltLock  = 0;
+static OSArray *		gPMHaltArray = 0;
+static const OSSymbol * gPMHaltClientAcknowledgeKey = 0;
+
+PMHaltWorker * PMHaltWorker::worker( void )
+{
+	PMHaltWorker *	me;
+	IOThread		thread;
+
+	do {
+		me = OSTypeAlloc( PMHaltWorker );
+		if (!me || !me->init())
+			break;
+
+		me->lock = IOLockAlloc();
+		if (!me->lock)
+			break;
+
+		DEBUG_LOG("PMHaltWorker %p\n", me);
+		me->retain();	// thread holds extra retain
+		thread = IOCreateThread( &PMHaltWorker::main, me );
+		if (!thread)
+		{
+			me->release();
+			break;
+		}
+		return me;
+
+	} while (false);
+
+	if (me) me->release();
+	return 0;
+}
+
+void PMHaltWorker::free( void )
+{
+	DEBUG_LOG("PMHaltWorker free %p\n", this);
+	if (lock)
+	{
+		IOLockFree(lock);
+		lock = 0;
+	}
+	return OSObject::free();
+}
+
+void PMHaltWorker::main( void * arg )
+{
+	PMHaltWorker * me = (PMHaltWorker *) arg;
+
+	IOLockLock( gPMHaltLock );
+	gPMHaltBusyCount++;
+	me->depth = gPMHaltDepth;
+	IOLockUnlock( gPMHaltLock );
+
+	while (me->depth >= 0)
+	{
+		PMHaltWorker::work( me );
+
+		IOLockLock( gPMHaltLock );
+		if (++gPMHaltIdleCount >= gPMHaltBusyCount)
+		{
+			// This is the last thread to finish work on this level,
+			// inform everyone to start working on next lower level.
+			gPMHaltDepth--;
+			me->depth = gPMHaltDepth;
+			gPMHaltIdleCount = 0;
+			thread_wakeup((event_t) &gPMHaltIdleCount);
+		}
+		else
+		{
+			// One or more threads are still working on this level,
+			// this thread must wait.
+			me->depth = gPMHaltDepth - 1;
+			do {
+				IOLockSleep(gPMHaltLock, &gPMHaltIdleCount, THREAD_UNINT);
+			} while (me->depth != gPMHaltDepth);
+		}
+		IOLockUnlock( gPMHaltLock );
+	}
+
+	// No more work to do, terminate thread
+	DEBUG_LOG("All done for worker: %p (visits = %u)\n", me, me->visits);
+	thread_wakeup( &gPMHaltDepth );
+	me->release();
+}
+
+void PMHaltWorker::work( PMHaltWorker * me )
+{
+	IOService *		service;
+	OSSet *			inner;
+	AbsoluteTime	startTime;
+	UInt32			deltaTime;
+	bool			timeout;
+
+	while (true)
+	{
+		service = 0;
+		timeout = false;
+
+		// Claim an unit of work from the shared pool
+		IOLockLock( gPMHaltLock );
+		inner = (OSSet *)gPMHaltArray->getObject(me->depth);
+		if (inner)
+		{
+			service = (IOService *)inner->getAnyObject();
+			if (service)
+			{
+				service->retain();
+				inner->removeObject(service);
+			}
+		}
+		IOLockUnlock( gPMHaltLock );	
+		if (!service)
+			break;  // no more work at this depth
+
+		clock_get_uptime(&startTime);
+
+		if (!service->isInactive() &&
+			service->setProperty(gPMHaltClientAcknowledgeKey, me))
+		{
+			IOLockLock(me->lock);
+			me->startTime = startTime;
+			me->service   = service;
+			me->timeout   = false;
+			IOLockUnlock(me->lock);
+
+			service->systemWillShutdown( gPMHaltEvent );
+
+			// Wait for driver acknowledgement
+			IOLockLock(me->lock);
+			while (service->getProperty(gPMHaltClientAcknowledgeKey))
+			{
+				IOLockSleep(me->lock, me, THREAD_UNINT);			
+			}
+			me->service = 0;
+			timeout = me->timeout;
+			IOLockUnlock(me->lock);
+		}
+
+		deltaTime = computeDeltaTimeMS(&startTime);
+		if ((deltaTime > kPMHaltTimeoutMS) || timeout ||
+			(gIOKitDebug & kIOLogDebugPower))
+		{
+			HaltRestartLog("%s driver %s (%p) took %lu ms\n",
+				(gPMHaltEvent == kIOMessageSystemWillPowerOff) ?
+					"PowerOff" : "Restart",
+				service->getName(), service,
+				deltaTime );
+		}
+
+		service->release();
+		me->visits++;
+	}
+}
+
+void PMHaltWorker::checkTimeout( PMHaltWorker * me, AbsoluteTime * now )
+{
+	UInt64			nano;
+	AbsoluteTime	startTime;
+	AbsoluteTime	endTime;
+
+	endTime = *now;
+
+	IOLockLock(me->lock);
+	if (me->service && !me->timeout)
+	{
+		startTime = me->startTime;
+		nano = 0;
+	    if (CMP_ABSOLUTETIME(&endTime, &startTime) > 0)
+	    {
+			SUB_ABSOLUTETIME(&endTime, &startTime);
+			absolutetime_to_nanoseconds(endTime, &nano);
+	    }
+		if (nano > 3000000000ULL)
+		{
+			me->timeout = true;
+			HaltRestartLog("%s still waiting on %s\n",
+				(gPMHaltEvent == kIOMessageSystemWillPowerOff) ?
+					"PowerOff" : "Restart",
+				me->service->getName());
+		}
+	}
+	IOLockUnlock(me->lock);
+}
+
+//*********************************************************************************
+// acknowledgeSystemWillShutdown
+//
+// Acknowledgement from drivers that they have prepared for shutdown/restart.
+//*********************************************************************************
+
+void IOPMrootDomain::acknowledgeSystemWillShutdown( IOService * from )
+{
+	PMHaltWorker *	worker;
+	OSObject *		prop;
+
+	if (!from)
+		return;
+
+	//DEBUG_LOG("%s acknowledged\n", from->getName());
+	prop = from->copyProperty( gPMHaltClientAcknowledgeKey );
+	if (prop)
+	{
+		worker = (PMHaltWorker *) prop;
+		IOLockLock(worker->lock);
+		from->removeProperty( gPMHaltClientAcknowledgeKey );
+		thread_wakeup((event_t) worker);
+		IOLockUnlock(worker->lock);
+		worker->release();
+	}
+	else
+	{
+		DEBUG_LOG("%s acknowledged without worker property\n",
+			from->getName());
+	}
+}
+
+//*********************************************************************************
+// notifySystemShutdown
+//
+// Notify all objects in PM tree that system will shutdown or restart
+//*********************************************************************************
+
+static void
+notifySystemShutdown( IOService * root, unsigned long event )
+{
+#define PLACEHOLDER ((OSSet *)gPMHaltArray)
+	IORegistryIterator *	iter;
+	IORegistryEntry *		entry;
+	IOService *				node;
+	OSSet *					inner;
+	PMHaltWorker *			workers[kPMHaltMaxWorkers];
+	AbsoluteTime			deadline;
+	unsigned int			totalNodes = 0;
+	unsigned int			depth;
+	unsigned int			rootDepth;
+	unsigned int			numWorkers;
+	unsigned int			count;
+	int						waitResult;
+	void *					baseFunc;
+	bool					ok;
+
+	DEBUG_LOG("%s event = %lx\n", __FUNCTION__, event);
+
+	baseFunc = OSMemberFunctionCast(void *, root, &IOService::systemWillShutdown);
+
+	// Iterate the entire PM tree starting from root
+
+	rootDepth = root->getDepth( gIOPowerPlane );
+	if (!rootDepth) goto done;
+
+	// debug - for repeated test runs
+	while (PMHaltWorker::metaClass->getInstanceCount())
+		IOSleep(1);
+
+	if (!gPMHaltArray)
+	{
+		gPMHaltArray = OSArray::withCapacity(40);
+		if (!gPMHaltArray) goto done;
+	}
+	else // debug
+		gPMHaltArray->flushCollection();
+
+	if (!gPMHaltLock)
+	{
+		gPMHaltLock = IOLockAlloc();
+		if (!gPMHaltLock) goto done;
+	}
+
+	if (!gPMHaltClientAcknowledgeKey)
+	{
+		gPMHaltClientAcknowledgeKey =
+			OSSymbol::withCStringNoCopy("PMShutdown");
+		if (!gPMHaltClientAcknowledgeKey) goto done;
+	}
+
+	gPMHaltEvent = event;
+
+	// Depth-first walk of PM plane
+
+	iter = IORegistryIterator::iterateOver(
+		root, gIOPowerPlane, kIORegistryIterateRecursively);
+
+	if (iter)
+	{
+		while ((entry = iter->getNextObject()))
+		{
+			node = OSDynamicCast(IOService, entry);
+			if (!node)
+				continue;
+
+			if (baseFunc == 
+				OSMemberFunctionCast(void *, node, &IOService::systemWillShutdown))
+				continue;
+
+			depth = node->getDepth( gIOPowerPlane );
+			if (depth <= rootDepth)
+				continue;
+
+			ok = false;
+
+			// adjust to zero based depth
+			depth -= (rootDepth + 1);
+
+			// gPMHaltArray is an array of containers, each container
+			// refers to nodes with the same depth.
+
+			count = gPMHaltArray->getCount();
+			while (depth >= count)
+			{
+				// expand array and insert placeholders
+				gPMHaltArray->setObject(PLACEHOLDER);
+				count++;
+			}
+			count = gPMHaltArray->getCount();
+			if (depth < count)
+			{
+				inner = (OSSet *)gPMHaltArray->getObject(depth);
+				if (inner == PLACEHOLDER)
+				{
+					inner = OSSet::withCapacity(40);
+					if (inner)
+					{
+						gPMHaltArray->replaceObject(depth, inner);
+						inner->release();
+					}
+				}
+
+				// PM nodes that appear more than once in the tree will have
+				// the same depth, OSSet will refuse to add the node twice.
+				if (inner)
+					ok = inner->setObject(node);
+			}
+			if (!ok)
+				DEBUG_LOG("Skipped PM node %s\n", node->getName());
+		}
+		iter->release();
+	}
+
+	// debug only
+	for (int i = 0; (inner = (OSSet *)gPMHaltArray->getObject(i)); i++)
+	{
+		count = 0;
+		if (inner != PLACEHOLDER)
+			count = inner->getCount();
+		DEBUG_LOG("Nodes at depth %u = %u\n", i, count);
+	}
+
+	// strip placeholders (not all depths are populated)
+	numWorkers = 0;
+	for (int i = 0; (inner = (OSSet *)gPMHaltArray->getObject(i)); )
+	{
+		if (inner == PLACEHOLDER)
+		{
+			gPMHaltArray->removeObject(i);
+			continue;
+		}
+		count = inner->getCount();
+		if (count > numWorkers)
+			numWorkers = count;
+		totalNodes += count;
+		i++;
+	}
+
+	if (gPMHaltArray->getCount() == 0 || !numWorkers)
+		goto done;
+
+	gPMHaltBusyCount = 0;
+	gPMHaltIdleCount = 0;
+	gPMHaltDepth = gPMHaltArray->getCount() - 1;
+
+	// Create multiple workers (and threads)
+
+	if (numWorkers > kPMHaltMaxWorkers)
+		numWorkers = kPMHaltMaxWorkers;
+
+	DEBUG_LOG("PM nodes = %u, maxDepth = %u, workers = %u\n",
+		totalNodes, gPMHaltArray->getCount(), numWorkers);
+
+	for (unsigned int i = 0; i < numWorkers; i++)
+		workers[i] = PMHaltWorker::worker();
+
+	// Wait for workers to exhaust all available work
+
+	IOLockLock(gPMHaltLock);
+	while (gPMHaltDepth >= 0)
+	{
+		clock_interval_to_deadline(1000, kMillisecondScale, &deadline);
+
+		waitResult = IOLockSleepDeadline(
+			gPMHaltLock, &gPMHaltDepth, deadline, THREAD_UNINT);
+		if (THREAD_TIMED_OUT == waitResult)
+		{
+			AbsoluteTime now;
+			clock_get_uptime(&now);
+
+			IOLockUnlock(gPMHaltLock);
+			for (unsigned int i = 0 ; i < numWorkers; i++)
+			{
+				if (workers[i])
+					PMHaltWorker::checkTimeout(workers[i], &now);
+			}
+			IOLockLock(gPMHaltLock);
+		}
+	}
+	IOLockUnlock(gPMHaltLock);
+
+	// Release all workers
+
+	for (unsigned int i = 0; i < numWorkers; i++)
+	{
+		if (workers[i])
+			workers[i]->release();
+		// worker also retained by it's own thread
+	}
+
+done:
+	DEBUG_LOG("%s done\n", __FUNCTION__);
+	return;
+}
+
+#if DEBUG_TEST
+// debug - exercise notifySystemShutdown()
+bool IOPMrootDomain::serializeProperties( OSSerialize * s ) const
+{
+	IOPMrootDomain * root = (IOPMrootDomain *) this;
+	notifySystemShutdown( root, kIOMessageSystemWillPowerOff );
+    return( super::serializeProperties(s) );
+}
+#endif
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -2215,8 +3202,10 @@ bool IORootParent::start ( IOService * nub )
     mostRecentChange = ON_STATE;
     super::start(nub);
     PMinit();
+	youAreRoot();
     registerPowerDriver(this,patriarchPowerStates,number_of_power_states);
-    powerOverrideOnPriv();
+	wakeSystem();
+    powerOverrideOnPriv();	
     return true;
 }
 

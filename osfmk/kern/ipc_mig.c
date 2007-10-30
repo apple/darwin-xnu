@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -110,6 +116,32 @@ mach_msg_send_from_kernel(
 	ipc_kmsg_send_always(kmsg);
 
 	return MACH_MSG_SUCCESS;
+}
+
+mach_msg_return_t
+mach_msg_send_from_kernel_with_options(
+	mach_msg_header_t	*msg,
+	mach_msg_size_t		send_size,
+	mach_msg_option_t	option,
+	mach_msg_timeout_t	timeout_val)
+{
+	ipc_kmsg_t kmsg;
+	mach_msg_return_t mr;
+
+	if (!MACH_PORT_VALID((mach_port_name_t)msg->msgh_remote_port))
+		return MACH_SEND_INVALID_DEST;
+
+	mr = ipc_kmsg_get_from_kernel(msg, send_size, &kmsg);
+	if (mr != MACH_MSG_SUCCESS)
+		return mr;
+
+	ipc_kmsg_copyin_from_kernel(kmsg);
+	mr = ipc_kmsg_send(kmsg, option, timeout_val);
+	if (mr != MACH_MSG_SUCCESS) {
+		ipc_kmsg_free(kmsg);
+	}
+	
+	return mr;
 }
 
 /*
@@ -211,32 +243,40 @@ mach_msg_rpc_from_kernel(
 	}
 	ipc_port_release(reply);
 
-	/*
-	 * XXXXX  Set manually for now ...
-	 *	No, why even bother, since the effort is wasted?
-	 *
-	{ mach_msg_format_0_trailer_t *trailer = (mach_msg_format_0_trailer_t *)
-		((vm_offset_t)&kmsg->ikm_header + kmsg->ikm_header.msgh_size);
-	trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
-	trailer->msgh_trailer_size = MACH_MSG_TRAILER_MINIMUM_SIZE;
-	}
-	 *****/
+	/* 
+	 * Check to see how much of the message/trailer can be received.
+	 * We chose the maximum trailer that will fit, since we don't
+	 * have options telling us which trailer elements the caller needed.
+	 */
+	if (rcv_size >= kmsg->ikm_header->msgh_size) {
+		mach_msg_format_0_trailer_t *trailer =  (mach_msg_format_0_trailer_t *)
+			((vm_offset_t)kmsg->ikm_header + kmsg->ikm_header->msgh_size);
 
-	if (rcv_size < kmsg->ikm_header->msgh_size) {
-		ipc_kmsg_copyout_dest(kmsg, ipc_space_reply);
-		ipc_kmsg_put_to_kernel(msg, kmsg, kmsg->ikm_header->msgh_size);
-		return MACH_RCV_TOO_LARGE;
+		if (rcv_size >= kmsg->ikm_header->msgh_size + MAX_TRAILER_SIZE) {
+			/* Enough room for a maximum trailer */
+			trailer->msgh_trailer_size = MAX_TRAILER_SIZE;
+		} 
+		else if (rcv_size < kmsg->ikm_header->msgh_size + 
+			   trailer->msgh_trailer_size) {
+			/* no room for even the basic (default) trailer */
+			trailer->msgh_trailer_size = 0;
+		}
+		assert(trailer->msgh_trailer_type == MACH_MSG_TRAILER_FORMAT_0);
+		rcv_size = kmsg->ikm_header->msgh_size + trailer->msgh_trailer_size;
+		mr = MACH_MSG_SUCCESS;
+	} else {
+		mr = MACH_RCV_TOO_LARGE;
 	}
+
 
 	/*
 	 *	We want to preserve rights and memory in reply!
 	 *	We don't have to put them anywhere; just leave them
 	 *	as they are.
 	 */
-
 	ipc_kmsg_copyout_to_kernel(kmsg, ipc_space_reply);
-	ipc_kmsg_put_to_kernel(msg, kmsg, kmsg->ikm_header->msgh_size);
-	return MACH_MSG_SUCCESS;
+	ipc_kmsg_put_to_kernel(msg, kmsg, rcv_size);
+	return mr;
 }
 
 

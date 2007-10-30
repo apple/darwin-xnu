@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #ifndef _IODMACOMMAND_H
 #define _IODMACOMMAND_H
@@ -43,6 +49,8 @@ class IOMapper;
 class IODMACommand : public IOCommand
 {
     OSDeclareDefaultStructors(IODMACommand);
+
+friend class IODMAEventSource;
 
 public:
 
@@ -313,6 +321,31 @@ public:
 				     void   *segments,
 				     UInt32 *numSegments);
 
+private:
+    virtual UInt64 transfer( IOOptionBits transferOp, UInt64 offset, void * buffer, UInt64 length );
+
+public:
+
+/*! @function writeBytes
+    @abstract Copy data to the IODMACommand's buffer from the specified buffer.
+    @discussion This method copies data to the IODMACommand's memory at the given offset, from the caller's buffer. The IODMACommand must be prepared, and the offset is relative to the prepared offset.
+    @param offset A byte offset into the IODMACommand's memory, relative to the prepared offset.
+    @param bytes The caller supplied buffer to copy the data from.
+    @param length The length of the data to copy.
+    @result The number of bytes copied, zero will be returned if the specified offset is beyond the prepared length of the IODMACommand. */
+
+    UInt64 writeBytes(UInt64 offset, const void *bytes, UInt64 length);
+
+/*! @function readBytes
+    @abstract Copy data from the IODMACommand's buffer to the specified buffer.
+    @discussion This method copies data from the IODMACommand's memory at the given offset, to the caller's buffer. The IODMACommand must be prepared, and the offset is relative to the prepared offset.
+    @param offset A byte offset into the IODMACommand's memory, relative to the prepared offset.
+    @param bytes The caller supplied buffer to copy the data to.
+    @param length The length of the data to copy.
+    @result The number of bytes copied, zero will be returned if the specified offset is beyond the prepared length of the IODMACommand. */
+
+    UInt64 readBytes(UInt64 offset, void *bytes, UInt64 length);
+
 /*! @function gen32IOVMSegments
     @abstract Helper function for a type checked call to genIOVMSegments(qv), for use with an IODMACommand set up with the output function kIODMACommandOutputHost32, kIODMACommandOutputBig32, or kIODMACommandOutputLittle32. If the output function of the IODMACommand is not a 32 bit function, results will be incorrect.
 */
@@ -332,7 +365,6 @@ public:
     virtual void free();
 
 private:
-
     typedef IOReturn (*InternalSegmentFunction)(
 				    void         *reference,
 				    IODMACommand *target,
@@ -358,9 +390,47 @@ private:
 			UInt32        segmentIndex);
     IOReturn IODMACommand::walkAll(UInt8 op);
 
+public:
+
+/*! @function prepareWithSpecification
+    @abstract Prepare the memory for an I/O transfer with a new specification.
+    @discussion Allocate the mapping resources neccessary for this transfer, specifying a sub range of the IOMemoryDescriptor that will be the target of the I/O.  The complete() method frees these resources.  Data may be copied to buffers for kIODirectionOut memory descriptors, depending on hardware mapping resource availabilty or alignment restrictions.  It should be noted that the this function may block and should only be called on the clients context, i.e never call this routine while gated; also the call itself is not thread safe though this should be an issue as each IODMACommand is independant.
+    @param outSegFunc SegmentFunction to call to output one physical segment. A set of nine commonly required segment functions are provided.
+    @param numAddressBits Number of bits that the hardware uses on its internal address bus. Typically 32 but may be more on modern hardware.  A 0 implies no-restriction other than that implied by the output segment function.
+    @param maxSegmentSize Maximum allowable size for one segment.  Defaults to 0 which means any size.
+    @param mappingOptions is the type of mapping that is required to translate an IOMemoryDescriptor into the desired number of bits.  For instance if your hardware only supports 32 bits but must run on machines with > 4G of RAM some mapping will be required.  Number of bits will be specified in numAddressBits, see below.This parameter can take 3 values:- kNonCoherent - used for non-coherent hardware transfers, Mapped - Validate that all I/O bus generated addresses are within the number of addressing bits specified, Bypassed indicates that bypassed addressing is required, this is used when the hardware transferes are into coherent memory but no mapping is required.  See also prepare() for failure cases.
+    @param maxTransferSize Maximum size of an entire transfer.	Defaults to 0 indicating no maximum.
+    @param alignment Alignment restriction, in bytes, on I/O bus addresses.  Defaults to single byte alignment.
+    @param mapper For mapping types kMapped & kBypassed mapper is used to define the hardware that will perform the mapping, defaults to the system mapper.
+    @param offset defines the starting offset in the memory descriptor the DMA command will operate on. genIOVMSegments will produce its results based on the offset and length passed to the prepare method.
+    @param length defines the ending position in the memory descriptor the DMA command will operate on. genIOVMSegments will produce its results based on the offset and length passed to the prepare method.
+    @param flushCache Flush the caches for the memory descriptor and make certain that the memory cycles are complete.  Defaults to true for kNonCoherent and is ignored by the other types.
+    @param synchronize Copy any buffered data back from the target IOMemoryDescriptor.  Defaults to true, if synchronize() is being used to explicitly copy data, passing false may avoid an unneeded copy.
+    @result An IOReturn code. Can fail if the mapping type is not recognised, if one of the 3 mandatory parameters are set to 0, if a 32 bit output function is selected when more than 32 bits of address is required or, if kBypassed is requested on a machine that doesn't support bypassing.
+*/
+
+    virtual IOReturn prepareWithSpecification(SegmentFunction	outSegFunc,
+					      UInt8		numAddressBits,
+					      UInt64		maxSegmentSize,
+					      MappingOptions	mappingOptions = kMapped,
+					      UInt64		maxTransferSize = 0,
+					      UInt32		alignment = 1,
+					      IOMapper		*mapper = 0,
+					      UInt64		offset = 0,
+					      UInt64		length = 0,
+					      bool		flushCache = true,
+					      bool		synchronize = true);
+
+    static IOReturn transferSegment(
+			void         *reference,
+			IODMACommand *target,
+			Segment64     segment,
+			void         *segments,
+			UInt32        segmentIndex);
+
 private:
-    OSMetaClassDeclareReservedUnused(IODMACommand,  0);
-    OSMetaClassDeclareReservedUnused(IODMACommand,  1);
+    OSMetaClassDeclareReservedUsed(IODMACommand,  0);
+    OSMetaClassDeclareReservedUsed(IODMACommand,  1);
     OSMetaClassDeclareReservedUnused(IODMACommand,  2);
     OSMetaClassDeclareReservedUnused(IODMACommand,  3);
     OSMetaClassDeclareReservedUnused(IODMACommand,  4);
@@ -426,7 +496,7 @@ protected:
 
 /*! @var reserved
     Reserved for future use.  (Internal use only)  */
-    struct ExpansionData * reserved;
+    struct IODMACommandInternal * reserved;
 };
 
 IOReturn IODMACommand::

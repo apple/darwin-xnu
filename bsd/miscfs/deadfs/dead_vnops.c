@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -63,6 +69,8 @@
 #include <sys/namei.h>
 #include <sys/buf.h>
 #include <vfs/vfs_support.h>
+
+int	chkvnlock(vnode_t vp);
 
 /*
  * Prototypes for dead operations on vnodes.
@@ -151,13 +159,7 @@ struct vnodeopv_desc dead_vnodeop_opv_desc =
  */
 /* ARGSUSED */
 int
-dead_lookup(ap)
-	struct vnop_lookup_args /* {
-		struct vnode * a_dvp;
-		struct vnode ** a_vpp;
-		struct componentname * a_cnp;
-		vfs_context_t a_context;
-	} */ *ap;
+dead_lookup(struct vnop_lookup_args *ap)
 {
 
 	*ap->a_vpp = NULL;
@@ -169,14 +171,8 @@ dead_lookup(ap)
  */
 /* ARGSUSED */
 int
-dead_open(ap)
-	struct vnop_open_args /* {
-		struct vnode *a_vp;
-		int  a_mode;
-		vfs_context_t a_context;
-	} */ *ap;
+dead_open(__unused struct vnop_open_args *ap)
 {
-
 	return (ENXIO);
 }
 
@@ -185,13 +181,7 @@ dead_open(ap)
  */
 /* ARGSUSED */
 int
-dead_read(ap)
-	struct vnop_read_args /* {
-		struct vnode *a_vp;
-		struct uio *a_uio;
-		int  a_ioflag;
-		vfs_context_t a_context;
-	} */ *ap;
+dead_read(struct vnop_read_args *ap)
 {
 
 	if (chkvnlock(ap->a_vp))
@@ -209,13 +199,7 @@ dead_read(ap)
  */
 /* ARGSUSED */
 int
-dead_write(ap)
-	struct vnop_write_args /* {
-		struct vnode *a_vp;
-		struct uio *a_uio;
-		int  a_ioflag;
-		vfs_context_t a_context;
-	} */ *ap;
+dead_write(struct vnop_write_args *ap)
 {
 
 	if (chkvnlock(ap->a_vp))
@@ -228,14 +212,7 @@ dead_write(ap)
  */
 /* ARGSUSED */
 int
-dead_ioctl(ap)
-	struct vnop_ioctl_args /* {
-		struct vnode *a_vp;
-		u_long a_command;
-		caddr_t  a_data;
-		int  a_fflag;
-		vfs_context_t a_context;
-	} */ *ap;
+dead_ioctl(struct vnop_ioctl_args *ap)
 {
 
 	if (!chkvnlock(ap->a_vp))
@@ -245,15 +222,7 @@ dead_ioctl(ap)
 
 /* ARGSUSED */
 int
-dead_select(ap)
-	struct vnop_select_args /* {
-		struct vnode *a_vp;
-		int  a_which;
-		int  a_fflags;
-		kauth_cred_t a_cred;
-		void *a_wql;
-		struct proc *a_p;
-	} */ *ap;
+dead_select(__unused struct vnop_select_args *ap)
 {
 
 	/*
@@ -266,10 +235,7 @@ dead_select(ap)
  * Just call the device strategy routine
  */
 int
-dead_strategy(ap)
-	struct vnop_strategy_args /* {
-		struct buf *a_bp;
-	} */ *ap;
+dead_strategy(struct vnop_strategy_args *ap)
 {
 
 	if (buf_vnode(ap->a_bp) == NULL || !chkvnlock(buf_vnode(ap->a_bp))) {
@@ -284,17 +250,7 @@ dead_strategy(ap)
  * Wait until the vnode has finished changing state.
  */
 int
-dead_blockmap(ap)
-	struct vnop_blockmap_args /* {
-		struct vnode *a_vp;
-		off_t a_foffset;
-		size_t a_size;
-		daddr64_t *a_bpn;
-		size_t *a_run;
-		void *a_poff;
-		int flags;
-		vfs_context_t a_context;
-	} */ *ap;
+dead_blockmap(struct vnop_blockmap_args *ap)
 {
 
 	if (!chkvnlock(ap->a_vp))
@@ -308,7 +264,7 @@ dead_blockmap(ap)
  */
 /* ARGSUSED */
 int
-dead_ebadf(void *dummy)
+dead_ebadf(__unused void *dummy)
 {
 
 	return (EBADF);
@@ -319,22 +275,12 @@ dead_ebadf(void *dummy)
  */
 /* ARGSUSED */
 int
-dead_badop(void *dummy)
+dead_badop(__unused void *dummy)
 {
 
 	panic("dead_badop called");
 	/* NOTREACHED */
-}
-
-/*
- * Empty vnode null operation
- */
-/* ARGSUSED */
-int
-dead_nullop(void *dummy)
-{
-
-	return (0);
+	return (-1);
 }
 
 /*
@@ -350,12 +296,7 @@ chkvnlock(__unused vnode_t vp)
 
 /* Blktooff */
 int
-dead_blktooff(ap)
-	struct vnop_blktooff_args /* {
-		struct vnode *a_vp;
-		daddr64_t a_lblkno;
-		off_t *a_offset;    
-	} */ *ap;
+dead_blktooff(struct vnop_blktooff_args *ap)
 {
     if (!chkvnlock(ap->a_vp))
 		return (EIO);
@@ -365,12 +306,7 @@ dead_blktooff(ap)
 }
 /* Blktooff */
 int
-dead_offtoblk(ap)
-struct vnop_offtoblk_args /* {
-	struct vnode *a_vp;
-	off_t a_offset;    
-	daddr64_t *a_lblkno;
-	} */ *ap;
+dead_offtoblk(struct vnop_offtoblk_args *ap)
 {
     if (!chkvnlock(ap->a_vp))
 		return (EIO);

@@ -175,7 +175,9 @@ if (! -f $MASTER_LOCAL) set MASTER_LOCAL = ""
 if (! -f $MASTER_CPU_LOCAL) set MASTER_CPU_LOCAL = ""
 
 if (! -d $OBJDIR) then
-    echo "[ creating $OBJDIR ]"
+    if ($?beverbose) then
+        echo "[ creating $OBJDIR ]"
+    endif
     mkdir -p $OBJDIR
 endif
 
@@ -264,7 +266,9 @@ part != 0 {\
 	rm -f $SYSCONF.new
     endif
     if (! -d $BLDDIR) then
-	echo "[ creating $BLDDIR ]"
+        if ($?beverbose) then
+	    echo "[ creating $BLDDIR ]"
+        endif
 	mkdir -p $BLDDIR
     endif
 #
@@ -299,7 +303,9 @@ part != 0 {\
     rm -f $SYSCONF
     mv $SYSCONF.new $SYSCONF
     if ($?doconfig) then
-	echo "[ configuring $SYSID ]"
+        if ($?beverbose) then
+	    echo "[ configuring $SYSID ]"
+        endif
 	if ($?profile) then
 	    $CONFIG_DIR/config -c $MASTER_DIR -p $SYSCONF
 	else
@@ -307,7 +313,9 @@ part != 0 {\
 	endif
     endif
     if ($?domake) then
-        echo "[ making $SYSID ]"
+        if ($?beverbose) then
+            echo "[ making $SYSID ]"
+        endif
         (cd $BLDDIR; make)
     endif
 end

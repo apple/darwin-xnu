@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
 	File:		BTreesInternal.h
@@ -155,15 +161,15 @@ enum {
 };
 typedef OptionBits	ReleaseBlockOptions;
 
-typedef	UInt64	FSSize;
-typedef	UInt32	ForkBlockNumber;
+typedef	u_int64_t	FSSize;
+typedef	u_int32_t	ForkBlockNumber;
 
 /*============================================================================
 	Fork Level Buffered I/O Access Method
 ============================================================================*/
 
 typedef	OSStatus	(* GetBlockProcPtr)		(FileReference				 fileRefNum,
-											 UInt32						 blockNum,
+											 u_int32_t					 blockNum,
 											 GetBlockOptions			 options,
 											 BlockDescriptor			*block );
 							 
@@ -202,7 +208,7 @@ enum BTreeIterationOperations{
 	kBTreeLastRecord,
 	kBTreeCurrentRecord
 };
-typedef UInt16 BTreeIterationOperation;
+typedef u_int16_t BTreeIterationOperation;
 
 
 /*
@@ -228,30 +234,30 @@ typedef BTreeKey *BTreeKeyPtr;
 	BTreeInfoRec Structure - for BTGetInformation
 */
 struct BTreeInfoRec{
-	UInt16				version;
-	UInt16				nodeSize;
-	UInt16				maxKeyLength;
-	UInt16				treeDepth;
-	UInt32				lastfsync;		/* Last time that this was fsynced  */
+	u_int16_t			version;
+	u_int16_t			nodeSize;
+	u_int16_t			maxKeyLength;
+	u_int16_t			treeDepth;
+	u_int32_t			lastfsync;		/* Last time that this was fsynced  */
 	ItemCount			numRecords;
 	ItemCount			numNodes;
 	ItemCount			numFreeNodes;
-	UInt8				keyCompareType;
-	UInt8				reserved[3];
+	u_int8_t			keyCompareType;
+	u_int8_t			reserved[3];
 };
 typedef struct BTreeInfoRec BTreeInfoRec;
 typedef BTreeInfoRec *BTreeInfoPtr;
 
 /*
-	BTreeHint can never be exported to the outside. Use UInt32 BTreeHint[4],
-	UInt8 BTreeHint[16], etc.
+	BTreeHint can never be exported to the outside. Use u_int32_t BTreeHint[4],
+	u_int8_t BTreeHint[16], etc.
  */
 struct BTreeHint{
 	ItemCount				writeCount;
-	UInt32					nodeNum;			// node the key was last seen in
-	UInt16					index;				// index then key was last seen at
-	UInt16					reserved1;
-	UInt32					reserved2;
+	u_int32_t				nodeNum;			// node the key was last seen in
+	u_int16_t				index;				// index then key was last seen at
+	u_int16_t				reserved1;
+	u_int32_t				reserved2;
 };
 typedef struct BTreeHint BTreeHint;
 typedef BTreeHint *BTreeHintPtr;
@@ -261,10 +267,10 @@ typedef BTreeHint *BTreeHintPtr;
 */
 struct BTreeIterator{
 	BTreeHint				hint;
-	UInt16					version;
-	UInt16					reserved;
-	UInt32					hitCount;			// Total number of leaf records hit
-	UInt32					maxLeafRecs;		// Max leaf records over iteration
+	u_int16_t				version;
+	u_int16_t				reserved;
+	u_int32_t				hitCount;			// Total number of leaf records hit
+	u_int32_t				maxLeafRecs;		// Max leaf records over iteration
 	BTreeKey				key;
 };
 typedef struct BTreeIterator BTreeIterator;
@@ -278,10 +284,10 @@ typedef BTreeIterator *BTreeIteratorPtr;
 /*
 	Key Comparison Function ProcPtr Type - for BTOpenPath
 */
-//typedef SInt32 				(* KeyCompareProcPtr)(BTreeKeyPtr a, BTreeKeyPtr b);
+//typedef int32_t 				(* KeyCompareProcPtr)(BTreeKeyPtr a, BTreeKeyPtr b);
 
 
-typedef SInt32 (* IterateCallBackProcPtr)(BTreeKeyPtr key, void * record, void * state);
+typedef int32_t (* IterateCallBackProcPtr)(BTreeKeyPtr key, void * record, void * state);
 
 
 extern OSStatus	BTOpenPath(FCB *filePtr, KeyCompareProcPtr keyCompareProc);
@@ -292,14 +298,14 @@ extern OSStatus	BTClosePath			(FCB		 				*filePtr );
 extern OSStatus	BTSearchRecord		(FCB		 				*filePtr,
 									 BTreeIterator				*searchIterator,
 									 FSBufferDescriptor			*btRecord,
-									 UInt16						*recordLen,
+									 u_int16_t					*recordLen,
 									 BTreeIterator				*resultIterator );
 
 extern OSStatus	BTIterateRecord		(FCB		 				*filePtr,
 									 BTreeIterationOperation	 operation,
 									 BTreeIterator				*iterator,
 									 FSBufferDescriptor			*btRecord,
-									 UInt16						*recordLen );
+									 u_int16_t					*recordLen );
 
 
 extern OSStatus BTIterateRecords(FCB *filePtr, BTreeIterationOperation operation, BTreeIterator *iterator,
@@ -308,12 +314,12 @@ extern OSStatus BTIterateRecords(FCB *filePtr, BTreeIterationOperation operation
 extern OSStatus	BTInsertRecord		(FCB		 				*filePtr,
 									 BTreeIterator				*iterator,
 									 FSBufferDescriptor			*btrecord,
-									 UInt16						 recordLen );
+									 u_int16_t					 recordLen );
 
 extern OSStatus	BTReplaceRecord		(FCB		 				*filePtr,
 									 BTreeIterator				*iterator,
 									 FSBufferDescriptor			*btRecord,
-									 UInt16						 recordLen );
+									 u_int16_t					 recordLen );
 
 extern OSStatus	BTUpdateRecord		(FCB		 				*filePtr,
 									 BTreeIterator				*iterator,
@@ -324,8 +330,10 @@ extern OSStatus	BTDeleteRecord		(FCB		 				*filePtr,
 									 BTreeIterator				*iterator );
 
 extern OSStatus	BTGetInformation	(FCB		 				*filePtr,
-									 UInt16						 vers,
+									 u_int16_t					 vers,
 									 BTreeInfoRec				*info );
+
+extern OSStatus BTIsDirty(FCB *filePtr);
 
 extern OSStatus	BTFlushPath			(FCB		 				*filePtr );
 
@@ -334,10 +342,10 @@ extern OSStatus BTReloadData		(FCB *filePtr);
 extern OSStatus	BTInvalidateHint	(BTreeIterator				*iterator );
 
 extern OSStatus	BTGetLastSync		(FCB		 				*filePtr,
-									 UInt32						*lastfsync );
+									 u_int32_t					*lastfsync );
 
 extern OSStatus	BTSetLastSync		(FCB		 				*filePtr,
-									 UInt32						lastfsync );
+									 u_int32_t					lastfsync );
 
 extern OSStatus	BTHasContiguousNodes(FCB		 				*filePtr);
 

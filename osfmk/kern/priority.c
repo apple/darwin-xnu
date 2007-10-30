@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -72,6 +78,8 @@
  *	thread_quantum_expire:
  *
  *	Recalculate the quantum and priority for a thread.
+ *
+ *	Called at splsched.
  */
 
 void
@@ -79,11 +87,10 @@ thread_quantum_expire(
 	timer_call_param_t	p0,
 	timer_call_param_t	p1)
 {
-	register processor_t		myprocessor = p0;
-	register thread_t			thread = p1;
-	spl_t						s;
+	processor_t			processor = p0;
+	thread_t			thread = p1;
+	ast_t				preempt;
 
-	s = splsched();
 	thread_lock(thread);
 
 	/*
@@ -92,7 +99,7 @@ thread_quantum_expire(
 	if (!(thread->sched_mode & TH_MODE_TIMESHARE)) {
 		uint64_t			new_computation;
 
-		new_computation = myprocessor->quantum_end;
+		new_computation = processor->quantum_end;
 		new_computation -= thread->computation_epoch;
 		if (new_computation + thread->computation_metered >
 											max_unsafe_computation) {
@@ -104,7 +111,7 @@ thread_quantum_expire(
 				thread->sched_mode &= ~TH_MODE_REALTIME;
 			}
 
-			pset_share_incr(thread->processor_set);
+			sched_share_incr();
 
 			thread->safe_release = sched_tick + sched_safe_duration;
 			thread->sched_mode |= (TH_MODE_FAILSAFE|TH_MODE_TIMESHARE);
@@ -143,25 +150,36 @@ thread_quantum_expire(
 			compute_my_priority(thread);
 	}
 
+	processor->current_pri = thread->sched_pri;
+
 	/*
 	 *	This quantum is up, give this thread another.
 	 */
-	if (first_timeslice(myprocessor))
-		myprocessor->timeslice--;
+	if (first_timeslice(processor))
+		processor->timeslice--;
 
 	thread_quantum_init(thread);
-	myprocessor->quantum_end += thread->current_quantum;
-	timer_call_enter1(&myprocessor->quantum_timer,
-							thread, myprocessor->quantum_end);
-
-	thread_unlock(thread);
+	processor->quantum_end += thread->current_quantum;
+	timer_call_enter1(&processor->quantum_timer,
+							thread, processor->quantum_end);
 
 	/*
-	 * Check for and schedule ast if needed.
+	 *	Context switch check.
 	 */
-	ast_check(myprocessor);
+	if ((preempt = csw_check(thread, processor)) != AST_NONE)
+		ast_on(preempt);
+	else {
+		processor_set_t		pset = processor->processor_set;
 
-	splx(s);
+		pset_lock(pset);
+
+		pset_hint_low(pset, processor);
+		pset_hint_high(pset, processor);
+
+		pset_unlock(pset);
+	}
+
+	thread_unlock(thread);
 }
 
 /*
@@ -263,7 +281,7 @@ compute_my_priority(
 	register int		priority;
 
 	do_priority_computation(thread, priority);
-	assert(thread->runq == RUN_QUEUE_NULL);
+	assert(thread->runq == PROCESSOR_NULL);
 	thread->sched_pri = priority;
 }
 
@@ -284,7 +302,7 @@ update_priority(
 	ticks = sched_tick - thread->sched_stamp;
 	assert(ticks != 0);
 	thread->sched_stamp += ticks;
-	thread->pri_shift = thread->processor_set->pri_shift;
+	thread->pri_shift = sched_pri_shift;
 
 	/*
 	 *	Gather cpu usage data.
@@ -341,8 +359,8 @@ update_priority(
 
 			thread->sched_mode &= ~TH_MODE_TIMESHARE;
 
-			if (thread->state & TH_RUN)
-				pset_share_decr(thread->processor_set);
+			if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
+				sched_share_decr();
 
 			if (!(thread->sched_mode & TH_MODE_ISDEPRESSED))
 				set_sched_pri(thread, thread->priority);
@@ -362,11 +380,10 @@ update_priority(
 
 		do_priority_computation(thread, new_pri);
 		if (new_pri != thread->sched_pri) {
-			run_queue_t		runq;
+			boolean_t		removed = run_queue_remove(thread);
 
-			runq = run_queue_remove(thread);
 			thread->sched_pri = new_pri;
-			if (runq != RUN_QUEUE_NULL)
+			if (removed)
 				thread_setrun(thread, SCHED_TAILQ);
 		}
 	}

@@ -46,6 +46,7 @@
 #include <sys/sockio.h>
 #include <sys/time.h>
 #include <sys/kernel.h>
+#include <sys/sysctl.h>
 #include <sys/errno.h>
 #include <sys/syslog.h>
 #include <sys/protosw.h>
@@ -102,7 +103,7 @@ int nd6_debug = 0;
 /* for debugging? */
 static int nd6_inuse, nd6_allocated;
 
-struct llinfo_nd6 llinfo_nd6 = {&llinfo_nd6, &llinfo_nd6};
+struct llinfo_nd6 llinfo_nd6 = {&llinfo_nd6, &llinfo_nd6, NULL, NULL, 0, 0, 0, 0, 0 };
 size_t nd_ifinfo_indexlim = 8;
 struct nd_ifinfo *nd_ifinfo = NULL;
 struct nd_drhead nd_defrouter;
@@ -198,15 +199,10 @@ nd6_ifattach(
  * changes, which means we might have to adjust the ND level MTU.
  */
 void
-nd6_setmtu(
-	struct ifnet *ifp)
+nd6_setmtu(struct ifnet *ifp)
 {
-#ifndef MIN
-#define MIN(a,b) ((a) < (b) ? (a) : (b))
-#endif
- 
 	struct nd_ifinfo *ndi;
-	u_long oldmaxmtu, oldlinkmtu;
+	u_long oldmaxmtu;
 
 	/*
 	 * Make sure IPv6 is enabled for the interface first, 
@@ -219,60 +215,35 @@ nd6_setmtu(
 
 	ndi = &nd_ifinfo[ifp->if_index];
 	oldmaxmtu = ndi->maxmtu;
-	oldlinkmtu = ndi->linkmtu;
 
-	switch (ifp->if_type) {
-	case IFT_ARCNET:	/* XXX MTU handling needs more work */
-		ndi->maxmtu = MIN(60480, ifp->if_mtu);
-		break;
-	case IFT_L2VLAN:	/* XXX what if the VLAN isn't over ethernet? */
-	case IFT_IEEE8023ADLAG:
-	case IFT_ETHER:
-		ndi->maxmtu = MIN(ETHERMTU, ifp->if_mtu);
-		break;
-	case IFT_FDDI:
-		ndi->maxmtu = MIN(FDDIIPMTU, ifp->if_mtu);
-		break;
-	case IFT_ATM:
-		ndi->maxmtu = MIN(ATMMTU, ifp->if_mtu);
-		break;
-	case IFT_IEEE1394:	/* XXX should be IEEE1394MTU(1500) */
-		ndi->maxmtu = MIN(ETHERMTU, ifp->if_mtu);
-		break;
-#if IFT_IEEE80211
-	case IFT_IEEE80211:	/* XXX should be IEEE80211MTU(1500) */
-		ndi->maxmtu = MIN(ETHERMTU, ifp->if_mtu);
-		break;
-#endif
-	default:
-		ndi->maxmtu = ifp->if_mtu;
-		break;
+	/*
+	 * The ND level maxmtu is somewhat redundant to the interface MTU
+	 * and is an implementation artifact of KAME.  Instead of hard-
+	 * limiting the maxmtu based on the interface type here, we simply
+	 * take the if_mtu value since SIOCSIFMTU would have taken care of
+	 * the sanity checks related to the maximum MTU allowed for the
+	 * interface (a value that is known only by the interface layer),
+	 * by sending the request down via ifnet_ioctl().  The use of the
+	 * ND level maxmtu and linkmtu (the latter obtained via RA) are done
+	 * via IN6_LINKMTU() which does further checking against if_mtu.
+	 */
+	ndi->maxmtu = ifp->if_mtu;
+
+	/*
+	* Decreasing the interface MTU under IPV6 minimum MTU may cause
+	* undesirable situation.  We thus notify the operator of the change
+	* explicitly.  The check for oldmaxmtu is necessary to restrict the
+	* log to the case of changing the MTU, not initializing it.
+	*/
+	if (oldmaxmtu >= IPV6_MMTU && ndi->maxmtu < IPV6_MMTU) {
+		log(LOG_NOTICE, "nd6_setmtu: "
+		    "new link MTU on %s%d (%lu) is too small for IPv6\n",
+		    ifp->if_name, ifp->if_unit, (unsigned long)ndi->maxmtu);
 	}
 
-	if (oldmaxmtu != ndi->maxmtu) {
-		/*
-		 * If the ND level MTU is not set yet, or if the maxmtu
-		 * is reset to a smaller value than the ND level MTU,
-		 * also reset the ND level MTU.
-		 */
-		if (ndi->linkmtu == 0 ||
-		    ndi->maxmtu < ndi->linkmtu) {
-			ndi->linkmtu = ndi->maxmtu;
-			/* also adjust in6_maxmtu if necessary. */
-			if (oldlinkmtu == 0) {
-				/*
-				 * XXX: the case analysis is grotty, but
-				 * it is not efficient to call in6_setmaxmtu()
-				 * here when we are during the initialization
-				 * procedure.
-				 */
-				if (in6_maxmtu < ndi->linkmtu)
-					in6_maxmtu = ndi->linkmtu;
-			} else
-				in6_setmaxmtu();
-		}
-	}
-#undef MIN
+	/* also adjust in6_maxmtu if necessary. */
+	if (ndi->maxmtu > in6_maxmtu)
+		in6_setmaxmtu();
 }
 
 void
@@ -429,7 +400,7 @@ skip1:
  */
 void
 nd6_timer(
-	void	*ignored_arg)
+	__unused void	*ignored_arg)
 {
 	struct llinfo_nd6 *ln;
 	struct nd_defrouter *dr;
@@ -597,8 +568,16 @@ nd6_timer(
 			 */
 			if (ip6_use_tempaddr &&
 			    (ia6->ia6_flags & IN6_IFF_TEMPORARY) != 0) {
-				if (regen_tmpaddr(ia6) == 0)
+				/* NOTE: We have to drop the lock here because 
+				 * regen_tmpaddr() eventually calls in6_update_ifa(),  
+				 * which must take the lock and would otherwise cause a 
+				 * hang. This is safe because the goto addrloop 
+				 * leads to a reevaluation of the in6_ifaddrs list
+				 */
+				lck_mtx_unlock(nd6_mutex);
+				if (regen_tmpaddr(ia6) == 0) 
 					regen = 1;
+				lck_mtx_lock(nd6_mutex);
 			}
 
 			in6_purgeaddr(&ia6->ia_ifa, 1);
@@ -619,6 +598,8 @@ nd6_timer(
 			    (ia6->ia6_flags & IN6_IFF_TEMPORARY) != 0 &&
 			    (oldflags & IN6_IFF_DEPRECATED) == 0) {
 
+				/* see NOTE above */
+				lck_mtx_unlock(nd6_mutex);
 				if (regen_tmpaddr(ia6) == 0) {
 					/*
 					 * A new temporary address is
@@ -632,8 +613,10 @@ nd6_timer(
 					 * loop just for safety.  Or does this 
 					 * significantly reduce performance??
 					 */
+					lck_mtx_lock(nd6_mutex);
 					goto addrloop;
 				}
+				lck_mtx_lock(nd6_mutex);
 			}
 		} else {
 			/*
@@ -919,9 +902,8 @@ nd6_lookup(
 	 *      use rt->rt_ifa->ifa_ifp, which would specify the REAL
 	 *      interface.
 	 */
-	if ((ifp->if_type !=IFT_PPP) && ((rt->rt_flags & RTF_GATEWAY) || (rt->rt_flags & RTF_LLINFO) == 0 ||
+	if ((ifp && ifp->if_type !=IFT_PPP) && ((rt->rt_flags & RTF_GATEWAY) || (rt->rt_flags & RTF_LLINFO) == 0 ||
 	    rt->rt_gateway->sa_family != AF_LINK ||  rt->rt_llinfo == NULL ||
-
 	    (ifp && rt->rt_ifa->ifa_ifp != ifp))) {
 		if (!rt_locked)
 			lck_mtx_unlock(rt_mtx);
@@ -1149,11 +1131,12 @@ void
 nd6_rtrequest(
 	int	req,
 	struct rtentry *rt,
-	struct sockaddr *sa) /* xxx unused */
+	__unused struct sockaddr *sa)
 {
 	struct sockaddr *gate = rt->rt_gateway;
 	struct llinfo_nd6 *ln = (struct llinfo_nd6 *)rt->rt_llinfo;
-	static struct sockaddr_dl null_sdl = {sizeof(null_sdl), AF_LINK};
+	static struct sockaddr_dl null_sdl = {sizeof(null_sdl), AF_LINK, 0, 0, 0, 0, 0, 
+											{0,0,0,0,0,0,0,0,0,0,0,0,} };
 	struct ifnet *ifp = rt->rt_ifp;
 	struct ifaddr *ifa;
 	struct timeval timenow;
@@ -1330,7 +1313,7 @@ nd6_rtrequest(
 				SDL(gate)->sdl_alen = ifp->if_addrlen;
 			}
 			if (nd6_useloopback) {
-				rt->rt_ifp = &loif[0];	/* XXX */
+				rt->rt_ifp = lo_ifp;	/* XXX */
 				/*
 				 * Make sure rt_ifa be equal to the ifaddr
 				 * corresponding to the address.
@@ -1526,7 +1509,7 @@ nd6_ioctl(
 			error = EINVAL;
 			break;
 		}
-		ndi->ndi.linkmtu = nd_ifinfo[ifp->if_index].linkmtu;
+		ndi->ndi.linkmtu = IN6_LINKMTU(ifp);
 		ndi->ndi.maxmtu = nd_ifinfo[ifp->if_index].maxmtu;
 		ndi->ndi.basereachable =
 		    nd_ifinfo[ifp->if_index].basereachable;
@@ -1568,7 +1551,7 @@ nd6_ioctl(
 	case SIOCSPFXFLUSH_IN6:
 	    {
 		/* flush all the prefix advertised by routers */
-		struct nd_prefix *pr, *next;
+		struct nd_prefix *next;
 		lck_mtx_lock(nd6_mutex);
 
 		for (pr = nd_prefix.lh_first; pr; pr = next) {
@@ -1598,7 +1581,7 @@ nd6_ioctl(
 	case SIOCSRTRFLUSH_IN6:
 	    {
 		/* flush all the default routers */
-		struct nd_defrouter *dr, *next;
+		struct nd_defrouter *next;
 
 		lck_mtx_lock(nd6_mutex);
 		if ((dr = TAILQ_FIRST(&nd_defrouter)) != NULL) {
@@ -1663,7 +1646,7 @@ nd6_cache_lladdr(
 	struct ifnet *ifp,
 	struct in6_addr *from,
 	char *lladdr,
-	int lladdrlen,
+	__unused int lladdrlen,
 	int type,	/* ICMP6 type */
 	int code)	/* type dependent information */
 {
@@ -1901,7 +1884,7 @@ fail:
 
 static void
 nd6_slowtimo(
-    void *ignored_arg)
+    __unused void *ignored_arg)
 {
 	int i;
 	struct nd_ifinfo *nd6if;
@@ -2270,7 +2253,7 @@ nd6_lookup_ipv6(
 	
 	if ((packet->m_flags & M_MCAST) != 0) {
 		return dlil_resolve_multi(ifp, (const struct sockaddr*)ip6_dest,
-								  ll_dest, ll_dest_len);
+								  (struct sockaddr *)ll_dest, ll_dest_len);
 	}
 	
 	if (route == NULL) {
@@ -2301,18 +2284,12 @@ done:
 	return result;
 }
 
-#ifndef __APPLE__
-static int nd6_sysctl_drlist SYSCTL_HANDLER_ARGS;
-static int nd6_sysctl_prlist SYSCTL_HANDLER_ARGS;
 SYSCTL_DECL(_net_inet6_icmp6);
-SYSCTL_NODE(_net_inet6_icmp6, ICMPV6CTL_ND6_DRLIST, nd6_drlist,
-	CTLFLAG_RD, nd6_sysctl_drlist, "");
-SYSCTL_NODE(_net_inet6_icmp6, ICMPV6CTL_ND6_PRLIST, nd6_prlist,
-	CTLFLAG_RD, nd6_sysctl_prlist, "");
 
 static int
 nd6_sysctl_drlist SYSCTL_HANDLER_ARGS 
 {
+#pragma unused(oidp, arg1, arg2)
 	int error;
 	char buf[1024];
 	struct in6_defrouter *d, *de;
@@ -2357,6 +2334,7 @@ nd6_sysctl_drlist SYSCTL_HANDLER_ARGS
 static int
 nd6_sysctl_prlist SYSCTL_HANDLER_ARGS 
 {
+#pragma unused(oidp, arg1, arg2)
 	int error;
 	char buf[1024];
 	struct in6_prefix *p, *pe;
@@ -2369,7 +2347,7 @@ nd6_sysctl_prlist SYSCTL_HANDLER_ARGS
 	lck_mtx_lock(nd6_mutex);
 
 	for (pr = nd_prefix.lh_first; pr; pr = pr->ndpr_next) {
-		u_short advrtrs;
+		u_short advrtrs = 0;
 		size_t advance;
 		struct sockaddr_in6 *sin6, *s6;
 		struct nd_pfxrouter *pfr;
@@ -2430,4 +2408,8 @@ nd6_sysctl_prlist SYSCTL_HANDLER_ARGS
 	lck_mtx_unlock(nd6_mutex);
 	return error;
 }
-#endif
+SYSCTL_PROC(_net_inet6_icmp6, ICMPV6CTL_ND6_DRLIST, nd6_drlist,
+	CTLFLAG_RD, 0, 0, nd6_sysctl_drlist, "S,in6_defrouter","");
+SYSCTL_PROC(_net_inet6_icmp6, ICMPV6CTL_ND6_PRLIST, nd6_prlist,
+	CTLFLAG_RD, 0, 0, nd6_sysctl_prlist, "S,in6_defrouter","");
+

@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -119,19 +125,19 @@ typedef __darwin_id_t	id_t;
  * this option is done, it is as though they were still running... nothing
  * about them is returned.
  */
-#define WNOHANG		0x01	/* [XSI] don't hang in wait/no child to reap */
-#define WUNTRACED	0x02	/* [XSI] notify on stopped, untraced children */
+#define WNOHANG		0x00000001  /* [XSI] no hang in wait/no child to reap */
+#define WUNTRACED	0x00000002  /* [XSI] notify on stop, untraced child */
 
 /*
  * Macros to test the exit status returned by wait
  * and extract the relevant values.
  */
-#ifdef _POSIX_C_SOURCE
+#if defined(_POSIX_C_SOURCE) && !defined(_DARWIN_C_SOURCE)
 #define	_W_INT(i)	(i)
 #else
 #define	_W_INT(w)	(*(int *)&(w))	/* convert union wait to int */
 #define	WCOREFLAG	0200
-#endif /* _POSIX_C_SOURCE */
+#endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
 
 /* These macros are permited, as they are in the implementation namespace */
 #define	_WSTATUS(x)	(_W_INT(x) & 0177)
@@ -141,19 +147,24 @@ typedef __darwin_id_t	id_t;
  * [XSI] The <sys/wait.h> header shall define the following macros for
  * analysis of process status values
  */
+#if __DARWIN_UNIX03
+#define WEXITSTATUS(x)	((_W_INT(x) >> 8) & 0x000000ff)
+#else /* !__DARWIN_UNIX03 */
 #define WEXITSTATUS(x)	(_W_INT(x) >> 8)
-#define WIFCONTINUED(x) (x == 0x13)	/* 0x13 == SIGCONT */
+#endif /* !__DARWIN_UNIX03 */
+/* 0x13 == SIGCONT */
+#define WSTOPSIG(x)	(_W_INT(x) >> 8)
+#define WIFCONTINUED(x) (_WSTATUS(x) == _WSTOPPED && WSTOPSIG(x) == 0x13)
+#define WIFSTOPPED(x)	(_WSTATUS(x) == _WSTOPPED && WSTOPSIG(x) != 0x13)
 #define WIFEXITED(x)	(_WSTATUS(x) == 0)
 #define WIFSIGNALED(x)	(_WSTATUS(x) != _WSTOPPED && _WSTATUS(x) != 0)
-#define WIFSTOPPED(x)	(_WSTATUS(x) == _WSTOPPED)
-#define WSTOPSIG(x)	(_W_INT(x) >> 8)
 #define WTERMSIG(x)	(_WSTATUS(x))
-#if !defined(_POSIX_C_SOURCE)
+#if (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE))
 #define WCOREDUMP(x)	(_W_INT(x) & WCOREFLAG)
 
 #define	W_EXITCODE(ret, sig)	((ret) << 8 | (sig))
 #define	W_STOPCODE(sig)		((sig) << 8 | _WSTOPPED)
-#endif /* !defined(_POSIX_C_SOURCE) */
+#endif /* (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)) */
 
 /*
  * [XSI] The following symbolic constants shall be defined as possible
@@ -161,16 +172,16 @@ typedef __darwin_id_t	id_t;
  */
 /* WNOHANG already defined for wait4() */
 /* WUNTRACED defined for wait4() but not for waitid() */
-#define	WEXITED		0x04	/* [XSI] Processes which have exitted */
-#ifdef _POSIX_C_SOURCE
+#define	WEXITED		0x00000004  /* [XSI] Processes which have exitted */
+#if __DARWIN_UNIX03
 /* waitid() parameter */
-#define	WSTOPPED	0x08	/* [XSI] Any child stopped by signal receipt */
+#define	WSTOPPED	0x00000008  /* [XSI] Any child stopped by signal */
 #endif
-#define	WCONTINUED	0x10	/* [XSI] Any child stopped then continued */
-#define	WNOWAIT		0x20	/* [XSI] Leave process returned waitable */
+#define	WCONTINUED	0x00000010  /* [XSI] Any child stopped then continued */
+#define	WNOWAIT		0x00000020  /* [XSI] Leave process returned waitable */
 
 
-#if !defined(_POSIX_C_SOURCE)
+#if (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE))
 /* POSIX extensions and 4.2/4.3 compatability: */
 
 /*
@@ -184,7 +195,7 @@ typedef __darwin_id_t	id_t;
 /*
  * Deprecated:
  * Structure of the information in the status word returned by wait4.
- * If w_stopval==WSTOPPED, then the second structure describes
+ * If w_stopval==_WSTOPPED, then the second structure describes
  * the information returned, else the first.
  */
 union wait {
@@ -230,24 +241,27 @@ union wait {
 #define w_stopval	w_S.w_Stopval
 #define w_stopsig	w_S.w_Stopsig
 
+#endif /* (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)) */
+
+#if !(__DARWIN_UNIX03 - 0)
 /*
  * Stopped state value; cannot use waitid() parameter of the same name
  * in the same scope
  */
 #define	WSTOPPED	_WSTOPPED
-#endif /* !defined(_POSIX_C_SOURCE) */
+#endif /* !__DARWIN_UNIX03 */
 
 #ifndef KERNEL
 __BEGIN_DECLS
-pid_t	wait(int *);
-pid_t	waitpid(pid_t, int *, int);
+pid_t	wait(int *) __DARWIN_ALIAS_C(wait);
+pid_t	waitpid(pid_t, int *, int) __DARWIN_ALIAS_C(waitpid);
 #ifndef _ANSI_SOURCE
-int	waitid(idtype_t, id_t, siginfo_t *, int);
+int	waitid(idtype_t, id_t, siginfo_t *, int) __DARWIN_ALIAS_C(waitid);
 #endif /* !_ANSI_SOURCE */
-#if  !defined(_POSIX_C_SOURCE)
+#if  (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE))
 pid_t	wait3(int *, int, struct rusage *);
 pid_t	wait4(pid_t, int *, int, struct rusage *);
-#endif /* !defined(_POSIX_C_SOURCE) */
+#endif /* (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)) */
 __END_DECLS
 #endif
 #endif /* !_SYS_WAIT_H_ */

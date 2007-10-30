@@ -12,11 +12,15 @@ INSTINC_SUBDIRS_PPC =
 
 INSTINC_SUBDIRS_I386 =
 
+INSTINC_SUBDIRS_ARM =
+
 EXPINC_SUBDIRS =
 
 EXPINC_SUBDIRS_PPC =
 
 EXPINC_SUBDIRS_I386 =
+
+EXPINC_SUBDIRS_ARM =
 
 MIG_TYPES = \
 	UNDTypes.defs
@@ -72,7 +76,8 @@ ${COMP_FILES} : ${MIG_TYPES}
         
 ${MIG_KUSRC} : \
 	%.c : %.defs
-	${MIG} ${MIGFLAGS} ${MIGKUFLAGS}        \
+	@echo MIG $@
+	$(_v)${MIG} ${MIGFLAGS} ${MIGKUFLAGS}        \
 		-user    $*.c              \
 		-header  $*.h              \
 		-server  /dev/null		\
@@ -81,7 +86,8 @@ ${MIG_KUSRC} : \
 
 ${MIG_KSSRC}: \
 	%Server.c : %.defs
-	${MIG} ${MIGFLAGS} ${MIGKSFLAGS}        \
+	@echo MIG $@
+	$(_v)${MIG} ${MIGFLAGS} ${MIGKSFLAGS}        \
 		-user    /dev/null              \
 		-header  /dev/null              \
 		-server  $*Server.c		\

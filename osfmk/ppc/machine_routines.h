@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -89,6 +95,9 @@ extern vm_offset_t		ml_static_ptovirt(
 /* virtual to physical on wired pages */
 extern vm_offset_t		ml_vtophys(
 							vm_offset_t			vaddr);
+
+vm_size_t ml_nofault_copy(
+	vm_offset_t virtsrc, vm_offset_t virtdst, vm_size_t size);
 
 /* PCI config cycle probing */
 extern boolean_t		ml_probe_read(
@@ -202,6 +211,11 @@ extern void				bzero_phys(
 							addr64_t			phys_address,
 							uint32_t			length);
 
+/* Zero bytes starting at a physical address that's uncacheable */
+extern void				bzero_phys_nc(
+							addr64_t			phys_address,
+							uint32_t			length);
+
 #endif /* KERNEL_PRIVATE */
 
 #ifdef	XNU_KERNEL_PRIVATE
@@ -223,18 +237,6 @@ extern vm_offset_t		ml_static_malloc(
 
 #endif /* PEXPERT_KERNEL_PRIVATE || MACH_KERNEL_PRIVATE */
 
-#if	defined(BSD_KERNEL_PRIVATE) || defined(MACH_KERNEL_PRIVATE)
-
-extern int				set_be_bit(
-							void);
-
-extern int				clr_be_bit(
-							void);
-
-extern int				be_tracing(
-							void);
-
-#endif /* BSD_KERNEL_PRIVATE || MACH_KERNEL_PRIVATE */
 
 #ifdef	MACH_KERNEL_PRIVATE
 extern void				ml_init_interrupt(
@@ -317,6 +319,8 @@ extern unsigned int		ml_scom_read(
 							uint64_t			*data);
 
 extern uint32_t 		ml_hdec_ratio(void);
+
+extern int boffSettingsInit;
 
 #endif /* KERNEL_PRIVATE */
 

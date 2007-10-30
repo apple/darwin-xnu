@@ -53,3 +53,19 @@ ident		LIBSA
 
 options		KDEBUG		# kernel tracing		# <kdebug>
 options		GPROF		# kernel profiling		# <profile>
+
+options		CONFIG_NOLIBKLD	# kernel linker			# <no_kld>
+makeoptions	LIBKLD_PATH = "/usr/local/lib/libkld.a"		# <!arm>
+makeoptions	LIBKLD = " "					# <no_kld>
+makeoptions	LIBKLD = "${LIBKLD_PATH}"			# <!no_kld>
+
+options		MALLOC_RESET_GC					# <smaller_kld>
+options		MALLOC_KLD_VM_ALLOCATE				# <smaller_kld>
+# Use mach_vm_* calls for libsa kernel code, since we redefine vm_* for libkld
+options		vm_allocate = mach_vm_allocate			# <smaller_kld>
+options		vm_deallocate = mach_vm_deallocate		# <smaller_kld>
+options		CONFIG_DTRACE					# <config_dtrace>
+
+options		CONFIG_NO_PANIC_STRINGS				# <no_panic_str>
+options		CONFIG_NO_PRINTF_STRINGS			# <no_printf_str>
+options		CONFIG_NO_KPRINTF_STRINGS			# <no_kprintf_str>

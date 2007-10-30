@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995, 1997 Apple Computer, Inc. All Rights Reserved */
 /*
@@ -86,10 +92,10 @@ struct filedesc {
 	struct	vnode *fd_cdir;		/* current directory */
 	struct	vnode *fd_rdir;		/* root directory */
 	int	fd_nfiles;		/* number of open files allocated */
-	u_short	fd_lastfile;		/* high-water mark of fd_ofiles */
-	u_short	fd_freefile;		/* approx. next free file */
+	int	fd_lastfile;		/* high-water mark of fd_ofiles */
+	int	fd_freefile;		/* approx. next free file */
 	u_short	fd_cmask;		/* mask for file creation */
-	u_short	fd_refcnt;		/* reference count */
+	u_long	fd_refcnt;		/* reference count */
 
 	int     fd_knlistsize;          /* size of knlist */
 	struct  klist *fd_knlist;       /* list of attached knotes */
@@ -114,7 +120,9 @@ struct filedesc {
 
 #ifdef KERNEL
 #define UF_RESVWAIT	0x10		/* close in progress */
-#endif
+#define UF_VALID_FLAGS	(UF_EXCLOSE| UF_RESERVED | UF_CLOSING | UF_RESVWAIT)
+#endif /* KERNEL */
+
 /*
  * Storage required per open file descriptor.
  */
@@ -126,21 +134,20 @@ struct filedesc {
  */
 extern int	dupfdopen(struct filedesc *fdp,
 				int indx, int dfd, int mode, int error);
-extern int	fdalloc(struct proc *p, int want, int *result);
-extern void	fdrelse(struct proc *p, int fd);
-extern int	fdavail(struct proc *p, int n);
+extern int	fdalloc(proc_t p, int want, int *result);
+extern void	fdrelse(proc_t p, int fd);
+extern int	fdavail(proc_t p, int n);
 #define		fdfile(p, fd)					\
 			(&(p)->p_fd->fd_ofiles[(fd)])
 #define		fdflags(p, fd)					\
 			(&(p)->p_fd->fd_ofileflags[(fd)])
-extern int	falloc(struct proc *p,
-				struct fileproc **resultfp, int *resultfd);
+extern int	falloc(proc_t p, struct fileproc **resultfp, int *resultfd, vfs_context_t ctx);
 extern void	ffree(struct file *fp);
 
 #ifdef __APPLE_API_PRIVATE
-extern struct	filedesc *fdcopy(struct proc *p);
-extern void	fdfree(struct proc *p);
-extern void	fdexec(struct proc *p);
+extern struct	filedesc *fdcopy(proc_t p, struct vnode *uth_cdir);
+extern void	fdfree(proc_t p);
+extern void	fdexec(proc_t p);
 #endif /* __APPLE_API_PRIVATE */
 
 #endif /* KERNEL */

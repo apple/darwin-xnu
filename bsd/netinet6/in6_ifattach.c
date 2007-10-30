@@ -1,3 +1,30 @@
+/*
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
 /*	$FreeBSD: src/sys/netinet6/in6_ifattach.c,v 1.8 2002/04/19 04:46:22 suz Exp $	*/
 /*	$KAME: in6_ifattach.c,v 1.118 2001/05/24 07:44:00 itojun Exp $	*/
 
@@ -38,13 +65,15 @@
 #include <sys/sockio.h>
 #include <sys/kernel.h>
 #include <sys/syslog.h>
-#include <sys/md5.h>
+#include <libkern/crypto/md5.h>
+#include <libkern/OSAtomic.h>
 #include <kern/lock.h>
 
 #include <net/if.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
 #include <net/route.h>
+#include <net/kpi_protocol.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -75,10 +104,10 @@ int ip6_auto_linklocal = IP6_AUTO_LINKLOCAL;
 int ip6_auto_linklocal = 1;	/* enable by default */
 #endif
 
+int loopattach6_done = 0;
 
 extern struct inpcbinfo udbinfo;
 extern struct inpcbinfo ripcbinfo;
-extern lck_mtx_t *rt_mtx;
 
 static int get_rand_ifid(struct ifnet *, struct in6_addr *);
 static int generate_tmp_ifid(u_int8_t *, const u_int8_t *, u_int8_t *);
@@ -107,23 +136,23 @@ static int in6_ifattach_loopback(struct ifnet *);
  */
 static int
 get_rand_ifid(
-	struct ifnet *ifp,
+	__unused struct ifnet *ifp,
 	struct in6_addr *in6)	/* upper 64bits are preserved */
 {
 	MD5_CTX ctxt;
 	u_int8_t digest[16];
-	int hostnamelen	= strlen(hostname);
+	int len	= strlen(hostname);
 
 #if 0
 	/* we need at least several letters as seed for ifid */
-	if (hostnamelen < 3)
+	if (len < 3)
 		return -1;
 #endif
 
 	/* generate 8 bytes of pseudo-random value. */
 	bzero(&ctxt, sizeof(ctxt));
 	MD5Init(&ctxt);
-	MD5Update(&ctxt, hostname, hostnamelen);
+	MD5Update(&ctxt, hostname, len);
 	MD5Final(digest, &ctxt);
 
 	/* assumes sizeof(digest) > sizeof(ifid) */
@@ -264,7 +293,7 @@ get_hw_ifid(
 
 found:
 	ifnet_lock_done(ifp);
-	addr = LLADDR(sdl);
+	addr = (u_int8_t *) LLADDR(sdl);
 	addrlen = sdl->sdl_alen;
 
 	/* get EUI64 */
@@ -442,7 +471,7 @@ in6_ifattach_linklocal(
 {
 	struct in6_ifaddr *ia;
 	struct in6_aliasreq ifra;
-	struct nd_prefix pr0;
+	struct nd_prefix pr0, *pr;
 	int i, error;
 
 	/*
@@ -450,7 +479,7 @@ in6_ifattach_linklocal(
 	 */
 	bzero(&ifra, sizeof(ifra));
 
-	dlil_plumb_protocol(PF_INET6, ifp);
+	proto_plumb(PF_INET6, ifp);
 
 	/*
 	 * in6_update_ifa() does not use ifra_name, but we accurately set it
@@ -574,12 +603,17 @@ in6_ifattach_linklocal(
 	 * address, and then reconfigure another one, the prefix is still
 	 * valid with referring to the old link-local address.
 	 */
-	if (nd6_prefix_lookup(&pr0) == NULL) {
-		if ((error = nd6_prelist_add(&pr0, NULL, NULL)) != 0)
+	if ((pr = nd6_prefix_lookup(&pr0)) == NULL) {
+		if ((error = nd6_prelist_add(&pr0, NULL, &pr)) != 0)
 			return(error);
 	}
 
 	in6_post_msg(ifp, KEV_INET6_NEW_LL_ADDR, ia);
+
+	/* Drop use count held above during lookup/add */
+	if (pr != NULL)
+		ndpr_rele(pr, FALSE);
+
 	return 0;
 }
 
@@ -669,7 +703,7 @@ in6_nigroup(
 	l = p - name;
 	strncpy(n, name, l);
 	n[(int)l] = '\0';
-	for (q = n; *q; q++) {
+	for (q = (u_char *) n; *q; q++) {
 		if ('A' <= *q && *q <= 'Z')
 			*q = *q - 'A' + 'a';
 	}
@@ -848,13 +882,17 @@ in6_ifattach(
 	 */
 	if ((ifp->if_flags & IFF_LOOPBACK) != 0) {
 		struct in6_ifaddr *ia6 = NULL;
-		in6 = in6addr_loopback;
-		if ((ia6 = in6ifa_ifpwithaddr(ifp, &in6)) == NULL) {
-			if (in6_ifattach_loopback(ifp) != 0)
-				return;
-		}
-		else {
-			ifafree(&ia6->ia_ifa);
+		if (!OSCompareAndSwap(0, 1, (UInt32 *)&loopattach6_done)) {
+			in6 = in6addr_loopback;
+			if ((ia6 = in6ifa_ifpwithaddr(ifp, &in6)) == NULL) {
+				if (in6_ifattach_loopback(ifp) != 0) {
+					OSCompareAndSwap(1, 0, (UInt32 *)&loopattach6_done);
+					return;
+				}
+			}
+			else {
+				ifafree(&ia6->ia_ifa);
+			}
 		}
 	}
 
@@ -909,8 +947,6 @@ in6_ifdetach(
 	struct rtentry *rt;
 	short rtflags;
 	struct sockaddr_in6 sin6;
-	struct in6_multi *in6m;
-	struct in6_multi *in6m_next;
 
 	/* nuke prefix list.  this may try to remove some of ifaddrs as well */
 	in6_purgeprefix(ifp);
@@ -946,8 +982,8 @@ in6_ifdetach(
 
 		/* remove from the routing table */
 		lck_mtx_lock(rt_mtx);
-		if ((ia->ia_flags & IFA_ROUTE)
-		 && (rt = rtalloc1_locked((struct sockaddr *)&ia->ia_addr, 0, 0UL))) {
+		if ((ia->ia_flags & IFA_ROUTE) &&
+		    (rt = rtalloc1_locked((struct sockaddr *)&ia->ia_addr, 0, 0UL))) {
 			rtflags = rt->rt_flags;
 			rtfree_locked(rt);
 			rtrequest_locked(RTM_DELETE,
@@ -1002,9 +1038,11 @@ in6_ifdetach(
 	sin6.sin6_addr.s6_addr16[1] = htons(ifp->if_index);
 	lck_mtx_lock(rt_mtx);
 	rt = rtalloc1_locked((struct sockaddr *)&sin6, 0, 0UL);
-	if (rt && rt->rt_ifp == ifp) {
-		rtrequest_locked(RTM_DELETE, (struct sockaddr *)rt_key(rt),
-			rt->rt_gateway, rt_mask(rt), rt->rt_flags, 0);
+	if (rt != NULL) {
+	        if (rt->rt_ifp == ifp) {
+			rtrequest_locked(RTM_DELETE, (struct sockaddr *)rt_key(rt),
+				rt->rt_gateway, rt_mask(rt), rt->rt_flags, 0);
+		}
 		rtfree_locked(rt);
 	}
 	lck_mtx_unlock(rt_mtx);
@@ -1037,15 +1075,13 @@ in6_get_tmpifid(
 }
 
 extern size_t nd_ifinfo_indexlim;
-extern int ip6_use_tempaddr;
 void
 in6_tmpaddrtimer(
-	void *ignored_arg)
+	__unused void *ignored_arg)
 {
 	int i;
 	struct nd_ifinfo *ndi;
 	u_int8_t nullbuf[8];
-	int s = splnet();
 
 	timeout(in6_tmpaddrtimer, (caddr_t)0,
 		      (ip6_temp_preferred_lifetime - ip6_desync_factor -
@@ -1069,6 +1105,4 @@ in6_tmpaddrtimer(
 			}
 		}
 	}
-
-	splx(s);
 }

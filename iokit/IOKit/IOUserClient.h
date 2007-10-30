@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 /*
@@ -39,6 +45,15 @@ enum {
     kIOUCStructIStructO = 3,
     kIOUCScalarIStructI = 4
 };
+
+/*! @enum
+    @abstract Constant to denote a variable length structure argument to IOUserClient.
+    @constant kIOUCVariableStructureSize Use in the structures IOExternalMethod, IOExternalAsyncMethod, IOExternalMethodDispatch to specify the size of the structure is variable.
+*/
+enum {
+    kIOUCVariableStructureSize = 0xffffffff
+};
+
 
 typedef IOReturn (IOService::*IOMethod)(void * p1, void * p2, void * p3,
                                         void * p4, void * p5, void * p6 );
@@ -79,6 +94,64 @@ enum {
 #define kIOClientPrivilegeAdministrator	"root"
 #define kIOClientPrivilegeLocalUser	"local"
 
+/*! @enum
+    @abstract Constants to specify the maximum number of scalar arguments in the IOExternalMethodArguments structure. These constants are documentary since the scalarInputCount, scalarOutputCount fields reflect the actual number passed.
+    @constant kIOExternalMethodScalarInputCountMax The maximum number of scalars able to passed on input.
+    @constant kIOExternalMethodScalarOutputCountMax The maximum number of scalars able to passed on output.
+*/
+enum {
+    kIOExternalMethodScalarInputCountMax  = 16,
+    kIOExternalMethodScalarOutputCountMax = 16,
+};
+
+
+struct IOExternalMethodArguments
+{
+    uint32_t		version;
+
+    uint32_t		selector;
+
+    mach_port_t           asyncWakePort;
+    io_user_reference_t * asyncReference;
+    uint32_t              asyncReferenceCount;
+
+    const uint64_t *    scalarInput;
+    uint32_t		scalarInputCount;
+
+    const void *	structureInput;
+    uint32_t		structureInputSize;
+
+    IOMemoryDescriptor * structureInputDescriptor;
+   
+    uint64_t *		scalarOutput;
+    uint32_t		scalarOutputCount;
+
+    void *		structureOutput;
+    uint32_t		structureOutputSize;
+
+    IOMemoryDescriptor * structureOutputDescriptor;
+    uint32_t		 structureOutputDescriptorSize;
+
+    uint32_t		__reserved[32];
+};
+
+typedef IOReturn (*IOExternalMethodAction)(OSObject * target, void * reference, 
+					    IOExternalMethodArguments * arguments);
+struct IOExternalMethodDispatch
+{
+    IOExternalMethodAction function;
+    uint32_t		   checkScalarInputCount;
+    uint32_t		   checkStructureInputSize;
+    uint32_t		   checkScalarOutputCount;
+    uint32_t		   checkStructureOutputSize;
+};
+
+enum {
+#define IO_EXTERNAL_METHOD_ARGUMENTS_CURRENT_VERSION	1
+    kIOExternalMethodArgumentsCurrentVersion = IO_EXTERNAL_METHOD_ARGUMENTS_CURRENT_VERSION
+};
+
+
 /*!
     @class IOUserClient
     @abstract   Provides a basis for communication between client applications and I/O Kit objects.
@@ -103,12 +176,15 @@ protected:
 public:
     OSSet * mappings;
     UInt8   sharedInstance;
-
     UInt8   __reservedA[3];
     void  * __reserved[7];
 
+    virtual IOReturn externalMethod( uint32_t selector, IOExternalMethodArguments * arguments,
+					IOExternalMethodDispatch * dispatch = 0, OSObject * target = 0, void * reference = 0 );
+    OSMetaClassDeclareReservedUsed(IOUserClient, 0);
+
 private:
-    OSMetaClassDeclareReservedUnused(IOUserClient, 0);
+
     OSMetaClassDeclareReservedUnused(IOUserClient, 1);
     OSMetaClassDeclareReservedUnused(IOUserClient, 2);
     OSMetaClassDeclareReservedUnused(IOUserClient, 3);
@@ -131,6 +207,12 @@ protected:
     static void setAsyncReference(OSAsyncReference asyncRef,
                                   mach_port_t wakePort,
                                   void *callback, void *refcon);
+
+    static IOReturn sendAsyncResult64(OSAsyncReference64 reference,
+                                        IOReturn result, io_user_reference_t args[], UInt32 numArgs);
+    static void setAsyncReference64(OSAsyncReference64 asyncRef,
+					mach_port_t wakePort,
+					mach_vm_address_t callback, io_user_reference_t refcon);
 public:
 
     static void initialize( void );
@@ -140,10 +222,8 @@ public:
     static IOReturn clientHasPrivilege( void * securityToken,
                                         const char * privilegeName );
 
-#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
     virtual bool init();
     virtual bool init( OSDictionary * dictionary );
-#endif
     // Currently ignores the all args, just passes up to IOService::init()
     virtual bool initWithTask(
                     task_t owningTask, void * securityToken, UInt32 type,
@@ -176,6 +256,11 @@ public:
                                     task_t task,
                                     IOOptionBits mapFlags = kIOMapAnywhere,
 				    IOVirtualAddress atAddress = 0 );
+
+    IOMemoryMap * mapClientMemory64( IOOptionBits type,
+                                    task_t task,
+                                    IOOptionBits mapFlags = kIOMapAnywhere,
+				    mach_vm_address_t atAddress = 0 );
 
     /*!
         @function removeMappingForDescriptor

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 /*
@@ -72,14 +78,14 @@ typedef short  csrpos_t;    /* cursor position, ONE_SPACE bytes per char */
 /*
  * Globals.
  */
-static short     vga_idx_reg      = 0;   /* location of VGA index register */
-static short     vga_io_reg       = 0;   /* location of VGA data register */
-static short     vga_cols         = 80;  /* number of columns */
-static short     vga_rows         = 25;  /* number of rows */
-static char      vga_attr         = 0;   /* current character attribute */
-static char      vga_attr_rev     = 0;   /* current reverse attribute */
-static char      vga_cursor_start = 0;   /* cached cursor start scan line */
-static char *    vram_start       = 0;   /* VM start of VGA frame buffer */
+static short     vga_idx_reg;		/* location of VGA index register */
+static short     vga_io_reg;		/* location of VGA data register */
+static short     vga_cols = 80;		/* number of columns */
+static short     vga_rows = 25;		/* number of rows */
+static char      vga_attr;		/* current character attribute */
+static char      vga_attr_rev;		/* current reverse attribute */
+static char      vga_cursor_start;	/* cached cursor start scan line */
+static unsigned char *vram_start;	/* VM start of VGA frame buffer */
 
 /*
  * Functions in kdasm.s.
@@ -209,7 +215,7 @@ vga_init(int cols, int rows, unsigned char * addr)
  * Scroll the screen up 'n' character lines.
  */
 void
-tc_scroll_up( int lines, __unused int top, __unused int bottom )
+tc_scroll_up(int lines, __unused unsigned int top, __unused unsigned int bottom)
 {
     csrpos_t  to;
     csrpos_t  from;
@@ -233,7 +239,8 @@ tc_scroll_up( int lines, __unused int top, __unused int bottom )
  * Scrolls the screen down 'n' character lines.
  */
 void
-tc_scroll_down( int lines, __unused int top, __unused int bottom )
+tc_scroll_down(int lines, __unused unsigned int top,
+	       __unused unsigned int bottom)
 {
     csrpos_t  to;
     csrpos_t  from;
@@ -312,7 +319,7 @@ tc_update_color( int color, int fore )
  * Show the hardware cursor.
  */
 void
-tc_show_cursor( int x, int y )
+tc_show_cursor(unsigned int x, unsigned int y)
 {
     set_cursor_position( XY_TO_CSRPOS(x, y) );
     set_cursor_enable( TRUE );
@@ -324,7 +331,7 @@ tc_show_cursor( int x, int y )
  * Hide the hardware cursor.
  */
 void
-tc_hide_cursor( __unused int x, __unused int y )
+tc_hide_cursor(__unused unsigned int x, __unused unsigned int y)
 {
     set_cursor_enable( FALSE );
 }
@@ -336,8 +343,8 @@ tc_hide_cursor( __unused int x, __unused int y )
  * relative to the current cursor position.
  */
 void
-tc_clear_screen(int x, int y, __unused int top, __unused int bottom,
-		int operation)
+tc_clear_screen(unsigned int x, unsigned int y, __unused unsigned int top,
+		__unused unsigned int bottom, int operation)
 {
     csrpos_t start;
     int      count;
@@ -368,7 +375,7 @@ tc_clear_screen(int x, int y, __unused int top, __unused int bottom,
  * and attributes.
  */
 void
-tc_paint_char(int x, int y, unsigned char ch, int attrs,
+tc_paint_char(unsigned int x, unsigned int y, unsigned char ch, int attrs,
 	      __unused unsigned char ch_previous, __unused int attrs_previous)
 {
     char my_attr = vga_attr;

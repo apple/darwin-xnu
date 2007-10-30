@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*	Copyright (c) 1988, 1989, 1997, 1998 Apple Computer, Inc. 
  *
@@ -56,6 +62,7 @@
 #include <netat/at_pcb.h>
 #include <netat/at_var.h>
 #include <netat/at_aarp.h>
+#include <netat/at_pat.h>
 #include <netat/debug.h>
 
 #include <sys/kern_event.h>
@@ -76,26 +83,21 @@ struct	etalk_addr	et_zeroaddr = {
 aarp_amt_t		probe_cb;
 aarp_amt_array *aarp_table[IF_TOTAL_MAX];
 
-int aarp_init1(), aarp_init2();
-int aarp_send_data();
 
-StaticProc int aarp_req_cmd_in();
-StaticProc int aarp_resp_cmd_in();
-StaticProc int aarp_probe_cmd_in();
-StaticProc int aarp_send_resp();
-StaticProc int aarp_send_req();
-StaticProc int aarp_send_probe();
-StaticProc aarp_amt_t *aarp_lru_entry();
-StaticProc int aarp_glean_info();
-StaticProc int aarp_delete_amt_info();
-StaticProc void aarp_build_pkt();
+StaticProc int aarp_req_cmd_in(aarp_pkt_t *, at_ifaddr_t*);
+StaticProc int aarp_resp_cmd_in(aarp_pkt_t *, at_ifaddr_t*);
+StaticProc int aarp_probe_cmd_in(aarp_pkt_t *, at_ifaddr_t*);
+StaticProc int aarp_send_resp(at_ifaddr_t *, aarp_pkt_t *);
+StaticProc int aarp_send_req(aarp_amt_t *);
+StaticProc int aarp_send_probe(void);
+StaticProc aarp_amt_t *aarp_lru_entry(aarp_amt_t *);
+StaticProc int aarp_glean_info(aarp_pkt_t *, at_ifaddr_t*);
+StaticProc int aarp_delete_amt_info(aarp_amt_t	*);
+StaticProc void aarp_build_pkt(aarp_pkt_t *, at_ifaddr_t*);
 StaticProc void aarp_sched_req(void *);
-StaticProc int aarp_get_rand_node();
-StaticProc int aarp_get_next_node();
-StaticProc int aarp_get_rand_net();
-
-extern void AARPwakeup(aarp_amt_t *);
-extern int pat_output(at_ifaddr_t *, gbuf_t *, unsigned char *, int);
+StaticProc int aarp_get_rand_node(at_ifaddr_t	*);
+StaticProc int aarp_get_next_node(at_ifaddr_t	*);
+StaticProc int aarp_get_rand_net(at_ifaddr_t *);
 
 /****************************************************************************
  * aarp_init()
@@ -299,7 +301,7 @@ StaticProc int aarp_resp_cmd_in (pkt, elapp)
 		}
 		amt_ptr->dest_addr = pkt->src_addr;
 		if (FDDI_OR_TOKENRING(elapp->aa_ifp->if_type))
-			ddp_bit_reverse(&amt_ptr->dest_addr);
+			ddp_bit_reverse((unsigned char *)&amt_ptr->dest_addr);
 		m = amt_ptr->m;
 		amt_ptr->m = NULL;
 		pat_output(amt_ptr->elapp, m,
@@ -561,7 +563,7 @@ StaticProc   int	aarp_send_resp(elapp, pkt)
 
 	gbuf_winc(m,sizeof(aarp_pkt_t));
 	if (FDDI_OR_TOKENRING(elapp->aa_ifp->if_type))
-		ddp_bit_reverse(&new_pkt->dest_addr);
+		ddp_bit_reverse((unsigned char *)&new_pkt->dest_addr);
 
 	if (pat_output(elapp, m, (unsigned char *)&new_pkt->dest_addr,
 		       AARP_AT_TYPE))
@@ -621,7 +623,7 @@ register aarp_amt_t 	*amt_ptr;
  * aarp_send_probe()
  *
  ****************************************************************************/
-StaticProc  int	aarp_send_probe()
+StaticProc  int	aarp_send_probe(void)
 {
 	register aarp_pkt_t  *pkt;
 	register gbuf_t	     *m;
@@ -715,7 +717,7 @@ at_ifaddr_t	*elapp;
 	 */
 	amt_ptr->dest_addr = pkt->src_addr;
 	if (FDDI_OR_TOKENRING(elapp->aa_ifp->if_type))
-		ddp_bit_reverse(&amt_ptr->dest_addr);
+		ddp_bit_reverse((unsigned char *)&amt_ptr->dest_addr);
 	return(1);
 }
 
@@ -748,7 +750,7 @@ register aarp_amt_t	*amt_ptr;
  *
  ****************************************************************************/
 
-void  aarp_sched_probe(void *arg)
+void  aarp_sched_probe(__unused void *arg)
 {
 
 	atalk_lock();
@@ -921,8 +923,8 @@ register at_ifaddr_t	*elapp;
 }
 
 
-int getAarpTableSize(elapId)
-     int	elapId;			/* elap_specifics array index (should be
+int getAarpTableSize(__unused int elapId)
+      			/* elap_specifics array index (should be
 					 * changed when we add a non-ethernet type
 					 * of I/F to the mix. Unused for now.
 					 */
@@ -930,8 +932,8 @@ int getAarpTableSize(elapId)
 	return(AMTSIZE);
 }
 
-int getPhysAddrSize(elapId)
-     int	elapId;			/* elap_specifics array index (should be
+int getPhysAddrSize(__unused int elapId)
+     			/* elap_specifics array index (should be
 					 * changed when we add a non-ethernet type
 					 * of I/F to the mix. Unused for now.
 					 */

@@ -42,7 +42,9 @@
 .Sh SYNOPSIS
 .Fd #include <signal.h>
 .Ft int
-.Fn sigsuspend "const sigset_t *sigmask"
+.Fo sigsuspend
+.Fa "const sigset_t *sigmask"
+.Fc
 .Sh DESCRIPTION
 .Fn Sigsuspend
 temporarily changes the blocked signal mask to the set to which
@@ -71,12 +73,12 @@ always terminates by being interrupted, returning -1 with
 set to
 .Dv EINTR .
 .Sh SEE ALSO
-.Xr sigprocmask 2 ,
 .Xr sigaction 2 ,
+.Xr sigprocmask 2 ,
 .Xr sigsetops 3
 .Sh STANDARDS
 The
-.Nm sigsupend
+.Nm sigsuspend
 function call
 conforms to
 .St -p1003.1-88 .

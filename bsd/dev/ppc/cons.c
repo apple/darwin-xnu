@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* 
  * Copyright (c) 1987, 1988 NeXT, Inc.
@@ -47,10 +53,7 @@ struct tty	*constty;		/* current console device */
 
 /*ARGSUSED*/
 int
-consopen(dev, flag, devtype, pp)
-	dev_t dev;
-	int flag, devtype;
-	struct proc *pp;
+consopen(__unused dev_t dev, int flag, int devtype, struct proc *pp)
 {
 	dev_t device;
 	boolean_t funnel_state;
@@ -70,10 +73,7 @@ consopen(dev, flag, devtype, pp)
 
 /*ARGSUSED*/
 int
-consclose(dev, flag, mode, pp)
-	dev_t dev;
-	int flag, mode;
-	struct proc *pp;
+consclose(__unused dev_t dev, int flag, int mode, struct proc *pp)
 {
 	dev_t device;
 	boolean_t funnel_state;
@@ -94,10 +94,7 @@ consclose(dev, flag, mode, pp)
 
 /*ARGSUSED*/
 int
-consread(dev, uio, ioflag)
-	dev_t dev;
-	struct uio *uio;
-	int ioflag;
+consread(__unused dev_t dev, struct uio *uio, int ioflag)
 {
 	dev_t device;
 	boolean_t funnel_state;
@@ -116,10 +113,7 @@ consread(dev, uio, ioflag)
 
 /*ARGSUSED*/
 int
-conswrite(dev, uio, ioflag)
-	dev_t dev;
-	struct uio *uio;
-	int ioflag;
+conswrite(__unused dev_t dev, struct uio *uio, int ioflag)
 {
     dev_t device;
 	boolean_t funnel_state;
@@ -138,12 +132,7 @@ conswrite(dev, uio, ioflag)
 
 /*ARGSUSED*/
 int
-consioctl(dev, cmd, addr, flag, p)
-	dev_t dev;
-	int cmd;
-	caddr_t addr;
-	int flag;
-	struct proc *p;
+consioctl(__unused dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 {
 	dev_t device;
 	boolean_t funnel_state;
@@ -159,7 +148,7 @@ consioctl(dev, cmd, addr, flag, p)
 	 * Superuser can always use this to wrest control of console
 	 * output from the "virtual" console.
 	 */
-	if (cmd == TIOCCONS && constty) {
+	if ((unsigned int)cmd == TIOCCONS && constty) {
 		error = proc_suser(p);
 		if (error) {
 			goto out;
@@ -178,11 +167,7 @@ out:
 /*ARGSUSED*/
 /* called with funnel held */
 int
-consselect(dev, flag, wql, p)
-	dev_t dev;
-	int flag;
-	void *wql;
-	struct proc *p;
+consselect(__unused dev_t dev, int flag, void *wql, struct proc *p)
 {
 	dev_t device;
 
@@ -194,7 +179,7 @@ consselect(dev, flag, wql, p)
 }
 
 int
-cons_getc()
+cons_getc(__unused dev_t dev)
 {
 	dev_t device;
 	boolean_t funnel_state;
@@ -211,10 +196,8 @@ cons_getc()
 	return(error);
 }
 
-/*ARGSUSED*/
 int
-cons_putc(c)
-	char c;
+cons_putc(__unused dev_t dev, char c)
 {
 	dev_t device;
 	boolean_t funnel_state;
@@ -239,9 +222,9 @@ cons_putc(c)
  */
 int 
 alert(
-	int width, 
-	int height, 
-	const char *title, 
+	__unused int width, 
+	__unused int height, 
+	__unused const char *title, 
 	const char *msg, 
 	int p1, 
 	int p2, 
@@ -254,7 +237,7 @@ alert(
 {
 	char smsg[200];
 	
-	sprintf(smsg, msg,  p1, p2, p3, p4, p5, p6, p7, p8);
+	snprintf(smsg, sizeof(smsg), msg,  p1, p2, p3, p4, p5, p6, p7, p8);
 #if FIXME  /* [ */
 	/* DoAlert(title, smsg); */
 #else
@@ -265,7 +248,7 @@ alert(
 }
 
 int 
-alert_done()
+alert_done(void)
 {
 	/* DoRestore(); */
 	return 0;

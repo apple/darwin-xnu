@@ -42,7 +42,10 @@
 .Sh NAME
 .Nm profil
 .Nd control process profiling
+.Sh LIBRARY
+.Lb libc
 .Sh SYNOPSIS
+.In unistd.h
 .Ft int
 .Fn profil "char *samples" "size_t size" "u_long offset" "u_int scale"
 .Sh DESCRIPTION
@@ -117,8 +120,11 @@ contains an invalid address.
 .El
 .Sh SEE ALSO
 .Xr gprof 1
-.\" .Sh HISTORY
-.\" wish I knew...  probably v7.
+.Sh HISTORY
+The
+.Fn profil
+function appeared in
+.At v7 .
 .Sh BUGS
 This routine should be named
 .Fn profile .

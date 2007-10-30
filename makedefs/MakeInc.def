@@ -20,7 +20,7 @@ endif
 # Component List
 #
 ifndef COMPONENT_LIST 
-export COMPONENT_LIST 	= osfmk bsd iokit pexpert libkern libsa
+export COMPONENT_LIST 	= osfmk bsd libkern iokit pexpert libsa security
 export COMPONENT_LIST_UC := $(shell printf "%s" "$(COMPONENT_LIST)" | $(TR) a-z A-Z)
 endif
 ifndef	COMPONENT
@@ -35,8 +35,10 @@ endif
 
 # Architecture options
 #
-#  supported configurations : PPC I386
-#
+ifndef SUPPORTED_ARCH_CONFIGS
+export SUPPORTED_ARCH_CONFIGS = PPC I386 ARM
+endif
+
 ifndef ARCH_CONFIGS
 ifdef RC_ARCHS
 export ARCH_CONFIGS 	:= $(shell printf "%s" "$(RC_ARCHS)" | $(TR) a-z A-Z)
@@ -50,40 +52,131 @@ export ARCH_CONFIG_LC 	:= $(shell printf "%s" "$(ARCH_CONFIG)" | $(TR) A-Z a-z)
 endif
 endif
 
-
+#
 # Kernel Configuration options  
 #
-# supported configurations : RELEASE DEBUG PROFILE
-# By default, make wll build RELEASE, otherwise the value of KERNEL_CONFIG
-# will be used as kernel configuration. If KERNEL_CONFIGS (plural) is set
-# it will override KERNEL_CONFIG. Make sure to set KERNEL_CONFIGS because
-# build_all rule loops over it when building.
-
-ifndef KERNEL_CONFIGS
-ifndef KERNEL_CONFIG
-export KERNEL_CONFIGS 	= RELEASE
-else
-export KERNEL_CONFIGS = $(KERNEL_CONFIG)
+ifndef SUPPORTED_KERNEL_CONFIGS
+export SUPPORTED_KERNEL_CONFIGS = RELEASE DEVELOPMENT DEBUG PROFILE
 endif
+
+ifndef DEFAULT_KERNEL_CONFIG
+export DEFAULT_KERNEL_CONFIG = RELEASE
+endif
+
+# If KERNEL_CONFIGS is specified it should override KERNEL_CONFIG.
+# If KERNEL_CONFIG is specified it will override the default. Will quit with
+# error if more than one config is specified.
+# If DEFAULT_KERNEL_CONFIG is not specified then it will be built RELEASE.
+ifndef KERNEL_CONFIGS
+	ifndef KERNEL_CONFIG
+	export KERNEL_CONFIGS 	= $(DEFAULT_KERNEL_CONFIG)
+	else
+	export KERNEL_CONFIGS	= $(KERNEL_CONFIG)
+	endif
 endif
 
 ifndef KERNEL_CONFIG
 export KERNEL_CONFIG 	= $(firstword $(KERNEL_CONFIGS))
 endif
 
+ifneq ($(words $(KERNEL_CONFIG)), 1)
+$(error There were $(words $(KERNEL_CONFIG)) parameters passed to KERNEL_CONFIG = $(KERNEL_CONFG). \
+		Are you sure? To specify multiple configurations please use KERNEL_CONFIGS)
+endif
+
+#
+# Machine Configuration options  
+#
+# ppc supported configurations : none
+# i386 supported configurations : none
+# arm supported configurations : LN2410SBC MX31ADS INTEGRATORCP S5I3000SMDK S5L8900XFPGA S5L8900XRB OLOCREEK
+#
+ifndef SUPPORTED_MACHINE_CONFIGS
+export SUPPORTED_MACHINE_CONFIGS = LN2410SBC MX31ADS INTEGRATORCP S5I3000SMDK S5L8900XFPGA S5L8900XRB OLOCREEK DEFAULT
+endif
+
+export DEFAULT_ARM_MACHINE_CONFIG 	= S5L8900XRB
+
+ifndef MACHINE_CONFIG
+export MACHINE_CONFIG 	= DEFAULT
+endif
+
+ifndef MACHINE_FLAGS_LN2410SBC
+export MACHINE_FLAGS_LN2410SBC = -DARM_BOARD_CONFIG_LN2410_920T
+endif
+ifndef MACHINE_FLAGS_MX31ADS
+export MACHINE_FLAGS_MX31ADS = -DARM_BOARD_CONFIG_MX31ADS_1136JFS
+endif
+ifndef MACHINE_FLAGS_INTEGRATORCP
+export MACHINE_FLAGS_INTEGRATORCP = -DARM_BOARD_CONFIG_INTEGRATORCP_1136JFS
+endif
+ifndef MACHINE_FLAGS_S5I3000SMDK
+export MACHINE_FLAGS_S5I3000SMDK = -DARM_BOARD_CONFIG_S5I3000SMDK_1176JZFS
+endif
+ifndef MACHINE_FLAGS_S5L8900XFPGA
+export MACHINE_FLAGS_S5L8900XFPGA = -DARM_BOARD_CONFIG_S5L8900XFPGA_1136JFS
+endif
+ifndef MACHINE_FLAGS_S5L8900XRB
+export MACHINE_FLAGS_S5L8900XRB = -DARM_BOARD_CONFIG_S5L8900XRB
+endif
+ifndef MACHINE_FLAGS_OLOCREEK
+export MACHINE_FLAGS_OLOCREEK = -DARM_BOARD_CONFIG_OLOCREEK
+endif
+ifndef MACHINE_FLAGS_DEFAULT
+export MACHINE_FLAGS_DEFAULT =
+endif
+
+#
+# Target configuration options.  NOTE - target configurations will 
+# override ARCH_CONFIGS and KERNEL_CONFIGS.
+#
+# Target configs come in groups of three parameters.  The first is the 
+# kernel configuration, the second is the architecture configuration,
+# and the third is the machine configuration.  You may pass in as
+# many groups of configurations as you wish.  Each item passed in is
+# seperated by whitespace.
+#
+# Example:
+#	TARGET_CONFIGS="release ppc default debug i386 default release arm MX31ADS"
+# Parameters may be in upper or lower case (they are converted to upper).
+#
+# "default" parameter is a special case.  It means use the default value for 
+# that parameter.  Here are the default values for each configuration:
+#
+# default kernel configuration = DEFAULT_KERNEL_CONFIG
+# default architecture configuration = system architecture where you are running make.
+# default machine configuration for ppc = none at this time.
+# default machine configuration for i386 = none at this time.
+# default machine configuration for arm = "S5L8900XRB".
+#
+ifndef TARGET_CONFIGS_UC
+ifdef TARGET_CONFIGS
+	export TARGET_CONFIGS_UC = $(strip $(shell printf "%s" "$(TARGET_CONFIGS)" | $(TR) a-z A-Z))
+	export MACHINE_CONFIG	= $(word 3, $(TARGET_CONFIGS_UC))
+	export DEFAULT_KERNEL_CONFIG = $(word 1, $(TARGET_CONFIGS_UC))
+else
+	# generate TARGET_CONFIGS using KERNEL_CONFIGS and ARCH_CONFIGS and MACHINE_CONFIG (which defaults to "DEFAULT")
+	temp_list = $(foreach my_kern_config, $(KERNEL_CONFIGS), $(my_kern_config) arch_slot $(MACHINE_CONFIG))
+	export TARGET_CONFIGS = $(strip $(foreach my_arch_config, $(ARCH_CONFIGS), $(subst arch_slot,$(my_arch_config),$(temp_list))))
+	export TARGET_CONFIGS_UC := $(shell printf "%s" "$(TARGET_CONFIGS)" | $(TR) a-z A-Z)
+	export MACHINE_CONFIG	= $(word 3, $(TARGET_CONFIGS_UC))
+	export DEFAULT_KERNEL_CONFIG = $(word 1, $(TARGET_CONFIGS_UC))
+endif
+endif
+
+export MACHINE_CONFIG_LC := $(shell printf "%s" "$(MACHINE_CONFIG)" | $(TR) A-Z a-z)
+export KERNEL_CONFIG_LC := $(shell printf "%s" "$(KERNEL_CONFIG)" | $(TR) A-Z a-z)
+
 #
 # Kernel Configuration to install
 #
-#  supported install architecture : PPC I386
+#  supported install architecture : PPC I386 ARM
 #
-export INSTALL_TYPE 	= RELEASE
+export INSTALL_TYPE 	= $(DEFAULT_KERNEL_CONFIG)
+
 ifndef INSTALL_ARCHS
-ifdef RC_ARCHS
-export INSTALL_ARCHS 	= $(ARCH_CONFIGS)
-else
-export INSTALL_ARCHS 	= $(ARCH_CONFIGS)
-endif
-export INSTALL_ARCHS_LC := $(shell printf "%s" "$(ARCH_CONFIGS)" | $(TR) A-Z a-z)
+export INSTALL_ARCHS 	= $(strip $(foreach my_config, $(SUPPORTED_ARCH_CONFIGS), $(findstring $(my_config), $(TARGET_CONFIGS_UC))))
+export INSTALL_ARCHS_LC := $(shell printf "%s" "$(INSTALL_ARCHS)" | $(TR) A-Z a-z)
 endif
 
 export INSTALL_ARCH_DEFAULT	= PPC
@@ -91,7 +184,7 @@ export INSTALL_ARCH_DEFAULT	= PPC
 #
 # Standard defines list
 #
-export DEFINES = -DAPPLE -DNeXT -DKERNEL -DKERNEL_PRIVATE -DXNU_KERNEL_PRIVATE -DPRIVATE -D__MACHO__=1 -Dvolatile=__volatile $(IDENT)
+export DEFINES = -DAPPLE -DKERNEL -DKERNEL_PRIVATE -DXNU_KERNEL_PRIVATE -DPRIVATE -D__MACHO__=1 -Dvolatile=__volatile $(IDENT)
 
 #
 # Compiler command
@@ -128,13 +221,26 @@ export CXXWARNFLAGS ?= $(CXXWARNFLAGS_STD)
 
 
 #
-# Setup for parallel sub-makes when doing an RC build
+# Setup for parallel sub-makes based on 2 times number of logical CPUs
 #
 ifndef MAKEJOBS
-ifeq "YES" "$(RC_XBS)"
-export MAKEJOBS = --jobs=3
+export MAKEJOBS = --jobs=$(shell expr `/usr/sbin//sysctl -n hw.logicalcpu` \* 2)
 endif
-endif
+
+#
+# Default ARCH_FLAGS, for use with compiler/linker/assembler/mig drivers
+
+ARCH_FLAGS_PPC		  = -arch ppc
+ARCH_FLAGS_I386		  = -arch i386
+ARCH_FLAGS_ARM		  = $($(addsuffix $(MACHINE_CONFIG),ARCH_FLAGS_ARM_))
+
+ARCH_FLAGS_ARM_LN2410SBC	  = -arch arm
+ARCH_FLAGS_ARM_MX31ADS		  = -arch armv6
+ARCH_FLAGS_ARM_INTEGRATORCP	  = -arch armv6
+ARCH_FLAGS_ARM_S5I3000SMDK	  = -arch armv6
+ARCH_FLAGS_ARM_S5L8900XFPGA	  = -arch armv6
+ARCH_FLAGS_ARM_S5L8900XRB	  = -arch armv6
+ARCH_FLAGS_ARM_OLOCREEK	 	  = -arch arm
 
 #
 # Default CFLAGS
@@ -143,26 +249,67 @@ ifdef RC_CFLAGS
 export OTHER_CFLAGS	= $(subst $(addprefix -arch ,$(RC_ARCHS)),,$(RC_CFLAGS))
 endif
 
-export CFLAGS_GEN = -static -g -nostdinc -nostdlib -no-cpp-precomp \
-	-fno-builtin -finline -fno-keep-inline-functions -msoft-float \
-	-fsigned-bitfields $(OTHER_CFLAGS) -force_cpusubtype_ALL
+export DSYMBUILDDIR = ./Contents/Resources/DWARF/
+
+#
+# We must not use -fno-keep-inline-functions, or it will remove the dtrace
+# probes from the kernel.
+#
+export CFLAGS_GEN = -static $(DEBUG_CFLAGS) -nostdinc -nostdlib -no-cpp-precomp \
+	-fno-builtin -finline -msoft-float \
+	-fsigned-bitfields $(OTHER_CFLAGS)
 
 export CFLAGS_RELEASE 	= 
+export CFLAGS_DEVELOPMENT 	=
 export CFLAGS_DEBUG 	= 
 export CFLAGS_PROFILE 	=  -pg
 
-export CFLAGS_PPC 	= -arch ppc -Dppc -DPPC -D__PPC__ -DPAGE_SIZE_FIXED
-export CFLAGS_I386 	= -arch i386 -Di386 -DI386 -D__I386__ -DPAGE_SIZE_FIXED
+ifeq ($(ARCH_CONFIG),ARM)
+BUILD_STABS = 1
+endif
 
-export CFLAGS_RELEASEPPC = -O2 -mcpu=750 -mmultiple -fschedule-insns
-export CFLAGS_RELEASE_TRACEPPC = -O2 -mcpu=750 -mmultiple -fschedule-insns
-export CFLAGS_DEBUGPPC = -O2 -mcpu=750 -mmultiple -fschedule-insns
-export CFLAGS_PROFILEPPC = -O2 -mcpu=750 -mmultiple -fschedule-insns
+ifeq ($(BUILD_STABS),1)
+export CFLAGS_PPC 	= -Dppc -DPPC -D__PPC__ -DPAGE_SIZE_FIXED \
+				-mno-altivec -gstabs+ -force_cpusubtype_ALL
+export CFLAGS_I386 	= -Di386 -DI386 -D__I386__ \
+				-DPAGE_SIZE_FIXED -gstabs+ -force_cpusubtype_ALL
+export CFLAGS_ARM 	= -Darm -DARM -D__ARM__ -DPAGE_SIZE_FIXED \
+	-fno-strict-aliasing -gstabs+ -fno-keep-inline-functions
+export BUILD_DWARF = 0
+export BUILD_STABS = 1
+else
+export CFLAGS_PPC 	= -Dppc -DPPC -D__PPC__ -DPAGE_SIZE_FIXED \
+				-mno-altivec -gdwarf-2 -force_cpusubtype_ALL
+export CFLAGS_I386 	= -Di386 -DI386 -D__I386__ \
+				-DPAGE_SIZE_FIXED -gdwarf-2 -force_cpusubtype_ALL
+export CFLAGS_ARM 	= -Darm -DARM -D__ARM__ -DPAGE_SIZE_FIXED \
+	-fno-strict-aliasing -gdwarf-2 -fno-keep-inline-functions
+export BUILD_DWARF = 1
+export BUILD_STABS = 0
+endif
+ifeq (-arch armv6,$(ARCH_FLAGS_ARM))
+CFLAGS_ARM		+= -mthumb
+endif
+
+export CFLAGS_RELEASEPPC = -O2 -mcpu=750 -mmultiple
+export CFLAGS_RELEASE_TRACEPPC = -O2 -mcpu=750 -mmultiple
+export CFLAGS_DEVELOPMENTPPC = -O2 -mcpu=750 -mmultiple
+export CFLAGS_DEBUGPPC = -O2 -mcpu=750 -mmultiple
+export CFLAGS_PROFILEPPC = -O2 -mcpu=750 -mmultiple
+
 export CFLAGS_RELEASEI386 = -Os
+export CFLAGS_DEVELOPMENTI386 = -Os
 export CFLAGS_DEBUGI386 = -Os
 export CFLAGS_PROFILEI386 = -Os
 
+export CFLAGS_RELEASEARM = -O2
+export CFLAGS_DEVELOPMENTARM = -O2
+export CFLAGS_DEBUGARM = -O2
+export CFLAGS_PROFILEARM = -O2
+
 export CFLAGS 	= $(CFLAGS_GEN) \
+		  $($(addsuffix $(MACHINE_CONFIG),MACHINE_FLAGS_)) \
+		  $($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_)) \
 		  $($(addsuffix $(ARCH_CONFIG),CFLAGS_)) \
 		  $($(addsuffix $(KERNEL_CONFIG),CFLAGS_)) \
 		  $($(addsuffix $(ARCH_CONFIG), $(addsuffix $(KERNEL_CONFIG),CFLAGS_))) \
@@ -187,16 +334,20 @@ S_KCC	= $(CC)
 #
 # Default SFLAGS
 #
-export SFLAGS_GEN = -static -D__ASSEMBLER__ -force_cpusubtype_ALL $(OTHER_CFLAGS)
+export SFLAGS_GEN = -static -D__ASSEMBLER__ $(OTHER_CFLAGS)
 
 export SFLAGS_RELEASE 	= 
+export SFLAGS_DEVELOPMENT 	= 
 export SFLAGS_DEBUG 	= 
 export SFLAGS_PROFILE 	= 
 
-export SFLAGS_PPC 	= $(CFLAGS_PPC)
-export SFLAGS_I386 	= $(CFLAGS_I386)
+export SFLAGS_PPC 	= $(CFLAGS_PPC) -force_cpusubtype_ALL
+export SFLAGS_I386	= $(CFLAGS_I386)
+export SFLAGS_ARM	= $(CFLAGS_ARM)
 
 export SFLAGS 	= $(SFLAGS_GEN) \
+		  $($(addsuffix $(MACHINE_CONFIG),MACHINE_FLAGS_)) \
+		  $($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_)) \
 		  $($(addsuffix $(ARCH_CONFIG),SFLAGS_)) \
 		  $($(addsuffix $(KERNEL_CONFIG),SFLAGS_)) \
 		  $(DEFINES)
@@ -212,22 +363,23 @@ LD	= $(KC++) -nostdlib
 export LDFLAGS_COMPONENT_GEN = -static -r $(COMP_LDFLAGS_COMPONENT_GEN)
 
 export LDFLAGS_COMPONENT_RELEASE =  $(COMP_LDFLAGS_COMPONENT_RELEASE)
+export LDFLAGS_COMPONENT_DEVELOPMENT =  $(COMP_LDFLAGS_COMPONENT_DEVELOPMENT)
 export LDFLAGS_COMPONENT_DEBUG   =  $(COMP_LDFLAGS_COMPONENT_DEBUG)
 export LDFLAGS_COMPONENT_PROFILE =  $(COMP_LDFLAGS_COMPONENT_PROFILE)
 
-export LDFLAGS_COMPONENT_PPC 	= -arch ppc $(COMP_LDFLAGS_COMPONENT_PPC)
-export LDFLAGS_COMPONENT_I386 	= -arch i386 $(COMP_LDFLAGS_COMPONENT_i386)
+export LDFLAGS_COMPONENT_PPC 	= $(COMP_LDFLAGS_COMPONENT_PPC) -force_cpusubtype_ALL
+export LDFLAGS_COMPONENT_I386 	= $(COMP_LDFLAGS_COMPONENT_i386)
+export LDFLAGS_COMPONENT_ARM 	= $(COMP_LDFLAGS_COMPONENT_ARM)
 
 export LDFLAGS_COMPONENT	= $(LDFLAGS_COMPONENT_GEN) \
+		  $($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_)) \
 		  $($(addsuffix $(ARCH_CONFIG),LDFLAGS_COMPONENT_)) \
 		  $($(addsuffix $(KERNEL_CONFIG),LDFLAGS_COMPONENT_))
 
 export LDFLAGS_KERNEL_GEN = \
 	-static \
 	-fapple-kext \
-	-force_cpusubtype_ALL \
 	-Wl,-e,__start \
-	-Wl,-segalign,0x1000 \
 	-Wl,-sectalign,__TEXT,__text,0x1000 \
 	-Wl,-sectalign,__DATA,__common,0x1000 \
 	-Wl,-sectalign,__DATA,__bss,0x1000 \
@@ -236,22 +388,30 @@ export LDFLAGS_KERNEL_GEN = \
 	-Wl,-sectcreate,__PRELINK,__info,/dev/null
 
 export LDFLAGS_KERNEL_RELEASE 	=
+export LDFLAGS_KERNEL_DEVELOPMENT 	=
 #  -noseglinkedit
 export LDFLAGS_KERNEL_DEBUG 	= 
 export LDFLAGS_KERNEL_PROFILE 	= 
 
 export LDFLAGS_KERNEL_PPC      = \
-	-arch ppc \
+	-force_cpusubtype_ALL \
+	-Wl,-new_linker \
 	-Wl,-segaddr,__VECTORS,0x0 \
 	-Wl,-segaddr,__HIB,0x7000  \
 	-Wl,-segaddr,__TEXT,0xe000
  
 export LDFLAGS_KERNEL_I386     = \
-	-arch i386 \
+	-Wl,-new_linker \
 	-Wl,-segaddr,__HIB,0x100000 \
-	-Wl,-segaddr,__TEXT,0x111000
+	-Wl,-segaddr,__TEXT,0x111000 
+
+export LDFLAGS_KERNEL_ARM     = \
+	-Wl,-segaddr,__HIB,0xC0000000 \
+	-Wl,-segaddr,__TEXT,0xC0008000
 
 export LDFLAGS_KERNEL	= $(LDFLAGS_KERNEL_GEN) \
+		  $($(addsuffix $(MACHINE_CONFIG),MACHINE_FLAGS_)) \
+		  $($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_)) \
 		  $($(addsuffix $(ARCH_CONFIG),LDFLAGS_KERNEL_)) \
 		  $($(addsuffix $(KERNEL_CONFIG),LDFLAGS_KERNEL_))
 
@@ -275,7 +435,7 @@ export INCFLAGS 	= $(INCFLAGS_LOCAL) $(INCFLAGS_GEN) $(INCFLAGS_IMPORT) $(INCFLA
 #
 # Default MIGFLAGS
 #
-export MIGFLAGS	= $(DEFINES) $(INCFLAGS) $($(addsuffix $(ARCH_CONFIG),CFLAGS_))
+export MIGFLAGS	= $(DEFINES) $(INCFLAGS) $($(addsuffix $(ARCH_CONFIG),CFLAGS_)) $($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_))
 
 #
 # Default VPATH
@@ -289,7 +449,7 @@ export VPATH_GEN	= .:$(SOURCE):
 export VPATH	 	= $(VPATH_GEN)$(VPATH_IMPORT)$(VPATH_EXTERN)$(VPATH_MAKEFILE)
 
 #
-# Macros that control installation of kernel and it's header files
+# Macros that control installation of kernel and its header files
 #
 # install flags for header files
 # 
@@ -316,10 +476,10 @@ KRESDIR = $(KINCFRAME)/Versions/$(KINCVERS)/Resources
 
 XNU_PRIVATE_UNIFDEF = -UMACH_KERNEL_PRIVATE -UBSD_KERNEL_PRIVATE -UIOKIT_KERNEL_PRIVATE -ULIBKERN_KERNEL_PRIVATE -ULIBSA_KERNEL_PRIVATE -UPEXPERT_KERNEL_PRIVATE -UXNU_KERNEL_PRIVATE
 
-SPINCFRAME_UNIFDEF = $(XNU_PRIVATE_UNIFDEF) -UKERNEL_PRIVATE -UKERNEL -DPRIVATE
-SINCFRAME_UNIFDEF  = $(XNU_PRIVATE_UNIFDEF) -UKERNEL_PRIVATE -UKERNEL -UPRIVATE
-KPINCFRAME_UNIFDEF = $(XNU_PRIVATE_UNIFDEF) -DKERNEL_PRIVATE -DPRIVATE -DKERNEL
-KINCFRAME_UNIFDEF  = $(XNU_PRIVATE_UNIFDEF) -UKERNEL_PRIVATE -UPRIVATE -DKERNEL
+SPINCFRAME_UNIFDEF = $(XNU_PRIVATE_UNIFDEF) -UKERNEL_PRIVATE -UKERNEL -DPRIVATE -U_OPEN_SOURCE_
+SINCFRAME_UNIFDEF  = $(XNU_PRIVATE_UNIFDEF) -UKERNEL_PRIVATE -UKERNEL -UPRIVATE -D_OPEN_SOURCE_
+KPINCFRAME_UNIFDEF = $(XNU_PRIVATE_UNIFDEF) -DKERNEL_PRIVATE -DPRIVATE -DKERNEL -U_OPEN_SOURCE_
+KINCFRAME_UNIFDEF  = $(XNU_PRIVATE_UNIFDEF) -UKERNEL_PRIVATE -UPRIVATE -DKERNEL -D_OPEN_SOURCE_
 
 #
 # Compononent Header file destinations
@@ -330,6 +490,7 @@ EXPDIR = EXPORT_HDRS/$(COMPONENT)
 # Strip Flags
 #
 export STRIP_FLAGS_RELEASE	= -S -x 
+export STRIP_FLAGS_DEVELOPMENT	= -S -x 
 export STRIP_FLAGS_RELEASE_TRACE	= -S -x 
 export STRIP_FLAGS_DEBUG	= -S 
 export STRIP_FLAGS_DEBUG_TRACE	= -S 
@@ -338,9 +499,33 @@ export STRIP_FLAGS_PROFILE	= -S -x
 export STRIP_FLAGS 	= $($(addsuffix $(KERNEL_CONFIG),STRIP_FLAGS_)) 
 
 #
+# dsymutil flags
+#
+export DSYMUTIL_FLAGS_I386 = --arch=i386
+export DSYMUTIL_FLAGS_PPC = --arch=ppc
+export DSYMUTIL_FLAGS_ARM = --arch=arm
+
+export DSYMUTIL_FLAGS = $($(addsuffix $(ARCH_CONFIG),DSYMUTIL_FLAGS_))
+
+#
 # Man Page destination
 #
 MANDIR = usr/share/man
+
+##
+# Verbosity
+##
+ifeq ($(RC_XBS),YES)
+VERBOSE = YES
+else
+VERBOSE = NO
+endif
+
+ifeq ($(VERBOSE),YES)
+_v = 
+else
+_v = @
+endif
 
 #
 #  This must be here before any rules are possibly defined by the
@@ -351,3 +536,4 @@ MANDIR = usr/share/man
 
 default: all
 
+# vim: set ft=make:

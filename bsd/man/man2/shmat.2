@@ -38,13 +38,17 @@
 .Nm shmdt
 .Nd map/unmap shared memory
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
-.Fd #include <sys/ipc.h>
 .Fd #include <sys/shm.h>
 .Ft void *
-.Fn shmat "int shmid" "void *shmaddr" "int shmflg"
+.Fo shmat
+.Fa "int shmid"
+.Fa "const void *shmaddr"
+.Fa "int shmflg"
+.Fc
 .Ft int
-.Fn shmdt "void *shmaddr"
+.Fo shmdt
+.Fa "const void *shmaddr"
+.Fc
 .Sh DESCRIPTION
 .Fn shmat
 maps the shared memory segment associated with the shared memory identifier
@@ -86,30 +90,48 @@ and the global variable
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
+The
 .Fn shmat
-will fail if:
+system call will fail if:
 .Bl -tag -width Er
+.\" ===========
 .It Bq Er EACCES
 The calling process has no permission to access this shared memory segment.
-.It Bq Er ENOMEM
-There is not enough available data space for the calling process to
-map the shared memory segment.
+.\" ===========
 .It Bq Er EINVAL
 .Fa shmid
 is not a valid shared memory identifier.
 .Fa shmaddr
 specifies an illegal address.
+.\" ===========
 .It Bq Er EMFILE
 The number of shared memory segments has reached the system-wide limit.
+.\" ===========
+.It Bq Er ENOMEM
+There is not enough available data space for the calling process to
+map the shared memory segment.
+.Pp
 .El
+The
 .Fn shmdt
-will fail if:
+system call will fail if:
 .Bl -tag -width Er
 .It Bq Er EINVAL
 .Fa shmaddr
 is not the start address of a mapped shared memory segment.
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/ipc.h>
+.Fd #include <sys/shm.h>
+.Pp
+The include files
+.In sys/types.h
+and
+.In sys/ipc.h
+are necessary for both functions.
 .Sh SEE ALSO
+.Xr mmap 2 ,
 .Xr shmctl 2 ,
 .Xr shmget 2 ,
-.Xr mmap 2
+.Xr compat 5

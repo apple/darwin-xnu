@@ -1,0 +1,349 @@
+.\"
+.\" Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+.\"
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+.\" 
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. The rights granted to you under the License
+.\" may not be used to create, or enable the creation or redistribution of,
+.\" unlawful or unlicensed copies of an Apple operating system, or to
+.\" circumvent, violate, or enable the circumvention or violation of, any
+.\" terms of an Apple operating system software license agreement.
+.\" 
+.\" Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this file.
+.\" 
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\" 
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+.\"
+.\"     @(#)posix_spawn.2
+.
+.Dd August 9, 2007
+.Dt POSIX_SPAWN 2
+.Os "Mac OS X"
+.Sh NAME
+.Nm posix_spawn
+.Nm posix_spawnp
+.Nd spawn a process
+.Sh SYNOPSIS
+.Fd #include <spawn.h>
+.Ft int
+.Fo posix_spawn
+.Fa "pid_t *restrict pid"
+.Fa "const char *restrict path"
+.Fa "const posix_spawn_file_actions_t *file_actions"
+.Fa "const posix_spawnattr_t *restrict attrp"
+.Fa "char *const argv[restrict]"
+.Fa "char *const envp[restrict]"
+.Fc
+.Ft int
+.Fo posix_spawnp
+.Fa "pid_t *restrict pid"
+.Fa "const char *restrict file"
+.Fa "const posix_spawn_file_actions_t *file_actions"
+.Fa "const posix_spawnattr_t *restrict attrp"
+.Fa "char *const argv[restrict]"
+.Fa "char *const envp[restrict]"
+.Fc
+.Sh DESCRIPTION
+The
+.Fn posix_spawn
+function creates a new process from the executable file, called the
+.Em new process file ,
+specified by
+.Em path ,
+which is an absolute or relative path to the file.
+The
+.Fn posix_spawnp
+function is identical to the
+.Fn posix_spawn
+function if the
+.Em file
+specified contains a slash character; otherwise, the
+.Em file
+parameter is used to construct a pathname, with its path prefix being
+obtained by a search of the path specified in the environment by the
+.Dq Ev PATH variable .
+If this variable isn't specified, the default path is set according
+to the
+.Dv _PATH_DEFPATH
+definition in
+.In paths.h ,
+which is set to
+.Dq Ev /usr/bin:/bin .
+This pathname either refers to an executable object file,
+or a file of data for an interpreter;
+.Xr execve 2
+for more details.
+.Pp
+The argument
+.Fa pid
+is a pointer to a pid_t variable to receive the pid of the spawned
+process; if this is NULL, then the pid of the spawned process is
+not returned.  If this pointer is non-NULL, then on successful
+completion, the variable will be modified to contain the pid of the
+spawned process.  The value is undefined in the case of a failure.
+.Pp
+The argument
+.Fa file_actions
+is either NULL, or it is a a pointer to a file actions object that was
+initialized by a call to
+.Xr posix_spawn_file_actions_init 3
+and represents zero or more file actions.
+.Pp
+File descriptors open in the calling process image remain open in
+the new process image, except for those for which the close-on-exec
+flag is set (see
+.Xr close 2
+and
+.Xr fcntl 2 ) .
+Descriptors that remain open are unaffected by
+.Fn posix_spawn
+unless their behaviour is modified by a file action; see
+.Xr posix_spawn_file_actions_init 3
+for more information.
+.Pp
+The argument
+.Fa attrp
+is either NULL, or it is a pointer to an attributes object that was
+initialized by a call to
+.Xr posix_spawnattr_init 3
+and represents a set of spawn attributes to apply.  If NULL, then the
+default attributes are applied; otherwise, these attributes can control
+various aspects of the spawned process, and are applied prior to the
+spawned process beginning execution; see
+.Xr posix_spawnattr_init 3
+for more information.
+.Pp
+The argument
+.Fa argv
+is a pointer to a null-terminated array of
+character pointers to null-terminated character strings.
+These strings construct the argument list to be made available to the new
+process.  At least
+.Fa argv[0]
+must be present in the array, and should contain the file name of the
+program being spawned, e.g. the last component of the
+.Em path
+or
+.Em file
+argument.
+.Pp
+The argument
+.Fa envp
+is a pointer to a null-terminated array of character pointers to
+null-terminated strings.  A pointer to this array is normally stored
+in the global variable
+.Va environ.
+These strings pass information to the
+new process that is not directly an argument to the command (see
+.Xr environ 7 ) .
+.Pp
+Signals set to be ignored in the calling process are set to be ignored in
+the new process, unless the behaviour is modified by user specified
+.Em spawn attributes .
+Signals which are set to be caught in the calling process image are set to
+default action in the new process image.
+Blocked signals remain blocked regardless of changes to the signal action,
+unless the mask is overridden by user specified
+.Em spawn attributes .
+The signal stack is reset to be undefined (see
+.Xr sigaction 2
+for more information).
+.Pp
+By default, the effective user ID and group ID will be the same as those of
+the calling process image; however, this may be overridden to force them to
+be the real user ID and group ID of the parent process by user specified
+.Em spawn attributes
+(see
+.Xr posix_spawnattr_init 3
+for more information).
+.Pp
+If the set-user-ID mode bit of the new process image file is set
+(see
+.Xr chmod 2 ) ,
+the effective user ID of the new process image is set to the owner ID
+of the new process image file.
+If the set-group-ID mode bit of the new process image file is set,
+the effective group ID of the new process image is set to the group ID
+of the new process image file.
+(The effective group ID is the first element of the group list.)
+The real user ID, real group ID and supplementary group IDs of the new
+process image remain the same as the calling process image.
+After any set-user-ID and set-group-ID processing,
+the effective user ID is recorded as the saved set-user-ID,
+and the effective group ID is recorded as the saved set-group-ID.
+These values may be used in changing the effective IDs later (see
+.Xr setuid 2 ) .
+.Pp
+The new process also inherits the following attributes from
+the calling process:
+.Pp
+.Bl -column parent_process_ID -offset indent -compact
+.It parent process ID Ta see Xr getppid 2
+.It process group ID Ta see Xr getpgrp 2 , Xr posix_spawnattr_init 3
+.It access groups Ta see Xr getgroups 2
+.It working directory Ta see Xr chdir 2
+.It root directory Ta see Xr chroot 2
+.It control terminal Ta see Xr termios 4
+.It resource usages Ta see Xr getrusage 2
+.It interval timers Ta see Xr getitimer 2
+.It resource limits Ta see Xr getrlimit 2
+.It file mode mask Ta see Xr umask 2
+.It signal mask Ta see Xr sigaction 2 , Xr sigsetmask 2 ,
+.Xr posix_spawnattr_init 3
+.El
+.Pp
+When a program is executed as a result of a
+.Fn posix_spawn
+or
+.Fn posix_spawnp
+call, it is entered as follows:
+.Bd -literal -offset indent
+main(argc, argv, envp)
+int argc;
+char **argv, **envp;
+.Ed
+.Pp
+where
+.Fa argc
+is the number of elements in
+.Fa argv
+(the ``arg count'')
+and
+.Fa argv
+points to the array of character pointers
+to the arguments themselves.
+.Sh RETURN VALUES
+If the
+.Em pid
+argument is NULL, no pid is returned to the calling process; if it is
+non-NULL, then
+.Fn posix_spawn
+and
+.Fn posix_spawnp
+functions return the process ID of the child process into the pid_t
+variable pointed to by the
+.Em pid
+argument and return a 0 on success.  If an error occurs, they return
+a non-zero error code as the function return value, and no child process
+is created.
+.Sh ERRORS
+The
+.Fn posix_spawn
+and
+.Fn posix_spawnp
+functions will fail and return to the calling process if:
+.Bl -tag -width Er
+.\" ==========
+.It Bq Er EINVAL
+The value specified by
+.Fa file_actions
+or
+.Fa attrp
+is invalid.
+.\" ==========
+.It Bq Er E2BIG
+The number of bytes in the new process's argument list
+is larger than the system-imposed limit.
+This limit is specified by the
+.Xr sysctl 3
+MIB variable
+.Dv KERN_ARGMAX .
+.\" ==========
+.It Bq Er EACCES
+Search permission is denied for a component of the path prefix.
+.\" ==========
+.It Bq Er EACCES
+The new process file is not an ordinary file.
+.\" ==========
+.It Bq Er EACCES
+The new process file mode denies execute permission.
+.\" ==========
+.It Bq Er EACCES
+The new process file is on a filesystem mounted
+with execution disabled
+.Pf ( Dv MNT_NOEXEC
+in
+.Ao Pa sys/mount.h Ac ) .
+.\" ==========
+.It Bq Er EFAULT
+The new process file is not as long as indicated by
+the size values in its header.
+.\" ==========
+.It Bq Er EFAULT
+.Fa Path ,
+.Fa argv ,
+or
+.Fa envp
+point
+to an illegal address.
+.\" ==========
+.It Bq Er EIO
+An I/O error occurred while reading from the file system.
+.\" ==========
+.It Bq Er ELOOP
+Too many symbolic links were encountered in translating the pathname.
+This is taken to be indicative of a looping symbolic link.
+.\" ==========
+.It Bq Er ENAMETOOLONG
+A component of a pathname exceeded 
+.Dv {NAME_MAX}
+characters, or an entire path name exceeded 
+.Dv {PATH_MAX}
+characters.
+.\" ==========
+.It Bq Er ENOENT
+The new process file does not exist.
+.\" ==========
+.It Bq Er ENOEXEC
+The new process file has the appropriate access
+permission, but has an unrecognized format
+(e.g., an invalid magic number in its header).
+.\" ==========
+.It Bq Er ENOMEM
+The new process requires more virtual memory than
+is allowed by the imposed maximum
+.Pq Xr getrlimit 2 .
+.\" ==========
+.It Bq Er ENOTDIR
+A component of the path prefix is not a directory.
+.\" ==========
+.It Bq Er ETXTBSY
+The new process file is a pure procedure (shared text)
+file that is currently open for writing or reading by some process.
+.El
+.Sh CAVEAT
+If a program is
+.Em setuid
+to a non-super-user, but is executed when
+the real
+.Em uid
+is ``root'', then the program has some of the powers
+of a super-user as well.
+.Sh SEE ALSO
+.Xr exit 2 ,
+.Xr fork 2 ,
+.Xr execl 3 ,
+.Xr sysctl 3 ,
+.Xr environ 7 ,
+.Xr posix_spawnattr_init 3 ,
+.Xr posix_file_actions_init 3
+.Sh STANDARDS
+.St -susv3 [SPN]
+.Sh HISTORY
+The
+.Fn posix_spawn
+and
+.Fn posix_spawnp
+function calls appeared in
+.St -susv3 [SPN] .

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1989, 1993
@@ -64,6 +70,8 @@
 #include <sys/sockio.h>
 #include <sys/sysctl.h>
 
+#include <pexpert/pexpert.h>
+
 #include <net/if.h>
 #include <net/route.h>
 #include <net/if_llc.h>
@@ -72,6 +80,8 @@
 #include <net/if_ether.h>
 #include <netinet/if_ether.h>
 #include <netinet/in.h>	/* For M_LOOP */
+#include <net/kpi_interface.h>
+#include <net/kpi_protocol.h>
 
 /*
 #if INET
@@ -82,7 +92,7 @@
 #include <netinet/ip.h>
 #endif
 */
-
+#include <net/ether_if_module.h>
 #include <sys/socketvar.h>
 #include <net/if_vlan_var.h>
 #include <net/if_bond_var.h>
@@ -109,15 +119,20 @@ extern struct ifqueue atalkintrq;
 
 
 SYSCTL_DECL(_net_link);
-SYSCTL_NODE(_net_link, IFT_ETHER, ether, CTLFLAG_RW, 0, "Ethernet");
+SYSCTL_NODE(_net_link, IFT_ETHER, ether, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "Ethernet");
 
 struct en_desc {
 	u_int16_t	type;			/* Type of protocol stored in data */
 	u_long 		protocol_family;	/* Protocol family */
 	u_long		data[2];		/* Protocol data */
 };
+
 /* descriptors are allocated in blocks of ETHER_DESC_BLK_SIZE */
-#define ETHER_DESC_BLK_SIZE (10) 
+#if CONFIG_EMBEDDED
+#define ETHER_DESC_BLK_SIZE (2) /* IP, ARP */
+#else
+#define ETHER_DESC_BLK_SIZE (10)
+#endif
 
 /*
  * Header for the demux list, hangs off of IFP at family_cookie
@@ -130,15 +145,32 @@ struct ether_desc_blk_str {
 	struct en_desc  block_ptr[1];
 };
 /* Size of the above struct before the array of struct en_desc */
-#define ETHER_DESC_HEADER_SIZE	((size_t)&(((struct ether_desc_blk_str*)0)->block_ptr[0]))
+#define ETHER_DESC_HEADER_SIZE	((size_t)offsetof(struct ether_desc_blk_str, block_ptr))
 __private_extern__ u_char	etherbroadcastaddr[ETHER_ADDR_LEN] =
 								{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 
-int ether_add_proto_old(struct ifnet *ifp, u_long protocol_family, struct ddesc_head_str *desc_head);
-int ether_add_if(struct ifnet *ifp);
-int ether_del_if(struct ifnet *ifp);
-int ether_init_if(struct ifnet *ifp);
-int ether_family_init(void);
+#if defined (__arm__)
+static __inline__ int
+_ether_cmp(const void * a, const void * b)
+{
+	return (memcmp(a, b, ETHER_ADDR_LEN));
+}
+
+#else
+static __inline__ int
+_ether_cmp(const void * a, const void * b)
+{
+	const u_int16_t * a_s = (const u_int16_t *)a;
+	const u_int16_t * b_s = (const u_int16_t *)b;
+	
+	if (a_s[0] != b_s[0]
+	    || a_s[1] != b_s[1]
+	    || a_s[2] != b_s[2]) {
+		return (1);
+	}
+	return (0);
+}
+#endif
 
 /*
  * Release all descriptor entries owned by this protocol (there may be several).
@@ -263,8 +295,8 @@ ether_add_proto_internal(
 			 */
 			return ENOMEM;
 		}
-		
-		bzero(tmp + old_size, new_size - old_size);
+
+		bzero(((char *)tmp) + old_size, new_size - old_size);
 		if (desc_blk) {
 			bcopy(desc_blk, tmp, old_size);
 			FREE(desc_blk, M_IFADDR);
@@ -339,55 +371,6 @@ ether_add_proto(
 	return error;
 }
 
-__private_extern__ int
-ether_add_proto_old(
-	struct ifnet *ifp,
-	u_long protocol_family,
-	struct ddesc_head_str *desc_head)
-{
-	struct dlil_demux_desc  *desc;
-	int error = 0;
-	
-	TAILQ_FOREACH(desc, desc_head, next) {
-		struct ifnet_demux_desc dmx;
-		int swapped = 0;
-		
-		// Convert dlil_demux_desc to ifnet_demux_desc
-		dmx.type = desc->type;
-		dmx.datalen = desc->variants.native_type_length;
-		dmx.data = desc->native_type;
-		
-#ifdef DLIL_DESC_RAW
-		if (dmx.type == DLIL_DESC_RAW) {
-			swapped = 1;
-			dmx.type = DLIL_DESC_ETYPE2;
-			dmx.datalen = 2;
-			*(u_int16_t*)dmx.data = htons(*(u_int16_t*)dmx.data);
-		}
-#endif
-		
-		error = ether_add_proto_internal(ifp, protocol_family, &dmx);
-		if (swapped) {
-			*(u_int16_t*)dmx.data = ntohs(*(u_int16_t*)dmx.data);
-			swapped = 0;
-		}
-		if (error) {
-			ether_del_proto(ifp, protocol_family);
-			break;
-		}
-	}
-	
-	return error;
-} 
-
-
-static int
-ether_shutdown(void)
-{
-    return 0;
-}
-
-
 int
 ether_demux(
 	ifnet_t				ifp,
@@ -408,8 +391,7 @@ ether_demux(
 
 	if (eh->ether_dhost[0] & 1) {
 		/* Check for broadcast */
-		if (*(u_int32_t*)eh->ether_dhost == 0xFFFFFFFF &&
-			*(u_int16_t*)(eh->ether_dhost + sizeof(u_int32_t)) == 0xFFFF)
+		if (_ether_cmp(etherbroadcastaddr, eh->ether_dhost) == 0)
 			m->m_flags |= M_BCAST;
 		else
 			m->m_flags |= M_MCAST;
@@ -423,16 +405,12 @@ ether_demux(
 
 	if ((eh->ether_dhost[0] & 1) == 0) {
 		/*
- 		* When the driver is put into promiscuous mode we may receive unicast
-		* frames that are not intended for our interfaces.  They are marked here
-		* as being promiscuous so the caller may dispose of them after passing
-		* the packets to any interface filters.
-		*/
-		#define ETHER_CMP(x, y) ( ((u_int16_t *) x)[0] != ((u_int16_t *) y)[0] || \
-								  ((u_int16_t *) x)[1] != ((u_int16_t *) y)[1] || \
-								  ((u_int16_t *) x)[2] != ((u_int16_t *) y)[2] )
-		
-		if (ETHER_CMP(eh->ether_dhost, ifnet_lladdr(ifp))) {
+		 * When the driver is put into promiscuous mode we may receive unicast
+		 * frames that are not intended for our interfaces.  They are marked here
+		 * as being promiscuous so the caller may dispose of them after passing
+		 * the packets to any interface filters.
+		 */
+		if (_ether_cmp(eh->ether_dhost, ifnet_lladdr(ifp))) {
 			m->m_flags |= M_PROMISC;
 		}
 	}
@@ -539,11 +517,11 @@ ether_frameout(
             if ((*m)->m_flags & M_BCAST) {
                 struct mbuf *n = m_copy(*m, 0, (int)M_COPYALL);
                 if (n != NULL)
-                    dlil_output(lo_ifp, ndest->sa_family, n, 0, ndest, 0);
+                    dlil_output(lo_ifp, ndest->sa_family, n, NULL, ndest, 0);
             }
             else {
-                if (bcmp(edst, ifnet_lladdr(ifp), ETHER_ADDR_LEN) == 0) {
-                    dlil_output(lo_ifp, ndest->sa_family, *m, 0, ndest, 0);
+					if (_ether_cmp(edst, ifnet_lladdr(ifp)) == 0) {
+                    dlil_output(lo_ifp, ndest->sa_family, *m, NULL, ndest, 0);
                     return EJUSTRETURN;
                 }
             }
@@ -563,53 +541,15 @@ ether_frameout(
 	eh = mtod(*m, struct ether_header *);
 	(void)memcpy(&eh->ether_type, ether_type,
 		sizeof(eh->ether_type));
- 	(void)memcpy(eh->ether_dhost, edst, 6);
+ 	(void)memcpy(eh->ether_dhost, edst, ETHER_ADDR_LEN);
  	ifnet_lladdr_copy_bytes(ifp, eh->ether_shost, ETHER_ADDR_LEN);
 
 	return 0;
 }
 
-
-__private_extern__ int
-ether_add_if(struct ifnet *ifp)
-{
-	ifp->if_framer = ether_frameout;
-	ifp->if_demux = ether_demux;
-    
-    return 0;
-}
-
-__private_extern__ int
-ether_del_if(struct ifnet *ifp)
-{
-	if (ifp->family_cookie) {
-		FREE(ifp->family_cookie, M_IFADDR);
-		return 0;
-	}
-	else
-		return ENOENT;
-}
-
-__private_extern__ int
-ether_init_if(struct ifnet *ifp)
-{
-	/*
-	 * Copy ethernet address out of old style arpcom. New
-	 * interfaces created using the KPIs will not have an
-	 * interface family. Those interfaces will have the
-	 * lladdr passed in when the interface is created.
-	 */
-	u_char *enaddr = ((u_char*)ifp) + sizeof(struct ifnet);
-	ifnet_set_lladdr(ifp, enaddr, 6);
-	bzero(enaddr, 6);
-	
-    return 0;
-}
-
-
 errno_t
 ether_check_multi(
-	ifnet_t					ifp,
+	__unused ifnet_t		ifp,
 	const struct sockaddr	*proto_addr)
 {
 	errno_t	result = EAFNOSUPPORT;
@@ -649,52 +589,36 @@ ether_ioctl(
 	return EOPNOTSUPP;
 }
 
-
-extern int ether_attach_inet(struct ifnet *ifp, u_long proto_family);
-extern int ether_detach_inet(struct ifnet *ifp, u_long proto_family);
-extern int ether_attach_inet6(struct ifnet *ifp, u_long proto_family);
-extern int ether_detach_inet6(struct ifnet *ifp, u_long proto_family);
-
-extern void kprintf(const char *, ...);
-
-int ether_family_init(void)
+__private_extern__ int ether_family_init(void)
 {
-    int  error=0;
-    struct dlil_ifmod_reg_str  ifmod_reg;
-
-    /* ethernet family is built-in, called from bsd_init */
-
-    bzero(&ifmod_reg, sizeof(ifmod_reg));
-    ifmod_reg.add_if = ether_add_if;
-    ifmod_reg.del_if = ether_del_if;
-    ifmod_reg.init_if = ether_init_if;
-    ifmod_reg.add_proto = ether_add_proto_old;
-    ifmod_reg.del_proto = ether_del_proto;
-    ifmod_reg.ifmod_ioctl = ether_ioctl;
-    ifmod_reg.shutdown    = ether_shutdown;
-
-    if (dlil_reg_if_modules(APPLE_IF_FAM_ETHERNET, &ifmod_reg)) {
-        printf("WARNING: ether_family_init -- Can't register if family modules\n");
-        error = EIO;
-	goto done;
-    }
-
+	errno_t	error = 0;
+	
 	/* Register protocol registration functions */
-
-	if ((error = dlil_reg_proto_module(PF_INET, APPLE_IF_FAM_ETHERNET,
+	if ((error = proto_register_plumber(PF_INET, APPLE_IF_FAM_ETHERNET,
 									  ether_attach_inet, ether_detach_inet)) != 0) {
-		kprintf("dlil_reg_proto_module failed for AF_INET6 error=%d\n", error);
+		printf("proto_register_plumber failed for PF_INET error=%d\n", error);
 		goto done;
 	}
-
-
-	if ((error = dlil_reg_proto_module(PF_INET6, APPLE_IF_FAM_ETHERNET,
+#if INET6
+	if ((error = proto_register_plumber(PF_INET6, APPLE_IF_FAM_ETHERNET,
 									  ether_attach_inet6, ether_detach_inet6)) != 0) {
-		kprintf("dlil_reg_proto_module failed for AF_INET6 error=%d\n", error);
+		printf("proto_register_plumber failed for PF_INET6 error=%d\n", error);
 		goto done;
 	}
+#endif /* INET6 */
+#if NETAT
+	if ((error = proto_register_plumber(PF_APPLETALK, APPLE_IF_FAM_ETHERNET,
+									  ether_attach_at, ether_detach_at)) != 0) {
+		printf("proto_register_plumber failed PF_APPLETALK error=%d\n", error);
+		goto done;
+	}
+#endif /* NETAT */
+#if VLAN
 	vlan_family_init();
+#endif /* VLAN */
+#if BOND
 	bond_family_init();
+#endif /* BOND */
 
  done:
 

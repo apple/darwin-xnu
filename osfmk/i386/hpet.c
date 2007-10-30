@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2005-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <string.h>
@@ -49,7 +55,12 @@
 #include <i386/tsc.h>
 #include <i386/hpet.h>
 #include <i386/pmCPU.h>
+#include <i386/cpu_topology.h>
+#include <i386/cpu_threads.h>
 #include <pexpert/device_tree.h>
+#if	MACH_KDB
+#include <i386/db_machdep.h>
+#endif
 #if	MACH_KDB
 #include <ddb/db_aout.h>
 #include <ddb/db_access.h>
@@ -83,11 +94,87 @@ uint64_t hpet2bus = 0;
 uint32_t rcbaArea = 0;			
 uint32_t rcbaAreap = 0;			
 
+static int (*hpet_req)(uint32_t apicid, void *arg, hpetRequest_t *hpet) = NULL;
+static void *hpet_arg = NULL;
+
 #if DEBUG
 #define DBG(x...)	kprintf("DBG: " x)
 #else
 #define DBG(x...)
 #endif
+
+int
+hpet_register_callback(int (*hpet_reqst)(uint32_t apicid,
+					 void *arg,
+					 hpetRequest_t *hpet),
+		       void *arg)
+{
+    hpet_req = hpet_reqst;
+    hpet_arg = arg;
+    return(0);
+}
+
+/*
+ * This routine is called to obtain an HPET and have it assigned
+ * to a CPU.  It returns 0 if successful and non-zero if one could
+ * not be assigned.
+ */
+int
+hpet_request(uint32_t cpu)
+{
+    hpetRequest_t	hpetReq;
+    int			rc;
+    x86_lcpu_t		*lcpu;
+    x86_core_t		*core;
+    x86_pkg_t		*pkg;
+    boolean_t		enabled;
+
+    if (hpet_req == NULL) {
+	return(-1);
+    }
+
+    rc = (*hpet_req)(ml_get_apicid(cpu), hpet_arg, &hpetReq);
+    if (rc != 0) {
+	return(rc);
+    }
+
+    enabled = ml_set_interrupts_enabled(FALSE);
+    lcpu = cpu_to_lcpu(cpu);
+    core = lcpu->core;
+    pkg  = core->package;
+
+    /*
+     * Compute the address of the HPET.
+     */
+    core->Hpet = (hpetTimer_t *)((uint8_t *)hpetArea + hpetReq.hpetOffset);
+    core->HpetVec = hpetReq.hpetVector;
+
+    /*
+     * Enable interrupts
+     */
+    core->Hpet->Config |= Tn_INT_ENB_CNF;
+
+    /*
+     * Save the configuration
+     */
+    core->HpetCfg = core->Hpet->Config;
+    core->HpetCmp = 0;
+
+    /*
+     * If the CPU is the "primary" for the package, then
+     * add the HPET to the package too.
+     */
+    if (lcpu->primary) {
+	pkg->Hpet = core->Hpet;
+	pkg->HpetCfg = core->HpetCfg;
+	pkg->HpetCmp = core->HpetCmp;
+	pkg->flags |= X86PKG_FL_HAS_HPET;
+    }
+
+    ml_set_interrupts_enabled(enabled);
+
+    return(0);
+}
 
 /*
  * Map the RCBA area.
@@ -111,8 +198,6 @@ void
 hpet_init(void)
 {
 	unsigned int	*xmod;
-	uint64_t	now;
-	uint64_t	initialHPET;
 
 	map_rcbaArea();
 
@@ -204,14 +289,14 @@ hpet_init(void)
 	 * Convert current TSC to HPET value,
 	 * set it, and start it ticking.
 	 */
-	now = mach_absolute_time();
-	initialHPET = tmrCvt(now, hpetCvtn2t);
-	((hpetReg_t *)hpetArea)->MAIN_CNT = initialHPET;
+	uint64_t currtsc = rdtsc64();
+	uint64_t tscInHPET = tmrCvt(currtsc, tsc2hpet);
+	((hpetReg_t *)hpetArea)->MAIN_CNT = tscInHPET;
 	hpetcon = hpetcon | 1;
 	((hpetReg_t *)hpetArea)->GEN_CONF = hpetcon;
-	kprintf("HPET started: now = %08X.%08X, HPET = %08X.%08X\n",
-		(uint32_t)(now >> 32), (uint32_t)now,
-		(uint32_t)(initialHPET >> 32), (uint32_t)initialHPET);
+	kprintf("HPET started: TSC = %08X.%08X, HPET = %08X.%08X\n", 
+		(uint32_t)(currtsc >> 32), (uint32_t)currtsc,
+		(uint32_t)(tscInHPET >> 32), (uint32_t)tscInHPET);
 
 #if MACH_KDB
 	db_display_hpet((hpetReg_t *)hpetArea);	/* (BRINGUP) */
@@ -239,56 +324,87 @@ hpet_get_info(hpetInfo_t *info)
 
 /*
  * This routine is called by the HPET driver
- * when it assigns an HPET timer to a processor
+ * when it assigns an HPET timer to a processor.
+ *
+ * XXX with the new callback into the HPET driver,
+ * this routine will be deprecated.
  */
-
 void
 ml_hpet_cfg(uint32_t cpu, uint32_t hpetVect)
 {
-	uint64_t *hpetVaddr;
-	uint64_t hpetcnf;
+	uint64_t	*hpetVaddr;
+	hpetTimer_t	*hpet;
+	x86_lcpu_t	*lcpu;
+	x86_core_t	*core;
+	x86_pkg_t	*pkg;
+	boolean_t	enabled;
 	
 	if(cpu > 1) {
 		panic("ml_hpet_cfg: invalid cpu = %d\n", cpu);
 	}
 
+	lcpu = cpu_to_lcpu(cpu);
+	core = lcpu->core;
+	pkg  = core->package;
+
+	/*
+	 * Only deal with the primary CPU for the package.
+	 */
+	if (!lcpu->primary)
+	    return;
+
+	enabled = ml_set_interrupts_enabled(FALSE);
+
 	/* Calculate address of the HPET for this processor */
 	hpetVaddr = (uint64_t *)(((uint32_t)&(((hpetReg_t *)hpetArea)->TIM1_CONF)) + (cpu << 5));
+	hpet = (hpetTimer_t *)hpetVaddr;
 
-	DBG("ml_hpet_cfg: HPET for cpu %d at %08X, vector = %d\n",
+	DBG("ml_hpet_cfg: HPET for cpu %d at %p, vector = %d\n",
 	     cpu, hpetVaddr, hpetVect);
-	
-	/* Save the address and vector of the HPET for this processor */
-	cpu_data_ptr[cpu]->cpu_pmHpet = (uint64_t *)hpetVaddr;
-	cpu_data_ptr[cpu]->cpu_pmHpetVec = hpetVect;
 
-	/* Enable the interruptions now that we have a vector */
-	hpetcnf = *hpetVaddr;
-	hpetcnf = hpetcnf | Tn_INT_ENB_CNF;
-	*hpetVaddr = hpetcnf;
+	/* Save the address and vector of the HPET for this processor */
+	core->Hpet = hpet;
+	core->HpetVec = hpetVect;
+
+	/*
+	 * Enable interrupts
+	 */
+	core->Hpet->Config |= Tn_INT_ENB_CNF;
 
 	/* Save the configuration */
-	cpu_data_ptr[cpu]->cpu_pmStats.pmHpetCfg = hpetcnf;
-	cpu_data_ptr[cpu]->cpu_pmStats.pmHpetCmp = 0;
+	core->HpetCfg = core->Hpet->Config;
+	core->HpetCmp = 0;
 
-	/* See if nap policy has changed now */
-	machine_nap_policy();
+	/*
+	 * We're only doing this for the primary CPU, so go
+	 * ahead and add the HPET to the package too.
+	 */
+	pkg->Hpet = core->Hpet;
+	pkg->HpetVec = core->HpetVec;
+	pkg->HpetCfg = core->HpetCfg;
+	pkg->HpetCmp = core->HpetCmp;
+	pkg->flags |= X86PKG_FL_HAS_HPET;
 
+	ml_set_interrupts_enabled(enabled);
 }
 
 /*
  * This is the HPET interrupt handler.
  *
- * We really don't want to be here, but so far, I haven't figured out
- * a way to cancel the interrupt. Hopefully, some day we will figure out
- * how to do that or switch all timers to the HPET.
+ * It just hands off to the power management code so that the
+ * appropriate things get done there.
  */
 int
 HPETInterrupt(void)
 {
 
 	/* All we do here is to bump the count */
-	current_cpu_datap()->cpu_pmStats.pmHPETRupt++;
+	x86_package()->HpetInt++;
+
+	/*
+	 * Let power management do it's thing.
+	 */
+	pmHPETInterrupt();
 
 	/* Return and show that the 'rupt has been handled... */
 	return 1;
@@ -297,7 +413,8 @@ HPETInterrupt(void)
 
 static hpetReg_t saved_hpet;
 
-void hpet_save( void )
+void
+hpet_save(void)
 {
 	hpetReg_t	*from = (hpetReg_t *) hpetArea;
 	hpetReg_t	*to = &saved_hpet;
@@ -312,7 +429,8 @@ void hpet_save( void )
 	to->MAIN_CNT  = from->MAIN_CNT;
 }
 
-void hpet_restore( void )
+void
+hpet_restore(void)
 {
 	hpetReg_t	*from = &saved_hpet;
 	hpetReg_t	*to = (hpetReg_t *) hpetArea;
@@ -338,7 +456,7 @@ void hpet_restore( void )
 	to->TIM2_CONF = from->TIM2_CONF;
 	to->TIM2_COMP = from->TIM2_COMP;
 	to->GINTR_STA = -1ULL;
-	to->MAIN_CNT  = tmrCvt(mach_absolute_time(), hpetCvtn2t);
+	to->MAIN_CNT  = from->MAIN_CNT;
 
 	to->GEN_CONF = from->GEN_CONF;
 }
@@ -382,9 +500,8 @@ db_hpet(__unused db_expr_t addr, __unused int have_addr, __unused db_expr_t coun
 }
 
 void
-db_display_hpet(hpetReg_t * hpt)
+db_display_hpet(hpetReg_t *hpt)
 {
-
 	uint64_t        cmain;
 
 	cmain = hpt->MAIN_CNT;	/* Get the main timer */
@@ -422,9 +539,5 @@ db_display_hpet(hpetReg_t * hpt)
 
 	db_printf("\nHPET Frequency = %d.%05dMHz\n",
 	  (uint32_t) (hpetFreq / 1000000), (uint32_t) (hpetFreq % 1000000));
-
-	return;
-
 }
-
 #endif

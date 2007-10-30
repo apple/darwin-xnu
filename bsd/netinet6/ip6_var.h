@@ -291,11 +291,16 @@ extern int   ip6_lowportmax;		/* maximum reserved port */
 extern int	ip6_use_tempaddr; /* whether to use temporary addresses. */
 
 extern struct	pr_usrreqs rip6_usrreqs;
+extern struct   pr_usrreqs icmp6_dgram_usrreqs;
 struct sockopt;
 
 struct inpcb;
 
-int	icmp6_ctloutput(struct socket *, struct sockopt *sopt);
+int	icmp6_ctloutput(struct socket *, struct sockopt *);
+int	icmp6_dgram_ctloutput(struct socket *, struct sockopt *);
+int 	icmp6_dgram_send(struct socket *, int , struct mbuf *, struct sockaddr *, struct mbuf *, struct proc *);
+int 	icmp6_dgram_attach(struct socket *, int , struct proc *);
+
 
 struct in6_ifaddr;
 void	ip6_init(void);
@@ -309,8 +314,8 @@ char *	ip6_get_prevhdr(struct mbuf *, int);
 int	ip6_nexthdr(struct mbuf *, int, int, int *);
 int	ip6_lasthdr(struct mbuf *, int, int, int *);
 
-struct mbuf *ip6_addaux(struct mbuf *);
-struct mbuf *ip6_findaux(struct mbuf *);
+struct ip6aux *ip6_addaux(struct mbuf *);
+struct ip6aux *ip6_findaux(struct mbuf *);
 void	ip6_delaux(struct mbuf *);
 
 int	ip6_mforward(struct ip6_hdr *, struct ifnet *, struct mbuf *);
@@ -322,7 +327,7 @@ void	ip6_notify_pmtu(struct inpcb *, struct sockaddr_in6 *,
 			     u_int32_t *);
 int	ip6_sysctl(int *, u_int, void *, size_t *, void *, size_t);
 
-void	ip6_forward(struct mbuf *, int, int);
+void	ip6_forward(struct mbuf *, struct route_in6 *, int, int);
 
 void	ip6_mloopback(struct ifnet *, struct mbuf *, struct sockaddr_in6 *);
 int	ip6_output(struct mbuf *, struct ip6_pktopts *,

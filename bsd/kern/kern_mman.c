@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
- *
- * @APPLE_LICENSE_HEADER_START@
+ * Copyright (c) 2007 Apple Inc. All Rights Reserved.
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1988 University of Utah.
@@ -60,6 +66,12 @@
  *
  *	@(#)vm_mmap.c	8.10 (Berkeley) 2/19/95
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 /*
  * Mapped file (mmap) interface to VM
@@ -81,7 +93,11 @@
 #include <sys/conf.h>
 #include <sys/stat.h>
 #include <sys/ubc.h>
+#include <sys/ubc_internal.h>
 #include <sys/sysproto.h>
+
+#include <sys/syscall.h>
+#include <sys/kdebug.h>
 
 #include <bsm/audit_kernel.h>
 #include <bsm/audit_kevents.h>
@@ -103,21 +119,6 @@
 #include <vm/vm_kern.h>
 #include <vm/vm_pager.h>
 
-int
-sbrk(__unused struct proc *p, __unused struct sbrk_args *uap, __unused register_t *retval)
-{
-	/* Not yet implemented */
-	return (ENOTSUP);
-}
-
-int
-sstk(__unused struct proc *p, __unused struct sstk_args *uap, __unused register_t *retval)
-{
-	/* Not yet implemented */
-	return (ENOTSUP);
-}
-
-
 struct osmmap_args {
 		caddr_t	addr;
 		int	len;
@@ -127,10 +128,33 @@ struct osmmap_args {
 		long	pos;
 };
 
+/* XXX the following function should probably be static */
+kern_return_t map_fd_funneled(int, vm_object_offset_t, vm_offset_t *,
+				boolean_t, vm_size_t);
+
+/* XXX the following two functions aren't used anywhere */
+int osmmap(proc_t , struct osmmap_args *, register_t *);
+int mremap(void);
+
+int
+sbrk(__unused proc_t p, __unused struct sbrk_args *uap, __unused register_t *retval)
+{
+	/* Not yet implemented */
+	return (ENOTSUP);
+}
+
+int
+sstk(__unused proc_t p, __unused struct sstk_args *uap, __unused register_t *retval)
+{
+	/* Not yet implemented */
+	return (ENOTSUP);
+}
+
+
 int
 osmmap(
-	struct proc *curp,
-	register struct osmmap_args *uap,
+	proc_t curp,
+	struct osmmap_args *uap,
 	register_t *retval)
 {
 	struct mmap_args newargs;
@@ -153,8 +177,13 @@ osmmap(
 }
 
 
+/*
+ * XXX Internally, we use VM_PROT_* somewhat interchangeably, but the correct
+ * XXX usage is PROT_* from an interface perspective.  Thus the values of
+ * XXX VM_PROT_* and PROT_* need to correspond.
+ */
 int
-mmap(struct proc *p, struct mmap_args *uap, user_addr_t *retval)
+mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 {
 	/*
 	 *	Map in special device (must be SHARED) or file
@@ -162,7 +191,7 @@ mmap(struct proc *p, struct mmap_args *uap, user_addr_t *retval)
 	struct fileproc *fp;
 	register struct		vnode *vp;
 	int			flags;
-	int			prot;
+	int			prot, file_prot;
 	int			err=0;
 	vm_map_t		user_map;
 	kern_return_t		result;
@@ -170,7 +199,7 @@ mmap(struct proc *p, struct mmap_args *uap, user_addr_t *retval)
 	mach_vm_size_t		user_size;
 	vm_object_offset_t	pageoff;
 	vm_object_offset_t	file_pos;
-	int			alloc_flags;
+	int			alloc_flags=0;
 	boolean_t		docow;
 	vm_prot_t		maxprot;
 	void 			*handle;
@@ -188,6 +217,17 @@ mmap(struct proc *p, struct mmap_args *uap, user_addr_t *retval)
 	AUDIT_ARG(fd, uap->fd);
 
 	prot = (uap->prot & VM_PROT_ALL);
+#if 3777787
+	/*
+	 * Since the hardware currently does not support writing without
+	 * read-before-write, or execution-without-read, if the request is
+	 * for write or execute access, we must imply read access as well;
+	 * otherwise programs expecting this to work will fail to operate.
+	 */
+	if (prot & (VM_PROT_EXECUTE | VM_PROT_WRITE))
+		prot |= VM_PROT_READ;
+#endif	/* radar 3777787 */
+
 	flags = uap->flags;
 	vp = NULLVP;
 
@@ -200,8 +240,7 @@ mmap(struct proc *p, struct mmap_args *uap, user_addr_t *retval)
 
 
 	/* make sure mapping fits into numeric range etc */
-	if ((file_pos + user_size > (vm_object_offset_t)-PAGE_SIZE_64) ||
-	    ((flags & MAP_ANON) && fd != -1))
+	if (file_pos + user_size > (vm_object_offset_t)-PAGE_SIZE_64)
 		return (EINVAL);
 
 	/*
@@ -229,7 +268,7 @@ mmap(struct proc *p, struct mmap_args *uap, user_addr_t *retval)
 		 */
 		user_addr -= pageoff;
 		if (user_addr & PAGE_MASK)
-			return (EINVAL);
+		return (EINVAL);
 	}
 #ifdef notyet
 	/* DO not have apis to get this info, need to wait till then*/
@@ -246,18 +285,34 @@ mmap(struct proc *p, struct mmap_args *uap, user_addr_t *retval)
 
 #endif
 
+	alloc_flags = 0;
 
 	if (flags & MAP_ANON) {
 		/*
-		 * Mapping blank space is trivial.
+		 * Mapping blank space is trivial.  Use positive fds as the alias
+		 * value for memory tracking. 
 		 */
+		if (fd != -1) {
+			/*
+			 * Use "fd" to pass (some) Mach VM allocation flags,
+			 * (see the VM_FLAGS_* definitions).
+			 */
+			alloc_flags = fd & (VM_FLAGS_ALIAS_MASK |
+					    VM_FLAGS_PURGABLE);
+			if (alloc_flags != fd) {
+				/* reject if there are any extra flags */
+				return EINVAL;
+			}
+		}
+			
 		handle = NULL;
 		maxprot = VM_PROT_ALL;
 		file_pos = 0;
 		mapanon = 1;
 	} else {
 		struct vnode_attr va;
-		struct vfs_context context;
+		vfs_context_t ctx = vfs_context_current();
+
 		/*
 		 * Mapping file, get fp for validation. Obtain vnode and make
 		 * sure it is of appropriate type.
@@ -293,16 +348,16 @@ mmap(struct proc *p, struct mmap_args *uap, user_addr_t *retval)
 
 		AUDIT_ARG(vnpath, vp, ARG_VNODE1);
 		
-		/* conformance change - mmap needs to update access time for mapped
-		 * files
+		/*
+		 * POSIX: mmap needs to update access time for mapped files
 		 */
-		VATTR_INIT(&va);
-		nanotime(&va.va_access_time);
-		VATTR_SET_ACTIVE(&va, va_access_time);
-		context.vc_proc = p;
-		context.vc_ucred = kauth_cred_get();
-		vnode_setattr(vp, &va, &context);
-
+		if ((vnode_vfsvisflags(vp) & MNT_NOATIME) == 0) {
+			VATTR_INIT(&va);
+			nanotime(&va.va_access_time);
+			VATTR_SET_ACTIVE(&va, va_access_time);
+			vnode_setattr(vp, &va, ctx);
+		}
+		
 		/*
 		 * XXX hack to handle use of /dev/zero to map anon memory (ala
 		 * SunOS).
@@ -345,7 +400,7 @@ mmap(struct proc *p, struct mmap_args *uap, user_addr_t *retval)
  					 * Note that we already made this check when granting FWRITE
  					 * against the file, so it seems redundant here.
  					 */
- 					error = vnode_authorize(vp, NULL, KAUTH_VNODE_CHECKIMMUTABLE, &context);
+ 					error = vnode_authorize(vp, NULL, KAUTH_VNODE_CHECKIMMUTABLE, ctx);
  
  					/* if not granted for any reason, but we wanted it, bad */
  					if ((prot & PROT_WRITE) && (error != 0)) {
@@ -366,6 +421,14 @@ mmap(struct proc *p, struct mmap_args *uap, user_addr_t *retval)
 				maxprot |= VM_PROT_WRITE;
 
 			handle = (void *)vp;
+#if CONFIG_MACF
+			error = mac_file_check_mmap(vfs_context_ucred(ctx),
+			    fp->f_fglob, prot, flags, &maxprot);
+			if (error) {
+				(void)vnode_put(vp);
+				goto bad;
+			}
+#endif /* MAC */
 		}
 	}
 
@@ -392,7 +455,7 @@ mmap(struct proc *p, struct mmap_args *uap, user_addr_t *retval)
 	user_map = current_map();
 
 	if ((flags & MAP_FIXED) == 0) {
-		alloc_flags = VM_FLAGS_ANYWHERE;
+		alloc_flags |= VM_FLAGS_ANYWHERE;
 		user_addr = mach_vm_round_page(user_addr);
 	} else {
 		if (user_addr != mach_vm_trunc_page(user_addr)) {
@@ -412,9 +475,11 @@ mmap(struct proc *p, struct mmap_args *uap, user_addr_t *retval)
 		 * has to deallocate the existing mappings and establish the
 		 * new ones atomically.
 		 */
-		alloc_flags = VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE;
+		alloc_flags |= VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE;
 	}
 
+	if (flags & MAP_NOCACHE)
+		alloc_flags |= VM_FLAGS_NO_CACHE;
 
 	/*
 	 * Lookup/allocate object.
@@ -426,20 +491,29 @@ mmap(struct proc *p, struct mmap_args *uap, user_addr_t *retval)
 #if defined(VM_PROT_READ_IS_EXEC)
 		if (prot & VM_PROT_READ)
 			prot |= VM_PROT_EXECUTE;
-
 		if (maxprot & VM_PROT_READ)
 			maxprot |= VM_PROT_EXECUTE;
 #endif
 #endif
-		result = mach_vm_map(user_map, &user_addr, user_size, 0,
-				alloc_flags, IPC_PORT_NULL, 0,
-				FALSE, prot, maxprot,
-				(flags & MAP_SHARED) ? VM_INHERIT_SHARE : 
-				                       VM_INHERIT_DEFAULT);
+
+#if 3777787
+		if (prot & (VM_PROT_EXECUTE | VM_PROT_WRITE))
+			prot |= VM_PROT_READ;
+		if (maxprot & (VM_PROT_EXECUTE | VM_PROT_WRITE))
+			maxprot |= VM_PROT_READ;
+#endif	/* radar 3777787 */
+
+		result = vm_map_enter_mem_object(user_map,
+						 &user_addr, user_size,
+						 0, alloc_flags,
+						 IPC_PORT_NULL, 0, FALSE,
+						 prot, maxprot,
+						 (flags & MAP_SHARED) ?
+						 VM_INHERIT_SHARE : 
+						 VM_INHERIT_DEFAULT);
 		if (result != KERN_SUCCESS) 
 				goto out;
 	} else {
-		UBCINFOCHECK("mmap", vp);
 		pager = (vm_pager_t)ubc_getpager(vp);
 		
 		if (pager == NULL) {
@@ -466,24 +540,38 @@ mmap(struct proc *p, struct mmap_args *uap, user_addr_t *retval)
 #if defined(VM_PROT_READ_IS_EXEC)
 		if (prot & VM_PROT_READ)
 			prot |= VM_PROT_EXECUTE;
-
 		if (maxprot & VM_PROT_READ)
 			maxprot |= VM_PROT_EXECUTE;
 #endif
 #endif /* notyet */
 
-		result = mach_vm_map(user_map, &user_addr, user_size,
-				0, alloc_flags, (ipc_port_t)pager, file_pos,
-				docow, prot, maxprot, 
-				(flags & MAP_SHARED) ? VM_INHERIT_SHARE : 
-				                       VM_INHERIT_DEFAULT);
+#if 3777787
+		if (prot & (VM_PROT_EXECUTE | VM_PROT_WRITE))
+			prot |= VM_PROT_READ;
+		if (maxprot & (VM_PROT_EXECUTE | VM_PROT_WRITE))
+			maxprot |= VM_PROT_READ;
+#endif	/* radar 3777787 */
+
+		result = vm_map_enter_mem_object(user_map,
+						 &user_addr, user_size,
+						 0, alloc_flags,
+						 (ipc_port_t)pager, file_pos,
+						 docow, prot, maxprot, 
+						 (flags & MAP_SHARED) ?
+						 VM_INHERIT_SHARE : 
+						 VM_INHERIT_DEFAULT);
 
 		if (result != KERN_SUCCESS)  {
 				(void)vnode_put(vp);
 				goto out;
 		}
 
-		(void)ubc_map(vp,(prot & ( PROT_EXEC | PROT_READ | PROT_WRITE | PROT_EXEC)));
+		file_prot = prot & (PROT_READ | PROT_WRITE | PROT_EXEC);
+		if (docow) {
+			/* private mapping: won't write to the file */
+			file_prot &= ~PROT_WRITE;
+		}
+		(void) ubc_map(vp, file_prot);
 	}
 
 	if (!mapanon)
@@ -509,11 +597,23 @@ out:
 bad:
 	if (fpref)
 		fp_drop(p, fd, fp, 0);
+
+	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_SC_EXTENDED_INFO, SYS_mmap) | DBG_FUNC_NONE), fd, (uint32_t)(*retval), (uint32_t)user_size, error, 0);
+	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_SC_EXTENDED_INFO2, SYS_mmap) | DBG_FUNC_NONE), (uint32_t)(*retval >> 32), (uint32_t)(user_size >> 32),
+			      (uint32_t)(file_pos >> 32), (uint32_t)file_pos, 0);
+
 	return(error);
 }
 
 int
-msync(__unused struct proc *p, struct msync_args *uap, __unused register_t *retval)
+msync(__unused proc_t p, struct msync_args *uap, register_t *retval)
+{
+	__pthread_testcancel(1);
+	return(msync_nocancel(p, (struct msync_nocancel_args *)uap, retval));
+}
+
+int
+msync_nocancel(__unused proc_t p, struct msync_nocancel_args *uap, __unused register_t *retval)
 {
 	mach_vm_offset_t addr;
 	mach_vm_size_t size;
@@ -524,6 +624,8 @@ msync(__unused struct proc *p, struct msync_args *uap, __unused register_t *retv
 
 	addr = (mach_vm_offset_t) uap->addr;
 	size = (mach_vm_size_t)uap->len;
+
+	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_SC_EXTENDED_INFO, SYS_msync) | DBG_FUNC_NONE), (uint32_t)(addr >> 32), (uint32_t)(size >> 32), 0, 0, 0);
 
 	if (addr & PAGE_MASK_64) {
 		/* UNIX SPEC: user address is not page-aligned, return EINVAL */
@@ -542,8 +644,7 @@ msync(__unused struct proc *p, struct msync_args *uap, __unused register_t *retv
 
 	flags = uap->flags;
 	/* disallow contradictory flags */
-	if ((flags & (MS_SYNC|MS_ASYNC)) == (MS_SYNC|MS_ASYNC) ||
-	    (flags & (MS_ASYNC|MS_INVALIDATE)) == (MS_ASYNC|MS_INVALIDATE))
+	if ((flags & (MS_SYNC|MS_ASYNC)) == (MS_SYNC|MS_ASYNC))
 		return (EINVAL);
 
 	if (flags & MS_KILLPAGES)
@@ -587,7 +688,7 @@ mremap(void)
 }
 
 int
-munmap(__unused struct proc *p, struct munmap_args *uap, __unused register_t *retval)
+munmap(__unused proc_t p, struct munmap_args *uap, __unused register_t *retval)
 {
 	mach_vm_offset_t	user_addr;
 	mach_vm_size_t	user_size;
@@ -620,13 +721,16 @@ munmap(__unused struct proc *p, struct munmap_args *uap, __unused register_t *re
 }
 
 int
-mprotect(__unused struct proc *p, struct mprotect_args *uap, __unused register_t *retval)
+mprotect(__unused proc_t p, struct mprotect_args *uap, __unused register_t *retval)
 {
 	register vm_prot_t prot;
 	mach_vm_offset_t	user_addr;
 	mach_vm_size_t	user_size;
 	kern_return_t	result;
 	vm_map_t	user_map;
+#if CONFIG_MACF
+	int error;
+#endif
 
 	AUDIT_ARG(addr, uap->addr);
 	AUDIT_ARG(len, uap->len);
@@ -649,8 +753,29 @@ mprotect(__unused struct proc *p, struct mprotect_args *uap, __unused register_t
 #endif
 #endif /* notyet */
 
+#if 3936456
+	if (prot & (VM_PROT_EXECUTE | VM_PROT_WRITE))
+		prot |= VM_PROT_READ;
+#endif	/* 3936456 */
+
 	user_map = current_map();
 
+#if CONFIG_MACF
+	/*
+	 * The MAC check for mprotect is of limited use for 2 reasons:
+	 * Without mmap revocation, the caller could have asked for the max
+	 * protections initially instead of a reduced set, so a mprotect
+	 * check would offer no new security.
+	 * It is not possible to extract the vnode from the pager object(s)
+	 * of the target memory range.
+	 * However, the MAC check may be used to prevent a process from,
+	 * e.g., making the stack executable.
+	 */
+	error = mac_proc_check_mprotect(p, user_addr,
+	    		user_size, prot);
+	if (error)
+		return (error);
+#endif
 	result = mach_vm_protect(user_map, user_addr, user_size,
 				 FALSE, prot);
 	switch (result) {
@@ -667,7 +792,7 @@ mprotect(__unused struct proc *p, struct mprotect_args *uap, __unused register_t
 
 
 int
-minherit(__unused struct proc *p, struct minherit_args *uap, __unused register_t *retval)
+minherit(__unused proc_t p, struct minherit_args *uap, __unused register_t *retval)
 {
 	mach_vm_offset_t addr;
 	mach_vm_size_t size;
@@ -696,7 +821,7 @@ minherit(__unused struct proc *p, struct minherit_args *uap, __unused register_t
 }
 
 int
-madvise(__unused struct proc *p, struct madvise_args *uap, __unused register_t *retval)
+madvise(__unused proc_t p, struct madvise_args *uap, __unused register_t *retval)
 {
 	vm_map_t user_map;
 	mach_vm_offset_t start;
@@ -745,7 +870,7 @@ madvise(__unused struct proc *p, struct madvise_args *uap, __unused register_t *
 }
 
 int
-mincore(__unused struct proc *p, struct mincore_args *uap, __unused register_t *retval)
+mincore(__unused proc_t p, struct mincore_args *uap, __unused register_t *retval)
 {
 	mach_vm_offset_t addr, first_addr, end;
 	vm_map_t map;
@@ -786,7 +911,7 @@ mincore(__unused struct proc *p, struct mincore_args *uap, __unused register_t *
 	lastvecindex = -1;
 	for( ; addr < end; addr += PAGE_SIZE ) {
 		pqueryinfo = 0;
-		ret = vm_map_page_query(map, addr, &pqueryinfo, &numref);
+		ret = mach_vm_page_query(map, addr, &pqueryinfo, &numref);
 		if (ret != KERN_SUCCESS) 
 			pqueryinfo = 0;
 		mincoreinfo = 0;
@@ -845,7 +970,7 @@ mincore(__unused struct proc *p, struct mincore_args *uap, __unused register_t *
 }
 
 int
-mlock(__unused struct proc *p, struct mlock_args *uap, __unused register_t *retvalval)
+mlock(__unused proc_t p, struct mlock_args *uap, __unused register_t *retvalval)
 {
 	vm_map_t user_map;
 	vm_map_offset_t addr;
@@ -868,31 +993,21 @@ mlock(__unused struct proc *p, struct mlock_args *uap, __unused register_t *retv
 	pageoff = (addr & PAGE_MASK);
 	addr -= pageoff;
 	size = vm_map_round_page(size+pageoff);
-
-#ifdef notyet 
-/* Hmm.. What am I going to do with this? */
-	if (atop(size) + cnt.v_wire_count > vm_page_max_wired)
-		return (EAGAIN);
-#ifdef pmap_wired_count
-	if (size + ptoa(pmap_wired_count(vm_map_pmap(&p->p_vmspace->vm_map))) >
-	    p->p_rlimit[RLIMIT_MEMLOCK].rlim_cur)
-		return (ENOMEM);
-#else
-	error = suser(kauth_cred_get(), &p->p_acflag);
-	if (error)
-		return (error);
-#endif
-#endif /* notyet */
-
 	user_map = current_map();
 
 	/* have to call vm_map_wire directly to pass "I don't know" protections */
 	result = vm_map_wire(user_map, addr, addr+size, VM_PROT_NONE, TRUE);
-	return (result == KERN_SUCCESS ? 0 : ENOMEM);
+
+	if (result == KERN_RESOURCE_SHORTAGE)
+		return EAGAIN;
+	else if (result != KERN_SUCCESS)
+		return ENOMEM;
+
+	return 0;	/* KERN_SUCCESS */
 }
 
 int
-munlock(__unused struct proc *p, struct munlock_args *uap, __unused register_t *retval)
+munlock(__unused proc_t p, struct munlock_args *uap, __unused register_t *retval)
 {
 	mach_vm_offset_t addr;
 	mach_vm_size_t size;
@@ -904,17 +1019,6 @@ munlock(__unused struct proc *p, struct munlock_args *uap, __unused register_t *
 
 	addr = (mach_vm_offset_t) uap->addr;
 	size = (mach_vm_size_t)uap->len;
-
-
-#ifdef notyet 
-/* Hmm.. What am I going to do with this? */
-#ifndef pmap_wired_count
-	error = suser(kauth_cred_get(), &p->p_acflag);
-	if (error)
-		return (error);
-#endif
-#endif /* notyet */
-
 	user_map = current_map();
 
 	/* JMM - need to remove all wirings by spec - this just removes one */
@@ -924,13 +1028,13 @@ munlock(__unused struct proc *p, struct munlock_args *uap, __unused register_t *
 
 
 int
-mlockall(__unused struct proc *p, __unused struct mlockall_args *uap, __unused register_t *retval)
+mlockall(__unused proc_t p, __unused struct mlockall_args *uap, __unused register_t *retval)
 {
 	return (ENOSYS);
 }
 
 int
-munlockall(__unused struct proc *p, __unused struct munlockall_args *uap, __unused register_t *retval)
+munlockall(__unused proc_t p, __unused struct munlockall_args *uap, __unused register_t *retval)
 {
 	return(ENOSYS);
 }
@@ -938,7 +1042,7 @@ munlockall(__unused struct proc *p, __unused struct munlockall_args *uap, __unus
 
 /* BEGIN DEFUNCT */
 int
-obreak(__unused struct proc *p, __unused struct obreak_args *uap, __unused register_t *retval)
+obreak(__unused proc_t p, __unused struct obreak_args *uap, __unused register_t *retval)
 {
 	/* Not implemented, obsolete */
 	return (ENOMEM);
@@ -947,7 +1051,7 @@ obreak(__unused struct proc *p, __unused struct obreak_args *uap, __unused regis
 int	both;
 
 int
-ovadvise(__unused struct proc *p, __unused struct ovadvise_args *uap, __unused register_t *retval)
+ovadvise(__unused proc_t p, __unused struct ovadvise_args *uap, __unused register_t *retval)
 {
 
 #ifdef lint
@@ -994,9 +1098,8 @@ map_fd_funneled(
 	vm_size_t	map_size;
 	int		err=0;
 	vm_map_t	my_map;
-	struct proc	*p =(struct proc *)current_proc();
+	proc_t		p = current_proc();
 	struct vnode_attr vattr;
-	struct vfs_context context;
 
 	/*
 	 *	Find the inode; verify that it's a regular file.
@@ -1029,16 +1132,16 @@ map_fd_funneled(
 
 	AUDIT_ARG(vnpath, vp, ARG_VNODE1);
 
-	/* conformance change - mmap needs to update access time for mapped
-	 * files
+	/*
+	 * POSIX: mmap needs to update access time for mapped files
 	 */
-	VATTR_INIT(&vattr);
-	nanotime(&vattr.va_access_time);
-	VATTR_SET_ACTIVE(&vattr, va_access_time);
-	context.vc_proc = p;
-	context.vc_ucred = kauth_cred_get();
-	vnode_setattr(vp, &vattr, &context);
-
+	if ((vnode_vfsvisflags(vp) & MNT_NOATIME) == 0) {
+		VATTR_INIT(&vattr);
+		nanotime(&vattr.va_access_time);
+		VATTR_SET_ACTIVE(&vattr, va_access_time);
+		vnode_setattr(vp, &vattr, vfs_context_current());
+	}
+	
 	if (offset & PAGE_MASK_64) {
 		printf("map_fd: file offset not page aligned(%d : %s)\n",p->p_pid, p->p_comm);
 		(void)vnode_put(vp);
@@ -1058,8 +1161,7 @@ map_fd_funneled(
 	/*
 	 *	Map in the file.
 	 */
-	UBCINFOCHECK("map_fd_funneled", vp);
-	pager = (void *) ubc_getpager(vp);
+	pager = (void *)ubc_getpager(vp);
 	if (pager == NULL) {
 		(void)vnode_put(vp);
 		err = KERN_FAILURE;
@@ -1129,7 +1231,7 @@ map_fd_funneled(
 	}
 
 	ubc_setthreadcred(vp, current_proc(), current_thread());
-	(void)ubc_map(vp, (PROT_READ | PROT_WRITE | PROT_EXEC));
+	(void)ubc_map(vp, (PROT_READ | PROT_EXEC));
 	(void)vnode_put(vp);
 	err = 0;
 bad:

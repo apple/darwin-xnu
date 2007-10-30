@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -135,7 +141,8 @@ extern void		pmap_startup(
 						 * use remaining physical pages
 						 * to allocate page frames.
 						 */
-extern void		pmap_init(void);	/* Initialization,
+extern void		pmap_init(void) __attribute__((section("__TEXT, initcode")));
+						/* Initialization,
 						 * after kernel runs
 						 * in virtual memory.
 						 */
@@ -180,7 +187,11 @@ extern void		pmap_virtual_space(
  */
 extern pmap_t		pmap_create(	/* Create a pmap_t. */
 				vm_map_size_t	size,
+#ifdef __i386__
 				boolean_t	is_64bit);
+#else
+				__unused boolean_t	is_64bit);
+#endif
 extern pmap_t		(pmap_kernel)(void);	/* Return the kernel's pmap */
 extern void		pmap_reference(pmap_t pmap);	/* Gain a reference. */
 extern void		pmap_destroy(pmap_t pmap); /* Release a reference. */
@@ -253,6 +264,9 @@ extern kern_return_t	(pmap_attribute_cache_sync)(  /* Flush appropriate
 extern unsigned int	(pmap_cache_attributes)(
 				ppnum_t		pn);
 
+extern void pmap_sync_page_data_phys(ppnum_t pa);
+extern void pmap_sync_page_attributes_phys(ppnum_t pa);
+
 /*
  * debug/assertions. pmap_verify_free returns true iff
  * the given physical page is mapped into no pmap.
@@ -263,13 +277,15 @@ extern boolean_t	pmap_verify_free(ppnum_t pn);
  *	Statistics routines
  */
 extern int		(pmap_resident_count)(pmap_t pmap);
+extern int		(pmap_resident_max)(pmap_t pmap);
 
 /*
  *	Sundry required (internal) routines
  */
+#ifdef CURRENTLY_UNUSED_AND_UNTESTED
 extern void		pmap_collect(pmap_t pmap);/* Perform garbage
 						 * collection, if any */
-
+#endif
 /*
  *	Optional routines
  */
@@ -350,10 +366,14 @@ extern kern_return_t	(pmap_attribute)(	/* Get/Set special memory
 	if (__pmap != kernel_pmap) {					\
 		ASSERT_PAGE_DECRYPTED(__page);				\
 	}								\
+	if (__page->error) {						\
+		panic("VM page %p should not have an error\n",		\
+			__page);					\
+	}								\
 	pmap_enter(__pmap,						\
 		   (virtual_address),					\
 		   __page->phys_page,					\
-		   (protection) & ~__page->page_lock,			\
+		   (protection),					\
 		   (flags),						\
 		   (wired));						\
 	MACRO_END
@@ -396,6 +416,19 @@ extern void		(pmap_pageable)(
 				vm_map_offset_t	end,
 				boolean_t	pageable);
 
+#ifndef NO_NESTED_PMAP
+extern uint64_t pmap_nesting_size_min;
+extern uint64_t pmap_nesting_size_max;
+extern kern_return_t pmap_nest(pmap_t grand,
+			       pmap_t subord,
+			       addr64_t vstart,
+			       addr64_t nstart,
+			       uint64_t size);
+extern kern_return_t pmap_unnest(pmap_t grand,
+				 addr64_t vaddr,
+				 uint64_t size);
+#endif /* NO_NESTED_PMAP */
+
 #endif	/* MACH_KERNEL_PRIVATE */
 
 /*
@@ -417,11 +450,6 @@ extern pmap_t	kernel_pmap;			/* The kernel's map */
 #define VM_WIMG_MASK		0xFF
 #define VM_WIMG_USE_DEFAULT	0x80000000
 
-extern void		pmap_modify_pages(	/* Set modify bit for pages */
-				pmap_t		map,
-				vm_map_offset_t	s,
-				vm_map_offset_t	e);
-
 extern vm_offset_t	pmap_extract(pmap_t pmap,
 				vm_map_offset_t va);
 
@@ -433,9 +461,13 @@ extern void		pmap_change_wiring(	/* Specify pageability */
 /* LP64todo - switch to vm_map_offset_t when it grows */
 extern void		pmap_remove(	/* Remove mappings. */
 				pmap_t		map,
-				addr64_t	s,
-				addr64_t	e);
+				vm_map_offset_t	s,
+				vm_map_offset_t	e);
 
+extern void		fillPage(ppnum_t pa, unsigned int fill);
+
+extern void pmap_map_sharedpage(task_t task, pmap_t pmap);
+extern void pmap_unmap_sharedpage(pmap_t pmap);
 
 #endif  /* KERNEL_PRIVATE */
 

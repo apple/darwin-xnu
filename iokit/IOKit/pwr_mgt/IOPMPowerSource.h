@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 1998-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
  
 #ifndef _IOPMPowerSource_h_
@@ -131,6 +137,15 @@ enum {
  * IORegistry Key: kIOPMPSManufacturerKey
  * String describing battery manufacturer
  *
+ * Manufactured Date
+ * Type: unsigned 16-bit bitfield
+ * IORegistry Key: kIOPMPSManufactureDateKey
+ * Date is published in a bitfield per the Smart Battery Data spec rev 1.1 
+ * in section 5.1.26
+ *   Bits 0...4 => day (value 1-31; 5 bits)
+ *   Bits 5...8 => month (value 1-12; 4 bits)
+ *   Bits 9...15 => years since 1980 (value 0-127; 7 bits)
+ *
  * Model
  * Type: OSSymbol
  * IORegistry Key: kIOPMPSModelKey
@@ -139,7 +154,10 @@ enum {
  * Serial
  * Type: OSSymbol
  * IORegistry Key: kIOPMPSSerialKey
- * String describing serial number  or unique info
+ * String describing serial number or unique info
+ * The serial number published hear bears no correspondence to the Apple serial
+ * number printed on each battery. This is a manufacturer serial number with 
+ * no correlation to the printed serial number.
  *
  * LegacyIOBatteryInfo
  * Type: OSDictionary
@@ -154,9 +172,17 @@ class IOPMPowerSource : public IOService
     friend class IOPMPowerSourceList;
 
  protected:
-    // Tracking for IOPMPowerSourceList
-    IOPMPowerSource         *nextInList;
+
+/* bool settingsChangedSinceLastUpdate
+ * Used by subclasses to determine if any settings have been modified via the
+ * accessors below since last call to update(). true is settings have changed;
+ * false otherwise.
+ */
+    bool settingsChangedSinceUpdate;
     
+/* OSDictionary properties
+ * Stores power source state
+ */
     OSDictionary            *properties;
 
     const OSSymbol *externalConnectedKey;
@@ -178,6 +204,9 @@ class IOPMPowerSource : public IOService
     const OSSymbol *modelKey;
     const OSSymbol *serialKey;
     const OSSymbol *batteryInfoKey;
+
+    // Tracking for IOPMPowerSourceList
+    IOPMPowerSource         *nextInList;
 
  public:
 
@@ -227,7 +256,10 @@ class IOPMPowerSource : public IOService
     OSSymbol *serial(void);
     OSDictionary *legacyIOBatteryInfo(void);
     
+    OSObject *getPSProperty(const OSSymbol *);
+    
 protected:
+
 /* Protected "setter" methods for subclasses
  * Subclasses should use these setters to modify all battery properties.
  * 
@@ -256,7 +288,13 @@ protected:
     void setModel(OSSymbol *);
     void setSerial(OSSymbol *);
     void setLegacyIOBatteryInfo(OSDictionary *);
-    
+
+/* All of these methods funnel through the generic accessor method
+   setPSProperty. Caller can pass in any arbitrary OSSymbol key, and
+   that value will be stored in the PM settings dictionary, and relayed
+   onto the IORegistry at update time.
+ */
+    void setPSProperty(const OSSymbol *, OSObject *);
 };
 
 #endif

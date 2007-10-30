@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995, 1997 Apple Computer, Inc. All Rights Reserved */
 /*
@@ -54,6 +60,12 @@
  *
  *	@(#)ucred.h	8.4 (Berkeley) 1/9/95
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 #ifndef _SYS_UCRED_H_
 #define	_SYS_UCRED_H_
@@ -63,19 +75,24 @@
 #include <sys/param.h>
 #include <bsm/audit.h>
 
+struct label;
+
 #ifdef __APPLE_API_UNSTABLE
 
 /*
  * In-kernel credential structure.
  *
  * Note that this structure should not be used outside the kernel, nor should
- * it or copies of it be exported outside.  
+ * it or copies of it be exported outside.
  */
 struct ucred {
 	TAILQ_ENTRY(ucred)	cr_link; /* never modify this without KAUTH_CRED_HASH_LOCK */
 	u_long	cr_ref;			/* reference count */
 	
-	/* credential hash depends on everything from this point on (see kauth_cred_get_hashkey) */
+	/*
+	 * The credential hash depends on everything from this point on
+	 * (see kauth_cred_get_hashkey)
+	 */
 	uid_t	cr_uid;			/* effective user id */
 	uid_t	cr_ruid;		/* real user id */
 	uid_t	cr_svuid;		/* saved user id */
@@ -83,10 +100,28 @@ struct ucred {
 	gid_t	cr_groups[NGROUPS];	/* advisory group list */
 	gid_t	cr_rgid;		/* real group id */
 	gid_t	cr_svgid;		/* saved group id */
-	uid_t	cr_gmuid;		/* user id for group membership purposes */
+	uid_t	cr_gmuid;		/* UID for group membership purposes */
 	struct auditinfo cr_au;		/* user auditing data */
+	struct label	*cr_label;	/* MAC label */
+
+	int	cr_flags;		/* flags on credential */
+	/* 
+	 * NOTE: If anything else (besides the flags)
+	 * added after the label, you must change
+	 * kauth_cred_find().
+	 */
 };
+#ifndef _KAUTH_CRED_T
+#define	_KAUTH_CRED_T
 typedef struct ucred *kauth_cred_t;
+#endif	/* !_KAUTH_CRED_T */
+
+/*
+ * Credential flags that can be set on a credential
+ */
+#define CRF_NOMEMBERD	0x00000001	/* memberd opt out by setgroups() */
+#define CRF_MAC_ENFORCE 0x00000002	/* force entry through MAC Framework */
+                                  	/* also forces credential cache miss */
 
 /*
  * This is the external representation of struct ucred.
@@ -110,6 +145,8 @@ struct xucred {
 __BEGIN_DECLS
 int		crcmp(kauth_cred_t cr1, kauth_cred_t cr2);
 int		suser(kauth_cred_t cred, u_short *acflag);
+int		is_suser(void);
+int		is_suser1(void);
 int		set_security_token(struct proc * p);
 void		cru2x(kauth_cred_t cr, struct xucred *xcr);
 __END_DECLS

@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*!
 	@header kpi_interface.h
@@ -85,6 +91,8 @@ enum {
 */
 typedef u_int32_t ifnet_family_t;
 
+#ifndef BPF_TAP_MODE_T
+#define BPF_TAP_MODE_T
 /*!
 	@enum BPF tap mode
 	@abstract Constants defining interface families.
@@ -105,6 +113,7 @@ enum {
 	@abstract Mode for tapping. BPF_MODE_DISABLED/BPF_MODE_INPUT_OUTPUT etc.
 */
 typedef u_int32_t bpf_tap_mode;
+#endif /* !BPF_TAP_MODE_T */
 
 /*!
 	@typedef protocol_family_t
@@ -122,6 +131,18 @@ typedef u_int32_t protocol_family_t;
 	@constant IFNET_IP_FRAGMENT Hardware will fragment IP packets.
 	@constant IFNET_VLAN_TAGGING Hardware will generate VLAN headers.
 	@constant IFNET_VLAN_MTU Hardware supports VLAN MTU.
+	@constant IFNET_MULTIPAGES Driver is capable of handling packets
+		coming down from the network stack that reside in virtually,
+		but not in physically contiguous span of the external mbuf
+		clusters.  In this case, the data area of a packet in the
+		external mbuf cluster might cross one or more physical
+		pages that are disjoint, depending on the interface MTU
+		and the packet size.  Such a use of larger than system page
+		size clusters by the network stack is done for better system
+		efficiency.  Drivers that utilize the IOMbufNaturalMemoryCursor
+		with the getPhysicalSegmentsWithCoalesce interfaces and
+		enumerate the list of vectors should set this flag for
+		possible gain in performance during bulk data transfer.
 */
 
 enum {
@@ -135,6 +156,7 @@ enum {
 #endif
 		IFNET_VLAN_TAGGING	= 0x00010000,
 		IFNET_VLAN_MTU		= 0x00020000,
+		IFNET_MULTIPAGES	= 0x00100000,
 };
 /*!
 	@typedef ifnet_offload_t
@@ -178,6 +200,10 @@ typedef errno_t (*ifnet_output_func)(ifnet_t interface, mbuf_t data);
 	@typedef ifnet_ioctl_func
 	@discussion ifnet_ioctl_func is used to communicate ioctls from the
 		stack to the driver.
+		
+		All undefined ioctls are reserved for future use by Apple. If
+		you need to communicate with your kext using an ioctl, please
+		use SIOCSIFKPI and SIOCGIFKPI.
 	@param interface The interface the ioctl is being sent to.
 	@param proto_family The protocol family to handle the ioctl, may be
 		zero for no protocol_family.
@@ -188,13 +214,8 @@ typedef errno_t (*ifnet_ioctl_func)(ifnet_t interface, u_int32_t cmd, void *data
 
 /*!
 	@typedef ifnet_set_bpf_tap
-	@discussion ifnet_set_bpf_tap is used to set the bpf tap function to
-		be called when packets are sent and/or received.
-	@param interface The interface the bpf tap function is being set on.
-	@param mode Sets the mode of the tap to either disabled, input,
-		output, or input/output.
-	@param callback A function pointer to be called when a packet is
-		sent or received.
+	@discussion Deprecated. Specify NULL. Call bpf_tap_in/bpf_tap_out
+		for all packets.
  */
 typedef errno_t (*ifnet_set_bpf_tap)(ifnet_t interface, bpf_tap_mode mode,
 				bpf_packet_func callback);
@@ -348,6 +369,26 @@ typedef errno_t (*proto_media_input)(ifnet_t ifp, protocol_family_t protocol,
 									 mbuf_t packet, char* header);
 
 /*!
+	@typedef proto_media_input_v2
+	@discussion proto_media_input_v2 is called for all inbound packets for
+		a specific protocol on a specific interface. This function is
+		registered on an interface using ifnet_attach_protocolv2.
+		proto_media_input_v2 differs from proto_media_input in that it will
+		be called for a list of packets instead of once for each individual
+		packet. The frame header can be retrieved using mbuf_pkthdr_header.
+	@param ifp The interface the packet was received on.
+	@param protocol_family The protocol of the packet received.
+	@param packet The packet being input.
+	@result
+		If the result is zero, the caller will assume the packets were passed
+		to the protocol.
+		If the result is non-zero and not EJUSTRETURN, the caller will free
+		the packets.
+ */
+typedef errno_t (*proto_media_input_v2)(ifnet_t ifp, protocol_family_t protocol,
+										mbuf_t packet);
+
+/*!
 	@typedef proto_media_preout
 	@discussion proto_media_preout is called just before the packet
 		is transmitted. This gives the proto_media_preout function an
@@ -392,6 +433,10 @@ typedef void (*proto_media_event)(ifnet_t ifp, protocol_family_t protocol,
 		EOPNOTSUPP, other parts of the stack may not get an opportunity
 		to process the ioctl. If you return EJUSTRETURN, processing will
 		stop and a result of zero will be returned to the caller.
+		
+		All undefined ioctls are reserved for future use by Apple. If
+		you need to communicate with your kext using an ioctl, please
+		use SIOCSIFKPI and SIOCGIFKPI.
 	@param ifp The interface.
 	@param protocol_family The protocol family.
 	@param command The ioctl command.
@@ -539,7 +584,7 @@ struct ifnet_init_params {
 	ifnet_framer_func		framer;			/* optional */
 	void*					softc;			/* optional */
 	ifnet_ioctl_func		ioctl;			/* optional */
-	ifnet_set_bpf_tap		set_bpf_tap;	/* optional */
+	ifnet_set_bpf_tap		set_bpf_tap;	/* deprecated */
 	ifnet_detached_func		detach;			/* optional */
 	ifnet_event_func		event;			/* optional */
 	const void				*broadcast_addr;/* required for non point-to-point interfaces */
@@ -622,6 +667,19 @@ struct ifnet_attach_proto_param {
 	u_int32_t				demux_count;	/* interface may/may not require */
 	
 	proto_media_input			input;		/* required */
+	proto_media_preout			pre_output;	/* required */
+	proto_media_event			event;		/* optional */
+	proto_media_ioctl			ioctl;		/* optional */
+	proto_media_detached		detached;	/* optional */
+	proto_media_resolve_multi	resolve;	/* optional */
+	proto_media_send_arp		send_arp;	/* optional */
+};
+
+struct ifnet_attach_proto_param_v2 {
+	struct ifnet_demux_desc	*demux_array;	/* interface may/may not require */
+	u_int32_t				demux_count;	/* interface may/may not require */
+	
+	proto_media_input_v2		input;		/* required */
 	proto_media_preout			pre_output;	/* required */
 	proto_media_event			event;		/* optional */
 	proto_media_ioctl			ioctl;		/* optional */
@@ -901,6 +959,20 @@ errno_t ifnet_attach_protocol(ifnet_t interface, protocol_family_t protocol_fami
 			const struct ifnet_attach_proto_param *proto_details);
 
 /*!
+	@function ifnet_attach_protocol_v2
+	@discussion Attaches a protocol to an interface using the newer version 2
+		style interface. So far the only difference is support for packet
+		chains which improve performance.
+	@param interface The interface.
+	@param protocol_family The protocol family being attached
+		(PF_INET/PF_APPLETALK/etc...).
+	@param proto_details Details of the protocol being attached.
+	@result 0 on success otherwise the errno error.
+ */
+errno_t ifnet_attach_protocol_v2(ifnet_t interface, protocol_family_t protocol_family,
+			const struct ifnet_attach_proto_param_v2 *proto_details);
+
+/*!
 	@function ifnet_detach_protocol
 	@discussion Detaches a protocol from an interface.
 	@param interface The interface.
@@ -919,8 +991,7 @@ errno_t ifnet_detach_protocol(ifnet_t interface, protocol_family_t protocol_fami
 		determine which preoutput function to call. The route and dest
 		parameters will be passed to the preoutput function defined for
 		the attachment of the specified protocol to the specified
-		interface. ifnet_output will free the mbuf chain in the event of
-		an error.
+		interface. ifnet_output will always free the mbuf chain.
 	@param interface The interface.
 	@param protocol_family The family of the protocol generating this
 		packet (i.e. AF_INET).
@@ -946,8 +1017,7 @@ errno_t ifnet_output(ifnet_t interface, protocol_family_t protocol_family, mbuf_
 		packet. Processing, such as calling the protocol preoutput and
 		interface framer functions will be bypassed. The packet will
 		pass through the filters and be sent on the interface as is.
-		ifnet_output_raw will free the packet chain in the event of an
-		error.
+		ifnet_output_raw will always free the packet chain.
 	@param interface The interface.
 	@param protocol_family The family of the protocol generating this
 		packet (i.e. AF_INET).
@@ -977,6 +1047,10 @@ errno_t ifnet_input(ifnet_t interface, mbuf_t first_packet,
 	@function ifnet_ioctl
 	@discussion Calls the interface's ioctl function with the parameters
 		passed.
+		
+		All undefined ioctls are reserved for future use by Apple. If
+		you need to communicate with your kext using an ioctl, please
+		use SIOCSIFKPI and SIOCGIFKPI.
 	@param interface The interface.
 	@param protocol The protocol family of the protocol to send the
 		ioctl to (may be zero). Some ioctls apply to a protocol while
@@ -1316,6 +1390,23 @@ errno_t ifnet_llbroadcast_copy_bytes(ifnet_t interface, void* addr,
  */
 errno_t ifnet_set_lladdr_and_type(ifnet_t interface, const void* lladdr, size_t length, u_char type);
 #endif KERNEL_PRIVATE
+
+/*!
+	@function ifnet_resolve_multicast
+	@discussion Resolves a multicast address for an attached protocol to
+		a link-layer address. If a link-layer address is passed in, the
+		interface will verify that it is a valid multicast address.
+	@param interface The interface.
+	@param proto_addr A protocol address to be converted to a link-layer
+		address.
+	@param ll_addr Storage for the resulting link-layer address.
+	@param ll_len Length of the storage for the link-layer address.
+	@result 0 on success. EOPNOTSUPP indicates the multicast address was
+		not supported or could not be translated. Other errors may
+		indicate other failures.
+ */
+errno_t ifnet_resolve_multicast(ifnet_t ifp, const struct sockaddr *proto_addr,
+								struct sockaddr *ll_addr, size_t ll_len);
 
 /*!
 	@function ifnet_add_multicast

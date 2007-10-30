@@ -1,3 +1,30 @@
+/*
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
 /*	$FreeBSD: src/sys/netinet6/ip6_input.c,v 1.11.2.10 2001/07/24 19:10:18 brooks Exp $	*/
 /*	$KAME: ip6_input.c,v 1.194 2001/05/27 13:28:35 itojun Exp $	*/
 
@@ -86,6 +113,7 @@
 #include <net/if_types.h>
 #include <net/if_dl.h>
 #include <net/route.h>
+#include <net/kpi_protocol.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -108,7 +136,6 @@
 #include <netinet6/ipsec6.h>
 #endif
 extern int ipsec_bypass;
-extern lck_mtx_t *sadb_mutex;
 #endif
 
 #include <netinet6/ip6_fw.h>
@@ -160,7 +187,7 @@ extern lck_mtx_t	*inet6_domain_mutex;
 extern int loopattach_done;
 
 static void ip6_init2(void *);
-static struct mbuf *ip6_setdstifaddr(struct mbuf *, struct in6_ifaddr *);
+static struct ip6aux *ip6_setdstifaddr(struct mbuf *, struct in6_ifaddr *);
 
 static int ip6_hopopts_input(u_int32_t *, u_int32_t *, struct mbuf **, int *);
 #if PULLDOWN_TEST
@@ -173,9 +200,12 @@ void faithattach(void);
 void stfattach(void);
 #endif
 
+extern lck_mtx_t *domain_proto_mtx;
+
+
 static void
 ip6_proto_input(
-	protocol_family_t	protocol,
+	__unused protocol_family_t	protocol,
 	mbuf_t				packet)
 {
 	ip6_input(packet);
@@ -191,7 +221,6 @@ ip6_init()
 	struct ip6protosw *pr;
 	int i;
 	struct timeval tv;
-	extern lck_mtx_t *domain_proto_mtx;
 
 #if DIAGNOSTIC
 	if (sizeof(struct protosw) != sizeof(struct ip6protosw))
@@ -250,13 +279,13 @@ ip6_init()
 	timeout(ip6_init2, (caddr_t)0, 1 * hz);
 
 	lck_mtx_unlock(domain_proto_mtx);	
-	proto_register_input(PF_INET6, ip6_proto_input, NULL);
+	proto_register_input(PF_INET6, ip6_proto_input, NULL, 0);
 	lck_mtx_lock(domain_proto_mtx);	
 }
 
 static void
-ip6_init2(dummy)
-	void *dummy;
+ip6_init2(
+	__unused void *dummy)
 {
 	/*
 	 * to route local address of p2p link to loopback,
@@ -266,7 +295,7 @@ ip6_init2(dummy)
 		timeout(ip6_init2, (caddr_t)0, 1 * hz);
 		return;
 	}
-	in6_ifattach(&loif[0], NULL, NULL);
+	in6_ifattach(lo_ifp, NULL, NULL);
 
 #ifdef __APPLE__
 	/* nd6_timer_init */
@@ -315,7 +344,12 @@ ip6_init2(dummy)
 SYSINIT(netinet6init2, SI_SUB_PROTO_DOMAIN, SI_ORDER_MIDDLE, ip6_init2, NULL);
 #endif
 
-extern struct	route_in6 ip6_forward_rt;
+/*
+ * ip6_forward_rt contains the route entry that was recently used during
+ * the forwarding of an IPv6 packet and thus acts as a route cache.  Access
+ * to this variable is protected by the global lock ip6_mutex.
+ */
+static struct route_in6 ip6_forward_rt;
 
 void
 ip6_input(m)
@@ -372,7 +406,7 @@ ip6_input(m)
 #define M2MMAX	(sizeof(ip6stat.ip6s_m2m)/sizeof(ip6stat.ip6s_m2m[0]))
 		if (m->m_next) {
 			if (m->m_flags & M_LOOP) {
-				ip6stat.ip6s_m2m[loif[0].if_index]++;	/* XXX */
+				ip6stat.ip6s_m2m[ifnet_index(lo_ifp)]++;	/* XXX */
 			} else if (m->m_pkthdr.rcvif->if_index < M2MMAX)
 				ip6stat.ip6s_m2m[m->m_pkthdr.rcvif->if_index]++;
 			else
@@ -394,7 +428,7 @@ ip6_input(m)
 	if (m && m->m_next != NULL && m->m_pkthdr.len < MCLBYTES) {
 		struct mbuf *n;
 
-		MGETHDR(n, M_DONTWAIT, MT_HEADER);
+		MGETHDR(n, M_DONTWAIT, MT_HEADER);	/* MAC-OK */
 		if (n)
 			M_COPY_PKTHDR(n, m);
 		if (n && m->m_pkthdr.len > MHLEN) {
@@ -587,17 +621,10 @@ ip6_input(m)
 	/*
 	 *  Unicast check
 	 */
-	switch (ip6_ours_check_algorithm) {
-	default:
-		/*
-		 * XXX: I intentionally broke our indentation rule here,
-		 *      since this switch-case is just for measurement and
-		 *      therefore should soon be removed.
-		 */
 	if (ip6_forward_rt.ro_rt != NULL &&
 	    (ip6_forward_rt.ro_rt->rt_flags & RTF_UP) != 0 && 
 	    IN6_ARE_ADDR_EQUAL(&ip6->ip6_dst,
-			       &((struct sockaddr_in6 *)(&ip6_forward_rt.ro_dst))->sin6_addr))
+	    &((struct sockaddr_in6 *)(&ip6_forward_rt.ro_dst))->sin6_addr))
 		ip6stat.ip6s_forward_cachehit++;
 	else {
 		struct sockaddr_in6 *dst6;
@@ -695,7 +722,6 @@ ip6_input(m)
 			goto bad;
 		}
 	}
-	} /* XXX indentation (see above) */
 
 	/*
 	 * FAITH(Firewall Aided Internet Translator)
@@ -850,7 +876,7 @@ ip6_input(m)
 			return;
 		}
 	} else if (!ours) {
-		ip6_forward(m, 0, 1);
+		ip6_forward(m, &ip6_forward_rt, 0, 1);
 		lck_mtx_unlock(ip6_mutex);
 		return;
 	}	
@@ -924,20 +950,17 @@ injectit:
 		 * code - like udp/tcp/raw ip.
 		 */
 		if ((ipsec_bypass == 0) && (ip6_protox[nxt]->pr_flags & PR_LASTHDR) != 0) {
-			lck_mtx_lock(sadb_mutex);
 			if (ipsec6_in_reject(m, NULL)) {
-				ipsec6stat.in_polvio++;
-				lck_mtx_unlock(sadb_mutex);
+				IPSEC_STAT_INCREMENT(ipsec6stat.in_polvio);
 				goto badunlocked;
-		        }
-			lck_mtx_unlock(sadb_mutex);
+		    }
 		}
 #endif
 
 		/*
-		 * Call IP filter on last header only
+		 * Call IP filter
 		 */
-		if ((ip6_protox[nxt]->pr_flags & PR_LASTHDR) != 0 && !TAILQ_EMPTY(&ipv6_filters)) {
+		if (!TAILQ_EMPTY(&ipv6_filters)) {
 			ipf_ref();
 			TAILQ_FOREACH(filter, &ipv6_filters, ipf_link) {
 				if (seen == 0) {
@@ -981,28 +1004,26 @@ injectit:
  * set/grab in6_ifaddr correspond to IPv6 destination address.
  * XXX backward compatibility wrapper
  */
-static struct mbuf *
-ip6_setdstifaddr(m, ia6)
-	struct mbuf *m;
-	struct in6_ifaddr *ia6;
+static struct ip6aux *
+ip6_setdstifaddr(struct mbuf *m, struct in6_ifaddr *ia6)
 {
-	struct mbuf *n;
+	struct ip6aux *n;
 
 	n = ip6_addaux(m);
 	if (n)
-		mtod(n, struct ip6aux *)->ip6a_dstia6 = ia6;
-	return n;	/* NULL if failed to set */
+		n->ip6a_dstia6 = ia6;
+	return (struct ip6aux *)n;	/* NULL if failed to set */
 }
 
 struct in6_ifaddr *
 ip6_getdstifaddr(m)
 	struct mbuf *m;
 {
-	struct mbuf *n;
+	struct ip6aux *n;
 
 	n = ip6_findaux(m);
 	if (n)
-		return mtod(n, struct ip6aux *)->ip6a_dstia6;
+		return n->ip6a_dstia6;
 	else
 		return NULL;
 }
@@ -1293,6 +1314,10 @@ ip6_savecontrol(in6p, mp, ip6, m)
 		}
 	}
 #endif
+
+	/* some OSes call this logic with IPv4 packet, for SO_TIMESTAMP */
+	if ((ip6->ip6_vfc & IPV6_VERSION_MASK) != IPV6_VERSION)
+		return;
 
 	/* RFC 2292 sec. 5 */
 	if ((in6p->in6p_flags & IN6P_PKTINFO) != 0) {
@@ -1598,7 +1623,7 @@ ip6_get_prevhdr(m, off)
 	struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
 
 	if (off == sizeof(struct ip6_hdr))
-		return(&ip6->ip6_nxt);
+		return((char *) &ip6->ip6_nxt);
 	else {
 		int len, nxt;
 		struct ip6_ext *ip6e = NULL;
@@ -1622,7 +1647,7 @@ ip6_get_prevhdr(m, off)
 			nxt = ip6e->ip6e_nxt;
 		}
 		if (ip6e)
-			return(&ip6e->ip6e_nxt);
+			return((char *) &ip6e->ip6e_nxt);
 		else
 			return NULL;
 	}
@@ -1738,55 +1763,49 @@ ip6_lasthdr(m, off, proto, nxtp)
 	}
 }
 
-struct mbuf *
-ip6_addaux(m)
-	struct mbuf *m;
+struct ip6aux *
+ip6_addaux(
+	struct mbuf *m)
 {
-	struct mbuf *n;
-
-#if DIAGNOSTIC
-	if (sizeof(struct ip6aux) > MHLEN)
-		panic("assumption failed on sizeof(ip6aux)");
-#endif
-	n = m_aux_find(m, AF_INET6, -1);
-	if (n) {
-		if (n->m_len < sizeof(struct ip6aux)) {
-			printf("conflicting use of ip6aux");
-			return NULL;
-		}
-	} else {
-		n = m_aux_add(m, AF_INET6, -1);
-		if (n) {
-			n->m_len = sizeof(struct ip6aux);
-			bzero(mtod(n, caddr_t), n->m_len);
+	struct m_tag		*tag;
+	
+	/* Check if one is already allocated */
+	tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_INET6, NULL);
+	if (tag == NULL) {
+		/* Allocate a tag */
+		tag = m_tag_alloc(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_INET6,
+						  sizeof(*tag), M_DONTWAIT);
+		
+		/* Attach it to the mbuf */
+		if (tag) {
+			m_tag_prepend(m, tag);
 		}
 	}
-	return n;
+	
+	return tag ? (struct ip6aux*)(tag + 1) : NULL;
 }
 
-struct mbuf *
-ip6_findaux(m)
-	struct mbuf *m;
+struct ip6aux *
+ip6_findaux(
+	struct mbuf *m)
 {
-	struct mbuf *n;
-
-	n = m_aux_find(m, AF_INET6, -1);
-	if (n && n->m_len < sizeof(struct ip6aux)) {
-		printf("conflicting use of ip6aux");
-		n = NULL;
-	}
-	return n;
+	struct m_tag	*tag;
+	
+	tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_ENCAP, NULL);
+	
+	return tag ? (struct ip6aux*)(tag + 1) : NULL;
 }
 
 void
-ip6_delaux(m)
-	struct mbuf *m;
+ip6_delaux(
+	struct mbuf *m)
 {
-	struct mbuf *n;
+	struct m_tag	*tag;
 
-	n = m_aux_find(m, AF_INET6, -1);
-	if (n)
-		m_aux_delete(m, n);
+	tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_ENCAP, NULL);
+	if (tag) {
+		m_tag_delete(m, tag);
+	}
 }
 
 /*

@@ -28,11 +28,9 @@ INSTALL_MI_LIST	= ${DATAFILES}
 
 INSTALL_MI_DIR = miscfs/fdesc
 
-EXPORT_MI_LIST	= ${DATAFILES}
+EXPORT_MI_LIST	= ${DATAFILES} ${PRIVATE_DATAFILES}
 
 EXPORT_MI_DIR =	miscfs/fdesc
-
-INSTALL_MI_LIST = ${DATAFILES} ${PRIVATE_DATAFILES}
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

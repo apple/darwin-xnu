@@ -456,6 +456,7 @@ void in6_post_msg(struct ifnet *, u_long, struct in6_ifaddr *);
 #define SIOCGETMIFCNT_IN6	_IOWR('u', 107, \
 				      struct sioc_mif_req6) /* get pkt cnt per if */
 
+#ifdef PRIVATE
 /*
  * temporary control calls to attach/detach IP to/from an ethernet interface 
  */
@@ -466,6 +467,7 @@ void in6_post_msg(struct ifnet *, u_long, struct in6_ifaddr *);
 #define SIOCLL_STOP _IOWR('i', 131, struct in6_ifreq)    /* deconfigure linklocal from interface */
 #define SIOCAUTOCONF_START _IOWR('i', 132, struct in6_ifreq)    /* accept rtadvd on this interface */
 #define SIOCAUTOCONF_STOP _IOWR('i', 133, struct in6_ifreq)    /* stop accepting rtadv for this interface */
+#endif /* PRIVATE */
 
 #define IN6_IFF_ANYCAST		0x01	/* anycast address */
 #define IN6_IFF_TENTATIVE	0x02	/* tentative address */
@@ -575,15 +577,15 @@ struct	in6_multistep {
 /* struct ifnet *ifp; */					\
 /* struct in6_multi *in6m; */					\
 do { \
-	struct ifmultiaddr *ifma; \
-	for (ifma = (ifp)->if_multiaddrs.lh_first; ifma; \
-	     ifma = ifma->ifma_link.le_next) { \
-		if (ifma->ifma_addr->sa_family == AF_INET6 \
-		    && IN6_ARE_ADDR_EQUAL(&((struct sockaddr_in6 *)ifma->ifma_addr)->sin6_addr, \
+	struct ifmultiaddr *_ifma; \
+	for (_ifma = (ifp)->if_multiaddrs.lh_first; _ifma; \
+	     _ifma = _ifma->ifma_link.le_next) { \
+		if (_ifma->ifma_addr->sa_family == AF_INET6 \
+		    && IN6_ARE_ADDR_EQUAL(&((struct sockaddr_in6 *)_ifma->ifma_addr)->sin6_addr, \
 					  &(addr))) \
 			break; \
 	} \
-	(in6m) = (struct in6_multi *)(ifma ? ifma->ifma_protospec : 0); \
+	(in6m) = (struct in6_multi *)(_ifma ? _ifma->ifma_protospec : 0); \
 } while(0)
 
 /*

@@ -32,16 +32,18 @@
 .Nm semget
 .Nd obtain a semaphore id
 .Sh SYNOPSIS
-.In sys/types.h
-.In sys/ipc.h
 .In sys/sem.h
 .Ft int
-.Fn semget "key_t key" "int nsems" "int flag"
+.Fo semget
+.Fa "key_t key"
+.Fa "int nsems"
+.Fa "int semflg"
+.Fc
 .Sh DESCRIPTION
 Based on the values of
 .Fa key
 and
-.Fa flag ,
+.Fa semflg ,
 .Fn semget
 returns the identifier of a newly created or previously existing
 set of semaphores.
@@ -61,7 +63,7 @@ An integer constant may be specified.  If no IPC object corresponding
 to
 .Fa key
 is specified and the IPC_CREAT bit is set in
-.Fa flag ,
+.Fa semflg ,
 a new one will be created.
 .It
 The
@@ -76,7 +78,7 @@ may be used to generate a key from a pathname.
 The mode of a newly created IPC object is determined by
 .Em OR Ns 'ing
 the following constants into the
-.Fa flag
+.Fa semflg
 argument:
 .Bl -tag -width XSEM_WXX6XXX
 .It Dv SEM_R
@@ -113,32 +115,58 @@ The
 system call
 will fail if:
 .Bl -tag -width Er
+.\" ===========
 .\" ipcperm could fail (we're opening to read and write, as it were)
 .It Bq Er EACCES
 Access permission failure.
+.\" ===========
 .\"
-.\" sysv_sem.c is quite explicit about these, so I'm pretty sure
-.\" this is accurate
+.\" sysv_sem.c is quite explicit about these,
+.\" so I'm pretty sure this is accurate
 .\"
 .It Bq Er EEXIST
-IPC_CREAT and IPC_EXCL were specified, and a semaphore set
-corresponding to
+IPC_CREAT and IPC_EXCL were specified,
+and a semaphore set corresponding to
 .Fa key
 already exists.
+.\" ===========
 .It Bq Er EINVAL
-The number of semaphores requested exceeds the system imposed maximum
-per set.
-.It Bq Er ENOSPC
-Insufficiently many semaphores are available.
-.It Bq Er ENOSPC
-The kernel could not allocate a
-.Fa "struct semid_ds" .
+The number of semaphores requested
+is either less than 1 or greater than the system imposed maximum per set.
+.\" ===========
+.It Bq Er EINVAL
+A semaphore identifier exists for the argument key,
+but the number of semaphores in the set associated with it
+is less than
+.Fa nsems ,
+and
+.Fa nsems
+is non-zero.
+.\" ===========
 .It Bq Er ENOENT
 No semaphore set was found corresponding to
 .Fa key ,
 and IPC_CREAT was not specified.
+.\" ===========
+.It Bq Er ENOSPC
+Insufficiently many semaphores are available.
+.\" ===========
+.It Bq Er ENOSPC
+The kernel could not allocate a
+.Fa "struct semid_ds" .
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/ipc.h>
+.Fd #include <sys/sem.h>
+.Pp
+The include files
+.In sys/types.h
+and
+.In sys/ipc.h
+are necessary.
 .Sh SEE ALSO
 .Xr semctl 2 ,
 .Xr semop 2 ,
-.Xr ftok 3
+.Xr ftok 3 ,
+.Xr compat 5

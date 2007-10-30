@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*-
@@ -82,6 +88,11 @@
 #include <kern/task.h>
 #include <kern/thread.h>
 
+#include <mach/task.h>			/* for task_resume() */
+#include <kern/sched_prim.h>		/* for thread_exception_return() */
+
+/* XXX ken/bsd_kern.c - prototype should be in common header */
+int get_task_userstop(task_t);
 
 /* Macros to clear/set/test flags. */
 #define	SET(t, f)	(t) |= (f)
@@ -97,16 +108,15 @@ extern thread_t get_firstthread(task_t);
  */
 
 int
-ptrace(p, uap, retval)
-	struct proc *p;
-	struct ptrace_args *uap;
-	register_t *retval;
+ptrace(struct proc *p, struct ptrace_args *uap, register_t *retval)
 {
 	struct proc *t = current_proc();	/* target process */
 	task_t		task;
 	thread_t	th_act;
 	struct uthread 	*ut;
 	int tr_sigexc = 0;
+	int error = 0;
+	int stopped = 0;
 
 	AUDIT_ARG(cmd, uap->req);
 	AUDIT_ARG(pid, uap->pid);
@@ -114,21 +124,23 @@ ptrace(p, uap, retval)
 	AUDIT_ARG(value, uap->data);
 
 	if (uap->req == PT_DENY_ATTACH) {
-		if (ISSET(p->p_flag, P_TRACED)) {
+		proc_lock(p);
+		if (ISSET(p->p_lflag, P_LTRACED)) {
+			proc_unlock(p);
 			exit1(p, W_EXITCODE(ENOTSUP, 0), retval);
 			/* drop funnel before we return */
-			thread_funnel_set(kernel_flock, FALSE);
 			thread_exception_return();
 			/* NOTREACHED */
 		}
-		SET(p->p_flag, P_NOATTACH);
+		SET(p->p_lflag, P_LNOATTACH);
+		proc_unlock(p);
 
 		return(0);
 	}
 
 	if (uap->req == PT_FORCEQUOTA) {
 		if (is_suser()) {
-			SET(t->p_flag, P_FORCEQUOTA);
+			OSBitOrAtomic(P_FORCEQUOTA, (UInt32 *)&t->p_flag);
 			return (0);
 		} else
 			return (EPERM);
@@ -138,32 +150,39 @@ ptrace(p, uap, retval)
 	 *	Intercept and deal with "please trace me" request.
 	 */	 
 	if (uap->req == PT_TRACE_ME) {
-		SET(p->p_flag, P_TRACED);
+		proc_lock(p);
+		SET(p->p_lflag, P_LTRACED);
 		/* Non-attached case, our tracer is our parent. */
-		t->p_oppid = t->p_pptr->p_pid;
+		p->p_oppid = p->p_ppid;
+		proc_unlock(p);
 		return(0);
 	}
 	if (uap->req == PT_SIGEXC) {
-		if (ISSET(p->p_flag, P_TRACED)) {
-			SET(p->p_flag, P_SIGEXC);
+		proc_lock(p);
+		if (ISSET(p->p_lflag, P_LTRACED)) {
+			SET(p->p_lflag, P_LSIGEXC);
+			proc_unlock(p);
 			return(0);
-		} else
+		} else {
+			proc_unlock(p);
 			return(EINVAL);
+		}
+	}
+
+	/* 
+	 * We do not want ptrace to do anything with kernel or launchd 
+	 */
+	if (uap->pid < 2) {
+		return(EPERM);
 	}
 
 	/*
 	 *	Locate victim, and make sure it is traceable.
 	 */
-	if ((t = pfind(uap->pid)) == NULL)
+	if ((t = proc_find(uap->pid)) == NULL)
 			return (ESRCH);
 
 	AUDIT_ARG(process, t);
-
-	/* We do not want ptrace to do anything with kernel, init 
-	 * and mach_init
-	 */
-	if (uap->pid <=2 )
-		return (EPERM);
 
 	task = t->task;
 	if (uap->req == PT_ATTACHEXC) {
@@ -176,29 +195,41 @@ ptrace(p, uap, retval)
 		if ( kauth_authorize_process(proc_ucred(p), KAUTH_PROCESS_CANTRACE, 
 									 t, (uintptr_t)&err, 0, 0) == 0 ) {
 			/* it's OK to attach */
-			SET(t->p_flag, P_TRACED);
+			proc_lock(t);
+			SET(t->p_lflag, P_LTRACED);
 			if (tr_sigexc) 
-				SET(t->p_flag, P_SIGEXC);
+				SET(t->p_lflag, P_LSIGEXC);
 	
-			t->p_oppid = t->p_pptr->p_pid;
+			t->p_oppid = t->p_ppid;
+			proc_unlock(t);
 			if (t->p_pptr != p)
-				proc_reparent(t, p);
+				proc_reparentlocked(t, p, 1, 0);
 	
-			if (get_task_userstop(task) == 0 ) {
-				t->p_xstat = 0;
-				psignal(t, SIGSTOP);
-			} else {
-				t->p_xstat = SIGSTOP; 
-				task_resume(task);       
+			proc_lock(t);
+			if (get_task_userstop(task) > 0 ) {
+				stopped = 1;
 			}
-			return(0);
+			t->p_xstat = 0;
+			proc_unlock(t);
+			psignal(t, SIGSTOP);
+			/*
+			 * If the process was stopped, wake up and run through
+			 * issignal() again to properly connect to the tracing
+			 * process.
+			 */
+			if (stopped)
+				task_resume(task);       
+			error = 0;
+			goto out;
 		}
 		else {
 			/* not allowed to attach, proper error code returned by kauth_authorize_process */
-			if (ISSET(t->p_flag, P_NOATTACH)) {
+			if (ISSET(t->p_lflag, P_LNOATTACH)) {
 				psignal(p, SIGSEGV);
 			}
-			return (err);
+			
+			error = err;
+			goto out;
 		}
 	}
 
@@ -206,38 +237,55 @@ ptrace(p, uap, retval)
 	 * You can't do what you want to the process if:
 	 *	(1) It's not being traced at all,
 	 */
-	if (!ISSET(t->p_flag, P_TRACED))
-		return (EPERM);
+	proc_lock(t);
+	if (!ISSET(t->p_lflag, P_LTRACED)) {
+		proc_unlock(t);
+		error = EPERM;
+		goto out;
+	}
 
 	/*
 	 *	(2) it's not being traced by _you_, or
 	 */
-	if (t->p_pptr != p)
-		return (EBUSY);
+	if (t->p_pptr != p) {
+		proc_unlock(t);
+		error = EBUSY;
+		goto out;
+	}
 
 	/*
 	 *	(3) it's not currently stopped.
 	 */
-	if (t->p_stat != SSTOP)
-		return (EBUSY);
+	if (t->p_stat != SSTOP) {
+		proc_unlock(t);
+		error = EBUSY;
+		goto out;
+	}
 
 	/*
 	 *	Mach version of ptrace executes request directly here,
 	 *	thus simplifying the interaction of ptrace and signals.
 	 */
+	/* proc lock is held here */
 	switch (uap->req) {
 
 	case PT_DETACH:
-		if (t->p_oppid != t->p_pptr->p_pid) {
+		if (t->p_oppid != t->p_ppid) {
 			struct proc *pp;
 
-			pp = pfind(t->p_oppid);
-			proc_reparent(t, pp ? pp : initproc);
+			proc_unlock(t);
+			pp = proc_find(t->p_oppid);
+			proc_reparentlocked(t, pp ? pp : initproc, 1, 0);
+			if (pp != PROC_NULL)
+				proc_rele(pp);
+			proc_lock(t);
+			
 		}
 
 		t->p_oppid = 0;
-		CLR(t->p_flag, P_TRACED);
-		CLR(t->p_flag, P_SIGEXC);
+		CLR(t->p_lflag, P_LTRACED);
+		CLR(t->p_lflag, P_LSIGEXC);
+		proc_unlock(t);
 		goto resume;
 		
 	case PT_KILL:
@@ -245,74 +293,100 @@ ptrace(p, uap, retval)
 		 *	Tell child process to kill itself after it
 		 *	is resumed by adding NSIG to p_cursig. [see issig]
 		 */
-		psignal_lock(t, SIGKILL, 0);
+		proc_unlock(t);
+		psignal(t, SIGKILL);
 		goto resume;
 
 	case PT_STEP:			/* single step the child */
 	case PT_CONTINUE:		/* continue the child */
+		proc_unlock(t);
 		th_act = (thread_t)get_firstthread(task);
-		if (th_act == THREAD_NULL)
-			goto errorLabel;
+		if (th_act == THREAD_NULL) {
+			error = EINVAL;
+			goto out;
+		}
 
 		if (uap->addr != (user_addr_t)1) {
 #if defined(ppc)
 #define ALIGNED(addr,size)	(((unsigned)(addr)&((size)-1))==0)
-		        if (!ALIGNED((int)uap->addr, sizeof(int)))
-			        return (ERESTART);
+			if (!ALIGNED((int)uap->addr, sizeof(int)))
+				return (ERESTART);
 #undef 	ALIGNED
 #endif
-		        thread_setentrypoint(th_act, uap->addr);
+			thread_setentrypoint(th_act, uap->addr);
 		}
 
-		if ((unsigned)uap->data >= NSIG)
-			goto errorLabel;
+		if ((unsigned)uap->data >= NSIG) {
+			error = EINVAL;
+			goto out;
+		}
 
 		if (uap->data != 0) {
-			psignal_lock(t, uap->data, 0);
+			psignal(t, uap->data);
                 }
 
 		if (uap->req == PT_STEP) {
 		        /*
 			 * set trace bit
 			 */
-		        thread_setsinglestep(th_act, 1);
+			if (thread_setsinglestep(th_act, 1) != KERN_SUCCESS) {
+				error = ENOTSUP;
+				goto out;
+			}
 		} else {
 		        /*
 			 * clear trace bit if on
 			 */
-		        thread_setsinglestep(th_act, 0);
-		}
+			if (thread_setsinglestep(th_act, 0) != KERN_SUCCESS) {
+				error = ENOTSUP;
+				goto out;
+			}
+		}	
 	resume:
+		proc_lock(t);
 		t->p_xstat = uap->data;
 		t->p_stat = SRUN;
 		if (t->sigwait) {
 			wakeup((caddr_t)&(t->sigwait));
-			if ((t->p_flag & P_SIGEXC) == 0)
-				task_release(task);
-		}
+			proc_unlock(t);
+			if ((t->p_lflag & P_LSIGEXC) == 0) {
+				task_resume(task);
+			}
+		} else
+			proc_unlock(t);
+			
 		break;
 		
 	case PT_THUPDATE:  {
-		if ((unsigned)uap->data >= NSIG)
-			goto errorLabel;
+		proc_unlock(t);
+		if ((unsigned)uap->data >= NSIG) {
+			error = EINVAL;
+			goto out;
+		}
 		th_act = port_name_to_thread(CAST_DOWN(mach_port_name_t, uap->addr));
 		if (th_act == THREAD_NULL)
 			return (ESRCH);
 		ut = (uthread_t)get_bsdthread_info(th_act);
 		if (uap->data)
 			ut->uu_siglist |= sigmask(uap->data);
+		proc_lock(t);
 		t->p_xstat = uap->data;
 		t->p_stat = SRUN;
+		proc_unlock(t);
 		thread_deallocate(th_act);
-		return(0);
+		error = 0;
 		}
 		break;
-errorLabel:
 	default:
-		return(EINVAL);
+		proc_unlock(t);
+		error = EINVAL;
+		goto out;
 	}
 
-	return(0);
+	error = 0;
+out:
+	proc_rele(t);
+	return(error);
 }
 
 
@@ -336,7 +410,7 @@ cantrace(proc_t cur_procp, kauth_cred_t creds, proc_t traced_procp, int *errp)
 	/*
 	 *	(2) it's already being traced, or
 	 */
-	if (ISSET(traced_procp->p_flag, P_TRACED)) {
+	if (ISSET(traced_procp->p_lflag, P_LTRACED)) {
 		*errp = EBUSY;
 		return (0);
 	}
@@ -352,12 +426,12 @@ cantrace(proc_t cur_procp, kauth_cred_t creds, proc_t traced_procp, int *errp)
 		return (0);
 	}
 
-	if ((cur_procp->p_flag & P_TRACED) && isinferior(cur_procp, traced_procp)) {
+	if ((cur_procp->p_lflag & P_LTRACED) && isinferior(cur_procp, traced_procp)) {
 		*errp = EPERM;
 		return (0);
 	}
 
-	if (ISSET(traced_procp->p_flag, P_NOATTACH)) {
+	if (ISSET(traced_procp->p_lflag, P_LNOATTACH)) {
 		*errp = EBUSY;
 		return (0);
 	}

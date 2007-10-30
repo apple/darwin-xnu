@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -155,9 +161,26 @@ tvecoff:	stw		r26,FM_BACKPTR(r1)				; Link back to the previous frame
 #endif /* DEBUG */
 
 			mr		r30,r4
-			lwz		r3,SAVtime+4(r4)
-			addi	r4,r13,SYSTEM_TIMER
-			bl		EXT(timer_event)
+			lwz		r3,SAVtime(r4)
+			lwz		r4,SAVtime+4(r4)
+			addi	r5,r13,SYSTEM_TIMER
+			bl		EXT(thread_timer_event)
+			addi	r5,r25,SYSTEM_STATE
+			bl		EXT(state_event)
+
+			lwz		r7,ACT_TASK(r13)
+			lwz		r8,TASK_VTIMERS(r7)
+			cmpwi	r8,0
+			beq++	0f
+
+			lwz		r7,ACT_PER_PROC(r13)
+			li		r4,AST_BSD
+			lwz		r8,PP_PENDING_AST(r7)
+			or		r8,r8,r4
+			stw		r8,PP_PENDING_AST(r7)
+			addi	r3,r13,ACT_AST
+			bl		EXT(hw_atomic_or)
+0:
 
 /* call trap handler proper, with
  *   ARG0 = type
@@ -358,9 +381,26 @@ noassist:	cmplwi	r15,0x7000						; Do we have a fast path trap?
 			stw		r0,ACT_MACT_KSP(r13)			; Mark stack as busy with 0 val 
 			stw		r15,FM_BACKPTR(r1)				; Link stack frame backwards
 
-			lwz		r3,SAVtime+4(r30)
-			addi	r4,r13,SYSTEM_TIMER
-			bl		EXT(timer_event)
+			lwz		r3,SAVtime(r30)
+			lwz		r4,SAVtime+4(r30)
+			addi	r5,r13,SYSTEM_TIMER
+			bl		EXT(thread_timer_event)
+			addi	r5,r25,SYSTEM_STATE
+			bl		EXT(state_event)
+		
+			lwz		r7,ACT_TASK(r13)
+			lwz		r8,TASK_VTIMERS(r7)
+			cmpwi	r8,0
+			beq++	0f
+
+			lwz		r7,ACT_PER_PROC(r13)
+			li		r4,AST_BSD
+			lwz		r8,PP_PENDING_AST(r7)
+			or		r8,r8,r4
+			stw		r8,PP_PENDING_AST(r7)
+			addi	r3,r13,ACT_AST
+			bl		EXT(hw_atomic_or)
+0:
 		
 #if	DEBUG
 /* If debugging, we need two frames, the first being a dummy
@@ -560,11 +600,11 @@ ksystrace:
 			ori		r8,r8,lo16(EXT(kdebug_enable))	; Get bottom of kdebug_enable 
 			lwz		r8,0(r8)						; Get kdebug_enable 
 
-			lwz		r7,TASK_SYSCALLS_MACH(r10)		; Get the current count
-			neg		r31,r0							; Make this positive
-			mr 		r3,r31							; save it
-			slwi	r27,r3,4						; multiply by 16
-			slwi	r3,r3,2							; and the original by 4
+			lwz		r7,TASK_SYSCALLS_MACH(r10)	; Get the current count
+			neg		r31,r0						; Make this positive
+			mr 		r3,r31						; save it
+			slwi	r27,r3,4					; multiply by 16
+			slwi	r3,r3,2						; and the original by 4
 			ori		r28,r28,lo16(EXT(mach_trap_table))	; Get address of table
 			add		r27,r27,r3						; for a total of 20x (5 words/entry)
 			addi	r7,r7,1							; Bump TASK_SYSCALLS_MACH count
@@ -586,10 +626,10 @@ ksystrace:
 .L_kernel_syscall_munge:
 			cmplwi	r0,0							; test for null munger
 			mtctr	r0								; Set the function call address
-			addi	r3,r30,saver3					; Pointer to args from save area
-			addi	r4,r1,FM_ARG0+ARG_SIZE			; Pointer for munged args
-			beq--	.L_kernel_syscall_trapcall		; null munger - skip to trap call
-			bctrl									; Call the munge function
+			addi	r3,r30,saver3						; Pointer to args from save area
+			addi	r4,r1,FM_ARG0+ARG_SIZE				; Pointer for munged args
+			beq--	.L_kernel_syscall_trapcall		;   null munger - skip to trap call
+			bctrl								; Call the munge function
 
 .L_kernel_syscall_trapcall:		
 			lwz		r0,MACH_TRAP_FUNCTION(r31)		; Pick up the function address
@@ -949,29 +989,46 @@ ihbootnover:										; (TEST/DEBUG)
 			mr		r31,r3
 			mr		r30,r4
 
-			lwz		r3,SAVtime+4(r4)
-			addi	r4,r13,SYSTEM_TIMER
-			bl		EXT(timer_event)
+			lwz		r3,SAVtime(r4)
+			lwz		r4,SAVtime+4(r4)
+			addi	r5,r25,PP_PROCESSOR
+			lwz		r5,KERNEL_TIMER(r5)
+			bl		EXT(thread_timer_event)
+			addi	r6,r25,PP_PROCESSOR
+			lwz		r5,CURRENT_STATE(r6)
+			addi	r7,r6,USER_STATE
+			cmplw	r5,r7
+			bne		0f
+			addi	r5,r6,SYSTEM_STATE
+			bl		EXT(state_event)
+0:
+
+			lwz		r7,ACT_TASK(r13)
+			lwz		r8,TASK_VTIMERS(r7)
+			cmpwi	r8,0
+			beq++	0f
+
+			lwz		r7,ACT_PER_PROC(r13)
+			li		r4,AST_BSD
+			lwz		r8,PP_PENDING_AST(r7)
+			or		r8,r8,r4
+			stw		r8,PP_PENDING_AST(r7)
+			addi	r3,r13,ACT_AST
+			bl		EXT(hw_atomic_or)
+0:
 
 			mr		r3,r31
 			mr		r4,r30
 			lwz		r5,savedsisr(r30)				; Get the DSISR
 			lwz		r6,savedar+4(r30)				; Get the DAR 
-			
+
 #if FPFLOOD
 			stfd	f31,emfp31(r25)					; (TEST/DEBUG)
 #endif
 
 			bl	EXT(interrupt)
 
-
-/* interrupt() returns a pointer to the saved state in r3
- *
- * Ok, back from C. Disable interrupts while we restore things
- */
-			.globl EXT(ihandler_ret)
-
-LEXT(ihandler_ret)									; Marks our return point from debugger entry
+/* interrupt() returns a pointer to the saved state in r3 */
 
 			lis		r10,hi16(MASK(MSR_VEC))			; Get the vector enable
 			mfmsr	r0								; Get our MSR
@@ -1423,13 +1480,19 @@ segtb:		mftbu	r20								; Get the upper time base
 			
 			mtdec	r13								; Set our value
 
-chkifuser:	addi	r4,r28,SYSTEM_TIMER
-			mftb	r3
+chkifuser:	bl		EXT(mach_absolute_time)
+			lwz		r5,ACT_PER_PROC(r28)
+			addi	r6,r5,PP_PROCESSOR
+			lwz		r5,KERNEL_TIMER(r6)
+			lwz		r29,CURRENT_STATE(r6)
 			beq--	cr7,chkifuser1					; Skip this if we are going to kernel...
 			stw		r18,umwSpace(r28)				; Half-invalidate to force MapUserAddressWindow to reload SRs
-			addi	r4,r28,USER_TIMER
+			addi	r5,r28,USER_TIMER
+			addi	r29,r6,USER_STATE
 
-chkifuser1:	bl		EXT(timer_event)
+chkifuser1:	bl		EXT(thread_timer_event)
+			mr		r5,r29
+			bl		EXT(state_event)
 
 chkenax:	
 

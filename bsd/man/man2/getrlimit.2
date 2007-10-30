@@ -41,13 +41,17 @@
 .Nm setrlimit
 .Nd control maximum system resource consumption
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
-.Fd #include <sys/time.h>
 .Fd #include <sys/resource.h>
 .Ft int
-.Fn getrlimit "int resource" "struct rlimit *rlp"
+.Fo getrlimit
+.Fa "int resource"
+.Fa "struct rlimit *rlp"
+.Fc
 .Ft int
-.Fn setrlimit "int resource" "const struct rlimit *rlp"
+.Fo setrlimit
+.Fa "int resource"
+.Fa "const struct rlimit *rlp"
+.Fc
 .Sh DESCRIPTION
 Limits on the consumption of system resources by the current process
 and each process it creates may be obtained with the
@@ -60,35 +64,45 @@ The
 .Fa resource
 parameter is one of the following:
 .Bl -tag -width RLIMIT_FSIZEAA
+.\" ========
 .It Li RLIMIT_CORE
 The largest size (in bytes)
 .Xr core
 file that may be created.
+.\" ========
 .It Li RLIMIT_CPU
 The maximum amount of cpu time (in seconds) to be used by
 each process.
+.\" ========
 .It Li RLIMIT_DATA
 The maximum size (in bytes) of the data segment for a process;
 this defines how far a program may extend its break with the
 .Xr sbrk 2
 system call.
+.\" ========
 .It Li RLIMIT_FSIZE
 The largest size (in bytes) file that may be created.
+.\" ========
 .It Li RLIMIT_MEMLOCK
 The maximum size (in bytes) which a process may lock into memory
 using the
 .Xr mlock 2
 function.
+.\" ========
 .It Li RLIMIT_NOFILE
 The maximum number of open files for this process.
+.\" ========
 .It Li RLIMIT_NPROC
 The maximum number of simultaneous processes for this user id.
+.\" ========
 .It Li RLIMIT_RSS
-The maximum size (in bytes) to which a process's resident set size may
-grow.
-This imposes a limit on the amount of physical memory to be given to
-a process; if memory is tight, the system will prefer to take memory
+The maximum size (in bytes)
+to which a process's resident set size may grow.
+This imposes a limit on the amount of physical memory
+to be given to a process;
+if memory is tight, the system will prefer to take memory
 from processes that are exceeding their declared resident set size.
+.\" ========
 .It Li RLIMIT_STACK
 The maximum size (in bytes) of the stack segment for a process;
 this defines how far a program's stack segment may be extended.
@@ -116,11 +130,6 @@ within the range from 0 to
 .Fa rlim_max
 or (irreversibly) lower
 .Fa rlim_max .
-.Pp
-An
-.Dq infinite
-value for a limit is defined as
-.Dv RLIM_INFINITY .
 .Pp
 Because this information is stored in the per-process information,
 this system call must be executed directly by the shell if it
@@ -161,28 +170,61 @@ that an error occurred, and an error code is stored in the global
 location
 .Va errno .
 .Sh ERRORS
-.Fn Getrlimit
+The
+.Fn getrlimit
 and
 .Fn setrlimit
-will fail if:
+system calls will fail if:
 .Bl -tag -width Er
+.\" ==========
 .It Bq Er EFAULT
 The address specified for
 .Fa rlp
 is invalid.
-.It Bq Er EPERM
-The limit specified to
-.Fn setrlimit
-would have
-raised the maximum limit value, and the caller is not the super-user.
+.\" ==========
+.It Bq Er EINVAL
+.Fa resource
+is invalid.
 .El
+.Pp
+The
+.Fn setrlimit
+call will fail if:
+.Bl -tag -width Er
+.\" ==========
+.It Bq Er EINVAL
+The specified limit is invalid
+(e.g., RLIM_INFINITY or lower than rlim_cur).
+.\" ==========
+.It Bq Er EPERM
+The limit specified would have raised the maximum limit value
+and the caller is not the super-user.
+.El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/time.h>
+.Fd #include <sys/resource.h>
+.Pp
+The include files
+.In sys/types.h
+and
+.In sys/time.h
+are necessary.
+.Sh COMPATIBILITY
+.Fn setrlimit
+now returns with
+.Va errno
+set to EINVAL in places that historically succeeded.
+It no longer accepts "rlim_cur = RLIM_INFINITY" for RLIM_NOFILE.
+Use "rlim_cur = min(OPEN_MAX, rlim_max)".
 .Sh SEE ALSO
 .Xr csh 1 ,
 .Xr sh 1 ,
 .Xr quota 2 ,
 .Xr sigaction 2 ,
 .Xr sigaltstack 2 ,
-.Xr sysctl 3
+.Xr sysctl 3 ,
+.Xr compat 5
 .Sh HISTORY
 The
 .Fn getrlimit

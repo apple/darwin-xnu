@@ -3,6 +3,9 @@ export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
+export COMP_LDFLAGS_COMPONENT_PPC = -Wl,-i_OSCompareAndSwap:_hw_compare_and_store \
+                                    -Wl,-i_OSDequeueAtomic:_hw_dequeue_atomic \
+                                    -Wl,-i_OSEnqueueAtomic:_hw_queue_atomic
 
 include $(MakeInc_cmd)
 include $(MakeInc_def)
@@ -16,8 +19,11 @@ INSTINC_SUBDIRS = \
 	ipc \
 	machine \
 	UserNotification \
+	gssd \
+	lockd \
 	vm \
-	libsa
+	libsa \
+	kdp
 
 INSTINC_SUBDIRS_PPC = \
 	mach \
@@ -26,6 +32,10 @@ INSTINC_SUBDIRS_PPC = \
 INSTINC_SUBDIRS_I386 = \
 	mach	\
 	i386
+
+INSTINC_SUBDIRS_ARM = \
+	mach	\
+	arm
 
 EXPINC_SUBDIRS = \
 	mach	\
@@ -37,8 +47,11 @@ EXPINC_SUBDIRS = \
 	ipc \
 	machine \
 	UserNotification \
+	gssd \
+	lockd \
 	vm \
-	libsa
+	libsa \
+	kdp
 
 EXPINC_SUBDIRS_PPC = \
 	mach \
@@ -47,6 +60,10 @@ EXPINC_SUBDIRS_PPC = \
 EXPINC_SUBDIRS_I386 = \
 	mach	\
 	i386
+
+EXPINC_SUBDIRS_ARM = \
+	mach	\
+	arm
 
 SETUP_SUBDIRS = 	\
 	conf
@@ -59,5 +76,3 @@ INST_SUBDIRS =	\
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-
-

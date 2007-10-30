@@ -1,37 +1,33 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * Revision 2.3  91/05/14  16:40:19  mrt
- * 	Correcting copyright
- * 
- * Revision 2.2  91/03/16  15:15:51  rpd
- * 	Created.
- * 	[91/03/13            rpd]
- * 
- */
-/* CMU_ENDHIST */
 /* 
  * Mach Operating System
  * Copyright (c) 1991,1990,1989,1988,1987 Carnegie Mellon University
@@ -70,23 +66,14 @@
  *	This makes them easier to examine with ddb.
  */
 
-mach_counter_t c_thread_invoke_csw = 0;
-mach_counter_t c_thread_invoke_hits = 0;
-mach_counter_t c_thread_invoke_misses = 0;
-mach_counter_t c_thread_invoke_same = 0;
-mach_counter_t c_thread_invoke_same_cont = 0;
-mach_counter_t c_incoming_interrupts = 0;
-mach_counter_t c_syscalls_unix = 0;
-mach_counter_t c_syscalls_mach = 0;
-
 #if	MACH_COUNTERS
 mach_counter_t c_action_thread_block = 0;
 mach_counter_t c_ast_taken_block = 0;
-mach_counter_t c_clock_ticks = 0;
 mach_counter_t c_dev_io_blocks = 0;
 mach_counter_t c_dev_io_tries = 0;
 mach_counter_t c_idle_thread_block = 0;
 mach_counter_t c_idle_thread_handoff = 0;
+mach_counter_t c_incoming_interrupts = 0;
 mach_counter_t c_io_done_thread_block = 0;
 mach_counter_t c_ipc_mqueue_receive_block_kernel = 0;
 mach_counter_t c_ipc_mqueue_receive_block_user = 0;
@@ -99,6 +86,13 @@ mach_counter_t c_stacks_max = 0;
 mach_counter_t c_stacks_min = 0;
 mach_counter_t c_swtch_block = 0;
 mach_counter_t c_swtch_pri_block = 0;
+mach_counter_t c_syscalls_unix = 0;
+mach_counter_t c_syscalls_mach = 0;
+mach_counter_t c_thread_invoke_csw = 0;
+mach_counter_t c_thread_invoke_hits = 0;
+mach_counter_t c_thread_invoke_misses = 0;
+mach_counter_t c_thread_invoke_same = 0;
+mach_counter_t c_thread_invoke_same_cont = 0;
 mach_counter_t c_thread_switch_block = 0;
 mach_counter_t c_thread_switch_handoff = 0;
 mach_counter_t c_vm_fault_page_block_backoff_kernel = 0;

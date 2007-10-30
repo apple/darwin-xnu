@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -68,12 +74,12 @@ void
 timer_init(
 	timer_t		timer)
 {
-	timer->low_bits = 0;
-	timer->high_bits = 0;
-	timer->high_bits_check = 0;
 #if	!STAT_TIME
 	timer->tstamp = 0;
 #endif	/* STAT_TIME */
+	timer->low_bits = 0;
+	timer->high_bits = 0;
+	timer->high_bits_check = 0;
 }
 
 /*
@@ -92,43 +98,49 @@ timer_delta(
 	return (new - old);
 }
 
+void
+timer_advance(
+	timer_t		timer,
+	uint64_t	delta)
+{
+	uint64_t	low;
+
+	low = delta + timer->low_bits;
+	if (low >> 32)
+		timer_update(timer, timer->high_bits + (low >> 32), low);
+	else
+		timer->low_bits = low;
+}
+
 #if	!STAT_TIME
 
+void
+timer_start(
+	timer_t		timer,
+	uint64_t	tstamp)
+{
+	timer->tstamp = tstamp;
+}
+
+void
+timer_stop(
+	timer_t		timer,
+	uint64_t	tstamp)
+{
+	timer_advance(timer, tstamp - timer->tstamp);
+}
+
 /*
- *	Update the current timer (if any)
- *	and start the new timer, which
- *	could be either the same or NULL.
- *
- *	Called with interrupts disabled.
+ *	Update the timer and start a new one.
  */
 void
 timer_switch(
-	uint32_t		tstamp,
+	timer_t			timer,
+	uint64_t		tstamp,
 	timer_t			new_timer)
 {
-	processor_t		processor = current_processor();
-	timer_t			timer;
-	uint32_t		old_low, low;
-
-	/*
-	 *	Update current timer.
-	 */
-	timer = PROCESSOR_DATA(processor, current_timer);
-	if (timer != NULL) {
-		old_low = timer->low_bits;
-		low = old_low + tstamp - timer->tstamp;
-		if (low < old_low)
-			timer_update(timer, timer->high_bits + 1, low);
-		else
-			timer->low_bits = low;
-	}
-
-	/*
-	 *	Start new timer.
-	 */
-	PROCESSOR_DATA(processor, current_timer) = new_timer;
-	if (new_timer != NULL)
-		new_timer->tstamp = tstamp;
+	timer_advance(timer, tstamp - timer->tstamp);
+	new_timer->tstamp = tstamp;
 }
 
 #if	MACHINE_TIMER_ROUTINES
@@ -140,36 +152,30 @@ timer_switch(
 #else	/* MACHINE_TIMER_ROUTINES */
 
 /*
- *	Update the current timer and start
- *	the new timer.  Requires a current
+ *	Update the current thread timer and
+ *	start the new timer.  Requires a current
  *	and new timer.
  *
  *	Called with interrupts disabled.
  */
 void
-timer_event(
-	uint32_t		tstamp,
+thread_timer_event(
+	uint64_t		tstamp,
 	timer_t			new_timer)
 {
 	processor_t		processor = current_processor();
 	timer_t			timer;
-	uint32_t		old_low, low;
 
 	/*
 	 *	Update current timer.
 	 */
-	timer = PROCESSOR_DATA(processor, current_timer);
-	old_low = timer->low_bits;
-	low = old_low + tstamp - timer->tstamp;
-	if (low < old_low)
-		timer_update(timer, timer->high_bits + 1, low);
-	else
-		timer->low_bits = low;
+	timer = PROCESSOR_DATA(processor, thread_timer);
+	timer_advance(timer, tstamp - timer->tstamp);
 
 	/*
 	 *	Start new timer.
 	 */
-	PROCESSOR_DATA(processor, current_timer) = new_timer;
+	PROCESSOR_DATA(processor, thread_timer) = new_timer;
 	new_timer->tstamp = tstamp;
 }
 

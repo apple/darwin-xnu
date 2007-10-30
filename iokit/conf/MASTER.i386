@@ -1,15 +1,18 @@
-#
 ######################################################################
 #  
-#  Standard NeXT Research Configurations:
-#  -------- ---- -------- ---------------
+#  Standard Apple Mac OS Configurations:
+#  -------- ----- ------ ---------------
 #
-#  RELEASE = [intel mach iokitcpp]
-#  PROFILE = [RELEASE profile]
-#  DEBUG = [intel mach iokitcpp debug]
+#  RELEASE	= [ intel mach iokitcpp hibernation medium crypto config_dtrace ]
+#  PROFILE	= [ RELEASE profile ]
+#  DEBUG	= [ RELEASE debug ]
+#
+#  EMBEDDED	= [ intel mach iokitcpp hibernation no_kextd bsmall crypto ]
+#  DEVELOPMENT	= [ EMBEDDED config_dtrace ]
 #
 ######################################################################
 
 machine		"i386"					# <intel>
 cpu		"i386"					# <intel>
 
+options		NO_KEXTD				# <no_kextd>

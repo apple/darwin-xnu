@@ -1,25 +1,29 @@
 /*
- * Copyright (c) 2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * "Portions Copyright (c) 1999 Apple Computer, Inc.  All Rights
- * Reserved.  This file contains Original Code and/or Modifications of
- * Original Code as defined in and that are subject to the Apple Public
- * Source License Version 1.0 (the 'License').  You may not use this file
- * except in compliance with the License.  Please obtain a copy of the
- * License at http://www.apple.com/publicsource and read it before using
- * this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
  * 
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License."
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * History:
@@ -34,6 +38,16 @@
 #if !KERNEL
 #include <mach-o/swap.h>
 #include <libkern/OSByteOrder.h>
+#endif
+
+#ifdef CONFIG_NOLIBKLD
+int kld_address_func = 0;
+int kld_forget_symbol = 0;
+int kld_load_basefile_from_memory = 0;
+int kld_load_from_memory = 0;
+int kld_lookup = 0;
+int kld_set_link_options = 0;
+int kld_unload_all = 0;
 #endif
 
 #if KERNEL
@@ -58,7 +72,6 @@ enum { false = 0, true = 1 };
 
 extern void kld_error_vprintf(const char *format, va_list ap);
 
-__private_extern__ char *strstr(const char *in, const char *str);
 extern struct mach_header _mh_execute_header;
 extern struct segment_command *getsegbyname(char *seg_name);	// 32 bit only
 
@@ -163,7 +176,7 @@ extern struct segment_command *getsegbyname(char *seg_name);	// 32 bit only
 
 typedef struct Data {
     unsigned long fLength, fCapacity;
-    unsigned char *fData;
+    char *fData;
 } Data, *DataRef;
 
 struct sectionRecord {
@@ -187,7 +200,7 @@ struct patchRecord {
 
 struct relocRecord {
     void *fValue;
-    const struct nlist *fSymbol;
+    struct nlist *fSymbol;
     struct relocation_info *fRInfo;
     void *reserved;
 };
@@ -211,10 +224,10 @@ struct fileRecord {
     struct sectionRecord *fSections;
     vm_offset_t fVMAddr, fVMEnd;
     struct segment_command *fLinkEditSeg;
-    const char **fSymbToStringTable;
+    char **fSymbToStringTable;
     char *fStringBase;
     struct nlist *fSymbolBase;
-    const struct nlist *fLocalSyms;
+    struct nlist *fLocalSyms;
     unsigned int fNSects;
     int fNLocal;
     Boolean fIsKernel, fIsReloc, fIsIncrLink, fNoKernelExecutable, fIsKmem;
@@ -224,7 +237,7 @@ struct fileRecord {
 #if !KERNEL
     Boolean fSwapped;
 #endif
-    const char fPath[1];
+    char fPath[1];
 };
 
 static DataRef sFilesTable;
@@ -255,12 +268,12 @@ static __inline__ unsigned long DataGetLength(DataRef data)
     return data->fLength;
 }
 
-static __inline__ unsigned char *DataGetPtr(DataRef data)
+static __inline__ char *DataGetPtr(DataRef data)
 {
     return data->fData;
 }
 
-static __inline__ unsigned char *DataGetEndPtr(DataRef data)
+static __inline__ char *DataGetEndPtr(DataRef data)
 {
     return data->fData + data->fLength;
 }
@@ -285,11 +298,11 @@ static Boolean DataEnsureCapacity(DataRef data, unsigned long capacity)
 {
     // Don't bother to ever shrink a data object.
     if (capacity > data->fCapacity) {
-	unsigned char *newData;
+	char *newData;
 
 	capacity += kDataCapacityIncrement - 1;
 	capacity &= ~(kDataCapacityIncrement - 1);
-	newData = (unsigned char *) realloc(data->fData, capacity);
+	newData = (char *) realloc(data->fData, capacity);
 	if (!newData)
 	    return false;
 
@@ -345,7 +358,7 @@ static DataRef DataCreate(unsigned long capacity)
 	    data->fCapacity &= ~(kDataCapacityIncrement - 1);
 	}
 
-	data->fData = (unsigned char *) malloc(data->fCapacity);
+	data->fData = (char *) malloc(data->fCapacity);
 	if (!data->fData) {
 	    free(data);
 	    return NULL;
@@ -367,13 +380,13 @@ static void DataRelease(DataRef data)
     }
 }
 
-static __inline__ const char *
+static __inline__ char *
 symNameByIndex(const struct fileRecord *file, unsigned int symInd)
 {
     return file->fSymbToStringTable[symInd];
 }
 
-static __inline__  const char *
+static __inline__  char *
 symbolname(const struct fileRecord *file, const struct nlist *sym)
 {
     unsigned int index;
@@ -387,7 +400,7 @@ symbolname(const struct fileRecord *file, const struct nlist *sym)
         return symNameByIndex(file,  index);
 
     if (-1 == sym->n_un.n_strx)
-        return (const char *) sym->n_value;
+        return (char *) sym->n_value;
 
     // If the preceding tests fail then we have a getNewSymbol patch and
     // the file it refers to has already been patched as the n_strx is set
@@ -438,7 +451,7 @@ addFile(struct fileRecord *file, const char *path)
     }
 
     bcopy(file, newFile, sizeof(struct fileRecord) - 1);
-    strcpy((char *) newFile->fPath, path);
+    strlcpy((char *) newFile->fPath, path, strlen(path) + 1);
 
     return newFile;
 }
@@ -494,15 +507,65 @@ static void unmapFile(struct fileRecord *file)
 
 static void removeFile(struct fileRecord *file)
 {
+    int i, count;
+
     if (file->fClassList) {
-	DataRelease(file->fClassList);
+        struct metaClassRecord ** fileClasses =
+            (struct metaClassRecord **)DataGetPtr(file->fClassList);
+        
+        count = DataGetLength(file->fClassList) / sizeof(struct metaClassRecord *);
+
+        for (i = 0; i < count; i++) {
+            struct metaClassRecord * thisClass = fileClasses[i];
+
+            if (thisClass->fSuperName) {
+                free(thisClass->fSuperName);
+            }
+            if (thisClass->fPatchedVTable) {
+                free(thisClass->fPatchedVTable);
+            }
+
+            free(thisClass);
+        }
+        
+ 	DataRelease(file->fClassList);
 	file->fClassList = 0;
     }
+
+    // unmapFile() releases file->fSectData
+
+    if (file->fNewSymbols) {
+        struct nlist ** syms =
+            (struct nlist **)DataGetPtr(file->fNewSymbols);
+
+        count = DataGetLength(file->fNewSymbols) / sizeof(struct nlist *);
+
+        for (i = 0; i < count; i++) {
+            free(syms[i]);
+        }
+        DataRelease(file->fNewSymbols);
+        file->fNewSymbols = 0;
+    }
+
+    if (file->fNewStringBlocks) {
+        DataRef * stringBlocks = (DataRef *)DataGetPtr(file->fNewStringBlocks);
+        count = DataGetLength(file->fNewStringBlocks) / sizeof(DataRef);
+
+        for (i = 0; i < count; i++) {
+            DataRelease(stringBlocks[i]);
+        }
+
+        DataRelease(file->fNewStringBlocks);
+        file->fNewStringBlocks = 0;
+    }
+
+    // unmapFile() releases file->fSym2Strings
 
     unmapFile(file);
 
     free(file);
 }
+
 
 #if !KERNEL
 static Boolean
@@ -798,7 +861,7 @@ static Boolean findBestArch(struct fileRecord *file, const char *pathName)
 #endif /* KERNEL */
 
     return_if(magic != MH_MAGIC,
-	false, ("%s isn't a valid mach-o\n", pathName));
+	false, ("%s isn't a valid mach-o (magic is %08x)\n", pathName, magic));
 
     return true;
 }
@@ -913,10 +976,10 @@ tryRemangleAgain:
 // mach-o files
 static Boolean parseSymtab(struct fileRecord *file, const char *pathName)
 {
-    const struct nlist *sym;
+    struct nlist *sym;
     unsigned int i, firstlocal, nsyms;
     unsigned long strsize;
-    const char *strbase;
+    char *strbase;
     Boolean foundOSObject, found295CPP, havelocal;
 
     // we found a link edit segment so recompute the bases
@@ -953,7 +1016,7 @@ static Boolean parseSymtab(struct fileRecord *file, const char *pathName)
     DataSetLength(file->fSym2Strings, nsyms * sizeof(const char *));
     return_if(!file->fSym2Strings, false, 
 	    ("Unable to allocate memory - symbol string trans\n", pathName));
-    file->fSymbToStringTable = (const char **) DataGetPtr(file->fSym2Strings);
+    file->fSymbToStringTable = (char **) DataGetPtr(file->fSym2Strings);
 
     // Search for the first non-stab symbol in table
     strsize = file->fSymtab->strsize;
@@ -963,7 +1026,7 @@ static Boolean parseSymtab(struct fileRecord *file, const char *pathName)
     found295CPP = foundOSObject = false;
     for (i = 0, sym = file->fSymbolBase; i < nsyms; i++, sym++) {
         long strx = sym->n_un.n_strx;
-        const char *symname = strbase + strx;
+        char *symname = strbase + strx;
         unsigned char n_type;
 
         return_if(((unsigned long) strx > strsize), false,
@@ -981,7 +1044,7 @@ static Boolean parseSymtab(struct fileRecord *file, const char *pathName)
 	if (file->fIsIncrLink && !file->fNSects)
 	{
 	    // symbol set
-	    struct nlist *patchsym = (struct nlist *) sym;
+	    struct nlist *patchsym = sym;
 	    const char * lookname;
 	    const struct nlist * realsym;
 
@@ -1109,11 +1172,11 @@ static Boolean parseSymtab(struct fileRecord *file, const char *pathName)
 
 // @@@ gvdl:  These functions need to be hashed they are
 // going to be way too slow for production code.
-static const struct nlist *
+static struct nlist *
 findSymbolByAddress(const struct fileRecord *file, void *entry)
 {
     // not quite so dumb linear search of all symbols
-    const struct nlist *sym;
+    struct nlist *sym;
     int i, nsyms;
 
     // First try to find the symbol in the most likely place which is the
@@ -1137,7 +1200,7 @@ findSymbolByAddress(const struct fileRecord *file, void *entry)
     return NULL;
 }
 
-static const struct nlist *
+static struct nlist *
 findSymbolByAddressInAllFiles(__unused const struct fileRecord * fromFile, 
 			    void *entry, const struct fileRecord **resultFile)
 {
@@ -1153,7 +1216,7 @@ findSymbolByAddressInAllFiles(__unused const struct fileRecord * fromFile,
 	    if ((((vm_offset_t)entry) >= files[i]->fVMAddr)
 	     && (((vm_offset_t)entry) <  files[i]->fVMEnd))
 	    {
-		const struct nlist * result;
+		struct nlist * result;
 		if (resultFile)
 		    *resultFile = files[i];
 		result = findSymbolByAddress(files[i], entry);
@@ -1198,7 +1261,7 @@ findSymbolByName(struct fileRecord *file, const char *symname)
 
         context.fSymname = symname;
         context.fFile = file;
-        return (struct nlist *)
+        return (const struct nlist *)
             bsearch(&context,
                     file->fLocalSyms, file->fNLocal, sizeof(struct nlist),
                     symbolSearch);
@@ -1206,9 +1269,9 @@ findSymbolByName(struct fileRecord *file, const char *symname)
 }
 
 static Boolean
-relocateSection(const struct fileRecord *file, struct sectionRecord *sectionRec)
+relocateSection(struct fileRecord *file, struct sectionRecord *sectionRec)
 {
-    const struct nlist *symbol;
+    struct nlist *symbol;
     const struct section *section;
     struct relocRecord *rec;
     struct relocation_info *rinfo;
@@ -1283,6 +1346,7 @@ relocateSection(const struct fileRecord *file, struct sectionRecord *sectionRec)
 		("Invalid relocation entry in %s - extern\n", file->fPath));
 	}
 	else {
+	    void * addr = *entry;
 	    /*
 	     * If the symbol is not in any section then it can't be a
 	     * pointer to a local segment and I don't care about it.
@@ -1295,7 +1359,6 @@ relocateSection(const struct fileRecord *file, struct sectionRecord *sectionRec)
 		("Invalid relocation entry in %s - local\n", file->fPath));
 
 	    // Find the symbol, if any, that backs this entry 
-	    void * addr = *entry;
 #if !KERNEL
 	    if (file->fSwapped)
 		addr = (void *) OSSwapInt32((uint32_t) addr);
@@ -1311,13 +1374,13 @@ relocateSection(const struct fileRecord *file, struct sectionRecord *sectionRec)
     }
 
     DataSetLength(sectionRec->fRelocCache, i * sizeof(struct relocRecord));
-    ((struct fileRecord *) file)->fImageDirty = true;
+    file->fImageDirty = true;
 
     return true;
 }
 
 static const struct nlist *
-findSymbolRefAtLocation(const struct fileRecord *file,
+findSymbolRefAtLocation(struct fileRecord *file,
 			struct sectionRecord *sctn, void **loc, const struct fileRecord **foundInFile)
 {
     const struct nlist * result;
@@ -1377,9 +1440,10 @@ addClass(struct fileRecord *file,
 	    (DataGetPtr(file->fClassList) + DataGetLength(file->fClassList));
 
 	// Copy the meta Class structure and string name into newClass and
-        // insert object at end of the file->fClassList and sMergeMetaClasses 
-	*newClass = *inClass;
-	strcpy(newClass->fClassName, cname);
+        // insert object at end of the file->fClassList and sMergeMetaClasses
+        memcpy(newClass, inClass, sizeof(*inClass));
+        // metaClassRecord declares fClassName[1]
+	strlcpy(newClass->fClassName, cname, strlen(cname) + sizeof(newClass->fClassName));
 	fileClasses[-1] = newClass;
 
 	return true;
@@ -1611,6 +1675,8 @@ static Boolean mergeOSObjectsForFile(const struct fileRecord *file)
 		    errprintf("duplicate class %s in %s & %s\n",
 			      list1[k]->fClassName,
 			      file->fPath, list2[j]->fFile->fPath);
+
+                    foundDuplicates = true;
 		}
 	    }
 	}
@@ -1731,7 +1797,7 @@ static Boolean resolveKernelVTable(struct metaClassRecord *metaClass)
 	if (file->fSwapped)
 	    addr = (void *) OSSwapInt32((uint32_t) addr);
 #endif
-	curPatch->fSymbol = (struct nlist *) 
+	curPatch->fSymbol =
 	    findSymbolByAddress(file, addr);
 	if (curPatch->fSymbol)
 	{
@@ -1740,7 +1806,7 @@ static Boolean resolveKernelVTable(struct metaClassRecord *metaClass)
 	}
 	else
 	{
-	    curPatch->fSymbol = (struct nlist *) 
+	    curPatch->fSymbol =
 		findSymbolByAddressInAllFiles(file, addr, &curPatch->fFile);
 	    if (!curPatch->fSymbol) {
 		errprintf("%s: !findSymbolByAddressInAllFiles(%p)\n",
@@ -1758,11 +1824,11 @@ static Boolean resolveKernelVTable(struct metaClassRecord *metaClass)
     return true;
 }
 
-static const char *addNewString(struct fileRecord *file, 
-                                const char *strname, int namelen)
+static char *addNewString(struct fileRecord *file, 
+                                const char *strname, unsigned int namelen)
 {
     DataRef strings = 0;
-    const char *newStr;
+    char *newStr;
 
     namelen++;	// Include terminating '\0';
 
@@ -1801,7 +1867,7 @@ static const char *addNewString(struct fileRecord *file,
 // reloc->fPatch must contain a valid pointer
 static struct nlist *
 getNewSymbol(struct fileRecord *file,
-	     const struct relocRecord *reloc, const char *supername)
+	     struct relocRecord *reloc, const char *supername)
 {
     unsigned int size, i;
     struct nlist **sym;
@@ -1841,14 +1907,14 @@ getNewSymbol(struct fileRecord *file,
 	// Mark the original symbol entry as having been processed.
 	// This means that we wont attempt to create the symbol again
 	// in the future if we come through a different path.
-        ((struct nlist *) reloc->fSymbol)->n_un.n_strx =
+        reloc->fSymbol->n_un.n_strx =
 	    -reloc->fSymbol->n_un.n_strx;    
 
         // Mark the old symbol as being potentially deletable I can use the
         // n_sect field as the input symbol must be of type N_UNDF which means
         // that the n_sect field must be set to NO_SECT otherwise it is an
         // invalid input file.
-        ((struct nlist *) reloc->fSymbol)->n_sect = (unsigned char) -1;
+        reloc->fSymbol->n_sect = (unsigned char) -1;
     }
 
     // If we are here we didn't find the symbol so create a new one now
@@ -1865,7 +1931,7 @@ getNewSymbol(struct fileRecord *file,
     // If we are here we didn't find the symbol so create a new one now
     return_if(!DataAppendBytes(file->fSym2Strings, &newStr, sizeof(newStr)),
             NULL, ("Unable to grow symbol table for %s\n", file->fPath));
-    file->fSymbToStringTable = (const char **) DataGetPtr(file->fSym2Strings);
+    file->fSymbToStringTable = (char **) DataGetPtr(file->fSym2Strings);
 
     // Offset the string index by the original string table size
     // and negate the address to indicate that this is a 'new' symbol
@@ -1884,19 +1950,19 @@ static struct nlist *
 fixOldSymbol(struct fileRecord *file,
 	     const struct relocRecord *reloc, const char *supername)
 {
-    unsigned int namelen;
+    unsigned int namelen, oldnamelen;
     struct nlist *sym = (struct nlist *) reloc->fSymbol;
-    const char *oldname = symbolname(file, sym);
+    char *oldname = symbolname(file, sym);
 
     // assert(sym->n_un.n_strx >= 0);
 
     namelen = strlen(supername);
 
     sym->n_un.n_strx = -sym->n_un.n_strx;
-    if (oldname && namelen < strlen(oldname))
+    if (oldname && namelen < (oldnamelen = strlen(oldname)))
     {
 	// Overwrite old string in string table
-	strcpy((char *) oldname, supername);
+        strlcpy((char *) oldname, supername, oldnamelen + 1);
         file->fSymbolsDirty = true; 
         return sym;
     }
@@ -2174,7 +2240,7 @@ static Boolean growImage(struct fileRecord *file, vm_size_t delta)
     // addr_old = macho_old + fixed_offset
     // addr_new = macho_new + fixed_offset	therefore:
     // addr_new = addr_old + (macho_new - macho_old)
-#define REBASE(addr, delta)	( ((vm_address_t) (addr)) += (delta) )
+#define REBASE(addr, delta)	( *(vm_address_t*)(&addr) += (delta) )
     delta = newMachO - startMachO;
 
     // Rebase the cached-in object 'struct symtab_command' pointer
@@ -2269,6 +2335,9 @@ DEBUG_LOG(("Linking 2 %s\n", file->fPath));	// @@@ gvdl:
 		void **entry;
 		struct nlist *repairSym;
     
+                return_if(!rec->fRInfo, false,
+                         ("Bad Mach-O file; cannot link\n"));
+
 		// Repair Damage to object image
 		entry = (void **) (sectionBase + rec->fRInfo->r_address);
 		*entry = rec->fValue;
@@ -2459,18 +2528,18 @@ kld_file_map(const char *pathName)
 #endif /* KERNEL */
 
     do {
-	const struct machOMapping {
+	struct machOMapping {
 	    struct mach_header h;
 	    struct load_command c[1];
 	} *machO;
-	const struct load_command *cmd;
+	struct load_command *cmd;
 	boolean_t lookVMRange;
         unsigned long i;
 
 	if (!findBestArch(&file, pathName))
 	    break;
 
-	machO = (const struct machOMapping *) file.fMachO;
+	machO = (struct machOMapping *) file.fMachO;
 	if (file.fMachOSize < machO->h.sizeofcmds)
 	    break;
 
@@ -2482,7 +2551,7 @@ kld_file_map(const char *pathName)
             if (cmd->cmd == LC_SYMTAB)
 		file.fSymtab = (struct symtab_command *) cmd;
 	    else if (cmd->cmd == LC_SEGMENT) {
-                struct segment_command *seg = (struct segment_command *) cmd;
+                struct segment_command *seg = (struct segment_command *)cmd;
                 int nsects = seg->nsects;
 
 		if (lookVMRange) {
@@ -2522,7 +2591,7 @@ kld_file_map(const char *pathName)
 	if (machO->h.flags & MH_INCRLINK) {
 
 	    file.fIsIncrLink = true;
-	    ((struct machOMapping *) machO)->h.flags &= ~MH_INCRLINK;
+	    machO->h.flags &= ~MH_INCRLINK;
 
 #if !KERNEL
 	    // the symtab fileoffset is the end of seg0's vmsize,
@@ -2586,7 +2655,7 @@ kld_file_map(const char *pathName)
     return false;
 }
 
-void *kld_file_getaddr(const char *pathName, long *size)
+void *kld_file_getaddr(const char *pathName, unsigned long *size)
 {
     struct fileRecord *file = getFile(pathName);
 

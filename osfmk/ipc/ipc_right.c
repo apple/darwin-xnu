@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_FREE_COPYRIGHT@
@@ -48,6 +54,13 @@
  * the rights to redistribute these changes.
  */
 /*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ * Copyright (c) 2005-2006 SPARTA, Inc.
+ */
+/*
  */
 /*
  *	File:	ipc/ipc_right.c
@@ -73,6 +86,7 @@
 #include <ipc/ipc_right.h>
 #include <ipc/ipc_notify.h>
 #include <ipc/ipc_table.h>
+#include <security/mac_mach_internal.h>
 
 /*
  *	Routine:	ipc_right_lookup_write
@@ -1316,23 +1330,66 @@ ipc_right_copyin_check(
 	mach_msg_type_name_t		msgt_name)
 {
 	ipc_entry_bits_t bits;
+	ipc_port_t port;
+#if CONFIG_MACF_MACH
+	task_t self = current_task();
+	int rc = 0;
+#endif
 
 	bits= entry->ie_bits;
 	assert(space->is_active);
 
 	switch (msgt_name) {
 	    case MACH_MSG_TYPE_MAKE_SEND:
+		if ((bits & MACH_PORT_TYPE_RECEIVE) == 0)
+			return FALSE;
+
+#if CONFIG_MACF_MACH
+		port = (ipc_port_t) entry->ie_object;
+		ip_lock(port);
+		tasklabel_lock(self);
+		rc = mac_port_check_make_send(&self->maclabel, &port->ip_label);                tasklabel_unlock(self);
+		ip_unlock(port);
+		if (rc)
+			return FALSE;
+#endif
+		break;
+
 	    case MACH_MSG_TYPE_MAKE_SEND_ONCE:
+		if ((bits & MACH_PORT_TYPE_RECEIVE) == 0)
+			return FALSE;
+
+#if CONFIG_MACF_MACH
+		port = (ipc_port_t) entry->ie_object;
+		ip_lock(port);
+		tasklabel_lock(self);
+		rc = mac_port_check_make_send_once(&self->maclabel, &port->ip_label);
+		tasklabel_unlock(self);
+		ip_unlock(port);
+		if (rc)
+			return FALSE;
+#endif
+		break;
+
 	    case MACH_MSG_TYPE_MOVE_RECEIVE:
 		if ((bits & MACH_PORT_TYPE_RECEIVE) == 0)
 			return FALSE;
 
+#if CONFIG_MACF_MACH
+		port = (ipc_port_t) entry->ie_object;
+		ip_lock(port);
+		tasklabel_lock(self);
+		rc = mac_port_check_move_receive(&self->maclabel, &port->ip_label);
+		tasklabel_unlock(self);
+		ip_unlock(port);
+		if (rc)
+                        return FALSE;
+#endif
 		break;
 
 	    case MACH_MSG_TYPE_COPY_SEND:
 	    case MACH_MSG_TYPE_MOVE_SEND:
 	    case MACH_MSG_TYPE_MOVE_SEND_ONCE: {
-		ipc_port_t port;
 		boolean_t active;
 
 		if (bits & MACH_PORT_TYPE_DEAD_NAME)
@@ -1346,6 +1403,30 @@ ipc_right_copyin_check(
 
 		ip_lock(port);
 		active = ip_active(port);
+#if CONFIG_MACF_MACH
+		tasklabel_lock(self);
+		switch (msgt_name) {
+		case MACH_MSG_TYPE_COPY_SEND:
+			rc = mac_port_check_copy_send(&self->maclabel,
+			    &port->ip_label);
+			break;
+		case MACH_MSG_TYPE_MOVE_SEND:
+			rc = mac_port_check_move_send(&self->maclabel,
+			    &port->ip_label);
+			break;
+		case MACH_MSG_TYPE_MOVE_SEND_ONCE:
+			rc = mac_port_check_move_send_once(&self->maclabel,
+			    &port->ip_label);
+			break;
+		default:
+			panic("ipc_right_copyin_check: strange rights");
+		}
+		tasklabel_unlock(self);
+		if (rc) {
+			ip_unlock(port);
+			return FALSE;
+		}
+#endif
 		ip_unlock(port);
 
 		if (!active) {
@@ -1404,6 +1485,10 @@ ipc_right_copyin(
 	ipc_port_t		*sorightp)
 {
 	ipc_entry_bits_t bits;
+#if CONFIG_MACF_MACH
+	task_t self = current_task();
+	int    rc;
+#endif
 	
 	bits = entry->ie_bits;
 
@@ -1423,6 +1508,16 @@ ipc_right_copyin(
 		assert(ip_active(port));
 		assert(port->ip_receiver_name == name);
 		assert(port->ip_receiver == space);
+
+#if CONFIG_MACF_MACH
+		tasklabel_lock(self);
+		rc = mac_port_check_make_send(&self->maclabel, &port->ip_label);
+		tasklabel_unlock(self);
+		if (rc) {
+			ip_unlock(port);
+			return KERN_NO_ACCESS;
+		}
+#endif
 
 		port->ip_mscount++;
 		port->ip_srights++;
@@ -1448,6 +1543,16 @@ ipc_right_copyin(
 		assert(port->ip_receiver_name == name);
 		assert(port->ip_receiver == space);
 
+#if CONFIG_MACF_MACH
+		tasklabel_lock(self);
+		rc = mac_port_check_make_send_once(&self->maclabel, &port->ip_label);
+		tasklabel_unlock(self);
+		if (rc) {
+			ip_unlock(port);
+			return KERN_NO_ACCESS;
+		}
+#endif
+
 		port->ip_sorights++;
 		ip_reference(port);
 		ip_unlock(port);
@@ -1471,6 +1576,17 @@ ipc_right_copyin(
 		assert(ip_active(port));
 		assert(port->ip_receiver_name == name);
 		assert(port->ip_receiver == space);
+
+#if CONFIG_MACF_MACH
+		tasklabel_lock(self);
+		rc = mac_port_check_move_receive(&self->maclabel,
+						 &port->ip_label);
+		tasklabel_unlock(self);
+		if (rc) {
+			ip_unlock(port);
+			return KERN_NO_ACCESS;
+		}
+#endif
 
 		if (bits & MACH_PORT_TYPE_SEND) {
 			assert(IE_BITS_TYPE(bits) ==
@@ -1524,6 +1640,16 @@ ipc_right_copyin(
 		}
 		/* port is locked and active */
 
+#if CONFIG_MACF_MACH
+		tasklabel_lock(self);
+		rc = mac_port_check_copy_send(&self->maclabel, &port->ip_label);
+		tasklabel_unlock(self);
+		if (rc) {
+			ip_unlock(port);
+			return KERN_NO_ACCESS;
+		}
+#endif
+
 		if ((bits & MACH_PORT_TYPE_SEND) == 0) {
 			assert(IE_BITS_TYPE(bits) == MACH_PORT_TYPE_SEND_ONCE);
 			assert(port->ip_sorights > 0);
@@ -1565,6 +1691,17 @@ ipc_right_copyin(
 			goto move_dead;
 		}
 		/* port is locked and active */
+
+#if CONFIG_MACF_MACH
+		tasklabel_lock (self);
+		rc = mac_port_check_copy_send (&self->maclabel, &port->ip_label);
+		tasklabel_unlock (self);
+		if (rc)
+		  {
+		    ip_unlock (port);
+		    return KERN_NO_ACCESS;
+		  }
+#endif
 
 		if ((bits & MACH_PORT_TYPE_SEND) == 0) {
 			assert(IE_BITS_TYPE(bits) == MACH_PORT_TYPE_SEND_ONCE);
@@ -1631,6 +1768,17 @@ ipc_right_copyin(
 			goto move_dead;
 		}
 		/* port is locked and active */
+
+#if CONFIG_MACF_MACH
+		tasklabel_lock (self);
+		rc = mac_port_check_copy_send (&self->maclabel, &port->ip_label);
+		tasklabel_unlock (self);
+		if (rc)
+		  {
+		    ip_unlock (port);
+		    return KERN_NO_ACCESS;
+		  }
+#endif
 
 		if ((bits & MACH_PORT_TYPE_SEND_ONCE) == 0) {
 			assert(bits & MACH_PORT_TYPE_SEND);
@@ -1803,6 +1951,10 @@ ipc_right_copyin_two(
 	mach_port_urefs_t urefs;
 	ipc_port_t port;
 	ipc_port_t dnrequest = IP_NULL;
+#if CONFIG_MACF_MACH
+	task_t self = current_task();
+	int    rc;
+#endif
 
 	assert(space->is_active);
 
@@ -1822,6 +1974,16 @@ ipc_right_copyin_two(
 		goto invalid_right;
 	}
 	/* port is locked and active */
+
+#if CONFIG_MACF_MACH
+	tasklabel_lock(self);
+	rc = mac_port_check_copy_send(&self->maclabel, &port->ip_label);
+	tasklabel_unlock(self);
+	if (rc) {
+		ip_unlock(port);
+		return KERN_NO_ACCESS;
+	}
+#endif
 
 	assert(port->ip_srights > 0);
 
@@ -1899,6 +2061,9 @@ ipc_right_copyout(
 {
 	ipc_entry_bits_t bits;
 	ipc_port_t port;
+#if CONFIG_MACF_MACH
+	int rc;
+#endif
 
 	bits = entry->ie_bits;
 
@@ -1915,6 +2080,19 @@ ipc_right_copyout(
 		assert(IE_BITS_TYPE(bits) == MACH_PORT_TYPE_NONE);
 		assert(port->ip_sorights > 0);
 
+#if CONFIG_MACF_MACH
+		if (space->is_task) {
+			tasklabel_lock(space->is_task);
+			rc = mac_port_check_hold_send_once(&space->is_task->maclabel,
+							   &port->ip_label);
+			tasklabel_unlock(space->is_task);
+
+			if (rc) {
+				ip_unlock(port);
+				return KERN_NO_ACCESS;
+			}
+		}
+#endif
 		/* transfer send-once right and ref to entry */
 		ip_unlock(port);
 
@@ -1923,6 +2101,20 @@ ipc_right_copyout(
 
 	    case MACH_MSG_TYPE_PORT_SEND:
 		assert(port->ip_srights > 0);
+
+#if CONFIG_MACF_MACH
+		if (space->is_task) {
+			tasklabel_lock(space->is_task);
+			rc = mac_port_check_hold_send(&space->is_task->maclabel,
+						      &port->ip_label);
+			tasklabel_unlock(space->is_task);
+
+			if (rc) {
+				ip_unlock(port);
+				return KERN_NO_ACCESS;
+			}
+		}
+#endif
 
 		if (bits & MACH_PORT_TYPE_SEND) {
 			mach_port_urefs_t urefs = IE_BITS_UREFS(bits);
@@ -1977,6 +2169,20 @@ ipc_right_copyout(
 		assert(port->ip_mscount == 0);
 		assert(port->ip_receiver_name == MACH_PORT_NULL);
 		dest = port->ip_destination;
+
+#if CONFIG_MACF_MACH
+		if (space->is_task) {
+			tasklabel_lock(space->is_task);
+			rc = mac_port_check_hold_receive(&space->is_task->maclabel,
+							 &port->ip_label);
+			tasklabel_unlock(space->is_task);
+
+			if (rc) {
+				ip_unlock(port);
+				return KERN_NO_ACCESS;
+			}
+		}
+#endif
 
 		port->ip_receiver_name = name;
 		port->ip_receiver = space;

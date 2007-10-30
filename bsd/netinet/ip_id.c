@@ -57,7 +57,6 @@
  * This avoids reuse issues caused by reseeding.
  */
 
-#include "opt_random_ip_id.h"
 #include <sys/param.h>
 #include <sys/time.h>
 #include <sys/kernel.h>
@@ -72,7 +71,7 @@
 #define RU_M	31104		/* RU_M = 2^7*3^5 - don't change */
 
 #define PFAC_N 3
-const static u_int16_t pfacts[PFAC_N] = {
+static u_int16_t pfacts[PFAC_N] = {
 	2, 
 	3,
 	2729
@@ -91,6 +90,8 @@ static u_int16_t pmod(u_int16_t, u_int16_t, u_int16_t);
 static void ip_initid(void);
 u_int16_t ip_randomid(void);
 
+extern u_short ip_id;
+extern int ip_use_randomid;
 /*
  * Do a fast modular exponation, returned value will be in the range
  * of 0 - (mod-1)
@@ -133,10 +134,9 @@ ip_initid(void)
 {
 	u_int16_t j, i;
 	int noprime = 1;
-	struct timeval time;
-
-	getmicrouptime(&time);
-	read_random((void *) &tmp, sizeof(tmp));
+	struct timeval timenow;
+	
+	getmicrotime(&timenow);
 	ru_x = (tmp & 0xFFFF) % RU_M;
 
 	/* 15 bits of random seed */
@@ -176,7 +176,7 @@ ip_initid(void)
 	ru_g = pmod(RU_GEN,j,RU_N);
 	ru_counter = 0;
 
-	ru_reseed = time.tv_sec + RU_OUT;
+	ru_reseed = timenow.tv_sec + RU_OUT;
 	ru_msb = ru_msb == 0x8000 ? 0 : 0x8000; 
 }
 
@@ -184,10 +184,18 @@ u_int16_t
 ip_randomid(void)
 {
 	int i, n;
-	struct timeval time;
+	struct timeval timenow;
 
-	getmicrouptime(&time);
-	if (ru_counter >= RU_MAX || time.tv_sec > ru_reseed)
+	/* if net.inet.ip.random_id is disabled,
+	 * reverts to the incrementing ip_id
+	 */
+
+	if (ip_use_randomid == 0)
+		return htons(ip_id++);
+
+
+	getmicrotime(&timenow);
+	if (ru_counter >= RU_MAX || timenow.tv_sec > ru_reseed)
 		ip_initid();
 
 	if (!tmp)

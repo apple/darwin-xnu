@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *	Copyright (c) 1998 Apple Computer, Inc. 
@@ -42,35 +48,12 @@
 
 #include <net/if.h>
 
+#include <netat/sysglue.h>
 #include <netat/appletalk.h>
+#include <netat/at_pcb.h>
 #include <netat/at_var.h>
 #include <netat/ddp.h>
 
-
-extern int	ddp_pru_abort(struct socket *so);
-
-extern int	ddp_pru_attach(struct socket *so, int proto,
-			       struct proc *p);
-extern int	ddp_pru_bind(struct socket *so, struct sockaddr *nam,
-			     struct proc *p);
-extern int	ddp_pru_connect(struct socket *so, struct sockaddr *nam,
-				struct proc *p);
-
-extern int	ddp_pru_control(struct socket *so, u_long cmd, caddr_t data,
-				struct ifnet *ifp, struct proc *p);
-extern int	ddp_pru_detach(struct socket *so);
-extern int	ddp_pru_disconnect(struct socket *so);
-
-extern int	ddp_pru_peeraddr(struct socket *so, 
-				 struct sockaddr **nam);
-
-extern int	ddp_pru_send(struct socket *so, int flags, struct mbuf *m, 
-				 struct sockaddr *addr, struct mbuf *control,
-				 struct proc *p);
-
-extern int	ddp_pru_shutdown(struct socket *so);
-extern int	ddp_pru_sockaddr(struct socket *so, 
-				 struct sockaddr **nam);
 
 /*
  * Dummy usrreqs struct created by Ted for FreeBSD 3.x integration. 
@@ -117,14 +100,25 @@ struct domain atalkdomain =
 struct domain * atalkdom = &atalkdomain;
 lck_mtx_t  *atalk_mutex = NULL;
 
+lck_mtx_t *atalk_cluster_lock = NULL;
+static lck_attr_t *atalk_lock_attr;
+static lck_grp_t *atalk_lock_grp;
+static lck_grp_attr_t *atalk_lock_grp_attr;
+
 static int at_saved_lock, at_saved_unlock;
 
-SYSCTL_NODE(_net, PF_APPLETALK, appletalk, CTLFLAG_RW, 0, "AppleTalk Family");
+SYSCTL_NODE(_net, PF_APPLETALK, appletalk, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "AppleTalk Family");
 
 void
 atalk_dominit(void)
 {
 	atalk_mutex = atalkdom->dom_mtx;
+
+	atalk_lock_grp_attr = lck_grp_attr_alloc_init();
+	atalk_lock_grp = lck_grp_alloc_init("appletalk", atalk_lock_grp_attr);
+	atalk_lock_attr = lck_attr_alloc_init();
+	atalk_cluster_lock = lck_mtx_alloc_init(atalk_lock_grp,
+	    atalk_lock_attr);
 }
 
 void

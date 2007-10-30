@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 1999-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 
@@ -38,59 +44,86 @@
 
 static int cur_link_id = 0;
 
+/*
+ * Private directories where hardlink inodes reside.
+ */
+const char *hfs_private_names[] = {
+	HFSPLUSMETADATAFOLDER,      /* FILE HARDLINKS */
+	HFSPLUS_DIR_METADATA_FOLDER /* DIRECTORY HARDLINKS */
+};
+
 
 /*
- * Create a new indirect link
+ * Hardlink inodes save the head of their link chain in a
+ * private extended attribute.  The following calls are
+ * used to access this attribute.
+ */
+static int  setfirstlink(struct hfsmount * hfsmp, cnid_t fileid, cnid_t firstlink);
+static int  getfirstlink(struct hfsmount * hfsmp, cnid_t fileid, cnid_t *firstlink);
+
+/*
+ * Create a new catalog link record
  *
- * An indirect link is a reference to a data node.  The only useable
- * fields in the link are the link number, parentID, name and text
- * encoding.  All other catalog fields are ignored.
+ * An indirect link is a reference to an inode (the real
+ * file or directory record).
+ *
+ * All the indirect links for a given inode are chained
+ * together in a doubly linked list.
+ *
+ * Pre-Leopard file hard links do not have kHFSHasLinkChainBit 
+ * set and do not have first/prev/next link IDs i.e. the values 
+ * are zero.  If a new link is being added to an existing 
+ * pre-Leopard file hard link chain, do not set kHFSHasLinkChainBit.
  */
 static int
-createindirectlink(struct hfsmount *hfsmp, u_int32_t linknum,
-			u_int32_t linkparid, char *linkName, cnid_t *linkcnid)
+createindirectlink(struct hfsmount *hfsmp, u_int32_t linknum, struct cat_desc *descp,
+                   cnid_t nextcnid, cnid_t *linkcnid, int is_inode_linkchain_set)
 {
 	struct FndrFileInfo *fip;
-	struct cat_desc desc;
 	struct cat_attr attr;
-	int result;
 
-	/* Setup the descriptor */
-	bzero(&desc, sizeof(desc));
-	desc.cd_nameptr = linkName;
-	desc.cd_namelen = strlen(linkName);
-	desc.cd_parentcnid = linkparid;
+	if (linknum == 0) {
+		printf("createindirectlink: linknum is zero!\n");
+		return (EINVAL);
+	}
 
 	/* Setup the default attributes */
 	bzero(&attr, sizeof(attr));
 	
-	/* links are matched to data nodes by link ID and to volumes by create date */
-	attr.ca_rdev = linknum;  /* note: cat backend overloads ca_rdev to be the linknum when nlink = 0 */
-	attr.ca_itime = HFSTOVCB(hfsmp)->vcbCrDate;
-	attr.ca_mode = S_IFREG;
-
+	/* Links are matched to inodes by link ID and to volumes by create date */
+	attr.ca_linkref = linknum;
+	attr.ca_itime = hfsmp->hfs_itime;
+	attr.ca_mode = S_IFREG | S_IRUSR | S_IRGRP | S_IROTH;
+	attr.ca_recflags = kHFSHasLinkChainMask | kHFSThreadExistsMask;
+	attr.ca_flags = UF_IMMUTABLE;
 	fip = (struct FndrFileInfo *)&attr.ca_finderinfo;
-	fip->fdType    = SWAP_BE32 (kHardLinkFileType);	/* 'hlnk' */
-	fip->fdCreator = SWAP_BE32 (kHFSPlusCreator);	/* 'hfs+' */
-	fip->fdFlags   = SWAP_BE16 (kHasBeenInited);
 
+	if (descp->cd_flags & CD_ISDIR) {
+		fip->fdType    = SWAP_BE32 (kHFSAliasType);
+		fip->fdCreator = SWAP_BE32 (kHFSAliasCreator);
+		fip->fdFlags   = SWAP_BE16 (kIsAlias);
+	} else /* file */ {
+		fip->fdType    = SWAP_BE32 (kHardLinkFileType);
+		fip->fdCreator = SWAP_BE32 (kHFSPlusCreator);
+		fip->fdFlags   = SWAP_BE16 (kHasBeenInited);
+		/* If the file inode does not have kHFSHasLinkChainBit set 
+		 * and the next link chain ID is zero, assume that this 
+		 * is pre-Leopard file inode.  Therefore clear the bit.
+		 */
+		if ((is_inode_linkchain_set == 0) && (nextcnid == 0)) {
+			attr.ca_recflags &= ~kHFSHasLinkChainMask;
+		}
+	}
 	/* Create the indirect link directly in the catalog */
-	result = cat_create(hfsmp, &desc, &attr, NULL);
-
-	if (result == 0 && linkcnid != NULL)
-		*linkcnid = attr.ca_fileid;
-
-	return (result);
+	return cat_createlink(hfsmp, descp, &attr, nextcnid, linkcnid);
 }
 
 
 /*
- * 2 locks are needed (dvp and vp)
- * also need catalog lock
+ * Make a link to the cnode cp in the directory dp
+ * using the name in cnp.
  *
- * caller's responsibility:
- *		componentname cleanup
- *		unlocking dvp and vp
+ * The cnodes cp and dcp must be locked.
  */
 static int
 hfs_makelink(struct hfsmount *hfsmp, struct cnode *cp, struct cnode *dcp,
@@ -101,23 +134,27 @@ hfs_makelink(struct hfsmount *hfsmp, struct cnode *cp, struct cnode *dcp,
 	u_int32_t indnodeno = 0;
 	char inodename[32]; 
 	struct cat_desc to_desc;
+	struct cat_desc link_desc;
 	int newlink = 0;
 	int lockflags;
-	int retval;
+	int retval = 0;
 	cat_cookie_t cookie;
 	cnid_t orig_cnid;
+	cnid_t linkcnid;
+	cnid_t orig_firstlink;
+	enum privdirtype type;
+
+	type = S_ISDIR(cp->c_mode) ? DIR_HARDLINKS : FILE_HARDLINKS;
 
 	if (cur_link_id == 0) {
-	    cur_link_id = ((random() & 0x3fffffff) + 100);
-	    // printf("hfs: initializing cur link id to: 0x%.8x\n", cur_link_id);
+		cur_link_id = ((random() & 0x3fffffff) + 100);
 	}
 	
-	/* We don't allow link nodes in our Private Meta Data folder! */
-	if (dcp->c_fileid == hfsmp->hfs_privdir_desc.cd_cnid)
+	/* We don't allow link nodes in our private system directories. */
+	if (dcp->c_fileid == hfsmp->hfs_private_desc[FILE_HARDLINKS].cd_cnid ||
+	    dcp->c_fileid == hfsmp->hfs_private_desc[DIR_HARDLINKS].cd_cnid) {
 		return (EPERM);
-
-	if (hfs_freeblks(hfsmp, 0) == 0)
-		return (ENOSPC);
+	}
 
 	bzero(&cookie, sizeof(cat_cookie_t));
 	/* Reserve some space in the Catalog file. */
@@ -125,147 +162,208 @@ hfs_makelink(struct hfsmount *hfsmp, struct cnode *cp, struct cnode *dcp,
 		return (retval);
 	}
 
-	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_EXCLUSIVE_LOCK);
+	lockflags = SFL_CATALOG | SFL_ATTRIBUTE;
+	/* Directory hard links allocate space for a symlink. */
+	if (type == DIR_HARDLINKS) {
+		lockflags |= SFL_BITMAP;
+	}
+	lockflags = hfs_systemfile_lock(hfsmp, lockflags, HFS_EXCLUSIVE_LOCK);
 
-	// save off a copy of the current cnid so we can put 
-	// it back if we get errors down below
+	/* Save the current cnid value so we restore it if an error occurs. */
 	orig_cnid = cp->c_desc.cd_cnid;
 
 	/*
-	 * If this is a new hardlink then we need to create the data
-	 * node (inode) and replace the original file with a link node.
+	 * If this is a new hardlink then we need to create the inode
+	 * and replace the original file/dir object with a link node.
 	 */
-	if (cp->c_nlink == 2 && (cp->c_flag & C_HARDLINK) == 0) {
+	if ((cp->c_linkcount == 2) && !(cp->c_flag & C_HARDLINK)) {
 		newlink = 1;
 		bzero(&to_desc, sizeof(to_desc));
-		to_desc.cd_parentcnid = hfsmp->hfs_privdir_desc.cd_cnid;
+		to_desc.cd_parentcnid = hfsmp->hfs_private_desc[type].cd_cnid;
 		to_desc.cd_cnid = cp->c_fileid;
+		to_desc.cd_flags = (type == DIR_HARDLINKS) ? CD_ISDIR : 0;
 
 		do {
-			/* get a unique indirect node number */
-			if (retval == 0) {
-			    indnodeno = cp->c_fileid;
+			if (type == DIR_HARDLINKS) {
+				/* Directory hardlinks always use the cnid. */
+				indnodeno = cp->c_fileid;
+				MAKE_DIRINODE_NAME(inodename, sizeof(inodename),
+							indnodeno);
 			} else {
-			    indnodeno = cur_link_id++;
+				/* Get a unique indirect node number */
+				if (retval == 0) {
+					indnodeno = cp->c_fileid;
+				} else {
+					indnodeno = cur_link_id++;
+				}
+				MAKE_INODE_NAME(inodename, sizeof(inodename),
+						indnodeno);
 			}
-
-			MAKE_INODE_NAME(inodename, indnodeno);
-
-			/* move source file to data node directory */
-			to_desc.cd_nameptr = inodename;
+			/* Move original file/dir to data node directory */
+			to_desc.cd_nameptr = (const u_int8_t *)inodename;
 			to_desc.cd_namelen = strlen(inodename);
 		
-			retval = cat_rename(hfsmp, &cp->c_desc, &hfsmp->hfs_privdir_desc,
+			retval = cat_rename(hfsmp, &cp->c_desc, &hfsmp->hfs_private_desc[type],
 					&to_desc, NULL);
 
 			if (retval != 0 && retval != EEXIST) {
 			    printf("hfs_makelink: cat_rename to %s failed (%d). fileid %d\n",
 				inodename, retval, cp->c_fileid);
 			}
-
-		} while (retval == EEXIST);
+		} while ((retval == EEXIST) && (type == FILE_HARDLINKS));
 		if (retval)
 			goto out;
 
-		/* Replace source file with link node */
-		retval = createindirectlink(hfsmp, indnodeno, cp->c_parentcnid,
-				cp->c_desc.cd_nameptr, &cp->c_desc.cd_cnid);
+		/*
+		 * Replace original file/dir with a link record.
+		 */
+		
+		bzero(&link_desc, sizeof(link_desc));
+		link_desc.cd_nameptr = cp->c_desc.cd_nameptr;
+		link_desc.cd_namelen = cp->c_desc.cd_namelen;
+		link_desc.cd_parentcnid = cp->c_parentcnid;
+		link_desc.cd_flags = S_ISDIR(cp->c_mode) ? CD_ISDIR : 0;
+
+		retval = createindirectlink(hfsmp, indnodeno, &link_desc, 0, &linkcnid, true);
 		if (retval) {
-		    /* put it source file back */
-		    int err;
+			int err;
 
-		    // Put this back to what it was before.
-		    cp->c_desc.cd_cnid = orig_cnid;
+			/* Restore the cnode's cnid. */
+			cp->c_desc.cd_cnid = orig_cnid;
 
-		    err = cat_rename(hfsmp, &to_desc, &dcp->c_desc, &cp->c_desc, NULL);
-		    if (err)
-			panic("hfs_makelink: error %d from cat_rename backout 1", err);
-		    goto out;
+			/* Put the original file back. */
+			err = cat_rename(hfsmp, &to_desc, &dcp->c_desc, &cp->c_desc, NULL);
+			if (err && err != EIO && err != ENXIO)
+				panic("hfs_makelink: error %d from cat_rename backout 1", err);
+			goto out;
 		}
-		cp->c_rdev = indnodeno;
+		cp->c_attr.ca_linkref = indnodeno;
+		cp->c_desc.cd_cnid = linkcnid;
+		/* Directory hard links store the first link in an attribute. */
+		if (type == DIR_HARDLINKS) {
+			if (setfirstlink(hfsmp, cp->c_fileid, linkcnid) == 0)
+				cp->c_attr.ca_recflags |= kHFSHasAttributesMask;
+		} else /* FILE_HARDLINKS */ {
+			cp->c_attr.ca_firstlink = linkcnid;
+		}
+		cp->c_attr.ca_recflags |= kHFSHasLinkChainMask;
 	} else {
-		indnodeno = cp->c_rdev;
+		indnodeno = cp->c_attr.ca_linkref;
 	}
 
 	/*
 	 * Create a catalog entry for the new link (parentID + name).
 	 */
-	retval = createindirectlink(hfsmp, indnodeno, dcp->c_fileid, cnp->cn_nameptr, NULL);
-	if (retval && newlink) {
-	    int err;
+	
+	bzero(&link_desc, sizeof(link_desc));
+	link_desc.cd_nameptr = (const u_int8_t *)cnp->cn_nameptr;
+	link_desc.cd_namelen = strlen(cnp->cn_nameptr);
+	link_desc.cd_parentcnid = dcp->c_fileid;
+	link_desc.cd_flags = S_ISDIR(cp->c_mode) ? CD_ISDIR : 0;
 
-	    /* Get rid of new link */
-	    (void) cat_delete(hfsmp, &cp->c_desc, &cp->c_attr);
-	    
-	    // Put this back to what it was before.
-	    cp->c_desc.cd_cnid = orig_cnid;
-
-	    /* Put the source file back */
-	    err = cat_rename(hfsmp, &to_desc, &dcp->c_desc, &cp->c_desc, NULL);
-	    if (err)
-		panic("hfs_makelink: error %d from cat_rename backout 2", err);
-
-	    goto out;
+	/* Directory hard links store the first link in an attribute. */
+	if (type == DIR_HARDLINKS) {
+		retval = getfirstlink(hfsmp, cp->c_fileid, &orig_firstlink);
+	} else /* FILE_HARDLINKS */ {
+		orig_firstlink = cp->c_attr.ca_firstlink;
 	}
+	if (retval == 0)
+		retval = createindirectlink(hfsmp, indnodeno, &link_desc, 
+				orig_firstlink, &linkcnid, 
+				(cp->c_attr.ca_recflags & kHFSHasLinkChainMask));
+	if (retval && newlink) {
+		int err;
 
-	/*
-	 * Finally, if this is a new hardlink then:
-	 *  - update HFS Private Data dir
-	 *  - mark the cnode as a hard link
-	 */
-	if (newlink) {
+		/* Get rid of new link */
+		(void) cat_delete(hfsmp, &cp->c_desc, &cp->c_attr);
+		
+		/* Restore the cnode's cnid. */
+		cp->c_desc.cd_cnid = orig_cnid;
+		
+		/* Put the original file back. */
+		err = cat_rename(hfsmp, &to_desc, &dcp->c_desc, &cp->c_desc, NULL);
+		if (err && err != EIO && err != ENXIO)
+			panic("hfs_makelink: error %d from cat_rename backout 2", err);
+
+		cp->c_attr.ca_linkref = 0;
+		goto out;
+	} else if (retval == 0) {
+
+	    /* Update the original first link to point back to the new first link. */
+	    if (cp->c_attr.ca_recflags & kHFSHasLinkChainMask) {
+		(void) cat_updatelink(hfsmp, orig_firstlink, linkcnid, HFS_IGNORABLE_LINK);
+
+		/* Update the inode's first link value. */
+		if (type == DIR_HARDLINKS) {
+		    if (setfirstlink(hfsmp, cp->c_fileid, linkcnid) == 0)
+			cp->c_attr.ca_recflags |= kHFSHasAttributesMask;
+		} else {
+		    cp->c_attr.ca_firstlink = linkcnid;
+		}
+	    }
+	    /*
+	     * Finally, if this is a new hardlink then:
+	     *  - update the private system directory
+	     *  - mark the cnode as a hard link
+	     */
+	    if (newlink) {
 		vnode_t vp;
 		
-	    if (retval != 0) {
-		panic("hfs_makelink: retval %d but newlink = 1!\n", retval);
-	    }
-	    
-		hfsmp->hfs_privdir_attr.ca_entries++;
-		retval = cat_update(hfsmp, &hfsmp->hfs_privdir_desc,
-				    &hfsmp->hfs_privdir_attr, NULL, NULL);
 		if (retval != 0) {
-		    panic("hfs_makelink: cat_update of privdir failed! (%d)\n",
-			  retval);
+		    panic("hfs_makelink: retval %d but newlink = 1!\n", retval);
 		}
-		hfs_volupdate(hfsmp, VOL_MKFILE, 0);
+
+		hfsmp->hfs_private_attr[type].ca_entries++;
+		/* From application perspective, directory hard link is a 
+		 * normal directory.  Therefore count the new directory 
+		 * hard link for folder count calculation.
+		 */
+		if (type == DIR_HARDLINKS) {
+			INC_FOLDERCOUNT(hfsmp, hfsmp->hfs_private_attr[type]);
+		}
+		retval = cat_update(hfsmp, &hfsmp->hfs_private_desc[type],
+		    &hfsmp->hfs_private_attr[type], NULL, NULL);
+		if (retval != 0 && retval != EIO && retval != ENXIO) {
+		    panic("hfs_makelink: cat_update of privdir failed! (%d)\n", retval);
+		}
 		cp->c_flag |= C_HARDLINK;
 		if ((vp = cp->c_vp) != NULLVP) {
-			if (vnode_get(vp) == 0) {
-				vnode_set_hard_link(vp);
-				vnode_put(vp);
-			}
+		    if (vnode_get(vp) == 0) {
+			vnode_setmultipath(vp);
+			vnode_put(vp);
+		    }
 		}
 		if ((vp = cp->c_rsrc_vp) != NULLVP) {
-			if (vnode_get(vp) == 0) {
-				vnode_set_hard_link(vp);
-				vnode_put(vp);
-			}
+		    if (vnode_get(vp) == 0) {
+			vnode_setmultipath(vp);
+			vnode_put(vp);
+		    }
 		}
 		cp->c_touch_chgtime = TRUE;
 		cp->c_flag |= C_FORCEUPDATE;
+	    }
+	    dcp->c_flag |= C_FORCEUPDATE;
 	}
-	dcp->c_flag |= C_FORCEUPDATE;
-
 out:
 	hfs_systemfile_unlock(hfsmp, lockflags);
 
 	cat_postflight(hfsmp, &cookie, p);
+	
+	if (retval == 0 && newlink) {
+		hfs_volupdate(hfsmp, VOL_MKFILE, 0);
+	}
 	return (retval);
 }
 
 
 /*
- * link vnode call
-#% link		vp	U U U
-#% link		tdvp	L U U
-#
- vnop_link {
-     IN WILLRELE struct vnode *vp;
-     IN struct vnode *targetPar_vp;
-     IN struct componentname *cnp;
-     IN vfs_context_t context;
-
-     */
+ * link vnode operation
+ *
+ *  IN vnode_t  a_vp;
+ *  IN vnode_t  a_tdvp;
+ *  IN struct componentname  *a_cnp;
+ *  IN vfs_context_t  a_context;
+ */
 __private_extern__
 int
 hfs_vnop_link(struct vnop_link_args *ap)
@@ -273,30 +371,74 @@ hfs_vnop_link(struct vnop_link_args *ap)
 	struct hfsmount *hfsmp;
 	struct vnode *vp = ap->a_vp;
 	struct vnode *tdvp = ap->a_tdvp;
+	struct vnode *fdvp = NULLVP;
 	struct componentname *cnp = ap->a_cnp;
 	struct cnode *cp;
 	struct cnode *tdcp;
+	struct cnode *fdcp = NULL;
+	struct cat_desc todesc;
+	int lockflags = 0;
+	int intrans = 0;
 	enum vtype v_type;
-	int error, ret, lockflags;
-	struct cat_desc cndesc;
+	int error, ret;
 
-	if (VTOVCB(tdvp)->vcbSigWord != kHFSPlusSigWord) {
-		return err_link(ap);	/* hfs disks don't support hard links */
+	hfsmp = VTOHFS(vp);
+	v_type = vnode_vtype(vp);
+
+	/* No hard links in HFS standard file systems. */
+	if (hfsmp->hfs_flags & HFS_STANDARD) {
+		return (ENOTSUP);
 	}
-	if (VTOHFS(vp)->hfs_privdir_desc.cd_cnid == 0) {
-		return err_link(ap);	/* no private metadata dir, no links possible */
+	/* Linking to a special file is not permitted. */
+	if (v_type == VBLK || v_type == VCHR) {
+		return (EPERM);  
 	}
-	if (vnode_mount(tdvp) != vnode_mount(vp)) {
-		return (EXDEV);
+	if (v_type == VDIR) {
+		/* Make sure our private directory exists. */
+		if (hfsmp->hfs_private_desc[DIR_HARDLINKS].cd_cnid == 0) {
+			return (EPERM);
+		}
+		/*
+		 * Directory hardlinks (ADLs) have only been qualified on
+		 * journaled HFS+.  If/when they are tested on non-journaled
+		 * file systems then this test can be removed.
+		 */
+		if (hfsmp->jnl == NULL) {
+			return (EPERM);
+		}
+		/* Directory hardlinks also need the parent of the original directory. */
+		if ((error = hfs_vget(hfsmp, hfs_currentparent(VTOC(vp)), &fdvp, 1))) {
+			return (error);
+		}
+	} else {
+		/* Make sure our private directory exists. */
+		if (hfsmp->hfs_private_desc[FILE_HARDLINKS].cd_cnid == 0) {
+			return (ENOTSUP);
+		}
 	}
-	if ((error = hfs_lockpair(VTOC(tdvp), VTOC(vp), HFS_EXCLUSIVE_LOCK))) {
-		return (error);
+	if (hfs_freeblks(hfsmp, 0) == 0) {
+		if (fdvp) {
+			vnode_put(fdvp);
+		}
+		return (ENOSPC);
+	}
+	/* Lock the cnodes. */
+	if (fdvp) {
+		if ((error = hfs_lockfour(VTOC(tdvp), VTOC(vp), VTOC(fdvp), NULL, HFS_EXCLUSIVE_LOCK))) {
+			if (fdvp) {
+				vnode_put(fdvp);
+		    	}
+			return (error);
+		}
+		fdcp = VTOC(fdvp);
+	} else {
+		if ((error = hfs_lockpair(VTOC(tdvp), VTOC(vp), HFS_EXCLUSIVE_LOCK))) {
+			return (error);
+		}
 	}
 	tdcp = VTOC(tdvp);
 	cp = VTOC(vp);
-	hfsmp = VTOHFS(vp);
-
-	if (cp->c_nlink >= HFS_LINK_MAX) {
+	if (cp->c_linkcount >= HFS_LINK_MAX) {
 		error = EMLINK;
 		goto out;
 	}
@@ -305,60 +447,807 @@ hfs_vnop_link(struct vnop_link_args *ap)
 		goto out;
 	}
 	if (cp->c_flag & (C_NOEXISTS | C_DELETED)) {
-	    error = ENOENT;
-	    goto out;
-	}
-	
-	v_type = vnode_vtype(vp);
-	if (v_type == VBLK || v_type == VCHR) {
-		error = EINVAL;  /* cannot link to a special file */
+		error = ENOENT;
 		goto out;
 	}
 
+	tdcp->c_flag |= C_DIR_MODIFICATION;
+
 	if (hfs_start_transaction(hfsmp) != 0) {
-	    error = EINVAL;  /* cannot link to a special file */
-	    goto out;
+		error = EINVAL;
+		goto out;
 	}
+	intrans = 1;
 
-	cp->c_nlink++;
+	todesc.cd_flags = (v_type == VDIR) ? CD_ISDIR : 0;
+	todesc.cd_encoding = 0;
+	todesc.cd_nameptr = (const u_int8_t *)cnp->cn_nameptr;
+	todesc.cd_namelen = cnp->cn_namelen;
+	todesc.cd_parentcnid = tdcp->c_fileid;
+	todesc.cd_hint = 0;
+	todesc.cd_cnid = 0;
+
+	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
+
+	/* If destination exists then we lost a race with create. */
+	if (cat_lookup(hfsmp, &todesc, 0, NULL, NULL, NULL, NULL) == 0) {
+		error = EEXIST;
+		goto out;
+	}
+	if (cp->c_flag & C_HARDLINK) {
+		struct cat_attr cattr;
+
+		/* If inode is missing then we lost a race with unlink. */
+		if ((cat_idlookup(hfsmp, cp->c_fileid, 0, NULL, &cattr, NULL) != 0) ||
+		    (cattr.ca_fileid != cp->c_fileid)) {
+			error = ENOENT;
+			goto out;
+		}
+	} else {
+		cnid_t fileid;
+
+		/* If source is missing then we lost a race with unlink. */
+		if ((cat_lookup(hfsmp, &cp->c_desc, 0, NULL, NULL, NULL, &fileid) != 0) ||
+		    (fileid != cp->c_fileid)) {
+			error = ENOENT;
+			goto out;
+		}
+	}
+	/* 
+	 * All directory links must reside in an non-ARCHIVED hierarchy.
+	 */
+	if (v_type == VDIR) {
+		/*
+		 * - Source parent and destination parent cannot match
+		 * - A link is not permitted in the root directory
+		 * - Parent of 'pointed at' directory is not the root directory
+		 * - The 'pointed at' directory (source) is not an ancestor
+		 *   of the new directory hard link (destination).
+		 * - No ancestor of the new directory hard link (destination) 
+		 *   is a directory hard link.
+		 */
+		if ((cp->c_parentcnid == tdcp->c_fileid) ||
+		    (tdcp->c_fileid == kHFSRootFolderID) ||
+		    (cp->c_parentcnid == kHFSRootFolderID) ||
+		    cat_check_link_ancestry(hfsmp, tdcp->c_fileid, cp->c_fileid)) {
+			error = EPERM;  /* abide by the rules, you did not */
+			goto out;
+		}
+	}
+	hfs_systemfile_unlock(hfsmp, lockflags);
+	lockflags = 0;
+
+	cp->c_linkcount++;
 	cp->c_touch_chgtime = TRUE;
-
 	error = hfs_makelink(hfsmp, cp, tdcp, cnp);
 	if (error) {
-		cp->c_nlink--;
+		cp->c_linkcount--;
 		hfs_volupdate(hfsmp, VOL_UPDATE, 0);
 	} else {
 		/* Invalidate negative cache entries in the destination directory */
-		if (hfsmp->hfs_flags & HFS_CASE_SENSITIVE)
+		if (tdcp->c_flag & C_NEG_ENTRIES) {
 			cache_purge_negatives(tdvp);
+			tdcp->c_flag &= ~C_NEG_ENTRIES;
+		}
 
 		/* Update the target directory and volume stats */
-		tdcp->c_nlink++;
 		tdcp->c_entries++;
+		if (v_type == VDIR) {
+			INC_FOLDERCOUNT(hfsmp, tdcp->c_attr);
+			tdcp->c_attr.ca_recflags |= kHFSHasChildLinkMask;
+
+			/* Set kHFSHasChildLinkBit in the destination hierarchy */
+			error = cat_set_childlinkbit(hfsmp, tdcp->c_parentcnid);
+			if (error) {
+				printf ("hfs_vnop_link: error updating destination parent chain for %u\n", tdcp->c_cnid);
+				error = 0;
+			}
+		}
+		tdcp->c_dirchangecnt++;
 		tdcp->c_touch_chgtime = TRUE;
 		tdcp->c_touch_modtime = TRUE;
 		tdcp->c_flag |= C_FORCEUPDATE;
 
 		error = hfs_update(tdvp, 0);
-		if (error) {
-		    panic("hfs_vnop_link: error updating tdvp 0x%x\n", tdvp);
+		if (error && error != EIO && error != ENXIO) {
+			panic("hfs_vnop_link: error updating tdvp %p\n", tdvp);
 		}
+		
+		if ((v_type == VDIR) && 
+		    (fdcp != NULL) && 
+		    ((fdcp->c_attr.ca_recflags & kHFSHasChildLinkMask) == 0)) {
 
+			fdcp->c_attr.ca_recflags |= kHFSHasChildLinkMask;
+			fdcp->c_touch_chgtime = TRUE;
+			fdcp->c_flag |= C_FORCEUPDATE;
+			error = hfs_update(fdvp, 0);
+			if (error && error != EIO && error != ENXIO) {
+				panic("hfs_vnop_link: error updating fdvp %p\n", fdvp);
+			}
+
+			/* Set kHFSHasChildLinkBit in the source hierarchy */
+			error = cat_set_childlinkbit(hfsmp, fdcp->c_parentcnid);
+			if (error) {
+				printf ("hfs_vnop_link: error updating source parent chain for %u\n", fdcp->c_cnid);
+				error = 0;
+			}
+		}
 		hfs_volupdate(hfsmp, VOL_MKFILE,
 			(tdcp->c_cnid == kHFSRootFolderID));
 	}
+	/* Make sure update occurs inside transaction */
+	cp->c_flag |= C_FORCEUPDATE;  
 
-	cp->c_flag |= C_FORCEUPDATE;    // otherwise hfs_update() might skip the update
-
-	if ((ret = hfs_update(vp, TRUE)) != 0) {
-	    panic("hfs_vnop_link: error %d updating vp @ 0x%x\n", ret, vp);
+	if ((error == 0) && (ret = hfs_update(vp, TRUE)) != 0 && ret != EIO && ret != ENXIO) {
+		panic("hfs_vnop_link: error %d updating vp @ %p\n", ret, vp);
 	}
 
-	hfs_end_transaction(hfsmp);
-	
 	HFS_KNOTE(vp, NOTE_LINK);
 	HFS_KNOTE(tdvp, NOTE_WRITE);
 out:
-	hfs_unlockpair(tdcp, cp);
+	if (lockflags) {
+		hfs_systemfile_unlock(hfsmp, lockflags);
+	}
+	if (intrans) {
+		hfs_end_transaction(hfsmp);
+	}
+
+	tdcp->c_flag &= ~C_DIR_MODIFICATION;
+	wakeup((caddr_t)&tdcp->c_flag);
+
+	if (fdcp) {
+		hfs_unlockfour(tdcp, cp, fdcp, NULL);
+	} else {
+		hfs_unlockpair(tdcp, cp);
+	}
+	if (fdvp) {
+		vnode_put(fdvp);
+	}
 	return (error);
 }
+
+
+/*
+ * Remove a link to a hardlink file/dir.
+ *
+ * Note: dvp and vp cnodes are already locked.
+ */
+__private_extern__
+int
+hfs_unlink(struct hfsmount *hfsmp, struct vnode *dvp, struct vnode *vp, struct componentname *cnp, int skip_reserve)
+{
+	struct cnode *cp;
+	struct cnode *dcp;
+	struct cat_desc cndesc;
+	struct timeval tv;
+	char inodename[32];
+	cnid_t  prevlinkid;
+	cnid_t  nextlinkid;
+	int lockflags = 0;
+	int started_tr;
+	int rm_priv_file = 0;
+	int error;
+	
+	if (hfsmp->hfs_flags & HFS_STANDARD) {
+		return (EPERM);
+	}
+	cp = VTOC(vp);
+	dcp = VTOC(dvp);
+
+	dcp->c_flag |= C_DIR_MODIFICATION;
+	
+	/* Remove the entry from the namei cache: */
+	cache_purge(vp);
+
+	if ((error = hfs_start_transaction(hfsmp)) != 0) {
+		started_tr = 0;
+		goto out;
+	}
+	started_tr = 1;
+
+	/* 
+	 * Protect against a race with rename by using the component
+	 * name passed in and parent id from dvp (instead of using 
+	 * the cp->c_desc which may have changed).  
+	 *
+	 * Re-lookup the component name so we get the correct cnid
+	 * for the name (as opposed to the c_cnid in the cnode which
+	 * could have changed before the cnode was locked).
+	 */
+	cndesc.cd_flags = vnode_isdir(vp) ? CD_ISDIR : 0;
+	cndesc.cd_encoding = cp->c_desc.cd_encoding;
+	cndesc.cd_nameptr = (const u_int8_t *)cnp->cn_nameptr;
+	cndesc.cd_namelen = cnp->cn_namelen;
+	cndesc.cd_parentcnid = dcp->c_fileid;
+	cndesc.cd_hint = dcp->c_childhint;
+
+	lockflags = SFL_CATALOG | SFL_ATTRIBUTE;
+	if (cndesc.cd_flags & CD_ISDIR) {
+		/* We'll be removing the alias resource allocation blocks. */
+		lockflags |= SFL_BITMAP;
+	}
+	lockflags = hfs_systemfile_lock(hfsmp, lockflags, HFS_EXCLUSIVE_LOCK);
+
+	if ((error = cat_lookuplink(hfsmp, &cndesc, &cndesc.cd_cnid, &prevlinkid, &nextlinkid))) {
+		goto out;
+	}
+
+	/* Reserve some space in the catalog file. */
+	if (!skip_reserve && (error = cat_preflight(hfsmp, 2 * CAT_DELETE, NULL, 0))) {
+		goto out;
+	}
+
+	/* Purge any cached origin entries for a directory hard link. */
+	if (cndesc.cd_flags & CD_ISDIR) {
+		hfs_relorigin(cp, dcp->c_fileid);
+		if (dcp->c_fileid != dcp->c_cnid) {
+			hfs_relorigin(cp, dcp->c_cnid);
+		}
+	}
+
+	/* Delete the link record. */
+	if ((error = cat_deletelink(hfsmp, &cndesc))) {
+		goto out;
+	}
+
+	/* Update the parent directory. */
+	if (dcp->c_entries > 0) {
+		dcp->c_entries--;
+	}
+	if (cndesc.cd_flags & CD_ISDIR) {
+		DEC_FOLDERCOUNT(hfsmp, dcp->c_attr);
+	}
+	dcp->c_dirchangecnt++;
+	microtime(&tv);
+	dcp->c_ctime = tv.tv_sec;
+	dcp->c_mtime = tv.tv_sec;
+	(void ) cat_update(hfsmp, &dcp->c_desc, &dcp->c_attr, NULL, NULL);
+
+	/*
+	 * If this is the last link then we need to process the inode.
+	 * Otherwise we need to fix up the link chain.
+	 */
+	--cp->c_linkcount;
+	if (cp->c_linkcount < 1) {
+		char delname[32];
+		struct cat_desc to_desc;
+		struct cat_desc from_desc;
+
+		/*
+		 * If a file inode or directory inode is being deleted, rename 
+		 * it to an open deleted file.  This ensures that deletion 
+		 * of inode and its corresponding extended attributes does 
+		 * not overflow the journal.  This inode will be deleted 
+		 * either in hfs_vnop_inactive() or in hfs_remove_orphans(). 
+		 * Note: a rename failure here is not fatal.
+		 */	
+		bzero(&from_desc, sizeof(from_desc));
+		bzero(&to_desc, sizeof(to_desc));
+		if (vnode_isdir(vp)) {
+			if (cp->c_entries != 0) {
+				panic("hfs_unlink: dir not empty (id %d, %d entries)", cp->c_fileid, cp->c_entries);
+			}
+			MAKE_DIRINODE_NAME(inodename, sizeof(inodename),
+						cp->c_attr.ca_linkref);
+			from_desc.cd_parentcnid = hfsmp->hfs_private_desc[DIR_HARDLINKS].cd_cnid;
+			from_desc.cd_flags = CD_ISDIR;
+			to_desc.cd_flags = CD_ISDIR;
+		} else { 
+			MAKE_INODE_NAME(inodename, sizeof(inodename),
+					cp->c_attr.ca_linkref);
+			from_desc.cd_parentcnid = hfsmp->hfs_private_desc[FILE_HARDLINKS].cd_cnid;
+			from_desc.cd_flags = 0;
+			to_desc.cd_flags = 0;
+		}
+		from_desc.cd_nameptr = (const u_int8_t *)inodename;
+		from_desc.cd_namelen = strlen(inodename);
+		from_desc.cd_cnid = cp->c_fileid;
+
+		MAKE_DELETED_NAME(delname, sizeof(delname), cp->c_fileid);
+		to_desc.cd_nameptr = (const u_int8_t *)delname;
+		to_desc.cd_namelen = strlen(delname);
+		to_desc.cd_parentcnid = hfsmp->hfs_private_desc[FILE_HARDLINKS].cd_cnid;
+		to_desc.cd_cnid = cp->c_fileid;
+
+		error = cat_rename(hfsmp, &from_desc, &hfsmp->hfs_private_desc[FILE_HARDLINKS],
+				   &to_desc, (struct cat_desc *)NULL);
+		if (error == 0) {
+			cp->c_flag |= C_DELETED;
+			cp->c_attr.ca_recflags &= ~kHFSHasLinkChainMask;
+			cp->c_attr.ca_firstlink = 0;
+			if (vnode_isdir(vp)) {
+				hfsmp->hfs_private_attr[DIR_HARDLINKS].ca_entries--;
+				DEC_FOLDERCOUNT(hfsmp, hfsmp->hfs_private_attr[DIR_HARDLINKS]);
+
+				hfsmp->hfs_private_attr[FILE_HARDLINKS].ca_entries++;
+				INC_FOLDERCOUNT(hfsmp, hfsmp->hfs_private_attr[FILE_HARDLINKS]);
+
+				(void)cat_update(hfsmp, &hfsmp->hfs_private_desc[DIR_HARDLINKS],
+					&hfsmp->hfs_private_attr[DIR_HARDLINKS], NULL, NULL);
+				(void)cat_update(hfsmp, &hfsmp->hfs_private_desc[FILE_HARDLINKS],
+					&hfsmp->hfs_private_attr[FILE_HARDLINKS], NULL, NULL);
+			}
+		} else {
+			error = 0;  /* rename failure here is not fatal */
+		}
+	} else /* Still some links left */ {
+		cnid_t firstlink;
+
+		/*
+		 * Update the start of the link chain.
+		 * Note: Directory hard links store the first link in an attribute.
+		 */
+		if (vnode_isdir(vp) &&
+		    getfirstlink(hfsmp, cp->c_fileid, &firstlink) == 0 &&
+		    firstlink == cndesc.cd_cnid) {
+			if (setfirstlink(hfsmp, cp->c_fileid, nextlinkid) == 0)
+				cp->c_attr.ca_recflags |= kHFSHasAttributesMask;
+		} else if (vnode_isreg(vp) && cp->c_attr.ca_firstlink == cndesc.cd_cnid) {
+			cp->c_attr.ca_firstlink = nextlinkid;
+		}
+		/* Update previous link. */
+		if (prevlinkid) {
+			(void) cat_updatelink(hfsmp, prevlinkid, HFS_IGNORABLE_LINK, nextlinkid);
+		}
+		/* Update next link. */
+		if (nextlinkid) {
+			(void) cat_updatelink(hfsmp, nextlinkid, prevlinkid, HFS_IGNORABLE_LINK);
+		}
+	}
+
+	/* Push new link count to disk. */
+	cp->c_ctime = tv.tv_sec;	
+	(void) cat_update(hfsmp, &cp->c_desc, &cp->c_attr, NULL, NULL);
+
+	/* All done with the system files. */
+	hfs_systemfile_unlock(hfsmp, lockflags);
+	lockflags = 0;
+
+	/* Update file system stats. */
+	hfs_volupdate(hfsmp, VOL_RMFILE, (dcp->c_cnid == kHFSRootFolderID));
+	/* The last link of a directory removed the inode. */
+	if (rm_priv_file) {
+		hfs_volupdate(hfsmp, VOL_RMFILE, 0);
+	}
+	/*
+	 * All done with this cnode's descriptor...
+	 *
+	 * Note: all future catalog calls for this cnode may be
+	 * by fileid only.  This is OK for HFS (which doesn't have
+	 * file thread records) since HFS doesn't support hard links.
+	 */
+	cat_releasedesc(&cp->c_desc);
+
+	HFS_KNOTE(dvp, NOTE_WRITE);
+	HFS_KNOTE(vp, NOTE_DELETE);
+out:
+	if (lockflags) {
+		hfs_systemfile_unlock(hfsmp, lockflags);
+	}
+	if (started_tr) {
+		hfs_end_transaction(hfsmp);
+	}
+
+	dcp->c_flag &= ~C_DIR_MODIFICATION;
+	wakeup((caddr_t)&dcp->c_flag);
+
+	return (error);
+}
+
+
+/*
+ * Initialize the HFS+ private system directories.
+ *
+ * These directories are used to hold the inodes
+ * for file and directory hardlinks as well as
+ * open-unlinked files.
+ *
+ * If they don't yet exist they will get created.
+ *
+ * This call is assumed to be made during mount.
+ */
+__private_extern__
+void
+hfs_privatedir_init(struct hfsmount * hfsmp, enum privdirtype type)
+{
+	struct vnode * dvp = NULLVP;
+	struct cnode * dcp = NULL;
+	struct cat_desc *priv_descp;
+	struct cat_attr *priv_attrp;
+	struct FndrDirInfo * fndrinfo;
+	struct timeval tv;
+	int lockflags;
+	int trans = 0;
+	int error;
+	
+	if (hfsmp->hfs_flags & HFS_STANDARD) {
+		return;
+	}
+
+	priv_descp = &hfsmp->hfs_private_desc[type];
+	priv_attrp = &hfsmp->hfs_private_attr[type];
+
+	/* Check if directory already exists. */
+	if (priv_descp->cd_cnid != 0) {
+		return;
+	}
+
+	priv_descp->cd_parentcnid = kRootDirID;
+	priv_descp->cd_nameptr = (const u_int8_t *)hfs_private_names[type];
+	priv_descp->cd_namelen = strlen((const char *)priv_descp->cd_nameptr);
+	priv_descp->cd_flags = CD_ISDIR | CD_DECOMPOSED;
+
+	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
+	error = cat_lookup(hfsmp, priv_descp, 0, NULL, priv_attrp, NULL, NULL);
+	hfs_systemfile_unlock(hfsmp, lockflags);
+
+	if (error == 0) {
+		if (type == FILE_HARDLINKS) {
+			hfsmp->hfs_metadata_createdate = priv_attrp->ca_itime;
+		}
+		priv_descp->cd_cnid = priv_attrp->ca_fileid;
+		goto exit;
+	}
+
+	/* Directory is missing, if this is read-only then we're done. */
+	if (hfsmp->hfs_flags & HFS_READ_ONLY) {
+		goto exit;
+	}
+
+	/* Grab the root directory so we can update it later. */
+	if (hfs_vget(hfsmp, kRootDirID, &dvp, 0) != 0) {
+		goto exit;
+	}
+	dcp = VTOC(dvp);
+
+	/* Setup the default attributes */
+	bzero(priv_attrp, sizeof(struct cat_attr));
+	priv_attrp->ca_flags = UF_IMMUTABLE | UF_HIDDEN;
+	priv_attrp->ca_mode = S_IFDIR;
+	if (type == DIR_HARDLINKS) {
+		priv_attrp->ca_mode |= S_ISVTX | S_IRUSR | S_IXUSR | S_IRGRP |
+		                       S_IXGRP | S_IROTH | S_IXOTH;
+	}
+	priv_attrp->ca_linkcount = 1;
+	priv_attrp->ca_itime = hfsmp->hfs_itime;
+	priv_attrp->ca_recflags = kHFSHasFolderCountMask;
+	
+	fndrinfo = (struct FndrDirInfo *)&priv_attrp->ca_finderinfo;
+	fndrinfo->frLocation.v = SWAP_BE16(16384);
+	fndrinfo->frLocation.h = SWAP_BE16(16384);
+	fndrinfo->frFlags = SWAP_BE16(kIsInvisible + kNameLocked);		
+
+	if (hfs_start_transaction(hfsmp) != 0) {
+		goto exit;
+	}
+	trans = 1;
+
+	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_EXCLUSIVE_LOCK);
+
+	/* Make sure there's space in the Catalog file. */
+	if (cat_preflight(hfsmp, CAT_CREATE, NULL, 0) != 0) {
+		hfs_systemfile_unlock(hfsmp, lockflags);
+		goto exit;
+	}
+
+	/* Create the private directory on disk. */
+	error = cat_create(hfsmp, priv_descp, priv_attrp, NULL);
+	if (error == 0) {
+		priv_descp->cd_cnid = priv_attrp->ca_fileid;
+
+		/* Update the parent directory */
+		dcp->c_entries++;
+		INC_FOLDERCOUNT(hfsmp, dcp->c_attr);
+		dcp->c_dirchangecnt++;
+		microtime(&tv);
+		dcp->c_ctime = tv.tv_sec;
+		dcp->c_mtime = tv.tv_sec;
+		(void) cat_update(hfsmp, &dcp->c_desc, &dcp->c_attr, NULL, NULL);
+	}
+
+	hfs_systemfile_unlock(hfsmp, lockflags);
+	
+	if (error) {
+		goto exit;
+	}
+	if (type == FILE_HARDLINKS) {
+		hfsmp->hfs_metadata_createdate = hfsmp->hfs_itime;
+	}
+	hfs_volupdate(hfsmp, VOL_MKDIR, 1);
+exit:
+	if (trans) {
+		hfs_end_transaction(hfsmp);
+	}
+	if (dvp) {
+		hfs_unlock(dcp);
+		vnode_put(dvp);
+	}
+	if ((error == 0) && (type == DIR_HARDLINKS)) {
+		hfs_xattr_init(hfsmp);
+	}
+}
+
+
+/*
+ * Lookup a hardlink link (from chain)
+ */
+__private_extern__
+int
+hfs_lookuplink(struct hfsmount *hfsmp, cnid_t linkfileid, cnid_t *prevlinkid,  cnid_t *nextlinkid)
+{
+	int lockflags;
+	int error;
+
+	*prevlinkid = 0;
+	*nextlinkid = 0;
+
+	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
+
+	error = cat_lookuplinkbyid(hfsmp, linkfileid, prevlinkid, nextlinkid);
+	if (error == ENOLINK) {
+		hfs_systemfile_unlock(hfsmp, lockflags);
+		lockflags = hfs_systemfile_lock(hfsmp, SFL_ATTRIBUTE, HFS_SHARED_LOCK);
+
+		error = getfirstlink(hfsmp, linkfileid, nextlinkid);
+	}
+	hfs_systemfile_unlock(hfsmp, lockflags);
+
+	return (error);
+}
+
+/*
+ * Cache the orgin of a directory hard link
+ *
+ * cnode must be lock on entry
+ */
+__private_extern__
+void
+hfs_savelinkorigin(cnode_t *cp, cnid_t parentcnid)
+{
+	linkorigin_t *origin = NULL;
+	void * thread = current_thread();
+	int count = 0;
+
+	/*
+	 *  Look for an existing origin first.  If not found, create/steal one.
+	 */
+	TAILQ_FOREACH(origin, &cp->c_originlist, lo_link) {
+		++count;
+		if (origin->lo_thread == thread) {
+			TAILQ_REMOVE(&cp->c_originlist, origin, lo_link);
+			break;
+		}
+	}
+	if (origin == NULL) {
+		/* Recycle the last (i.e., the oldest) if we have too many. */
+		if (count > MAX_CACHED_ORIGINS) {
+			origin = TAILQ_LAST(&cp->c_originlist, hfs_originhead);
+			TAILQ_REMOVE(&cp->c_originlist, origin, lo_link);
+		} else {
+			MALLOC(origin, linkorigin_t *, sizeof(linkorigin_t), M_TEMP, M_WAITOK);
+		}
+		origin->lo_thread = thread;
+	}
+	origin->lo_cnid = cp->c_cnid;
+	origin->lo_parentcnid = parentcnid;
+	TAILQ_INSERT_HEAD(&cp->c_originlist, origin, lo_link);
+}
+
+/*
+ * Release any cached origins for a directory hard link
+ *
+ * cnode must be lock on entry
+ */
+__private_extern__
+void
+hfs_relorigins(struct cnode *cp)
+{
+	linkorigin_t *origin, *prev;
+
+	TAILQ_FOREACH_SAFE(origin, &cp->c_originlist, lo_link, prev) {
+		FREE(origin, M_TEMP);
+	}
+	TAILQ_INIT(&cp->c_originlist);
+}
+
+/*
+ * Release a specific origin for a directory hard link
+ *
+ * cnode must be lock on entry
+ */
+__private_extern__
+void
+hfs_relorigin(struct cnode *cp, cnid_t parentcnid)
+{
+	linkorigin_t *origin = NULL;
+	void * thread = current_thread();
+
+	TAILQ_FOREACH(origin, &cp->c_originlist, lo_link) {
+		if ((origin->lo_thread == thread) ||
+		    (origin->lo_parentcnid == parentcnid)) {
+			TAILQ_REMOVE(&cp->c_originlist, origin, lo_link);
+			break;
+		}
+	}
+}
+
+/*
+ * Test if a directory hard link has a cached origin
+ *
+ * cnode must be lock on entry
+ */
+__private_extern__
+int
+hfs_haslinkorigin(cnode_t *cp)
+{
+	if (cp->c_flag & C_HARDLINK) {
+		linkorigin_t *origin;
+		void * thread = current_thread();
+	
+		TAILQ_FOREACH(origin, &cp->c_originlist, lo_link) {
+			if (origin->lo_thread == thread) {
+				return (1);
+			}
+		}
+	}
+	return (0);
+}
+
+/*
+ * Obtain the current parent cnid of a directory hard link
+ *
+ * cnode must be lock on entry
+ */
+__private_extern__
+cnid_t
+hfs_currentparent(cnode_t *cp)
+{
+	if (cp->c_flag & C_HARDLINK) {
+		linkorigin_t *origin;
+		void * thread = current_thread();
+	
+		TAILQ_FOREACH(origin, &cp->c_originlist, lo_link) {
+			if (origin->lo_thread == thread) {
+				return (origin->lo_parentcnid);
+			}
+		}
+	}
+	return (cp->c_parentcnid);
+}
+
+/*
+ * Obtain the current cnid of a directory hard link
+ *
+ * cnode must be lock on entry
+ */
+__private_extern__
+cnid_t
+hfs_currentcnid(cnode_t *cp)
+{
+	if (cp->c_flag & C_HARDLINK) {
+		linkorigin_t *origin;
+		void * thread = current_thread();
+	
+		TAILQ_FOREACH(origin, &cp->c_originlist, lo_link) {
+			if (origin->lo_thread == thread) {
+				return (origin->lo_cnid);
+			}
+		}
+	}
+	return (cp->c_cnid);
+}
+
+
+/*
+ * Set the first link attribute for a given file id.
+ *
+ * The attributes b-tree must already be locked.
+ * If journaling is enabled, a transaction must already be started.
+ */
+static int
+setfirstlink(struct hfsmount * hfsmp, cnid_t fileid, cnid_t firstlink)
+{
+	FCB * btfile;
+	BTreeIterator * iterator;
+	FSBufferDescriptor btdata;
+	u_int8_t attrdata[FIRST_LINK_XATTR_REC_SIZE];
+	HFSPlusAttrData *dataptr;
+	int result;
+	u_int16_t datasize;
+
+	if (hfsmp->hfs_attribute_cp == NULL) {
+		return (EPERM);
+	}
+	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
+	bzero(iterator, sizeof(*iterator));
+
+	result = hfs_buildattrkey(fileid, FIRST_LINK_XATTR_NAME, (HFSPlusAttrKey *)&iterator->key);
+	if (result) {
+		goto out;
+	}
+	dataptr = (HFSPlusAttrData *)&attrdata[0];
+	dataptr->recordType = kHFSPlusAttrInlineData;
+	dataptr->reserved[0] = 0;
+	dataptr->reserved[1] = 0;
+
+	/*
+	 * Since attrData is variable length, we calculate the size of
+	 * attrData by subtracting the size of all other members of
+	 * structure HFSPlusAttData from the size of attrdata.
+	 */
+	(void)snprintf((char *)&dataptr->attrData[0],
+			sizeof(dataptr) - (4 * sizeof(uint32_t)),
+		        "%lu", (unsigned long)firstlink);
+	dataptr->attrSize = 1 + strlen((char *)&dataptr->attrData[0]);
+
+	/* Calculate size of record rounded up to multiple of 2 bytes. */
+	datasize = sizeof(HFSPlusAttrData) - 2 + dataptr->attrSize + ((dataptr->attrSize & 1) ? 1 : 0);
+
+	btdata.bufferAddress = dataptr;
+	btdata.itemSize = datasize;
+	btdata.itemCount = 1;
+
+	btfile = hfsmp->hfs_attribute_cp->c_datafork;
+
+	/* Insert the attribute. */
+	result = BTInsertRecord(btfile, iterator, &btdata, datasize);
+	if (result == btExists) {
+		result = BTReplaceRecord(btfile, iterator, &btdata, datasize);
+	}
+	(void) BTFlushPath(btfile);
+out:
+	FREE(iterator, M_TEMP);
+
+	return MacToVFSError(result);
+}
+
+/*
+ * Get the first link attribute for a given file id.
+ *
+ * The attributes b-tree must already be locked.
+ */
+static int
+getfirstlink(struct hfsmount * hfsmp, cnid_t fileid, cnid_t *firstlink)
+{
+	FCB * btfile;
+	BTreeIterator * iterator;
+	FSBufferDescriptor btdata;
+	u_int8_t attrdata[FIRST_LINK_XATTR_REC_SIZE];
+	HFSPlusAttrData *dataptr;
+	int result;
+	u_int16_t datasize;
+
+	if (hfsmp->hfs_attribute_cp == NULL) {
+		return (EPERM);
+	}
+	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
+	bzero(iterator, sizeof(*iterator));
+
+	result = hfs_buildattrkey(fileid, FIRST_LINK_XATTR_NAME, (HFSPlusAttrKey *)&iterator->key);
+	if (result)
+		goto out;
+
+	dataptr = (HFSPlusAttrData *)&attrdata[0];
+	datasize = sizeof(attrdata);
+
+	btdata.bufferAddress = dataptr;
+	btdata.itemSize = sizeof(attrdata);
+	btdata.itemCount = 1;
+
+	btfile = hfsmp->hfs_attribute_cp->c_datafork;
+
+	result = BTSearchRecord(btfile, iterator, &btdata, NULL, NULL);
+	if (result)
+		goto out;
+
+	if (dataptr->attrSize < 3) {
+		result = ENOENT;
+		goto out;
+	}
+	*firstlink = strtoul((char*)&dataptr->attrData[0], NULL, 10);
+out:
+	FREE(iterator, M_TEMP);
+
+	return MacToVFSError(result);
+}
+

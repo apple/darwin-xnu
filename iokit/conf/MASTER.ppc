@@ -4,9 +4,10 @@
 #  Standard Apple MacOS X Configurations:
 #  -------- ---- -------- ---------------
 #
-#  RELEASE = [ppc mach iokitcpp]
+#  RELEASE = [ppc mach iokitcpp hibernation medium crypto config_dtrace]
+#  DEVELOPMENT = [ RELEASE ]
 #  PROFILE = [ RELEASE profile ]
-#  DEBUG = [ppc mach iokitcpp debug]
+#  DEBUG = [ RELEASE debug]
 #  RELEASE_TRACE = [ RELEASE kdebug ]
 #  DEBUG_TRACE   = [ DEBUG kdebug ]
 #

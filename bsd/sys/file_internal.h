@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995, 1997 Apple Computer, Inc. All Rights Reserved */
 /*
@@ -82,7 +88,7 @@ struct file;
  * One entry for each open kernel vnode and socket.
  */
 struct fileproc {
-	int32_t	f_flags;
+	unsigned int f_flags;
 	int32_t f_iocount;
 	struct fileglob * f_fglob;
 	void *	f_waddr;
@@ -100,31 +106,32 @@ struct fileproc {
 #define FP_AIOISSUED	0x0080
 #define FP_WAITEVENT	0x0100
 
+#define FP_VALID_FLAGS (FP_INCREATE | FP_INCLOSE | FP_INSELECT | FP_INCHRREAD | FP_WRITTEN | FP_WRITTEN | FP_CLOSING | FP_WAITCLOSE | FP_AIOISSUED | FP_WAITEVENT)
 
-/* defns of close_internal */
-#define CLOSEINT_LOCKED     1
-#define CLOSEINT_WAITONCLOSE 2
-#define CLOSEINT_NOFDRELSE  4
-#define CLOSEINT_NOFDNOREF  8
-  
+
+#ifndef _KAUTH_CRED_T
+#define	_KAUTH_CRED_T
+struct ucred;
+typedef struct ucred *kauth_cred_t;
+#endif	/* !_KAUTH_CRED_T */
+
 /* file types */
 typedef enum {
-	DTYPE_VNODE     = 1,    /* file */
-	DTYPE_SOCKET,           /* communications endpoint */
-	DTYPE_PSXSHM,           /* POSIX Shared memory */
-	DTYPE_PSXSEM,           /* POSIX Semaphores */
-	DTYPE_KQUEUE,           /* kqueue */
-	DTYPE_PIPE,             /* pipe */
-	DTYPE_FSEVENTS          /* fsevents */
+	DTYPE_VNODE 	= 1,	/* file */
+	DTYPE_SOCKET,		/* communications endpoint */
+	DTYPE_PSXSHM,		/* POSIX Shared memory */
+	DTYPE_PSXSEM,		/* POSIX Semaphores */
+	DTYPE_KQUEUE,		/* kqueue */
+	DTYPE_PIPE,		/* pipe */
+	DTYPE_FSEVENTS		/* fsevents */
 } file_type_t;
 
 /* defines for fg_lflags */
-#define FG_TERM        0x01    /* the fileglob is terminating .. */
-#define FG_INSMSGQ     0x02    /* insert to msgqueue pending .. */
-#define FG_WINSMSGQ    0x04    /* wait for the fielglob is in msgque */
-#define FG_RMMSGQ      0x08    /* the fileglob is being removed from msgqueue */
-#define FG_WRMMSGQ     0x10    /* wait for the fileglob to  be removed from msgqueue */
-
+#define FG_TERM 	0x01	/* the fileglob is terminating .. */
+#define FG_INSMSGQ 	0x02	/* insert to msgqueue pending .. */
+#define FG_WINSMSGQ	0x04 	/* wait for the fielglob is in msgque */
+#define FG_RMMSGQ	0x08 	/* the fileglob is being removed from msgqueue */
+#define FG_WRMMSGQ	0x10 	/* wait for the fileglob to  be removed from msgqueue */
 
 struct fileglob {
 	LIST_ENTRY(fileglob) f_list;/* list of active files */
@@ -133,24 +140,22 @@ struct fileglob {
 	file_type_t fg_type;		/* descriptor type */
 	int32_t	fg_count;	/* reference count */
 	int32_t	fg_msgcount;	/* references from message queue */
-	struct	ucred *fg_cred;	/* credentials associated with descriptor */
+	kauth_cred_t fg_cred;	/* credentials associated with descriptor */
 	struct	fileops {
-		int	(*fo_read)	__P((struct fileproc *fp, struct uio *uio,
-					    struct ucred *cred, int flags,
-					    struct proc *p));
-		int	(*fo_write)	__P((struct fileproc *fp, struct uio *uio,
-					    struct ucred *cred, int flags,
-					    struct proc *p));
+		int	(*fo_read)	(struct fileproc *fp, struct uio *uio,
+					 int flags, vfs_context_t ctx);
+		int	(*fo_write)	(struct fileproc *fp, struct uio *uio,
+					 int flags, vfs_context_t ctx);
 #define	FOF_OFFSET	0x00000001	/* offset supplied to vn_write */
 #define FOF_PCRED	0x00000002	/* cred from proc, not current thread */
-		int	(*fo_ioctl)	__P((struct fileproc *fp, u_long com,
-					    caddr_t data, struct proc *p));
-		int	(*fo_select)	__P((struct fileproc *fp, int which,
-						void *wql, struct proc *p));
-		int	(*fo_close)	__P((struct fileglob *fg, struct proc *p));
-		int	(*fo_kqfilter)	__P((struct fileproc *fp, struct knote *kn,
-					     struct proc *p));
-		int	(*fo_drain)	(struct fileproc *fp, struct proc *p);
+		int	(*fo_ioctl)	(struct fileproc *fp, u_long com,
+					 caddr_t data, vfs_context_t ctx);
+		int	(*fo_select)	(struct fileproc *fp, int which,
+					 void *wql, vfs_context_t ctx);
+		int	(*fo_close)	(struct fileglob *fg, vfs_context_t ctx);
+		int	(*fo_kqfilter)	(struct fileproc *fp, struct knote *kn,
+					 vfs_context_t ctx);
+		int	(*fo_drain)	(struct fileproc *fp, vfs_context_t ctx);
 	} *fg_ops;
 	off_t	fg_offset;
 	caddr_t	fg_data;		/* vnode or socket or SHM or semaphore */
@@ -158,6 +163,9 @@ struct fileglob {
 	int32_t fg_lflags;		/* file global flags */
 	unsigned int fg_lockpc[4];
 	unsigned int fg_unlockpc[4];
+#if CONFIG_MACF
+	struct label *fg_label;  /* JMM - use the one in the cred? */
+#endif
 };
 
 #ifdef __APPLE_API_PRIVATE
@@ -171,20 +179,14 @@ extern int nfiles;			/* actual number of open files */
 
 
 __BEGIN_DECLS
-int fo_read(struct fileproc *fp, struct uio *uio,
-	struct ucred *cred, int flags, struct proc *p);
-int fo_write(struct fileproc *fp, struct uio *uio,
-	struct ucred *cred, int flags, struct proc *p);
-int fo_ioctl(struct fileproc *fp, u_long com, caddr_t data,
-	struct proc *p);
-int fo_select(struct fileproc *fp, int which, void *wql,
-	struct proc *p);
-int fo_close(struct fileglob *fg, struct proc *p);
-int fo_kqfilter(struct fileproc *fp, struct knote *kn,
-	struct proc *p);
+int fo_read(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx);
+int fo_write(struct fileproc *fp, struct uio *uio, int flags,
+		vfs_context_t ctx);
+int fo_ioctl(struct fileproc *fp, u_long com, caddr_t data, vfs_context_t ctx);
+int fo_select(struct fileproc *fp, int which, void *wql, vfs_context_t ctx);
+int fo_close(struct fileglob *fg, vfs_context_t ctx);
+int fo_kqfilter(struct fileproc *fp, struct knote *kn, vfs_context_t ctx);
 void fileproc_drain(proc_t, struct fileproc *);
-void fp_setflags(proc_t, struct fileproc *, int);
-void fp_clearflags(proc_t, struct fileproc *, int);
 int fp_drop(struct proc *p, int fd, struct fileproc *fp, int locked);
 int fp_drop_written(proc_t p, int fd, struct fileproc *fp);
 int fp_drop_event(proc_t p, int fd, struct fileproc *fp);
@@ -205,7 +207,6 @@ int fp_getfvpandvid(struct proc *p, int fd, struct fileproc **resultfp, struct v
 struct socket;
 int fp_getfsock(struct proc *p, int fd, struct fileproc **resultfp, struct socket  **results);
 int fp_lookup(struct proc *p, int fd, struct fileproc **resultfp, int locked);
-int close_internal(struct proc *p, int fd, struct fileproc *fp, int flags);
 int closef_locked(struct fileproc *fp, struct fileglob *fg, struct proc *p);
 void fg_insertuipc(struct fileglob * fg);
 void fg_removeuipc(struct fileglob * fg);

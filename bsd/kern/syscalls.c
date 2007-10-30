@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
  * 
- * @APPLE_LICENSE_HEADER_START@ 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and 
- * are subject to the Apple Public Source License Version 1.1 (the 
- * "License").  You may not use this file except in compliance with the 
- * License.  Please obtain a copy of the License at 
- * http://www.apple.com/publicsource and read it before using this file. 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are 
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the 
- * License for the specific language governing rights and limitations 
- * under the License. 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
  * 
- * @APPLE_LICENSE_HEADER_END@ 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  * 
  * 
  * System call switch table.
@@ -58,12 +64,21 @@ const char *syscallnames[] = {
 	"getuid",             /* 24 = getuid */
 	"geteuid",            /* 25 = geteuid */
 	"ptrace",             /* 26 = ptrace */
+#if SOCKETS
 	"recvmsg",            /* 27 = recvmsg */
 	"sendmsg",            /* 28 = sendmsg */
 	"recvfrom",           /* 29 = recvfrom */
 	"accept",             /* 30 = accept */
 	"getpeername",        /* 31 = getpeername */
 	"getsockname",        /* 32 = getsockname */
+#else
+	"#27",                /* 27 = */
+	"#28",                /* 28 = */
+	"#29",                /* 29 = */
+	"#30",                /* 30 = */
+	"#31",                /* 31 = */
+	"#32",                /* 32 = */
+#endif /* SOCKETS */
 	"access",             /* 33 = access */
 	"chflags",            /* 34 = chflags */
 	"fchflags",           /* 35 = fchflags */
@@ -76,7 +91,7 @@ const char *syscallnames[] = {
 	"pipe",               /* 42 = pipe */
 	"getegid",            /* 43 = getegid */
 	"profil",             /* 44 = profil */
-	"ktrace",             /* 45 = ktrace */
+	"#45",                /* 45 = old ktrace */
 	"sigaction",          /* 46 = sigaction */
 	"getgid",             /* 47 = getgid */
 	"sigprocmask",        /* 48 = sigprocmask */
@@ -128,28 +143,48 @@ const char *syscallnames[] = {
 	"#94",                /* 94 = old setdopt */
 	"fsync",              /* 95 = fsync */
 	"setpriority",        /* 96 = setpriority */
+#if SOCKETS
 	"socket",             /* 97 = socket */
 	"connect",            /* 98 = connect */
+#else
+	"#97",                /* 97 = */
+	"#98",                /* 98 = */
+#endif /* SOCKETS */
 	"#99",                /* 99 = old accept */
 	"getpriority",        /* 100 = getpriority */
 	"#101",               /* 101 = old send */
 	"#102",               /* 102 = old recv */
 	"#103",               /* 103 = old sigreturn */
+#if SOCKETS
 	"bind",               /* 104 = bind */
 	"setsockopt",         /* 105 = setsockopt */
 	"listen",             /* 106 = listen */
+#else
+	"#104",               /* 104 = */
+	"#105",               /* 105 = */
+	"#106",               /* 106 = */
+#endif /* SOCKETS */
 	"#107",               /* 107 = old vtimes */
 	"#108",               /* 108 = old sigvec */
 	"#109",               /* 109 = old sigblock */
 	"#110",               /* 110 = old sigsetmask */
 	"sigsuspend",         /* 111 = sigsuspend */
 	"#112",               /* 112 = old sigstack */
+#if SOCKETS
 	"#113",               /* 113 = old recvmsg */
 	"#114",               /* 114 = old sendmsg */
+#else
+	"#113",               /* 113 = */
+	"#114",               /* 114 = */
+#endif /* SOCKETS */
 	"#115",               /* 115 = old vtrace */
 	"gettimeofday",       /* 116 = gettimeofday */
 	"getrusage",          /* 117 = getrusage */
+#if SOCKETS
 	"getsockopt",         /* 118 = getsockopt */
+#else
+	"#118",               /* 118 = */
+#endif /* SOCKETS */
 	"#119",               /* 119 = old resuba */
 	"readv",              /* 120 = readv */
 	"writev",             /* 121 = writev */
@@ -157,23 +192,29 @@ const char *syscallnames[] = {
 	"fchown",             /* 123 = fchown */
 	"fchmod",             /* 124 = fchmod */
 	"#125",               /* 125 = old recvfrom */
-	"#126",               /* 126 = old setreuid */
-	"#127",               /* 127 = old setregid */
+	"setreuid",           /* 126 = setreuid */
+	"setregid",           /* 127 = setregid */
 	"rename",             /* 128 = rename */
 	"#129",               /* 129 = old truncate */
 	"#130",               /* 130 = old ftruncate */
 	"flock",              /* 131 = flock */
 	"mkfifo",             /* 132 = mkfifo */
+#if SOCKETS
 	"sendto",             /* 133 = sendto */
 	"shutdown",           /* 134 = shutdown */
 	"socketpair",         /* 135 = socketpair */
+#else
+	"#133",               /* 133 = */
+	"#134",               /* 134 = */
+	"#135",               /* 135 = */
+#endif /* SOCKETS */
 	"mkdir",              /* 136 = mkdir */
 	"rmdir",              /* 137 = rmdir */
 	"utimes",             /* 138 = utimes */
 	"futimes",            /* 139 = futimes */
 	"adjtime",            /* 140 = adjtime */
 	"#141",               /* 141 = old getpeername */
-	"#142",               /* 142 = old gethostid */
+	"gethostuuid",        /* 142 = gethostuuid */
 	"#143",               /* 143 = old sethostid */
 	"#144",               /* 144 = old getrlimit */
 	"#145",               /* 145 = old setrlimit */
@@ -196,7 +237,7 @@ const char *syscallnames[] = {
 	"fstatfs",            /* 158 = fstatfs */
 	"unmount",            /* 159 = unmount */
 	"#160",               /* 160 = old async_daemon */
-#if NFSCLIENT
+#if NFSSERVER
 	"getfh",              /* 161 = getfh */
 #else
 	"#161",               /* 161 = */
@@ -208,7 +249,7 @@ const char *syscallnames[] = {
 	"#166",               /* 166 = old exportfs */
 	"mount",              /* 167 = mount */
 	"#168",               /* 168 = old ustat */
-	"#169",               /* 169 = */
+	"csops",              /* 169 = csops */
 	"table",              /* 170 = table old table */
 	"#171",               /* 171 = old wait3 */
 	"#172",               /* 172 = old rpause */
@@ -232,11 +273,7 @@ const char *syscallnames[] = {
 	"lstat",              /* 190 = lstat */
 	"pathconf",           /* 191 = pathconf */
 	"fpathconf",          /* 192 = fpathconf */
-#if COMPAT_GETFSSTAT
-	"getfsstat",          /* 193 = getfsstat */
-#else
 	"#193",               /* 193 = */
-#endif
 	"getrlimit",          /* 194 = getrlimit */
 	"setrlimit",          /* 195 = setrlimit */
 	"getdirentries",      /* 196 = getdirentries */
@@ -249,6 +286,7 @@ const char *syscallnames[] = {
 	"mlock",              /* 203 = mlock */
 	"munlock",            /* 204 = munlock */
 	"undelete",           /* 205 = undelete */
+#if NETAT
 	"ATsocket",           /* 206 = ATsocket */
 	"ATgetmsg",           /* 207 = ATgetmsg */
 	"ATputmsg",           /* 208 = ATputmsg */
@@ -257,6 +295,16 @@ const char *syscallnames[] = {
 	"ATPgetreq",          /* 211 = ATPgetreq */
 	"ATPgetrsp",          /* 212 = ATPgetrsp */
 	"#213",               /* 213 = Reserved for AppleTalk */
+#else
+	"#206",               /* 206 = */
+	"#207",               /* 207 = */
+	"#208",               /* 208 = */
+	"#209",               /* 209 = */
+	"#210",               /* 210 = */
+	"#211",               /* 211 = */
+	"#212",               /* 212 = */
+	"#213",               /* 213 = Reserved for AppleTalk */
+#endif /* NETAT */
 	"kqueue_from_portset_np",  /* 214 = kqueue_from_portset_np */
 	"kqueue_portset_np",  /* 215 = kqueue_portset_np */
 	"mkcomplex",          /* 216 = mkcomplex soon to be obsolete */
@@ -267,11 +315,7 @@ const char *syscallnames[] = {
 	"setattrlist",        /* 221 = setattrlist */
 	"getdirentriesattr",  /* 222 = getdirentriesattr */
 	"exchangedata",       /* 223 = exchangedata */
-#ifdef __APPLE_API_OBSOLETE
-	"checkuseraccess",    /* 224 = checkuseraccess */
-#else
-	"#224",               /* 224 = HFS checkuseraccess check access to a file */
-#endif /* __APPLE_API_OBSOLETE */
+	"#224",               /* 224 = was checkuseraccess */
 	"searchfs",           /* 225 = searchfs */
 	"delete",             /* 226 = delete private delete ( Carbon semantics ) */
 	"copyfile",           /* 227 = copyfile */
@@ -291,33 +335,69 @@ const char *syscallnames[] = {
 	"flistxattr",         /* 241 = flistxattr */
 	"fsctl",              /* 242 = fsctl */
 	"initgroups",         /* 243 = initgroups */
-	"#244",               /* 244 = */
+	"posix_spawn",        /* 244 = posix_spawn */
 	"#245",               /* 245 = */
 	"#246",               /* 246 = */
 #if NFSCLIENT
 	"nfsclnt",            /* 247 = nfsclnt */
-	"fhopen",             /* 248 = fhopen */
 #else
 	"#247",               /* 247 = */
+#endif
+#if NFSSERVER
+	"fhopen",             /* 248 = fhopen */
+#else
 	"#248",               /* 248 = */
 #endif
 	"#249",               /* 249 = */
 	"minherit",           /* 250 = minherit */
+#if SYSV_SEM
 	"semsys",             /* 251 = semsys */
+#else
+	"#251",               /* 251 = */
+#endif
+#if SYSV_MSG
 	"msgsys",             /* 252 = msgsys */
+#else
+	"#252",               /* 252 = */
+#endif
+#if SYSV_SHM
 	"shmsys",             /* 253 = shmsys */
+#else
+	"#253",               /* 253 = */
+#endif
+#if SYSV_SEM
 	"semctl",             /* 254 = semctl */
 	"semget",             /* 255 = semget */
 	"semop",              /* 256 = semop */
 	"#257",               /* 257 = */
+#else
+	"#254",               /* 254 = */
+	"#255",               /* 255 = */
+	"#256",               /* 256 = */
+	"#257",               /* 257 = */
+#endif
+#if SYSV_MSG
 	"msgctl",             /* 258 = msgctl */
 	"msgget",             /* 259 = msgget */
 	"msgsnd",             /* 260 = msgsnd */
 	"msgrcv",             /* 261 = msgrcv */
+#else
+	"#258",               /* 258 = */
+	"#259",               /* 259 = */
+	"#260",               /* 260 = */
+	"#261",               /* 261 = */
+#endif
+#if SYSV_SHM
 	"shmat",              /* 262 = shmat */
 	"shmctl",             /* 263 = shmctl */
 	"shmdt",              /* 264 = shmdt */
 	"shmget",             /* 265 = shmget */
+#else
+	"#262",               /* 262 = */
+	"#263",               /* 263 = */
+	"#264",               /* 264 = */
+	"#265",               /* 265 = */
+#endif
 	"shm_open",           /* 266 = shm_open */
 	"shm_unlink",         /* 267 = shm_unlink */
 	"sem_open",           /* 268 = sem_open */
@@ -346,25 +426,25 @@ const char *syscallnames[] = {
 	"mkfifo_extended",    /* 291 = mkfifo_extended */
 	"mkdir_extended",     /* 292 = mkdir_extended */
 	"identitysvc",        /* 293 = identitysvc */
-	"#294",               /* 294 = */
-	"#295",               /* 295 = */
-	"load_shared_file",   /* 296 = load_shared_file */
-	"reset_shared_file",  /* 297 = reset_shared_file */
-	"new_system_shared_regions",  /* 298 = new_system_shared_regions */
-	"shared_region_map_file_np",  /* 299 = shared_region_map_file_np */
-	"shared_region_make_private_np",  /* 300 = shared_region_make_private_np */
-	"#301",               /* 301 = */
-	"#302",               /* 302 = */
-	"#303",               /* 303 = */
-	"#304",               /* 304 = */
-	"#305",               /* 305 = */
-	"#306",               /* 306 = */
-	"#307",               /* 307 = */
-	"#308",               /* 308 = */
-	"#309",               /* 309 = */
+	"shared_region_check_np",  /* 294 = shared_region_check_np */
+	"shared_region_map_np",  /* 295 = shared_region_map_np */
+	"#296",               /* 296 = old load_shared_file */
+	"#297",               /* 297 = old reset_shared_file */
+	"#298",               /* 298 = old new_system_shared_regions */
+	"#299",               /* 299 = old shared_region_map_file_np */
+	"#300",               /* 300 = old shared_region_make_private_np */
+	"__pthread_mutex_destroy",  /* 301 = __pthread_mutex_destroy */
+	"__pthread_mutex_init",  /* 302 = __pthread_mutex_init */
+	"__pthread_mutex_lock",  /* 303 = __pthread_mutex_lock */
+	"__pthread_mutex_trylock",  /* 304 = __pthread_mutex_trylock */
+	"__pthread_mutex_unlock",  /* 305 = __pthread_mutex_unlock */
+	"__pthread_cond_init",  /* 306 = __pthread_cond_init */
+	"__pthread_cond_destroy",  /* 307 = __pthread_cond_destroy */
+	"__pthread_cond_broadcast",  /* 308 = __pthread_cond_broadcast */
+	"__pthread_cond_signal",  /* 309 = __pthread_cond_signal */
 	"getsid",             /* 310 = getsid */
 	"settid_with_pid",    /* 311 = settid_with_pid */
-	"#312",               /* 312 = */
+	"__pthread_cond_timedwait",  /* 312 = __pthread_cond_timedwait */
 	"aio_fsync",          /* 313 = aio_fsync */
 	"aio_return",         /* 314 = aio_return */
 	"aio_suspend",        /* 315 = aio_suspend */
@@ -373,35 +453,40 @@ const char *syscallnames[] = {
 	"aio_read",           /* 318 = aio_read */
 	"aio_write",          /* 319 = aio_write */
 	"lio_listio",         /* 320 = lio_listio */
-	"#321",               /* 321 = */
-	"#322",               /* 322 = */
+	"__pthread_cond_wait",  /* 321 = __pthread_cond_wait */
+	"iopolicysys",        /* 322 = iopolicysys */
 	"#323",               /* 323 = */
 	"mlockall",           /* 324 = mlockall */
 	"munlockall",         /* 325 = munlockall */
 	"#326",               /* 326 = */
 	"issetugid",          /* 327 = issetugid */
 	"__pthread_kill",     /* 328 = __pthread_kill */
-	"pthread_sigmask",    /* 329 = pthread_sigmask */
-	"sigwait",            /* 330 = sigwait */
+	"__pthread_sigmask",  /* 329 = __pthread_sigmask */
+	"__sigwait",          /* 330 = __sigwait */
 	"__disable_threadsignal",  /* 331 = __disable_threadsignal */
 	"__pthread_markcancel",  /* 332 = __pthread_markcancel */
 	"__pthread_canceled",  /* 333 = __pthread_canceled */
 	"__semwait_signal",   /* 334 = __semwait_signal */
-	"utrace",             /* 335 = utrace */
+	"#335",               /* 335 = old utrace */
 	"proc_info",          /* 336 = proc_info */
+#if SENDFILE
+	"sendfile",           /* 337 = sendfile */
+#else /* !SENDFILE */
 	"#337",               /* 337 = */
-	"#338",               /* 338 = */
-	"#339",               /* 339 = */
-	"#340",               /* 340 = */
-	"#341",               /* 341 = */
-	"#342",               /* 342 = */
-	"#343",               /* 343 = */
-	"#344",               /* 344 = */
-	"#345",               /* 345 = */
-	"#346",               /* 346 = */
-	"#347",               /* 347 = */
-	"#348",               /* 348 = */
-	"#349",               /* 349 = */
+#endif /* SENDFILE */
+	"stat64",             /* 338 = stat64 */
+	"fstat64",            /* 339 = fstat64 */
+	"lstat64",            /* 340 = lstat64 */
+	"stat64_extended",    /* 341 = stat64_extended */
+	"lstat64_extended",   /* 342 = lstat64_extended */
+	"fstat64_extended",   /* 343 = fstat64_extended */
+	"getdirentries64",    /* 344 = getdirentries64 */
+	"statfs64",           /* 345 = statfs64 */
+	"fstatfs64",          /* 346 = fstatfs64 */
+	"getfsstat64",        /* 347 = getfsstat64 */
+	"__pthread_chdir",    /* 348 = __pthread_chdir */
+	"__pthread_fchdir",   /* 349 = __pthread_fchdir */
+#if AUDIT
 	"audit",              /* 350 = audit */
 	"auditon",            /* 351 = auditon */
 	"#352",               /* 352 = */
@@ -412,14 +497,103 @@ const char *syscallnames[] = {
 	"getaudit_addr",      /* 357 = getaudit_addr */
 	"setaudit_addr",      /* 358 = setaudit_addr */
 	"auditctl",           /* 359 = auditctl */
-	"#360",               /* 360 = */
-	"#361",               /* 361 = */
+#else
+	"#350",               /* 350 = */
+	"#351",               /* 351 = */
+	"#352",               /* 352 = */
+	"#353",               /* 353 = */
+	"#354",               /* 354 = */
+	"#355",               /* 355 = */
+	"#356",               /* 356 = */
+	"#357",               /* 357 = */
+	"#358",               /* 358 = */
+	"#359",               /* 359 = */
+#endif
+	"bsdthread_create",   /* 360 = bsdthread_create */
+	"bsdthread_terminate",  /* 361 = bsdthread_terminate */
 	"kqueue",             /* 362 = kqueue */
 	"kevent",             /* 363 = kevent */
 	"lchown",             /* 364 = lchown */
 	"stack_snapshot",     /* 365 = stack_snapshot */
-	"#366",               /* 366 = */
-	"#367",               /* 367 = */
-	"#368",               /* 368 = */
+	"bsdthread_register",  /* 366 = bsdthread_register */
+	"workq_open",         /* 367 = workq_open */
+	"workq_ops",          /* 368 = workq_ops */
 	"#369",               /* 369 = */
+	"#370",               /* 370 = */
+	"#371",               /* 371 = */
+	"#372",               /* 372 = */
+	"#373",               /* 373 = */
+	"#374",               /* 374 = */
+	"#375",               /* 375 = */
+	"#376",               /* 376 = */
+	"#377",               /* 377 = */
+	"#378",               /* 378 = */
+	"#379",               /* 379 = */
+	"__mac_execve",       /* 380 = __mac_execve */
+	"__mac_syscall",      /* 381 = __mac_syscall */
+	"__mac_get_file",     /* 382 = __mac_get_file */
+	"__mac_set_file",     /* 383 = __mac_set_file */
+	"__mac_get_link",     /* 384 = __mac_get_link */
+	"__mac_set_link",     /* 385 = __mac_set_link */
+	"__mac_get_proc",     /* 386 = __mac_get_proc */
+	"__mac_set_proc",     /* 387 = __mac_set_proc */
+	"__mac_get_fd",       /* 388 = __mac_get_fd */
+	"__mac_set_fd",       /* 389 = __mac_set_fd */
+	"__mac_get_pid",      /* 390 = __mac_get_pid */
+	"__mac_get_lcid",     /* 391 = __mac_get_lcid */
+	"__mac_get_lctx",     /* 392 = __mac_get_lctx */
+	"__mac_set_lctx",     /* 393 = __mac_set_lctx */
+	"setlcid",            /* 394 = setlcid */
+	"getlcid",            /* 395 = getlcid */
+	"read_nocancel",      /* 396 = read_nocancel */
+	"write_nocancel",     /* 397 = write_nocancel */
+	"open_nocancel",      /* 398 = open_nocancel */
+	"close_nocancel",     /* 399 = close_nocancel */
+	"wait4_nocancel",     /* 400 = wait4_nocancel */
+#if SOCKETS
+	"recvmsg_nocancel",   /* 401 = recvmsg_nocancel */
+	"sendmsg_nocancel",   /* 402 = sendmsg_nocancel */
+	"recvfrom_nocancel",  /* 403 = recvfrom_nocancel */
+	"accept_nocancel",    /* 404 = accept_nocancel */
+#else
+	"#401",               /* 401 = */
+	"#402",               /* 402 = */
+	"#403",               /* 403 = */
+	"#404",               /* 404 = */
+#endif /* SOCKETS */
+	"msync_nocancel",     /* 405 = msync_nocancel */
+	"fcntl_nocancel",     /* 406 = fcntl_nocancel */
+	"select_nocancel",    /* 407 = select_nocancel */
+	"fsync_nocancel",     /* 408 = fsync_nocancel */
+#if SOCKETS
+	"connect_nocancel",   /* 409 = connect_nocancel */
+#else
+	"#409",               /* 409 = */
+#endif /* SOCKETS */
+	"sigsuspend_nocancel",  /* 410 = sigsuspend_nocancel */
+	"readv_nocancel",     /* 411 = readv_nocancel */
+	"writev_nocancel",    /* 412 = writev_nocancel */
+#if SOCKETS
+	"sendto_nocancel",    /* 413 = sendto_nocancel */
+#else
+	"#413",               /* 413 = */
+#endif /* SOCKETS */
+	"pread_nocancel",     /* 414 = pread_nocancel */
+	"pwrite_nocancel",    /* 415 = pwrite_nocancel */
+	"waitid_nocancel",    /* 416 = waitid_nocancel */
+	"poll_nocancel",      /* 417 = poll_nocancel */
+#if SYSV_MSG
+	"msgsnd_nocancel",    /* 418 = msgsnd_nocancel */
+	"msgrcv_nocancel",    /* 419 = msgrcv_nocancel */
+#else
+	"#418",               /* 418 = */
+	"#419",               /* 419 = */
+#endif
+	"sem_wait_nocancel",  /* 420 = sem_wait_nocancel */
+	"aio_suspend_nocancel",  /* 421 = aio_suspend_nocancel */
+	"__sigwait_nocancel",  /* 422 = __sigwait_nocancel */
+	"__semwait_signal_nocancel",  /* 423 = __semwait_signal_nocancel */
+	"__mac_mount",        /* 424 = __mac_mount */
+	"__mac_get_mount",    /* 425 = __mac_get_mount */
+	"__mac_getfsstat",    /* 426 = __mac_getfsstat */
 };

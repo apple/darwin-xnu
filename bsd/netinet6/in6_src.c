@@ -98,7 +98,6 @@
 #include <net/net_osdep.h>
 
 #include "loop.h"
-extern lck_mtx_t *rt_mtx;
 
 /*
  * Return an IPv6 address, which is the most appropriate for a given
@@ -198,7 +197,7 @@ in6_selectsrc(
 		struct ifnet *ifp = mopts ? mopts->im6o_multicast_ifp : NULL;
 
 		if (ifp == NULL && IN6_IS_ADDR_MC_NODELOCAL(dst)) {
-			ifp = &loif[0];
+			ifp = lo_ifp;
 		}
 
 		if (ifp) {
@@ -262,10 +261,12 @@ in6_selectsrc(
 			sa6->sin6_family = AF_INET6;
 			sa6->sin6_len = sizeof(struct sockaddr_in6);
 			sa6->sin6_addr = *dst;
+#if SCOPEDROUTING
 			sa6->sin6_scope_id = dstsock->sin6_scope_id;
+#endif
 			if (IN6_IS_ADDR_MULTICAST(dst)) {
-				ro->ro_rt = rtalloc1_locked(&((struct route *)ro)
-						     ->ro_dst, 0, 0UL);
+				ro->ro_rt = rtalloc1_locked(
+				    &((struct route *)ro)->ro_dst, 0, 0UL);
 			} else {
 				rtalloc_ign_locked((struct route *)ro, 0UL);
 			}
@@ -348,11 +349,11 @@ in6_selecthlim(
  * share this function by all *bsd*...
  */
 int
-in6_pcbsetport(laddr, inp, p, locked)
-	struct in6_addr *laddr;
-	struct inpcb *inp;
-	struct proc *p;
-	int locked;
+in6_pcbsetport(
+	__unused struct in6_addr *laddr,
+	struct inpcb *inp,
+	struct proc *p,
+	int locked)
 {
 	struct socket *so = inp->inp_socket;
 	u_int16_t lport = 0, first, last, *lastport;

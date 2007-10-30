@@ -7,7 +7,11 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-COMPOBJROOT=$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)
+ifneq ($(MACHINE_CONFIG), DEFAULT)
+export COMPOBJROOT=$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)_$(MACHINE_CONFIG)/$(COMPONENT)
+else
+export COMPOBJROOT=$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)
+endif
 
 do_all: 
 	@echo "[ $(SOURCE) ] Starting do_all  $(COMPONENT) $(MACH_KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";	\

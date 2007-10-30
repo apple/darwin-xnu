@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -71,12 +77,18 @@
 #include <vm/cpm.h>
 
 #include <string.h>
+
+#include <libkern/OSDebug.h>
+#include <sys/kdebug.h>
+
 /*
  *	Variables exported by this module.
  */
 
 vm_map_t	kernel_map;
 vm_map_t	kernel_pageable_map;
+
+extern boolean_t vm_kernel_ready;
 
 /*
  * Forward declarations for internal functions.
@@ -99,6 +111,7 @@ kmem_alloc_contig(
 	vm_offset_t		*addrp,
 	vm_size_t		size,
 	vm_offset_t 		mask,
+	ppnum_t			max_pnum,
 	int 			flags)
 {
 	vm_object_t		object;
@@ -147,7 +160,7 @@ kmem_alloc_contig(
 	vm_object_reference(object);
 	vm_map_unlock(map);
 
-	kr = cpm_allocate(CAST_DOWN(vm_size_t, map_size), &pages, FALSE);
+	kr = cpm_allocate(CAST_DOWN(vm_size_t, map_size), &pages, max_pnum, FALSE);
 
 	if (kr != KERN_SUCCESS) {
 		vm_map_remove(map, vm_map_trunc_page(map_addr),
@@ -217,11 +230,17 @@ kernel_memory_allocate(
 	vm_object_t 		object;
 	vm_object_offset_t 	offset;
 	vm_map_entry_t 		entry;
-	vm_map_offset_t 	map_addr;
+	vm_map_offset_t 	map_addr, fill_start;
 	vm_map_offset_t		map_mask;
-	vm_map_size_t		map_size;
+	vm_map_size_t		map_size, fill_size;
 	vm_map_size_t		i;
 	kern_return_t 		kr;
+	vm_page_t		mem;
+	int			vm_alloc_flags;
+
+	if (! vm_kernel_ready) {
+		panic("kernel_memory_allocate: VM is not ready");
+	}
 
 	if (size == 0) {
 		*addrp = 0;
@@ -236,6 +255,44 @@ kernel_memory_allocate(
 
 	map_size = vm_map_round_page(size);
 	map_mask = (vm_map_offset_t) mask;
+	vm_alloc_flags = 0;
+
+	/*
+	 * Guard pages:
+	 *
+	 * Guard pages are implemented as ficticious pages.  By placing guard pages
+	 * on either end of a stack, they can help detect cases where a thread walks
+	 * off either end of its stack.  They are allocated and set up here and attempts
+	 * to access those pages are trapped in vm_fault_page().
+	 *
+	 * The map_size we were passed may include extra space for
+	 * guard pages.  If those were requested, then back it out of fill_size
+	 * since vm_map_find_space() takes just the actual size not including
+	 * guard pages.  Similarly, fill_start indicates where the actual pages
+	 * will begin in the range.
+	 */
+
+	fill_start = 0;
+	fill_size = map_size;
+	if (flags & KMA_GUARD_FIRST) {
+		vm_alloc_flags |= VM_FLAGS_GUARD_BEFORE;
+		fill_start += PAGE_SIZE_64;
+		fill_size -= PAGE_SIZE_64;
+		if (map_size < fill_start + fill_size) {
+			/* no space for a guard page */
+			*addrp = 0;
+			return KERN_INVALID_ARGUMENT;
+		}
+	}
+	if (flags & KMA_GUARD_LAST) {
+		vm_alloc_flags |= VM_FLAGS_GUARD_AFTER;
+		fill_size -= PAGE_SIZE_64;
+		if (map_size <= fill_start + fill_size) {
+			/* no space for a guard page */
+			*addrp = 0;
+			return KERN_INVALID_ARGUMENT;
+		}
+	}
 
 	/*
 	 *	Allocate a new object (if necessary).  We must do this before
@@ -248,11 +305,14 @@ kernel_memory_allocate(
 		object = vm_object_allocate(map_size);
 	}
 
-	kr = vm_map_find_space(map, &map_addr, map_size, map_mask, 0, &entry);
+	kr = vm_map_find_space(map, &map_addr,
+			       fill_size, map_mask,
+			       vm_alloc_flags, &entry);
 	if (KERN_SUCCESS != kr) {
 		vm_object_deallocate(object);
 		return kr;
 	}
+
 	entry->object.vm_object = object;
 	entry->offset = offset = (object == kernel_object) ? 
 		        map_addr - VM_MIN_KERNEL_ADDRESS : 0;
@@ -261,9 +321,35 @@ kernel_memory_allocate(
 	vm_map_unlock(map);
 
 	vm_object_lock(object);
-	for (i = 0; i < map_size; i += PAGE_SIZE) {
-		vm_page_t	mem;
 
+	/*
+	 * Allocate the lower guard page if one was requested.  The guard
+	 * page extends up to fill_start which is where the real memory
+	 * begins.
+	 */
+
+	for (i = 0; i < fill_start; i += PAGE_SIZE) {
+		for (;;) {
+			mem = vm_page_alloc_guard(object, offset + i);
+			if (mem != VM_PAGE_NULL)
+				break;
+			if (flags & KMA_NOPAGEWAIT) {
+				kr = KERN_RESOURCE_SHORTAGE;
+				goto nopage;
+			}
+			vm_object_unlock(object);
+			vm_page_more_fictitious();
+			vm_object_lock(object);
+		}
+		mem->busy = FALSE;
+	}
+
+	/*
+	 * Allocate the real memory here.  This extends from offset fill_start
+	 * for fill_size bytes.
+	 */
+
+	for (i = fill_start; i < fill_start + fill_size; i += PAGE_SIZE) {
 		for (;;) {
 		        if (flags & KMA_LOMEM)
 			        mem = vm_page_alloclo(object, offset + i);
@@ -274,12 +360,8 @@ kernel_memory_allocate(
 			        break;
 
 			if (flags & KMA_NOPAGEWAIT) {
-				if (object == kernel_object)
-					vm_object_page_remove(object, offset, offset + i);
-				vm_object_unlock(object);
-				vm_map_remove(map, map_addr, map_addr + map_size, 0);
-				vm_object_deallocate(object);
-				return KERN_RESOURCE_SHORTAGE;
+				kr = KERN_RESOURCE_SHORTAGE;
+				goto nopage;
 			}
 			vm_object_unlock(object);
 			VM_PAGE_WAIT();
@@ -287,19 +369,37 @@ kernel_memory_allocate(
 		}
 		mem->busy = FALSE;
 	}
+
+	/*
+	 * Lastly, allocate the ending guard page if requested.  This starts at the ending
+	 * address from the loop above up to the map_size that was originaly 
+	 * requested.
+	 */
+
+	for (i = fill_start + fill_size; i < map_size; i += PAGE_SIZE) {
+		for (;;) {
+			mem = vm_page_alloc_guard(object, offset + i);
+			if (mem != VM_PAGE_NULL)
+				break;
+			if (flags & KMA_NOPAGEWAIT) {
+				kr = KERN_RESOURCE_SHORTAGE;
+				goto nopage;
+			}
+			vm_object_unlock(object);
+			vm_page_more_fictitious();
+			vm_object_lock(object);
+		}
+		mem->busy = FALSE;
+	}
 	vm_object_unlock(object);
 
-	if ((kr = vm_map_wire(map, map_addr, map_addr + map_size, VM_PROT_DEFAULT, FALSE)) 
-		!= KERN_SUCCESS) {
-		if (object == kernel_object) {
-			vm_object_lock(object);
-			vm_object_page_remove(object, offset, offset + map_size);
-			vm_object_unlock(object);
-		}
-		vm_map_remove(map, map_addr, map_addr + map_size, 0);
-		vm_object_deallocate(object);
-		return (kr);
+	kr = vm_map_wire(map, map_addr, map_addr + map_size,
+			 VM_PROT_DEFAULT, FALSE);
+	if (kr != KERN_SUCCESS) {
+		vm_object_lock(object);
+		goto nopage;
 	}
+
 	/* now that the page is wired, we no longer have to fear coalesce */
 	vm_object_deallocate(object);
 	if (object == kernel_object)
@@ -310,6 +410,14 @@ kernel_memory_allocate(
 	 */
 	*addrp = CAST_DOWN(vm_offset_t, map_addr);
 	return KERN_SUCCESS;
+
+nopage:
+	if (object == kernel_object)
+		vm_object_page_remove(object, offset, offset + i);
+	vm_object_unlock(object);
+	vm_map_remove(map, map_addr, map_addr + map_size, 0);
+	vm_object_deallocate(object);
+	return KERN_RESOURCE_SHORTAGE;
 }
 
 /*
@@ -325,7 +433,9 @@ kmem_alloc(
 	vm_offset_t	*addrp,
 	vm_size_t	size)
 {
-	return kernel_memory_allocate(map, addrp, size, 0, 0);
+	kern_return_t kr = kernel_memory_allocate(map, addrp, size, 0, 0);
+	TRACE_MACHLEAKS(KMEM_ALLOC_CODE, KMEM_ALLOC_CODE_2, size, *addrp);
+	return kr;
 }
 
 /*
@@ -537,6 +647,8 @@ kmem_free(
 {
 	kern_return_t kr;
 
+	TRACE_MACHLEAKS(KMEM_FREE_CODE, KMEM_FREE_CODE_2, size, addr);
+
 	kr = vm_map_remove(map, vm_map_trunc_page(addr),
 				vm_map_round_page(addr + size), 
 				VM_MAP_REMOVE_KUNWIRE);
@@ -619,7 +731,7 @@ kmem_remap_pages(
 	    /*
 	     *	Wire it down (again)
 	     */
-	    vm_page_lock_queues();
+	    vm_page_lockspin_queues();
 	    vm_page_wire(mem);
 	    vm_page_unlock_queues();
 	    vm_object_unlock(object);
@@ -738,7 +850,6 @@ kmem_init(
 	/*
 	 *	Reserve virtual memory allocated up to this time.
 	 */
-
 	if (start != VM_MIN_KERNEL_ADDRESS) {
 		vm_map_offset_t map_addr;
  
@@ -754,6 +865,7 @@ kmem_init(
 			    VM_INHERIT_DEFAULT);
 	}
 
+
         /*
          * Account for kernel memory (text, data, bss, vm shenanigans).
          * This may include inaccessible "holes" as determined by what
@@ -762,6 +874,23 @@ kmem_init(
         vm_page_wire_count = (atop_64(max_mem) - (vm_page_free_count
                                                 + vm_page_active_count
                                                 + vm_page_inactive_count));
+
+	/*
+	 * Set the default global user wire limit which limits the amount of
+	 * memory that can be locked via mlock().  We set this to the total number of
+	 * pages that are potentially usable by a user app (max_mem) minus
+	 * 1000 pages.  This keeps 4MB in reserve for the kernel which will hopefully be
+	 * enough to avoid memory deadlocks. If for some reason the system has less than
+	 * 2000 pages of memory at this point, then we'll allow users to lock up to 80%
+	 * of that.  This can be overridden via a sysctl.
+	 */
+
+	if (max_mem > 2000)
+		vm_global_user_wire_limit = max_mem - 1000;
+	else
+		vm_global_user_wire_limit = max_mem * 100 / 80;
+	
+	vm_user_wire_limit = vm_global_user_wire_limit;		/* the default per user limit is the same as the global limit */
 }
 
 

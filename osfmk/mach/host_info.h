@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -96,7 +102,7 @@ typedef	integer_t	host_flavor_t;
 #ifdef MACH_KERNEL_PRIVATE
 struct host_basic_info_old {
 	integer_t	max_cpus;	/* max number of cpus possible */
-	integer_t	avail_cpus;	/* number of cpus now available */
+	uint32_t	avail_cpus;	/* number of cpus now available */
 	natural_t	memory_size;	/* size of memory in bytes */
 	cpu_type_t	cpu_type;	/* cpu type */
 	cpu_subtype_t	cpu_subtype;	/* cpu subtype */
@@ -188,8 +194,17 @@ typedef struct host_load_info	*host_load_info_t;
 /* in <mach/vm_statistics.h> */
 #define	HOST_VM_INFO_COUNT ((mach_msg_type_number_t) \
 		(sizeof(vm_statistics_data_t)/sizeof(integer_t)))
-#define	HOST_VM_INFO_REV0_COUNT ((mach_msg_type_number_t) \
-		(sizeof(vm_statistics_rev0_data_t)/sizeof(integer_t)))
+
+/* size of the latest version of the structure */
+#define HOST_VM_INFO_LATEST_COUNT HOST_VM_INFO_COUNT
+#define HOST_VM_INFO_REV2_COUNT	HOST_VM_INFO_LATEST_COUNT
+/* previous versions: adjust the size according to what was added each time */
+#define	HOST_VM_INFO_REV1_COUNT /* added "speculative_count" (1 int) */	\
+	((mach_msg_type_number_t) \
+	 (HOST_VM_INFO_REV2_COUNT - 1))
+#define	HOST_VM_INFO_REV0_COUNT /* added "purgable" info (2 ints) */ 	\
+	((mach_msg_type_number_t) \
+	 (HOST_VM_INFO_REV1_COUNT - 2))
 
 struct host_cpu_load_info {		/* number of ticks while running... */
 	natural_t	cpu_ticks[CPU_STATE_MAX]; /* ... in the given mode */

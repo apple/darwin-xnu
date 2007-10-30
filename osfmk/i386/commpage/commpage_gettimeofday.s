@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <sys/appleapiopts.h>
@@ -34,29 +40,25 @@ Lgettimeofday:
 	push	%ebp
 	mov	%esp,%ebp
 	push	%esi
-	push	%edi
 	push	%ebx
 
 0:
-	cmp	$0,_COMM_PAGE_TIMEENABLE
-	je	4f
-	mov	_COMM_PAGE_TIMEBASE,%esi
-	mov	_COMM_PAGE_TIMEBASE+4,%edi
-	mov	_COMM_PAGE_TIMESTAMP,%ebx
+	movl	_COMM_PAGE_GTOD_GENERATION,%esi	/* get generation (0 if disabled) */
+	testl	%esi,%esi			/* disabled? */
+	jz	4f
 
 	mov	$ _COMM_PAGE_NANOTIME,%eax
-	call	*%eax		/* get ns in %edx:%eax */
+	call	*%eax				/* get ns in %edx:%eax */
 
-	cmp	_COMM_PAGE_TIMEBASE,%esi
-	jne	0b
-	cmp	_COMM_PAGE_TIMEBASE+4,%edi
-	jne	0b
-	cmp	$0,_COMM_PAGE_TIMEENABLE
-	je	4f
 	
+	sub	_COMM_PAGE_GTOD_NS_BASE,%eax
+	sbb	_COMM_PAGE_GTOD_NS_BASE+4,%edx
+	mov	_COMM_PAGE_GTOD_SEC_BASE,%ebx	/* load all the data before checking generation */
 	mov	$ NSEC_PER_SEC,%ecx
-	sub	%esi,%eax
-	sbb	%edi,%edx
+	
+	cmpl	_COMM_PAGE_GTOD_GENERATION,%esi	/* has time data changed out from under us? */
+	jne	0b
+	
 	div	%ecx
 	add	%eax,%ebx
 
@@ -72,7 +74,6 @@ Lgettimeofday:
 
 3:
 	pop	%ebx
-	pop	%edi
 	pop	%esi
 	pop	%ebp
 	ret
@@ -91,21 +92,21 @@ Lgettimeofday_64:			// %rdi = ptr to timeval
 	pushq	%rbp			// set up a frame for backtraces
 	movq	%rsp,%rbp
 	movq	%rdi,%r9		// save ptr to timeval
-	movq	$_COMM_PAGE_32_TO_64(_COMM_PAGE_TIMEBASE),%r10
+	movq	$_COMM_PAGE_32_TO_64(_COMM_PAGE_TIME_DATA_START),%r10
 0:
-	cmpl	$0,_TIMEENABLE(%r10)	// is data valid? (test _COMM_PAGE_TIMEENABLE)
-	jz	4f			// no
-	movq	_TIMEBASE(%r10),%r11	// get _COMM_PAGE_TIMEBASE
+	movl	_GTOD_GENERATION(%r10),%r11d	// get generation (0 if disabled)
+	testl	%r11d,%r11d		// disabled?
+	jz	4f
+	
 	movq	$_COMM_PAGE_32_TO_64(_COMM_PAGE_NANOTIME),%rax
 	call	*%rax			// get %rax <- nanotime(), preserving %r9, %r10 and %r11
-	movl	_TIMESTAMP(%r10),%r8d	// get _COMM_PAGE_TIMESTAMP
-	cmpq	_TIMEBASE(%r10),%r11	// has _COMM_PAGE_TIMEBASE changed?
-	jne	0b			// loop until we have consistent data
-	cmpl	$0,_TIMEENABLE(%r10)	// is data valid? (test _COMM_PAGE_TIMEENABLE)
-	jz	4f			// no
+	
+	movl	_GTOD_SEC_BASE(%r10),%r8d	// get _COMM_PAGE_TIMESTAMP
+	subq	_GTOD_NS_BASE(%r10),%rax	// generate nanoseconds since timestamp
+	cmpl	_GTOD_GENERATION(%r10),%r11d	// has data changed out from under us?
+	jne	0b
 	
 	movl	$ NSEC_PER_SEC,%ecx
-	subq	%r11,%rax		// generate nanoseconds since timestamp
 	movq	%rax,%rdx
 	shrq	$32,%rdx		// get high half of delta in %edx
 	divl	%ecx			// %eax <- seconds since timestamp, %edx <- nanoseconds

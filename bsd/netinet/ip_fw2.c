@@ -36,7 +36,7 @@
 #error IPFIREWALL requires INET.
 #endif /* INET */
 
-#ifdef IPFW2
+#if IPFW2
 #include <machine/spl.h>
 
 #include <sys/param.h>
@@ -50,6 +50,8 @@
 #include <sys/sysctl.h>
 #include <sys/syslog.h>
 #include <sys/ucred.h>
+#include <sys/kern_event.h>
+
 #include <net/if.h>
 #include <net/route.h>
 #include <netinet/in.h>
@@ -108,6 +110,7 @@ static u_int32_t set_disable;
 
 int fw_verbose;
 static int verbose_limit;
+extern int fw_bypass;
 
 #define	IPFW_DEFAULT_RULE	65535
 
@@ -120,14 +123,19 @@ static struct ip_fw *layer3_chain;
 
 MALLOC_DEFINE(M_IPFW, "IpFw/IpAcct", "IpFw/IpAcct chain's");
 
-static int fw_debug = 1;
+static int fw_debug = 0;
 static int autoinc_step = 100; /* bounded to 1..1000 in add_rule() */
 
+static void ipfw_kev_post_msg(u_int32_t );
+
 #ifdef SYSCTL_NODE
-SYSCTL_NODE(_net_inet_ip, OID_AUTO, fw, CTLFLAG_RW, 0, "Firewall");
-SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, enable,
-    CTLFLAG_RW,
-    &fw_enable, 0, "Enable ipfw");
+
+static int ipfw_sysctl SYSCTL_HANDLER_ARGS;
+
+SYSCTL_NODE(_net_inet_ip, OID_AUTO, fw, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "Firewall");
+SYSCTL_PROC(_net_inet_ip_fw, OID_AUTO, enable,
+    CTLTYPE_INT | CTLFLAG_RW,
+    &fw_enable, 0, ipfw_sysctl, "I", "Enable ipfw");
 SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, autoinc_step, CTLFLAG_RW,
     &autoinc_step, 0, "Rule number autincrement step");
 SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, one_pass,
@@ -235,6 +243,21 @@ SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_short_lifetime, CTLFLAG_RW,
 SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_keepalive, CTLFLAG_RW,
     &dyn_keepalive, 0, "Enable keepalives for dyn. rules");
 
+static int
+ipfw_sysctl SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+	int error;
+	
+	error = sysctl_handle_int(oidp, oidp->oid_arg1, oidp->oid_arg2, req);
+	if (error || !req->newptr)
+		return (error);
+	
+	ipfw_kev_post_msg(KEV_IPFW_ENABLE);
+	
+	return error;
+}
+
 #endif /* SYSCTL_NODE */
 
 
@@ -246,7 +269,7 @@ lck_grp_attr_t    *ipfw_mutex_grp_attr;
 lck_attr_t        *ipfw_mutex_attr;
 lck_mtx_t         *ipfw_mutex;
 
-extern  void    ipfwsyslog( int level, char *format,...);
+extern  void    ipfwsyslog( int level, const char *format,...);
 
 #if DUMMYNET
 ip_dn_ruledel_t *ip_dn_ruledel_ptr = NULL;	/* hook into dummynet */
@@ -260,11 +283,11 @@ static          size_t		ipfwstringlen;
 
 #define dolog( a ) {		\
 	if ( fw_verbose == 2 )  	/* Apple logging, log to ipfw.log */ \
-		ipfwsyslog a ; 	\ 
+		ipfwsyslog a ; 	\
 	else log a ;		\
 }
 
-void    ipfwsyslog( int level, char *format,...)
+void    ipfwsyslog( int level, const char *format,...)
 {
 #define		msgsize		100
 
@@ -537,7 +560,7 @@ static void
 ipfw_log(struct ip_fw *f, u_int hlen, struct ether_header *eh,
 	struct mbuf *m, struct ifnet *oif)
 {
-	char *action;
+	const char *action;
 	int limit_reached = 0;
 	char ipv4str[MAX_IPv4_STR_LEN];
 	char action2[40], proto[48], fragment[28];
@@ -1218,7 +1241,7 @@ send_pkt(struct ipfw_flow_id *id, u_int32_t seq, u_int32_t ack, int flags)
 	struct tcphdr *tcp;
 	struct route sro;	/* fake route */
 
-	MGETHDR(m, M_DONTWAIT, MT_HEADER);
+	MGETHDR(m, M_DONTWAIT, MT_HEADER);	/* MAC-OK */
 	if (m == 0)
 		return;
 	m->m_pkthdr.rcvif = (struct ifnet *)0;
@@ -1285,7 +1308,7 @@ send_pkt(struct ipfw_flow_id *id, u_int32_t seq, u_int32_t ack, int flags)
 	bzero (&sro, sizeof (sro));
 	ip_rtaddr(ip->ip_dst, &sro);
 	m->m_flags |= M_SKIP_FIREWALL;
-	ip_output_list(m, 0, NULL, &sro, 0, NULL);
+	ip_output_list(m, 0, NULL, &sro, 0, NULL, NULL);
 	if (sro.ro_rt)
 		RTFREE(sro.ro_rt);
 }
@@ -1294,7 +1317,7 @@ send_pkt(struct ipfw_flow_id *id, u_int32_t seq, u_int32_t ack, int flags)
  * sends a reject message, consuming the mbuf passed as an argument.
  */
 static void
-send_reject(struct ip_fw_args *args, int code, int offset, int ip_len)
+send_reject(struct ip_fw_args *args, int code, int offset, __unused int ip_len)
 {
 
 	if (code != ICMP_REJECT_RST) { /* Send an ICMP unreach */
@@ -1304,7 +1327,7 @@ send_reject(struct ip_fw_args *args, int code, int offset, int ip_len)
 			ip->ip_len = ntohs(ip->ip_len);
 			ip->ip_off = ntohs(ip->ip_off);
 		}
-                args->m->m_flags |= M_SKIP_FIREWALL;
+		args->m->m_flags |= M_SKIP_FIREWALL;
 		icmp_error(args->m, ICMP_UNREACH, code, 0L, 0);
 	} else if (offset == 0 && args->f_id.proto == IPPROTO_TCP) {
 		struct tcphdr *const tcp =
@@ -1459,17 +1482,26 @@ ipfw_chk(struct ip_fw_args *args)
 	 */
 	u_int8_t proto;
 	u_int16_t src_port = 0, dst_port = 0;	/* NOTE: host format	*/
-	struct in_addr src_ip, dst_ip;		/* NOTE: network format	*/
+	struct in_addr src_ip = { 0 } , dst_ip = { 0 };		/* NOTE: network format	*/
 	u_int16_t ip_len=0;
 	int pktlen;
 	int dyn_dir = MATCH_UNKNOWN;
 	ipfw_dyn_rule *q = NULL;
 	struct timeval timenow;
 
-	if (m->m_flags & M_SKIP_FIREWALL) {
+	if (m->m_flags & M_SKIP_FIREWALL || fw_bypass) {
 		return 0;	/* accept */
 	}
 
+	/* 
+	 * Clear packet chain if we find one here.
+	 */
+	
+	if (m->m_nextpkt != NULL) {
+		m_freem_list(m->m_nextpkt);
+		m->m_nextpkt = NULL;
+	}
+	
 	lck_mtx_lock(ipfw_mutex);
 
 	getmicrotime(&timenow);
@@ -2104,7 +2136,7 @@ check_body:
 				 * if the packet is not ICMP (or is an ICMP
 				 * query), and it is not multicast/broadcast.
 				 */
-				if (hlen > 0 &&
+				if (hlen > 0 && offset == 0 &&
 				    (proto != IPPROTO_ICMP ||
 				     is_icmp_query(ip)) &&
 				    !(m->m_flags & (M_BCAST|M_MCAST)) &&
@@ -2216,7 +2248,6 @@ static int
 add_rule(struct ip_fw **head, struct ip_fw *input_rule)
 {
 	struct ip_fw *rule, *f, *prev;
-	int s;
 	int l = RULESIZE(input_rule);
 
 	if (*head == NULL && input_rule->rulenum != IPFW_DEFAULT_RULE)
@@ -2477,7 +2508,6 @@ static int
 del_entry(struct ip_fw **chain, u_int32_t arg)
 {
 	struct ip_fw *prev = NULL, *rule = *chain;
-	int s;
 	u_int16_t rulenum;	/* rule or old_set */
 	u_int8_t cmd, new_set;
 
@@ -2513,12 +2543,12 @@ del_entry(struct ip_fw **chain, u_int32_t arg)
 		 */
 		flush_rule_ptrs();
 		while (rule->rulenum == rulenum) {
-			ipfw_insn	*cmd = ACTION_PTR(rule);
+			ipfw_insn	*insn = ACTION_PTR(rule);
 			
 			/* keep forwarding rules around so struct isn't 
 			 * deleted while pointer is still in use elsewhere
 			 */
-			if (cmd->opcode == O_FORWARD_IP) {
+			if (insn->opcode == O_FORWARD_IP) {
 				mark_inactive(&prev, &rule);
 			}
 			else {
@@ -2531,12 +2561,12 @@ del_entry(struct ip_fw **chain, u_int32_t arg)
 		flush_rule_ptrs();
 		while (rule->rulenum < IPFW_DEFAULT_RULE) {
 			if (rule->set == rulenum) {
-				ipfw_insn	*cmd = ACTION_PTR(rule);
+				ipfw_insn	*insn = ACTION_PTR(rule);
 				
 				/* keep forwarding rules around so struct isn't 
 				 * deleted while pointer is still in use elsewhere
 				 */
-				if (cmd->opcode == O_FORWARD_IP) {
+				if (insn->opcode == O_FORWARD_IP) {
 					mark_inactive(&prev, &rule);
 				}
 				else {
@@ -2599,8 +2629,7 @@ static int
 zero_entry(int rulenum, int log_only)
 {
 	struct ip_fw *rule;
-	int s;
-	char *msg;
+	const char *msg;
 
 	if (rulenum == 0) {
 		norule_counter = 0;
@@ -2827,6 +2856,22 @@ bad_size:
 }
 
 
+static void
+ipfw_kev_post_msg(u_int32_t event_code)
+{
+	struct kev_msg		ev_msg;
+
+	bzero(&ev_msg, sizeof(struct kev_msg));
+	
+	ev_msg.vendor_code = KEV_VENDOR_APPLE;
+	ev_msg.kev_class = KEV_FIREWALL_CLASS;
+	ev_msg.kev_subclass = KEV_IPFW_SUBCLASS;
+	ev_msg.event_code = event_code;
+
+	kev_post_msg(&ev_msg);
+
+}
+
 /**
  * {set|get}sockopt parser.
  */
@@ -2836,7 +2881,7 @@ ipfw_ctl(struct sockopt *sopt)
 #define	RULE_MAXSIZE	(256*sizeof(u_int32_t))
 	u_int32_t api_version;
 	int command;
-	int error, s;
+	int error;
 	size_t size;
 	struct ip_fw *bp , *buf, *rule;
 	
@@ -3000,7 +3045,7 @@ ipfw_ctl(struct sockopt *sopt)
 				if (ipfw_dyn_v) {
 					for (i = 0; i < curr_dyn_buckets; i++) {
 						for ( p = ipfw_dyn_v[i] ; p != NULL ; p = p->next) {
-							(int) dyn_rule_vers1->chain = p->rule->rulenum;
+							dyn_rule_vers1->chain = p->rule->rulenum;
 							dyn_rule_vers1->id = p->id;
 							dyn_rule_vers1->mask = p->id;
 							dyn_rule_vers1->type = p->dyn_type;
@@ -3010,7 +3055,7 @@ ipfw_ctl(struct sockopt *sopt)
 							dyn_rule_vers1->bucket = p->bucket;
 							dyn_rule_vers1->state = p->state;
 							
-							dyn_rule_vers1->next = dyn_rule_vers1;
+							dyn_rule_vers1->next = (struct ipfw_dyn_rule *) dyn_rule_vers1;
 							dyn_last = dyn_rule_vers1;
 							
 							len += sizeof(*dyn_rule_vers1);
@@ -3050,6 +3095,7 @@ ipfw_ctl(struct sockopt *sopt)
 
 		lck_mtx_lock(ipfw_mutex);
 		free_chain(&layer3_chain, 0 /* keep default rule */);
+		fw_bypass = 1;
 #if DEBUG_INACTIVE_RULES
 			print_chain(&layer3_chain);
 #endif
@@ -3084,6 +3130,8 @@ ipfw_ctl(struct sockopt *sopt)
 			if (!error) {
 				lck_mtx_lock(ipfw_mutex);
 				error = add_rule(&layer3_chain, rule);
+				if (!error && fw_bypass)
+					fw_bypass = 0;
 				lck_mtx_unlock(ipfw_mutex);
 				
 				size = RULESIZE(rule);
@@ -3171,7 +3219,9 @@ ipfw_ctl(struct sockopt *sopt)
 					(set_disable | temp_rule.set_masks[0]) & ~temp_rule.set_masks[1] &
 					~(1<<RESVD_SET); /* set RESVD_SET always enabled */
 			}
-						
+			
+			if (!layer3_chain->next)
+				fw_bypass = 1;
 			lck_mtx_unlock(ipfw_mutex);
 		}
 		break;
@@ -3182,7 +3232,9 @@ ipfw_ctl(struct sockopt *sopt)
 		/* there is only a simple rule passed in
 		 * (no cmds), so use a temp struct to copy
 		 */
-		struct ip_fw	temp_rule = { 0 };
+		struct ip_fw	temp_rule;
+		
+		bzero(&temp_rule, sizeof(struct ip_fw));
 		
 		if (api_version != IP_FW_CURRENT_API_VERSION) {
 			error = ipfw_convert_to_latest(sopt, &temp_rule, api_version);
@@ -3206,6 +3258,26 @@ ipfw_ctl(struct sockopt *sopt)
 		error = EINVAL;
 	}
 
+	if (error != EINVAL) {
+		switch (command) {
+			case IP_FW_ADD:
+			case IP_OLD_FW_ADD:
+				ipfw_kev_post_msg(KEV_IPFW_ADD);
+				break;
+			case IP_OLD_FW_DEL:
+			case IP_FW_DEL:
+				ipfw_kev_post_msg(KEV_IPFW_DEL);
+				break;
+			case IP_FW_FLUSH:
+			case IP_OLD_FW_FLUSH:
+				ipfw_kev_post_msg(KEV_IPFW_FLUSH);
+				break;
+
+			default:
+				break;
+		}
+	}
+
 	return (error);
 }
 
@@ -3223,10 +3295,9 @@ struct ip_fw *ip_fw_default_rule;
  * every dyn_keepalive_period
  */
 static void
-ipfw_tick(void * __unused unused)
+ipfw_tick(__unused void * unused)
 {
 	int i;
-	int s;
 	ipfw_dyn_rule *q;
 	struct timeval timenow;
 
@@ -3298,17 +3369,6 @@ ipfw_init(void)
 	}
 	else {
 		ip_fw_default_rule = layer3_chain;
-#if 0
-		/* Radar 3920649, don't print unncessary messages to the log */
-		printf("ipfw2 initialized, divert %s, "
-			"rule-based forwarding enabled, default to %s, logging ",
-	#ifdef IPDIVERT
-			"enabled",
-	#else
-			"disabled",
-	#endif
-			default_rule.cmd[0].opcode == O_ACCEPT ? "accept" : "deny");
-#endif
 	
 	#ifdef IPFIREWALL_VERBOSE
 		fw_verbose = 1;
@@ -3316,13 +3376,13 @@ ipfw_init(void)
 	#ifdef IPFIREWALL_VERBOSE_LIMIT
 		verbose_limit = IPFIREWALL_VERBOSE_LIMIT;
 	#endif
-		if (fw_verbose == 0)
-			printf("disabled\n");
-		else if (verbose_limit == 0)
-			printf("unlimited\n");
-		else
-			printf("limited to %d packets/entry by default\n",
-				verbose_limit);
+		if (fw_verbose) {
+			if (!verbose_limit)
+				printf("ipfw2 verbose logging enabled: unlimited logging by default\n");
+			else
+				printf("ipfw2 verbose logging enabled: limited to %d packets/entry by default\n",
+					verbose_limit);
+		}
 	}
 
 	ip_fw_chk_ptr = ipfw_chk;
@@ -3334,3 +3394,4 @@ ipfw_init(void)
 }
 
 #endif /* IPFW2 */
+

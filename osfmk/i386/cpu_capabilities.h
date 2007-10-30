@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #ifdef	PRIVATE
 
@@ -42,10 +48,12 @@
 #define	kCache64			0x00000020
 #define	kCache128			0x00000040
 #define	kFastThreadLocalStorage		0x00000080	/* TLS ptr is kept in a user-mode-readable register */
-#define kHasSupplementalSSE3	0x00000100
-#define kHasMNI				kHasSupplementalSSE3
+#define kHasSupplementalSSE3		0x00000100
 #define	k64Bit				0x00000200	/* processor supports EM64T (not what mode you're running in) */
+#define	kHasSSE4_1			0x00000400
+#define	kHasSSE4_2			0x00000800
 
+#define	kSlow				0x00004000	/* tsc < nanosecond */
 #define	kUP				0x00008000	/* set if (kNumCPUs == 1) */
 #define	kNumCPUs			0x00FF0000	/* number of CPUs (see _NumCPUs() below) */
 
@@ -87,6 +95,11 @@ int _NumCPUs( void )
 #define _COMM_PAGE64_START_ADDRESS	( _COMM_PAGE64_BASE_ADDRESS )		/* address traditional commpage code starts on */
 #define _COMM_PAGE64_AREA_USED		( 2 * 4096 )				/* this is the amt actually populated */
 
+/* no need for an Objective-C area on Intel */
+#define _COMM_PAGE32_OBJC_SIZE		0ULL
+#define _COMM_PAGE32_OBJC_BASE		0ULL
+#define _COMM_PAGE64_OBJC_SIZE		0ULL
+#define _COMM_PAGE64_OBJC_BASE		0ULL
 
 #if defined(__i386__)
 
@@ -111,13 +124,15 @@ int _NumCPUs( void )
  
 #define _COMM_PAGE_SIGNATURE		(_COMM_PAGE_START_ADDRESS+0x000)	/* first few bytes are a signature */
 #define _COMM_PAGE_VERSION		(_COMM_PAGE_START_ADDRESS+0x01E)	/* 16-bit version# */
-#define	_COMM_PAGE_THIS_VERSION		6					/* version of the commarea format */
+#define	_COMM_PAGE_THIS_VERSION		7					/* version of the commarea format */
   
 #define _COMM_PAGE_CPU_CAPABILITIES	(_COMM_PAGE_START_ADDRESS+0x020)	/* uint32_t _cpu_capabilities */
 #define _COMM_PAGE_NCPUS		(_COMM_PAGE_START_ADDRESS+0x022)	/* uint8_t number of configured CPUs */
 #define _COMM_PAGE_CACHE_LINESIZE	(_COMM_PAGE_START_ADDRESS+0x026)	/* uint16_t cache line size */
 
-#define _COMM_PAGE_UNUSED1		(_COMM_PAGE_START_ADDRESS+0x028)	/* 24 unused bytes */
+#define _COMM_PAGE_SCHED_GEN		(_COMM_PAGE_START_ADDRESS+0x028)	/* uint32_t scheduler generation number (count of pre-emptions) */
+
+#define _COMM_PAGE_UNUSED1		(_COMM_PAGE_START_ADDRESS+0x02c)	/* 20 unused bytes */
  
 #if defined(__i386__)								/* following are not defined in 64-bit */
 #define _COMM_PAGE_2_TO_52		(_COMM_PAGE_START_ADDRESS+0x040)	/* double float constant 2**52 */
@@ -126,22 +141,27 @@ int _NumCPUs( void )
 #define _COMM_PAGE_UNUSED2		(_COMM_PAGE_START_ADDRESS+0x040)	/* 16 unused bytes */
 #endif
 
+#define	_COMM_PAGE_TIME_DATA_START	(_COMM_PAGE_START_ADDRESS+0x050)	/* base of offsets below (_NT_SCALE etc) */
 #define _COMM_PAGE_NT_TSC_BASE		(_COMM_PAGE_START_ADDRESS+0x050)	/* used by nanotime() */
 #define _COMM_PAGE_NT_SCALE		(_COMM_PAGE_START_ADDRESS+0x058)	/* used by nanotime() */
 #define _COMM_PAGE_NT_SHIFT		(_COMM_PAGE_START_ADDRESS+0x05c)	/* used by nanotime() */
 #define _COMM_PAGE_NT_NS_BASE		(_COMM_PAGE_START_ADDRESS+0x060)	/* used by nanotime() */
- 
-#define _COMM_PAGE_TIMEBASE		(_COMM_PAGE_START_ADDRESS+0x068)	/* used by gettimeofday() */
-#define _COMM_PAGE_TIMESTAMP		(_COMM_PAGE_START_ADDRESS+0x070)	/* used by gettimeofday() */
-#define _COMM_PAGE_TIMEENABLE		(_COMM_PAGE_START_ADDRESS+0x078)	/* used by gettimeofday() */
+#define _COMM_PAGE_NT_GENERATION	(_COMM_PAGE_START_ADDRESS+0x068)	/* used by nanotime() */
+#define _COMM_PAGE_GTOD_GENERATION	(_COMM_PAGE_START_ADDRESS+0x06c)	/* used by gettimeofday() */
+#define _COMM_PAGE_GTOD_NS_BASE		(_COMM_PAGE_START_ADDRESS+0x070)	/* used by gettimeofday() */
+#define _COMM_PAGE_GTOD_SEC_BASE	(_COMM_PAGE_START_ADDRESS+0x078)	/* used by gettimeofday() */
 
-#define	_NT_TSC_BASE			0					/* offsets into nanotime data */
+/* Warning: kernel commpage.h has a matching c typedef for the following.  They must be kept in sync.  */
+/* These offsets are from _COMM_PAGE_TIME_DATA_START */
+
+#define	_NT_TSC_BASE			0
 #define	_NT_SCALE			8
 #define	_NT_SHIFT			12
 #define	_NT_NS_BASE			16
-#define	_TIMEBASE			0					/* offsets into gettimeofday data */
-#define	_TIMESTAMP			8
-#define	_TIMEENABLE			16
+#define	_NT_GENERATION			24
+#define	_GTOD_GENERATION		28
+#define	_GTOD_NS_BASE			32
+#define	_GTOD_SEC_BASE			40
  
  /* jump table (jmp to this address, which may be a branch to the actual code somewhere else) */
  /* When new jump table entries are added, corresponding symbols should be added below         */
@@ -154,7 +174,7 @@ int _NumCPUs( void )
 #define _COMM_PAGE_ATOMIC_ADD32         (_COMM_PAGE_START_ADDRESS+0x1a0)	/* add atomic word */
 #define _COMM_PAGE_ATOMIC_ADD64         (_COMM_PAGE_START_ADDRESS+0x1c0)	/* add atomic doubleword */
 
-#define	_COMM_PAGE_UNUSED3		(_COMM_PAGE_START_ADDRESS+0x1e0)	/* 32 unused bytes */
+#define	_COMM_PAGE_UNUSED4		(_COMM_PAGE_START_ADDRESS+0x1e0)	/* 32 unused bytes */
 
 #define _COMM_PAGE_ABSOLUTE_TIME	(_COMM_PAGE_START_ADDRESS+0x200)	/* mach_absolute_time() */
 #define _COMM_PAGE_SPINLOCK_TRY		(_COMM_PAGE_START_ADDRESS+0x220)	/* spinlock_try() */
@@ -166,7 +186,7 @@ int _NumCPUs( void )
 #define _COMM_PAGE_FLUSH_ICACHE		(_COMM_PAGE_START_ADDRESS+0x520)	/* sys_icache_invalidate() */
 #define _COMM_PAGE_PTHREAD_SELF		(_COMM_PAGE_START_ADDRESS+0x580)	/* pthread_self() */
 
-#define _COMM_PAGE_UNUSED4		(_COMM_PAGE_START_ADDRESS+0x5a0)	/* 32 unused bytes */
+#define _COMM_PAGE_UNUSED5		(_COMM_PAGE_START_ADDRESS+0x5a0)	/* 32 unused bytes */
 
 #define _COMM_PAGE_RELINQUISH		(_COMM_PAGE_START_ADDRESS+0x5c0)	/* used by spinlocks */ 
 #define _COMM_PAGE_BTS		        (_COMM_PAGE_START_ADDRESS+0x5e0)	/* bit test-and-set */
@@ -176,12 +196,13 @@ int _NumCPUs( void )
 #define _COMM_PAGE_BCOPY		(_COMM_PAGE_START_ADDRESS+0x780)	/* bcopy() */
 #define	_COMM_PAGE_MEMCPY		(_COMM_PAGE_START_ADDRESS+0x7a0)	/* memcpy() */
 #define	_COMM_PAGE_MEMMOVE		(_COMM_PAGE_START_ADDRESS+0x7a0)	/* memmove() */
+#define	_COMM_PAGE_BCOPY_END		(_COMM_PAGE_START_ADDRESS+0xfff)	/* used by rosetta */
 
-#define	_COMM_PAGE_OLD_NANOTIME		(_COMM_PAGE_START_ADDRESS+0xf80)	/* old nanotime location (deprecated) */
 #define	_COMM_PAGE_MEMSET_PATTERN       (_COMM_PAGE_START_ADDRESS+0x1000)	/* used by nonzero memset() */
 #define	_COMM_PAGE_LONGCOPY		(_COMM_PAGE_START_ADDRESS+0x1200)	/* used by bcopy() for very long operands */
+#define	_COMM_PAGE_LONGCOPY_END		(_COMM_PAGE_START_ADDRESS+0x15ff)	/* used by rosetta */
 
-#define _COMM_PAGE_SYSTEM_INTEGRITY	(_COMM_PAGE_START_ADDRESS+0x1600)	/* system integrity data, 256 bytes */
+#define _COMM_PAGE_UNUSED6		(_COMM_PAGE_START_ADDRESS+0x1600)	/* unused */
 
 #define	_COMM_PAGE_NANOTIME		(_COMM_PAGE_START_ADDRESS+0x1700)	/* nanotime() */
 
@@ -225,7 +246,6 @@ symbol_name: nop
 	CREATE_COMM_PAGE_SYMBOL(___bcopy, _COMM_PAGE_BCOPY)
 	CREATE_COMM_PAGE_SYMBOL(___memcpy, _COMM_PAGE_MEMCPY)
 /*	CREATE_COMM_PAGE_SYMBOL(___memmove, _COMM_PAGE_MEMMOVE) */
-	CREATE_COMM_PAGE_SYMBOL(___old_nanotime, _COMM_PAGE_OLD_NANOTIME)
 	CREATE_COMM_PAGE_SYMBOL(___memset_pattern, _COMM_PAGE_MEMSET_PATTERN)
 	CREATE_COMM_PAGE_SYMBOL(___longcopy, _COMM_PAGE_LONGCOPY)
 	CREATE_COMM_PAGE_SYMBOL(___nanotime, _COMM_PAGE_NANOTIME)

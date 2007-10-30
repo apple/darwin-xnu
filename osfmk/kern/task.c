@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_FREE_COPYRIGHT@
@@ -72,10 +78,15 @@
  * improvements that they make and grant CSL redistribution rights.
  *
  */
+/*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ * Copyright (c) 2005 SPARTA, Inc.
+ */
 
 #include <mach_kdb.h>
-#include <mach_host.h>
-#include <mach_prof.h>
 #include <fast_tas.h>
 #include <platforms.h>
 
@@ -106,15 +117,15 @@
 #include <kern/host.h>
 #include <kern/clock.h>
 #include <kern/timer.h>
-#include <kern/profile.h>
 #include <kern/assert.h>
 #include <kern/sync_lock.h>
+#include <kern/affinity.h>
 
 #include <vm/pmap.h>
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>		/* for kernel_map, ipc_kernel_map */
 #include <vm/vm_pageout.h>
-#include <vm/vm_protos.h>	/* for vm_map_remove_commpage */
+#include <vm/vm_protos.h>
 
 #if	MACH_KDB
 #include <ddb/db_sym.h>
@@ -133,9 +144,13 @@
 #include <mach/mach_host_server.h>
 #include <mach/host_security_server.h>
 #include <mach/mach_port_server.h>
+#include <mach/security_server.h>
 
-#include <vm/task_working_set.h>
-#include <vm/vm_shared_memory_server.h>
+#include <vm/vm_shared_region.h>
+
+#if CONFIG_MACF_MACH
+#include <security/mac_mach_internal.h>
+#endif
 
 task_t	kernel_task;
 zone_t	task_zone;
@@ -168,51 +183,53 @@ task_backing_store_privileged(
 	return;
 }
 
-void
-task_working_set_disable(task_t task)
-{
-	struct tws_hash *ws;
-
-	task_lock(task);
-	ws = task->dynamic_working_set;
-	task->dynamic_working_set = NULL;
-	task_unlock(task);
-	if (ws) {
-		tws_hash_ws_flush(ws);
-		tws_hash_destroy(ws);
-	}
-}
 
 void
 task_set_64bit(
 		task_t task,
 		boolean_t is64bit)
 {
-        thread_t thread;
+#ifdef __i386__
+	thread_t thread;
+#endif /* __i386__ */
+	int	vm_flags = 0;
 
 	if (is64bit) {
-	        if (task_has_64BitAddr(task))
-		        return;
+		if (task_has_64BitAddr(task))
+			return;
 
-		/* LP64todo - no task working set for 64-bit */
 		task_set_64BitAddr(task);
-		task_working_set_disable(task);
 	} else {
-	        if ( !task_has_64BitAddr(task))
-		        return;
+		if ( !task_has_64BitAddr(task))
+			return;
 
 		/*
 		 * Deallocate all memory previously allocated
 		 * above the 32-bit address space, since it won't
 		 * be accessible anymore.
 		 */
-		/* LP64todo - make this clean */
-		vm_map_remove_commpage(task->map);
-		pmap_unmap_sharedpage(task->map->pmap);	/* Unmap commpage */
+		/* remove regular VM map entries & pmap mappings */
 		(void) vm_map_remove(task->map,
 				     (vm_map_offset_t) VM_MAX_ADDRESS,
 				     MACH_VM_MAX_ADDRESS,
-				     VM_MAP_NO_FLAGS);
+				     0);
+#ifdef __ppc__
+		/* LP64todo - make this clean */
+		/*
+		 * PPC51: ppc64 is limited to 51-bit addresses.
+		 * Memory mapped above that limit is handled specially
+		 * at the pmap level, so let pmap clean the commpage mapping
+		 * explicitly...
+		 */
+		pmap_unmap_sharedpage(task->map->pmap);	/* Unmap commpage */
+		/* ... and avoid regular pmap cleanup */
+		vm_flags |= VM_MAP_REMOVE_NO_PMAP_CLEANUP;
+#endif /* __ppc__ */
+		/* remove the higher VM mappings */
+		(void) vm_map_remove(task->map,
+				     MACH_VM_MAX_ADDRESS,
+				     0xFFFFFFFFFFFFF000ULL,
+				     vm_flags);
 		task_clear_64BitAddr(task);
 	}
 	/* FIXME: On x86, the thread save state flavor can diverge from the
@@ -223,9 +240,9 @@ task_set_64bit(
 	 */
 #ifdef __i386__
 	queue_iterate(&task->threads, thread, thread_t, task_threads) {
-	        machine_thread_switch_addrmode(thread, !is64bit);
+		machine_thread_switch_addrmode(thread);
 	}
-#endif
+#endif /* __i386__ */
 }
 
 void
@@ -247,55 +264,6 @@ task_init(void)
 	kernel_task->map = kernel_map;
 }
 
-#if	MACH_HOST
-
-#if 0
-static void
-task_freeze(
-	task_t task)
-{
-	task_lock(task);
-	/*
-	 *	If may_assign is false, task is already being assigned,
-	 *	wait for that to finish.
-	 */
-	while (task->may_assign == FALSE) {
-		wait_result_t res;
-
-		task->assign_active = TRUE;
-		res = thread_sleep_mutex((event_t) &task->assign_active,
-					 &task->lock, THREAD_UNINT);
-		assert(res == THREAD_AWAKENED);
-	}
-	task->may_assign = FALSE;
-	task_unlock(task);
-	return;
-}
-#else
-#define thread_freeze(thread)	assert(task->processor_set == &default_pset)
-#endif
-
-#if 0
-static void
-task_unfreeze(
-	task_t task)
-{
-	task_lock(task);
-	assert(task->may_assign == FALSE);
-	task->may_assign = TRUE;
-	if (task->assign_active == TRUE) {
-		task->assign_active = FALSE;
-		thread_wakeup((event_t)&task->assign_active);
-	}
-	task_unlock(task);
-	return;
-}
-#else
-#define thread_unfreeze(thread)	assert(task->processor_set == &default_pset)
-#endif
-
-#endif	/* MACH_HOST */
-
 /*
  * Create a task running in the kernel address space.  It may
  * have its own map of size mem_size and may have ipc privileges.
@@ -312,55 +280,44 @@ kernel_task_create(
 
 kern_return_t
 task_create(
-	task_t					parent_task,
+	task_t				parent_task,
 	__unused ledger_port_array_t	ledger_ports,
-	__unused  mach_msg_type_number_t	num_ledger_ports,
-	boolean_t				inherit_memory,
-	task_t					*child_task)	/* OUT */
+	__unused mach_msg_type_number_t	num_ledger_ports,
+	__unused boolean_t		inherit_memory,
+	__unused task_t			*child_task)	/* OUT */
 {
 	if (parent_task == TASK_NULL)
 		return(KERN_INVALID_ARGUMENT);
 
-	return task_create_internal(
-	    		parent_task, inherit_memory, task_has_64BitAddr(parent_task), child_task);
+	/*
+	 * No longer supported: too many calls assume that a task has a valid
+	 * process attached.
+	 */
+	return(KERN_FAILURE);
 }
 
 kern_return_t
 host_security_create_task_token(
 	host_security_t			host_security,
-	task_t					parent_task,
-	security_token_t			sec_token,
-	audit_token_t				audit_token,
-	host_priv_t				host_priv,
+	task_t				parent_task,
+	__unused security_token_t	sec_token,
+	__unused audit_token_t		audit_token,
+	__unused host_priv_t		host_priv,
 	__unused ledger_port_array_t	ledger_ports,
 	__unused mach_msg_type_number_t	num_ledger_ports,
-	boolean_t				inherit_memory,
-	task_t					*child_task)	/* OUT */
+	__unused boolean_t		inherit_memory,
+	__unused task_t			*child_task)	/* OUT */
 {
-        kern_return_t		result;
-        
 	if (parent_task == TASK_NULL)
 		return(KERN_INVALID_ARGUMENT);
 
 	if (host_security == HOST_NULL)
 		return(KERN_INVALID_SECURITY);
 
-	result = task_create_internal(
-			parent_task, inherit_memory, task_has_64BitAddr(parent_task), child_task);
-
-        if (result != KERN_SUCCESS)
-                return(result);
-
-	result = host_security_set_task_token(host_security,
-					      *child_task,
-					      sec_token,
-					      audit_token,
-					      host_priv);
-
-	if (result != KERN_SUCCESS)
-		return(result);
-
-	return(result);
+	/*
+	 * No longer supported.
+	 */
+	return(KERN_FAILURE);
 }
 
 kern_return_t
@@ -370,8 +327,8 @@ task_create_internal(
 	boolean_t	is_64bit,
 	task_t		*child_task)		/* OUT */
 {
-	task_t		new_task;
-	processor_set_t	pset;
+	task_t			new_task;
+	vm_shared_region_t	shared_region;
 
 	new_task = (task_t) zalloc(task_zone);
 
@@ -388,6 +345,10 @@ task_create_internal(
 					(vm_map_offset_t)(VM_MIN_ADDRESS),
 					(vm_map_offset_t)(VM_MAX_ADDRESS), TRUE);
 
+	/* Inherit memlock limit from parent */
+	if (parent_task)
+		vm_map_set_user_wire_limit(new_task->map, parent_task->map->user_wire_limit);
+
 	mutex_init(&new_task->lock, 0);
 	queue_init(&new_task->threads);
 	new_task->suspend_count = 0;
@@ -396,7 +357,7 @@ task_create_internal(
 	new_task->user_stop_count = 0;
 	new_task->role = TASK_UNSPECIFIED;
 	new_task->active = TRUE;
-	new_task->user_data = 0;
+	new_task->user_data = NULL;
 	new_task->faults = 0;
 	new_task->cow_faults = 0;
 	new_task->pageins = 0;
@@ -405,16 +366,12 @@ task_create_internal(
 	new_task->syscalls_mach = 0;
 	new_task->priv_flags = 0;
 	new_task->syscalls_unix=0;
-	new_task->csw=0;
+	new_task->c_switch = new_task->p_switch = new_task->ps_switch = 0;
 	new_task->taskFeatures[0] = 0;				/* Init task features */
 	new_task->taskFeatures[1] = 0;				/* Init task features */
-	new_task->dynamic_working_set = 0;
-
-	task_working_set_create(new_task, TWS_SMALL_HASH_LINE_COUNT, 
-				0, TWS_HASH_STYLE_DEFAULT);
 
 #ifdef MACH_BSD
-	new_task->bsd_info = 0;
+	new_task->bsd_info = NULL;
 #endif /* MACH_BSD */
 
 #ifdef __i386__
@@ -430,35 +387,30 @@ task_create_internal(
 	new_task->semaphores_owned = 0;
 	new_task->lock_sets_owned = 0;
 
-#if	MACH_HOST
-	new_task->may_assign = TRUE;
-	new_task->assign_active = FALSE;
-#endif	/* MACH_HOST */
+#if CONFIG_MACF_MACH
+	/*mutex_init(&new_task->labellock, ETAP_NO_TRACE);*/
+	new_task->label = labelh_new(1);
+	mac_task_label_init (&new_task->maclabel);
+#endif
 
 	ipc_task_init(new_task, parent_task);
 
 	new_task->total_user_time = 0;
 	new_task->total_system_time = 0;
 
-	task_prof_init(new_task);
+	new_task->vtimers = 0;
+
+	new_task->shared_region = NULL;
+
+	new_task->affinity_space = NULL;
 
 	if (parent_task != TASK_NULL) {
-#if	MACH_HOST
-		/*
-		 * Freeze the parent, so that parent_task->processor_set
-		 * cannot change.
-		 */
-		task_freeze(parent_task);
-#endif	/* MACH_HOST */
-		pset = parent_task->processor_set;
-		if (!pset->active)
-			pset = &default_pset;
-
 		new_task->sec_token = parent_task->sec_token;
 		new_task->audit_token = parent_task->audit_token;
 
-		shared_region_mapping_ref(parent_task->system_shared_region);
-		new_task->system_shared_region = parent_task->system_shared_region;
+		/* inherit the parent's shared region */
+		shared_region = vm_shared_region_get(parent_task);
+		vm_shared_region_set(new_task, shared_region);
 
 		new_task->wired_ledger_port = ledger_copy(
 			convert_port_to_ledger(parent_task->wired_ledger_port));
@@ -471,10 +423,10 @@ task_create_internal(
 		if (inherit_memory && parent_task->i386_ldt)
 			new_task->i386_ldt = user_ldt_copy(parent_task->i386_ldt);
 #endif
+		if (inherit_memory && parent_task->affinity_space)
+			task_affinity_create(parent_task, new_task);
 	}
 	else {
-		pset = &default_pset;
-
 		new_task->sec_token = KERNEL_SECURITY_TOKEN;
 		new_task->audit_token = KERNEL_AUDIT_TOKEN;
 		new_task->wired_ledger_port = ledger_copy(root_wired_ledger);
@@ -489,14 +441,11 @@ task_create_internal(
 		new_task->priority = BASEPRI_DEFAULT;
 		new_task->max_priority = MAXPRI_USER;
 	}
-
-	pset_lock(pset);
-	pset_add_task(pset, new_task);
-	pset_unlock(pset);
-#if	MACH_HOST
-	if (parent_task != TASK_NULL)
-		task_unfreeze(parent_task);
-#endif	/* MACH_HOST */
+	
+	mutex_lock(&tasks_threads_lock);
+	queue_enter(&tasks, new_task, task_t, tasks);
+	tasks_count++;
+	mutex_unlock(&tasks_threads_lock);
 
 	if (vm_backing_store_low && parent_task != NULL)
 		new_task->priv_flags |= (parent_task->priv_flags&VM_BACKING_STORE_PRIV);
@@ -516,26 +465,23 @@ void
 task_deallocate(
 	task_t		task)
 {
-	processor_set_t		pset;
-
 	if (task == TASK_NULL)
 	    return;
 
 	if (task_deallocate_internal(task) > 0)
 		return;
 
-	pset = task->processor_set;
-	pset_deallocate(pset);
-
-	if(task->dynamic_working_set)
-		tws_hash_destroy(task->dynamic_working_set);
-
 	ipc_task_terminate(task);
+
+	if (task->affinity_space)
+		task_affinity_deallocate(task);
 
 	vm_map_deallocate(task->map);
 	is_release(task->itk_space);
 
-	task_prof_deallocate(task);
+#if CONFIG_MACF_MACH
+	labelh_release(task->label);
+#endif
 	zfree(task_zone, task);
 }
 
@@ -576,7 +522,6 @@ kern_return_t
 task_terminate_internal(
 	task_t			task)
 {
-	processor_set_t		pset;
 	thread_t			thread, self;
 	task_t				self_task;
 	boolean_t			interrupt_save;
@@ -664,9 +609,13 @@ task_terminate_internal(
 	 */
 	ipc_space_destroy(task->itk_space);
 
-/* LP64todo - make this clean */
-	vm_map_remove_commpage(task->map);
+#ifdef __ppc__
+	/* LP64todo - make this clean */
+	/*
+	 * PPC51: ppc64 is limited to 51-bit addresses.
+	 */
 	pmap_unmap_sharedpage(task->map->pmap);		/* Unmap commpage */
+#endif /* __ppc__ */
 
 	if (vm_map_has_4GB_pagezero(task->map))
 		vm_map_clear_4GB_pagezero(task->map);
@@ -679,21 +628,18 @@ task_terminate_internal(
 	 * expense of removing the address space regions
 	 * at reap time, we do it explictly here.
 	 */
-	vm_map_remove(task->map, task->map->min_offset,
-								task->map->max_offset, VM_MAP_NO_FLAGS);
+	vm_map_remove(task->map,
+		      task->map->min_offset,
+		      task->map->max_offset,
+		      VM_MAP_NO_FLAGS);
 
-	shared_region_mapping_dealloc(task->system_shared_region);
+	/* release our shared region */
+	vm_shared_region_set(task, NULL);
 
-	/*
-	 * Flush working set here to avoid I/O in reaper thread
-	 */
-	if (task->dynamic_working_set)
-		tws_hash_ws_flush(task->dynamic_working_set);
-
-	pset = task->processor_set;
-	pset_lock(pset);
-	pset_remove_task(pset,task);
-	pset_unlock(pset);
+	mutex_lock(&tasks_threads_lock);
+	queue_remove(&tasks, task, task_t, tasks);
+	tasks_count--;
+	mutex_unlock(&tasks_threads_lock);
 
 	/*
 	 * We no longer need to guard against being aborted, so restore
@@ -953,7 +899,7 @@ task_threads(
 	mach_msg_type_number_t	*count)
 {
 	mach_msg_type_number_t	actual;
-	thread_t				*threads;
+	thread_t				*thread_list;
 	thread_t				thread;
 	vm_size_t				size, size_needed;
 	void					*addr;
@@ -962,7 +908,7 @@ task_threads(
 	if (task == TASK_NULL)
 		return (KERN_INVALID_ARGUMENT);
 
-	size = 0; addr = 0;
+	size = 0; addr = NULL;
 
 	for (;;) {
 		task_lock(task);
@@ -997,14 +943,14 @@ task_threads(
 	}
 
 	/* OK, have memory and the task is locked & active */
-	threads = (thread_t *)addr;
+	thread_list = (thread_t *)addr;
 
 	i = j = 0;
 
 	for (thread = (thread_t)queue_first(&task->threads); i < actual;
 				++i, thread = (thread_t)queue_next(&thread->task_threads)) {
 		thread_reference_internal(thread);
-		threads[j++] = thread;
+		thread_list[j++] = thread;
 	}
 
 	assert(queue_end(&task->threads, (queue_entry_t)thread));
@@ -1018,7 +964,7 @@ task_threads(
 	if (actual == 0) {
 		/* no threads, so return null pointer and deallocate memory */
 
-		*threads_out = 0;
+		*threads_out = NULL;
 		*count = 0;
 
 		if (size != 0)
@@ -1033,23 +979,23 @@ task_threads(
 			newaddr = kalloc(size_needed);
 			if (newaddr == 0) {
 				for (i = 0; i < actual; ++i)
-					thread_deallocate(threads[i]);
+					thread_deallocate(thread_list[i]);
 				kfree(addr, size);
 				return (KERN_RESOURCE_SHORTAGE);
 			}
 
 			bcopy(addr, newaddr, size_needed);
 			kfree(addr, size);
-			threads = (thread_t *)newaddr;
+			thread_list = (thread_t *)newaddr;
 		}
 
-		*threads_out = threads;
+		*threads_out = thread_list;
 		*count = actual;
 
 		/* do the conversion that Mig should handle */
 
 		for (i = 0; i < actual; ++i)
-			((ipc_port_t *) threads)[i] = convert_thread_to_port(threads[i]);
+			((ipc_port_t *) thread_list)[i] = convert_thread_to_port(thread_list[i]);
 	}
 
 	return (KERN_SUCCESS);
@@ -1243,6 +1189,7 @@ task_info(
 	switch (flavor) {
 
 	case TASK_BASIC_INFO_32:
+	case TASK_BASIC2_INFO_32:
 	{
 		task_basic_info_32_t	basic_info;
 		vm_map_t			map;
@@ -1254,22 +1201,28 @@ task_info(
 
 		map = (task == kernel_task)? kernel_map: task->map;
 		basic_info->virtual_size  = CAST_DOWN(vm_offset_t,map->size);
-		basic_info->resident_size = pmap_resident_count(map->pmap)
-						   * PAGE_SIZE;
+		if (flavor == TASK_BASIC2_INFO_32) {
+			/*
+			 * The "BASIC2" flavor gets the maximum resident
+			 * size instead of the current resident size...
+			 */
+			basic_info->resident_size = pmap_resident_max(map->pmap);
+		} else {
+			basic_info->resident_size = pmap_resident_count(map->pmap);
+		}
+		basic_info->resident_size *= PAGE_SIZE;
 
 		task_lock(task);
 		basic_info->policy = ((task != kernel_task)?
 										  POLICY_TIMESHARE: POLICY_RR);
 		basic_info->suspend_count = task->user_stop_count;
 
-		absolutetime_to_microtime(
-						task->total_user_time,
-								&basic_info->user_time.seconds,
-								&basic_info->user_time.microseconds);
-		absolutetime_to_microtime(
-						task->total_system_time,
-								&basic_info->system_time.seconds,
-								&basic_info->system_time.microseconds);
+		absolutetime_to_microtime(task->total_user_time,
+					  (unsigned *)&basic_info->user_time.seconds,
+					  (unsigned *)&basic_info->user_time.microseconds);
+		absolutetime_to_microtime(task->total_system_time,
+					  (unsigned *)&basic_info->system_time.seconds,
+					  (unsigned *)&basic_info->system_time.microseconds);
 		task_unlock(task);
 
 		*task_info_count = TASK_BASIC_INFO_32_COUNT;
@@ -1288,22 +1241,21 @@ task_info(
 
 		map = (task == kernel_task)? kernel_map: task->map;
 		basic_info->virtual_size  = map->size;
-		basic_info->resident_size = (mach_vm_size_t)(pmap_resident_count(map->pmap)
-						   * PAGE_SIZE);
+		basic_info->resident_size =
+			(mach_vm_size_t)(pmap_resident_count(map->pmap))
+			* PAGE_SIZE_64;
 
 		task_lock(task);
 		basic_info->policy = ((task != kernel_task)?
 										  POLICY_TIMESHARE: POLICY_RR);
 		basic_info->suspend_count = task->user_stop_count;
 
-		absolutetime_to_microtime(
-						task->total_user_time,
-								&basic_info->user_time.seconds,
-								&basic_info->user_time.microseconds);
-		absolutetime_to_microtime(
-						task->total_system_time,
-								&basic_info->system_time.seconds,
-								&basic_info->system_time.microseconds);
+		absolutetime_to_microtime(task->total_user_time,
+					  (unsigned *)&basic_info->user_time.seconds,
+					  (unsigned *)&basic_info->user_time.microseconds);
+		absolutetime_to_microtime(task->total_system_time,
+					  (unsigned *)&basic_info->system_time.seconds,
+					  (unsigned *)&basic_info->system_time.microseconds);
 		task_unlock(task);
 
 		*task_info_count = TASK_BASIC_INFO_64_COUNT;
@@ -1473,6 +1425,7 @@ task_info(
 	case TASK_EVENTS_INFO:
 	{
 		register task_events_info_t	events_info;
+		register thread_t			thread;
 
 		if (*task_info_count < TASK_EVENTS_INFO_COUNT)
 		    return (KERN_INVALID_ARGUMENT);
@@ -1480,6 +1433,7 @@ task_info(
 		events_info = (task_events_info_t) task_info_out;
 
 		task_lock(task);
+
 		events_info->faults = task->faults;
 		events_info->pageins = task->pageins;
 		events_info->cow_faults = task->cow_faults;
@@ -1487,11 +1441,24 @@ task_info(
 		events_info->messages_received = task->messages_received;
 		events_info->syscalls_mach = task->syscalls_mach;
 		events_info->syscalls_unix = task->syscalls_unix;
-		events_info->csw = task->csw;
+
+		events_info->csw = task->c_switch;
+
+		queue_iterate(&task->threads, thread, thread_t, task_threads) {
+			events_info->csw += thread->c_switch;
+		}
+
 		task_unlock(task);
 
 		*task_info_count = TASK_EVENTS_INFO_COUNT;
 		break;
+	}
+	case TASK_AFFINITY_TAG_INFO:
+	{
+		if (*task_info_count < TASK_AFFINITY_TAG_INFO_COUNT)
+		    return (KERN_INVALID_ARGUMENT);
+
+		return task_affinity_info(task, task_info_out, task_info_count);
 	}
 
 	default:
@@ -1499,6 +1466,101 @@ task_info(
 	}
 
 	return (KERN_SUCCESS);
+}
+
+void
+task_vtimer_set(
+	task_t		task,
+	integer_t	which)
+{
+	thread_t	thread;
+
+	/* assert(task == current_task()); */ /* bogus assert 4803227 4807483 */
+
+	task_lock(task);
+
+	task->vtimers |= which;
+
+	switch (which) {
+
+	case TASK_VTIMER_USER:
+		queue_iterate(&task->threads, thread, thread_t, task_threads) {
+			thread->vtimer_user_save = timer_grab(&thread->user_timer);
+		}
+		break;
+
+	case TASK_VTIMER_PROF:
+		queue_iterate(&task->threads, thread, thread_t, task_threads) {
+			thread->vtimer_prof_save = timer_grab(&thread->user_timer);
+			thread->vtimer_prof_save += timer_grab(&thread->system_timer);
+		}
+		break;
+
+	case TASK_VTIMER_RLIM:
+		queue_iterate(&task->threads, thread, thread_t, task_threads) {
+			thread->vtimer_rlim_save = timer_grab(&thread->user_timer);
+			thread->vtimer_rlim_save += timer_grab(&thread->system_timer);
+		}
+		break;
+	}
+
+	task_unlock(task);
+}
+
+void
+task_vtimer_clear(
+	task_t		task,
+	integer_t	which)
+{
+	assert(task == current_task());
+
+	task_lock(task);
+
+	task->vtimers &= ~which;
+
+	task_unlock(task);
+}
+
+void
+task_vtimer_update(
+__unused
+	task_t		task,
+	integer_t	which,
+	uint32_t	*microsecs)
+{
+	thread_t	thread = current_thread();
+	uint32_t	tdelt, secs;
+	uint64_t	tsum;
+
+	assert(task == current_task());
+
+	assert(task->vtimers & which);
+
+	tdelt = secs = 0;
+
+	switch (which) {
+
+	case TASK_VTIMER_USER:
+		tdelt = timer_delta(&thread->user_timer,
+								&thread->vtimer_user_save);
+		break;
+
+	case TASK_VTIMER_PROF:
+		tsum = timer_grab(&thread->user_timer);
+		tsum += timer_grab(&thread->system_timer);
+		tdelt = tsum - thread->vtimer_prof_save;
+		thread->vtimer_prof_save = tsum;
+		break;
+
+	case TASK_VTIMER_RLIM:
+		tsum = timer_grab(&thread->user_timer);
+		tsum += timer_grab(&thread->system_timer);
+		tdelt = tsum - thread->vtimer_rlim_save;
+		thread->vtimer_rlim_save = tsum;
+		break;
+	}
+
+	absolutetime_to_microtime(tdelt, &secs, microsecs);
 }
 
 /*
@@ -1525,7 +1587,7 @@ task_assign_default(
 	task_t		task,
 	boolean_t	assign_threads)
 {
-    return (task_assign(task, &default_pset, assign_threads));
+    return (task_assign(task, &pset0, assign_threads));
 }
 
 /*
@@ -1541,9 +1603,9 @@ task_get_assignment(
 	if (!task->active)
 		return(KERN_FAILURE);
 
-	*pset = task->processor_set;
-	pset_reference(*pset);
-	return(KERN_SUCCESS);
+	*pset = &pset0;
+
+	return (KERN_SUCCESS);
 }
 
 
@@ -1672,3 +1734,64 @@ task_reference(
 	if (task != TASK_NULL)
 		task_reference_internal(task);
 }
+
+#if CONFIG_MACF_MACH
+/*
+ * Protect 2 task labels against modification by adding a reference on
+ * both label handles. The locks do not actually have to be held while
+ * using the labels as only labels with one reference can be modified
+ * in place.
+ */
+
+void
+tasklabel_lock2(
+	task_t a,
+	task_t b)
+{
+	labelh_reference(a->label);
+	labelh_reference(b->label);
+}
+
+void
+tasklabel_unlock2(
+	task_t a,
+	task_t b)
+{
+	labelh_release(a->label);
+	labelh_release(b->label);
+}
+
+void
+mac_task_label_update_internal(
+	struct label	*pl,
+	struct task	*task)
+{
+
+	tasklabel_lock(task);
+	task->label = labelh_modify(task->label);
+	mac_task_label_update(pl, &task->maclabel);
+	tasklabel_unlock(task);
+	ip_lock(task->itk_self);
+	mac_port_label_update_cred(pl, &task->itk_self->ip_label);
+	ip_unlock(task->itk_self);
+}
+
+void
+mac_task_label_modify(
+	struct task	*task,
+	void		*arg,
+	void (*f)	(struct label *l, void *arg))
+{
+
+	tasklabel_lock(task);
+	task->label = labelh_modify(task->label);
+	(*f)(&task->maclabel, arg);
+	tasklabel_unlock(task);
+}
+
+struct label *
+mac_task_get_label(struct task *task)
+{
+	return (&task->maclabel);
+}
+#endif

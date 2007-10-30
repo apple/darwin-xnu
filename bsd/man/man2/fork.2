@@ -40,10 +40,11 @@
 .Nm fork
 .Nd create a new process
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
 .Fd #include <unistd.h>
 .Ft pid_t
-.Fn fork void
+.Fo fork
+.Fa void
+.Fc
 .Sh DESCRIPTION
 .Fn Fork
 causes creation of a new process.
@@ -77,35 +78,59 @@ are set to 0; see
 .Sh RETURN VALUES
 Upon successful completion,
 .Fn fork
-returns a value
-of 0 to the child process and returns the process ID of the child
-process to the parent process.  Otherwise, a value of -1 is returned
-to the parent process, no child process is created, and the global
-variable
+returns a value of 0 to the child process
+and returns the process ID of the child process to the parent process.
+Otherwise, a value of -1 is returned to the parent process,
+no child process is created, and the global variable
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
 .Fn Fork
 will fail and no child process will be created if:
 .Bl -tag -width Er
+.\" ==========
 .It Bq Er EAGAIN
-The system-imposed limit on the total
-number of processes under execution would be exceeded.
+The system-imposed limit
+on the total number of processes under execution
+would be exceeded.
 This limit is configuration-dependent.
+.\" ==========
 .It Bq Er EAGAIN
 The system-imposed limit
 .Dv MAXUPRC
 .Pq Aq Pa sys/param.h
 on the total number of
 processes under execution by a single user would be exceeded.
+.\" ==========
 .It Bq Er ENOMEM
 There is insufficient swap space for the new process.
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <unistd.h>
+.Pp
+The include file
+.In sys/types.h
+is necessary.
 .Sh SEE ALSO
 .Xr execve 2 ,
-.Xr wait 2
+.Xr sigaction 2 ,
+.Xr wait 2 ,
+.Xr compat 5
 .Sh HISTORY
 A
 .Fn fork
 function call appeared in
 .At v6 .
+.Sh CAVEATS
+There are limits to what you can do in the child process.
+To be totally safe you should restrict yourself to only
+executing async-signal safe operations until such time
+as one of the exec functions is called.  All APIs, including
+global data symbols, in any framework or library should be 
+assumed to be unsafe after a 
+.Fn fork
+unless explicitly documented to be safe or async-signal 
+safe.  If you need to use these frameworks in the child 
+process, you must exec.  In this situation it is reasonable 
+to exec yourself.

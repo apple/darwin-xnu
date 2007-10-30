@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_FREE_COPYRIGHT@
@@ -75,9 +81,6 @@
  *
  */
 
-#include <mach_host.h>
-#include <mach_prof.h>
-
 #include <mach/mach_types.h>
 #include <mach/boolean.h>
 #include <mach/policy.h>
@@ -108,7 +111,6 @@
 #include <kern/thread.h>
 #include <kern/host.h>
 #include <kern/zalloc.h>
-#include <kern/profile.h>
 #include <kern/assert.h>
 
 #include <ipc/ipc_kmsg.h>
@@ -118,6 +120,8 @@
 #include <vm/vm_pageout.h>
 
 #include <sys/kdebug.h>
+
+#include <mach/sdt.h>
 
 /*
  * Exported interfaces
@@ -137,9 +141,13 @@ static queue_head_t		thread_terminate_queue;
 
 static struct thread	thread_template, init_thread;
 
+static void		sched_call_null(
+					int			type,
+					thread_t	thread);
 #ifdef MACH_BSD
 extern void proc_exit(void *);
 #endif /* MACH_BSD */
+extern int debug_task;
 
 void
 thread_bootstrap(void)
@@ -148,7 +156,7 @@ thread_bootstrap(void)
 	 *	Fill in a template thread for fast initialization.
 	 */
 
-	thread_template.runq = RUN_QUEUE_NULL;
+	thread_template.runq = PROCESSOR_NULL;
 
 	thread_template.ref_count = 2;
 
@@ -188,34 +196,46 @@ thread_bootstrap(void)
 	thread_template.sched_usage = 0;
 	thread_template.pri_shift = INT8_MAX;
 	thread_template.cpu_usage = thread_template.cpu_delta = 0;
+	thread_template.c_switch = thread_template.p_switch = thread_template.ps_switch = 0;
 
 	thread_template.bound_processor = PROCESSOR_NULL;
 	thread_template.last_processor = PROCESSOR_NULL;
 	thread_template.last_switch = 0;
 
+	thread_template.sched_call = sched_call_null;
+
 	timer_init(&thread_template.user_timer);
 	timer_init(&thread_template.system_timer);
 	thread_template.user_timer_save = 0;
 	thread_template.system_timer_save = 0;
+	thread_template.vtimer_user_save = 0;
+	thread_template.vtimer_prof_save = 0;
+	thread_template.vtimer_rlim_save = 0;
 
 	thread_template.wait_timer_is_set = FALSE;
 	thread_template.wait_timer_active = 0;
 
 	thread_template.depress_timer_active = 0;
 
-	thread_template.processor_set = PROCESSOR_SET_NULL;
-
 	thread_template.special_handler.handler = special_handler;
-	thread_template.special_handler.next = 0;
+	thread_template.special_handler.next = NULL;
 
-#if	MACH_HOST
-	thread_template.may_assign = TRUE;
-	thread_template.assign_active = FALSE;
-#endif	/* MACH_HOST */
 	thread_template.funnel_lock = THR_FUNNEL_NULL;
 	thread_template.funnel_state = 0;
 	thread_template.recover = (vm_offset_t)NULL;
+	
+	thread_template.map = VM_MAP_NULL;
 
+#if CONFIG_DTRACE
+	thread_template.t_dtrace_predcache = 0;
+	thread_template.t_dtrace_vtime = 0;
+	thread_template.t_dtrace_tracing = 0;
+#endif /* CONFIG_DTRACE */
+	
+	thread_template.t_chud = 0;
+
+	thread_template.affinity_set = NULL;
+	
 	init_thread = thread_template;
 	machine_set_current_thread(&init_thread);
 }
@@ -254,13 +274,22 @@ thread_terminate_self(void)
 	thread_t		thread = current_thread();
 	task_t			task;
 	spl_t			s;
+	int lastthread = 0;
+
+	thread_mtx_lock(thread);
+
+	ulock_release_all(thread);
+
+	ipc_thread_disable(thread);
+	
+	thread_mtx_unlock(thread);
 
 	s = splsched();
 	thread_lock(thread);
 
 	/*
-	 *	Cancel priority depression, reset scheduling parameters,
-	 *	and wait for concurrent expirations on other processors.
+	 *	Cancel priority depression, wait for concurrent expirations
+	 *	on other processors.
 	 */
 	if (thread->sched_mode & TH_MODE_ISDEPRESSED) {
 		thread->sched_mode &= ~TH_MODE_ISDEPRESSED;
@@ -268,8 +297,6 @@ thread_terminate_self(void)
 		if (timer_call_cancel(&thread->depress_timer))
 			thread->depress_timer_active--;
 	}
-
-	thread_policy_reset(thread);
 
 	while (thread->depress_timer_active > 0) {
 		thread_unlock(thread);
@@ -284,22 +311,23 @@ thread_terminate_self(void)
 	thread_unlock(thread);
 	splx(s);
 
-	thread_mtx_lock(thread);
-
-	ulock_release_all(thread);
-
-	ipc_thread_disable(thread);
-	
-	thread_mtx_unlock(thread);
+	thread_policy_reset(thread);
 
 	/*
 	 * If we are the last thread to terminate and the task is
 	 * associated with a BSD process, perform BSD process exit.
 	 */
 	task = thread->task;
-	if (	hw_atomic_sub(&task->active_thread_count, 1) == 0	&&
-					task->bsd_info != NULL						)
+	uthread_cleanup(task, thread->uthread, task->bsd_info);
+	if (hw_atomic_sub(&task->active_thread_count, 1) == 0	&&
+					task->bsd_info != NULL) {
+		lastthread = 1;
+	} 
+	
+	if (lastthread != 0)
 		proc_exit(task->bsd_info);
+
+	uthread_cred_free(thread->uthread);
 
 	s = splsched();
 	thread_lock(thread);
@@ -351,7 +379,6 @@ void
 thread_deallocate(
 	thread_t			thread)
 {
-	processor_set_t		pset;
 	task_t				task;
 
 	if (thread == THREAD_NULL)
@@ -369,14 +396,11 @@ thread_deallocate(
 		void *ut = thread->uthread;
 
 		thread->uthread = NULL;
-		uthread_free(task, ut, task->bsd_info);
+		uthread_zone_free(ut);
 	}
 #endif  /* MACH_BSD */   
 
 	task_deallocate(task);
-
-	pset = thread->processor_set;
-	pset_deallocate(pset);
 
 	if (thread->kernel_stack != 0)
 		stack_free(thread);
@@ -396,7 +420,6 @@ thread_terminate_daemon(void)
 {
 	thread_t			thread;
 	task_t				task;
-	processor_set_t		pset;
 
 	(void)splsched();
 	simple_lock(&thread_terminate_lock);
@@ -411,15 +434,18 @@ thread_terminate_daemon(void)
 		task->total_user_time += timer_grab(&thread->user_timer);
 		task->total_system_time += timer_grab(&thread->system_timer);
 
+		task->c_switch += thread->c_switch;
+		task->p_switch += thread->p_switch;
+		task->ps_switch += thread->ps_switch;
+
 		queue_remove(&task->threads, thread, thread_t, task_threads);
 		task->thread_count--;
 		task_unlock(task);
 
-		pset = thread->processor_set;
-
-		pset_lock(pset);
-		pset_remove_thread(pset, thread);
-		pset_unlock(pset);
+		mutex_lock(&tasks_threads_lock);
+		queue_remove(&threads, thread, thread_t, threads);
+		threads_count--;
+		mutex_unlock(&tasks_threads_lock);
 
 		thread_deallocate(thread);
 
@@ -464,27 +490,24 @@ thread_stack_daemon(void)
 {
 	thread_t		thread;
 
-	(void)splsched();
 	simple_lock(&thread_stack_lock);
 
 	while ((thread = (thread_t)dequeue_head(&thread_stack_queue)) != THREAD_NULL) {
 		simple_unlock(&thread_stack_lock);
-		/* splsched */
 
 		stack_alloc(thread);
-
+		
+		(void)splsched();
 		thread_lock(thread);
 		thread_setrun(thread, SCHED_PREEMPT | SCHED_TAILQ);
 		thread_unlock(thread);
 		(void)spllo();
 
-		(void)splsched();
 		simple_lock(&thread_stack_lock);
 	}
 
 	assert_wait((event_t)&thread_stack_queue, THREAD_UNINT);
 	simple_unlock(&thread_stack_lock);
-	/* splsched */
 
 	thread_block((thread_continue_t)thread_stack_daemon);
 	/*NOTREACHED*/
@@ -545,7 +568,6 @@ thread_create_internal(
 	thread_t				*out_thread)
 {
 	thread_t				new_thread;
-	processor_set_t			pset;
 	static thread_t			first_thread;
 
 	/*
@@ -577,7 +599,10 @@ thread_create_internal(
 			void *ut = new_thread->uthread;
 
 			new_thread->uthread = NULL;
-			uthread_free(parent_task, ut, parent_task->bsd_info);
+			/* cred free may not be necessary */
+			uthread_cleanup(parent_task, ut, parent_task->bsd_info);
+			uthread_cred_free(ut);
+			uthread_zone_free(ut);
 		}
 #endif  /* MACH_BSD */
 		zfree(thread_zone, new_thread);
@@ -593,29 +618,27 @@ thread_create_internal(
 
 	ipc_thread_init(new_thread);
 	queue_init(&new_thread->held_ulocks);
-	thread_prof_init(new_thread, parent_task);
 
 	new_thread->continuation = continuation;
 
-	pset = parent_task->processor_set;
-	assert(pset == &default_pset);
-	pset_lock(pset);
-
+	mutex_lock(&tasks_threads_lock);
 	task_lock(parent_task);
-	assert(parent_task->processor_set == pset);
 
 	if (	!parent_task->active							||
 			(parent_task->thread_count >= THREAD_MAX	&&
 			 parent_task != kernel_task)) {
 		task_unlock(parent_task);
-		pset_unlock(pset);
+		mutex_unlock(&tasks_threads_lock);
 
 #ifdef MACH_BSD
 		{
 			void *ut = new_thread->uthread;
 
 			new_thread->uthread = NULL;
-			uthread_free(parent_task, ut, parent_task->bsd_info);
+			uthread_cleanup(parent_task, ut, parent_task->bsd_info);
+			/* cred free may not be necessary */
+			uthread_cred_free(ut);
+			uthread_zone_free(ut);
 		}
 #endif  /* MACH_BSD */
 		ipc_thread_disable(new_thread);
@@ -637,8 +660,8 @@ thread_create_internal(
 	/* So terminating threads don't need to take the task lock to decrement */
 	hw_atomic_add(&parent_task->active_thread_count, 1);
 
-	/* Associate the thread with the processor set */
-	pset_add_thread(pset, new_thread);
+	queue_enter(&threads, new_thread, thread_t, threads);
+	threads_count++;
 
 	timer_call_setup(&new_thread->wait_timer, thread_timer_expire, new_thread);
 	timer_call_setup(&new_thread->depress_timer, thread_depress_expire, new_thread);
@@ -654,7 +677,7 @@ thread_create_internal(
 	new_thread->importance =
 					new_thread->priority - new_thread->task_priority;
 	new_thread->sched_stamp = sched_tick;
-	new_thread->pri_shift = new_thread->processor_set->pri_shift;
+	new_thread->pri_shift = sched_pri_shift;
 	compute_priority(new_thread, FALSE);
 
 	new_thread->active = TRUE;
@@ -677,6 +700,8 @@ thread_create_internal(
 					TRACEDBG_CODE(DBG_TRACE_STRING, 1) | DBG_FUNC_NONE,
 							dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, 0);
 	}
+
+	DTRACE_PROC1(lwp__create, thread_t, *out_thread);
 
 	return (KERN_SUCCESS);
 }
@@ -701,8 +726,8 @@ thread_create(
 	if (task->suspend_count > 0)
 		thread_hold(thread);
 
-	pset_unlock(task->processor_set);
 	task_unlock(task);
+	mutex_unlock(&tasks_threads_lock);
 	
 	*new_thread = thread;
 
@@ -730,8 +755,8 @@ thread_create_running(
 	result = machine_thread_set_state(
 						thread, flavor, new_state, new_state_count);
 	if (result != KERN_SUCCESS) {
-		pset_unlock(task->processor_set);
 		task_unlock(task);
+		mutex_unlock(&tasks_threads_lock);
 
 		thread_terminate(thread);
 		thread_deallocate(thread);
@@ -739,11 +764,11 @@ thread_create_running(
 	}
 
 	thread_mtx_lock(thread);
-	clear_wait(thread, THREAD_AWAKENED);
-	thread->started = TRUE;
+	thread_start_internal(thread);
 	thread_mtx_unlock(thread);
-	pset_unlock(task->processor_set);
+
 	task_unlock(task);
+	mutex_unlock(&tasks_threads_lock);
 
 	*new_thread = thread;
 
@@ -771,15 +796,20 @@ kernel_thread_create(
 	if (result != KERN_SUCCESS)
 		return (result);
 
-	pset_unlock(task->processor_set);
 	task_unlock(task);
+	mutex_unlock(&tasks_threads_lock);
 
 	stack_alloc(thread);
 	assert(thread->kernel_stack != 0);
+#if CONFIG_EMBEDDED
+	if (priority > BASEPRI_KERNEL)
+#endif
 	thread->reserved_stack = thread->kernel_stack;
 
 	thread->parameter = parameter;
 
+if(debug_task & 1)
+	kprintf("kernel_thread_create: thread = %p continuation = %p\n", thread, continuation);
 	*new_thread = thread;
 
 	return (result);
@@ -800,8 +830,7 @@ kernel_thread_start_priority(
 		return (result);
 
 	thread_mtx_lock(thread);
-	clear_wait(thread, THREAD_AWAKENED);
-	thread->started = TRUE;
+	thread_start_internal(thread);
 	thread_mtx_unlock(thread);
 
 	*new_thread = thread;
@@ -891,7 +920,7 @@ thread_info_internal(
 												POLICY_TIMESHARE: POLICY_RR);
 
 	    flags = 0;
-		if (thread->state & TH_IDLE)
+		if (thread->bound_processor != PROCESSOR_NULL && thread->bound_processor->idle_thread == thread)
 			flags |= TH_FLAGS_IDLE;
 
 	    if (!thread->kernel_stack)
@@ -1020,13 +1049,13 @@ thread_read_times(
 	time_value_t	*user_time,
 	time_value_t	*system_time)
 {
-	absolutetime_to_microtime(
-			timer_grab(&thread->user_timer),
-							&user_time->seconds, &user_time->microseconds);
+	absolutetime_to_microtime(timer_grab(&thread->user_timer),
+				  (unsigned *)&user_time->seconds,
+				  (unsigned *)&user_time->microseconds);
 
-	absolutetime_to_microtime(
-			timer_grab(&thread->system_timer),
-							&system_time->seconds, &system_time->microseconds);
+	absolutetime_to_microtime(timer_grab(&thread->system_timer),
+				  (unsigned *)&system_time->seconds,
+				  (unsigned *)&system_time->microseconds);
 }
 
 kern_return_t
@@ -1047,7 +1076,7 @@ kern_return_t
 thread_assign_default(
 	thread_t		thread)
 {
-	return (thread_assign(thread, &default_pset));
+	return (thread_assign(thread, &pset0));
 }
 
 /*
@@ -1063,8 +1092,8 @@ thread_get_assignment(
 	if (thread == NULL)
 		return (KERN_INVALID_ARGUMENT);
 
-	*pset = thread->processor_set;
-	pset_reference(*pset);
+	*pset = &pset0;
+
 	return (KERN_SUCCESS);
 }
 
@@ -1172,6 +1201,7 @@ funnel_unlock(
 	funnel_t * fnl)
 {
 	lck_mtx_unlock(fnl->fnl_mutex);
+	fnl->fnl_mtxholder = NULL;
 	fnl->fnl_mtxrelease = current_thread();
 }
 
@@ -1204,7 +1234,7 @@ thread_funnel_set(
 
 		if (funneled == TRUE) {
 			if (cur_thread->funnel_lock)
-				panic("Funnel lock called when holding one %x", cur_thread->funnel_lock);
+				panic("Funnel lock called when holding one %p", cur_thread->funnel_lock);
 			KERNEL_DEBUG(0x6032428 | DBG_FUNC_NONE,
 											fnl, 1, 0, 0, 0);
 			funnel_lock(fnl);
@@ -1234,6 +1264,31 @@ thread_funnel_set(
 	return(funnel_state_prev);
 }
 
+static void
+sched_call_null(
+__unused	int			type,
+__unused	thread_t	thread)
+{
+	return;
+}
+
+void
+thread_sched_call(
+	thread_t		thread,
+	sched_call_t	call)
+{
+	thread->sched_call = (call != NULL)? call: sched_call_null;
+}
+
+void
+thread_static_param(
+	thread_t		thread,
+	boolean_t		state)
+{
+	thread_mtx_lock(thread);
+	thread->static_param = state;
+	thread_mtx_unlock(thread);
+}
 
 /*
  * Export routines to other components for things that are done as macros
@@ -1258,3 +1313,107 @@ thread_should_halt(
 {
 	return (thread_should_halt_fast(th));
 }
+
+#if CONFIG_DTRACE
+uint32_t dtrace_get_thread_predcache(thread_t thread)
+{
+	if (thread != THREAD_NULL)
+		return thread->t_dtrace_predcache;
+	else
+		return 0;
+}
+
+int64_t dtrace_get_thread_vtime(thread_t thread)
+{
+	if (thread != THREAD_NULL)
+		return thread->t_dtrace_vtime;
+	else
+		return 0;
+}
+
+int64_t dtrace_get_thread_tracing(thread_t thread)
+{
+	if (thread != THREAD_NULL)
+		return thread->t_dtrace_tracing;
+	else
+		return 0;
+}
+
+boolean_t dtrace_get_thread_reentering(thread_t thread)
+{
+	if (thread != THREAD_NULL)
+		return (thread->options & TH_OPT_DTRACE) ? TRUE : FALSE;
+	else
+		return 0;
+}
+
+vm_offset_t dtrace_get_kernel_stack(thread_t thread)
+{
+	if (thread != THREAD_NULL)
+		return thread->kernel_stack;
+	else
+		return 0;
+}
+
+int64_t dtrace_calc_thread_recent_vtime(thread_t thread)
+{
+#if STAT_TIME
+	if (thread != THREAD_NULL) {
+		return timer_grab(&(thread->system_timer)) + timer_grab(&(thread->user_timer));
+	} else
+		return 0;
+#else
+	if (thread != THREAD_NULL) {
+		processor_t             processor = current_processor();
+		uint64_t 				abstime = mach_absolute_time();
+		timer_t					timer;
+
+		timer = PROCESSOR_DATA(processor, thread_timer);
+
+		return timer_grab(&(thread->system_timer)) + timer_grab(&(thread->user_timer)) +
+				(abstime - timer->tstamp); /* XXX need interrupts off to prevent missed time? */
+	} else
+		return 0;
+#endif
+}
+
+void dtrace_set_thread_predcache(thread_t thread, uint32_t predcache)
+{
+	if (thread != THREAD_NULL)
+		thread->t_dtrace_predcache = predcache;
+}
+
+void dtrace_set_thread_vtime(thread_t thread, int64_t vtime)
+{
+	if (thread != THREAD_NULL)
+		thread->t_dtrace_vtime = vtime;
+}
+
+void dtrace_set_thread_tracing(thread_t thread, int64_t accum)
+{
+	if (thread != THREAD_NULL)
+		thread->t_dtrace_tracing = accum;
+}
+
+void dtrace_set_thread_reentering(thread_t thread, boolean_t vbool)
+{
+	if (thread != THREAD_NULL) {
+		if (vbool)
+			thread->options |= TH_OPT_DTRACE;
+		else
+			thread->options &= (~TH_OPT_DTRACE);
+	}
+}
+
+vm_offset_t dtrace_set_thread_recover(thread_t thread, vm_offset_t recover)
+{
+	vm_offset_t prev = 0;
+
+	if (thread != THREAD_NULL) {
+		prev = thread->recover;
+		thread->recover = recover;
+	}
+	return prev;
+}
+
+#endif /* CONFIG_DTRACE */

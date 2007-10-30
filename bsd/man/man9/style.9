@@ -220,21 +220,24 @@ struct foo {
 LIST_HEAD(, foo) foohead;		/* Head of global foo list. */
 .Ed
 .Pp
-Avoid using typedefs for structure types.
-This makes it impossible
-for applications to use pointers to such a structure opaquely, which
-is both possible and beneficial when using an ordinary struct tag.
+Avoid using typedefs for structure types.  Typedefs are problematic
+because they do not properly hide their underlying type; for example you
+need to know if the typedef is the structure itself or a pointer to the
+structure.  In addition they must be declared exactly once, whereas an
+incomplete structure type can be mentioned as many times as necessary.
+Typedefs are difficult to use in stand-alone header files: the header
+that defines the typedef must be included before the header that uses it,
+or by the header that uses it (which causes namespace pollution), or
+there must be a back-door mechanism for obtaining the typedef.
+.Pp
 When convention requires a
 .Ic typedef ,
 make its name match the struct tag.
-Avoid typedefs ending in
-.Dq Li _t ,
-except as specified in Standard C or by \*[Px].
 .Bd -literal
 /* Make the structure name match the typedef. */
 typedef struct bar {
 	int	level;
-} BAR;
+} bar_t;
 .Ed
 .Pp
 All functions are prototyped somewhere.
@@ -244,6 +247,9 @@ elsewhere) go at the top of the first source module.
 Functions
 local to one source module should be declared
 .Ic static .
+Functions that are not exported outside of the kernel should
+be declared
+.Ic __private_extern__ .
 .Pp
 Functions used from other parts of the kernel are prototyped in the
 relevant include file.
@@ -252,16 +258,7 @@ Functions that are used locally in more than one module go into a
 separate header file, e.g.\&
 .Qq Pa extern.h .
 .Pp
-Only use the
-.Dv __P
-macro from the include file
-.Aq Pa sys/cdefs.h
-if the source
-file in general is (to be) compilable with a K&R Old Testament compiler.
-Use of the
-.Dv __P
-macro in new code is discouraged, although modifications
-to existing files should be consistent with that file's conventions.
+Do not use the __P macro.
 .Pp
 In general code can be considered
 .Dq "new code"
@@ -400,13 +397,15 @@ inside blocks unless the routine is unusually complicated.
 	}
 .Ed
 .Pp
-Indentation is an 8 character tab.
-Second level indents are four spaces.
+Variable names should contain underscores to separate words.  DO NOT use
+StudlyCaps.
+.Pp
+Indentation is an 8 character tab.  All code should fit in 80 columns.
 If you have to wrap a long statement, put the operator at the end of the
 line.
 .Bd -literal
-	while (cnt < 20 && this_variable_name_is_too_long_for_its_own_good &&
-	    ep != NULL)
+	while (cnt < 20 && this_variable_name_is_too_long &&
+	       ep != NULL)
 		z = a + really + long + statement + that + needs +
 		    two lines + gets + indented + four + spaces +
 		    on + the + second + and + subsequent + lines;
@@ -508,6 +507,8 @@ are not followed by a space.
 Note that
 .Xr indent 1
 does not understand this rule.
+.Ic sizeof Ns 's
+are written with parentheses always.
 .Pp
 .Dv NULL
 is the preferred null pointer constant.
@@ -556,6 +557,10 @@ Routines returning
 should not have their return values cast
 to any pointer type.
 .Pp
+Values in
+.Ic return
+statements should be enclosed in parentheses.
+.Pp
 Use
 .Xr err 3
 or
@@ -570,18 +575,7 @@ do not roll your own.
 }
 .Ed
 .Pp
-Old-style function declarations look like this:
-.Bd -literal
-static char *
-function(a1, a2, fl, a4)
-	int a1, a2;	/* Declare ints, too, don't default them. */
-	float fl;	/* Beware double vs. float prototype differences. */
-	int a4;		/* List in order declared. */
-{
-.Ed
-.Pp
-Use ANSI function declarations unless you explicitly need K&R compatibility.
-Long parameter lists are wrapped with a normal four space indent.
+Use ANSI function declarations.
 .Pp
 Variable numbers of arguments should look like this.
 .Bd -literal
@@ -597,11 +591,6 @@ vaf(const char *fmt, ...)
 	va_end(ap);
 	/* No return needed for void functions. */
 }
-
-static void
-usage()
-{
-	/* Insert an empty line if the function has no local variables. */
 .Ed
 .Pp
 Use
@@ -663,11 +652,9 @@ That is, without regard to whether an option takes arguments or not.
 The alphabetical ordering should take into account the case ordering
 shown above.
 .Pp
-New core kernel code should be reasonably compliant with the
+New core kernel code should be compliant with the
 .Nm
 guides.
-The guidelines for third-party maintained modules and device drivers are more
-relaxed but at a minimum should be internally consistent with their style.
 .Pp
 Stylistic changes (including whitespace changes) are hard on the source
 repository and are to be avoided without good reason.
@@ -677,12 +664,9 @@ KNF
 .Nm
 compliant in the repository must not diverge from compliance.
 .Pp
-Whenever possible, code should be run through a code checker
-(e.g.,
-.Xr lint 1
-or
-.Nm gcc Fl Wall )
-and produce minimal warnings.
+Code should be run through a code checker (e.g., sparse or
+.Nm gcc Fl Wall Fl Werror
+).
 .Sh SEE ALSO
 .Xr indent 1 ,
 .Xr lint 1 ,

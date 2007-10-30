@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #ifdef KERNEL
@@ -37,27 +43,18 @@
 #include "dgraph.h"
 #include "load.h"
 
+#ifdef KERNEL
+#include <sys/malloc.h>
+#endif
 
 static void __dgraph_entry_free(dgraph_entry_t * entry);
 
 #ifdef KERNEL
-/*******************************************************************************
-*
-*******************************************************************************/
-char * strdup(const char * string)
-{
-    char * dup = 0;
-    unsigned int length;
-
-    length = strlen(string);
-    dup = (char *)malloc((1+length) * sizeof(char));
-    if (!dup) {
-        return NULL;
-    }
-    strcpy(dup, string);
-    return dup;
-}
-
+#define dgstrdup(string) STRDUP(string, M_TEMP)
+#define dgfree(string) FREE(string, M_TEMP)
+#else
+#define dgstrdup strdup
+#define dgfree(string) free(string)
 #endif /* KERNEL */
 
 /*******************************************************************************
@@ -181,15 +178,15 @@ dgraph_error_t dgraph_init_with_arglist(
 static void __dgraph_entry_free(dgraph_entry_t * entry)
 {
     if (entry->name) {
-        free(entry->name);
+        dgfree(entry->name);
         entry->name = NULL;
     }
     if (entry->expected_kmod_name) {
-        free(entry->expected_kmod_name);
+        dgfree(entry->expected_kmod_name);
         entry->expected_kmod_name = NULL;
     }
     if (entry->expected_kmod_vers) {
-        free(entry->expected_kmod_vers);
+        dgfree(entry->expected_kmod_vers);
         entry->expected_kmod_vers = NULL;
     }
     if (entry->dependencies) {
@@ -198,7 +195,7 @@ static void __dgraph_entry_free(dgraph_entry_t * entry)
     }
     if (entry->symbols_malloc) {
         free((void *) entry->symbols_malloc);
-        entry->symbols_malloc = NULL;
+        entry->symbols_malloc = 0;
     }
     free(entry);
     return;
@@ -318,7 +315,7 @@ dgraph_entry_t ** fill_backward_load_order(
     dgraph_entry_t * first_entry,
     unsigned int * last_index /* out param */)
 {
-    int i;
+    unsigned int i;
     unsigned int scan_index = 0;
     unsigned int add_index = 0;
     dgraph_entry_t * scan_entry;
@@ -549,6 +546,10 @@ dgraph_entry_t * dgraph_add_dependent(
     void * object,
     size_t object_length,
     bool   object_is_kmem,
+#if CONFIG_MACF_KEXT
+    kmod_args_t user_data,
+    mach_msg_type_number_t user_data_length,
+#endif
 #endif /* KERNEL */
     const char * expected_kmod_name,
     const char * expected_kmod_vers,
@@ -622,12 +623,12 @@ dgraph_entry_t * dgraph_add_dependent(
         goto finish;
     }
     bzero(new_entry, sizeof(dgraph_entry_t));
-    new_entry->expected_kmod_name = strdup(expected_kmod_name);
+    new_entry->expected_kmod_name = dgstrdup(expected_kmod_name);
     if (!new_entry->expected_kmod_name) {
         error = 1;
         goto finish;
     }
-    new_entry->expected_kmod_vers = strdup(expected_kmod_vers);
+    new_entry->expected_kmod_vers = dgstrdup(expected_kmod_vers);
     if (!new_entry->expected_kmod_vers) {
         error = 1;
         goto finish;
@@ -657,8 +658,12 @@ dgraph_entry_t * dgraph_add_dependent(
     new_entry->object = object;
     new_entry->object_length = object_length;
     new_entry->object_is_kmem = object_is_kmem;
+#if CONFIG_MACF_KEXT
+    new_entry->user_data = user_data;
+    new_entry->user_data_length = user_data_length;
+#endif
 #endif /* KERNEL */
-    new_entry->name = strdup(name);
+    new_entry->name = dgstrdup(name);
     if (!new_entry->name) {
         error = 1;
         goto finish;
@@ -705,6 +710,10 @@ dgraph_entry_t * dgraph_add_dependency(
     void * object,
     size_t object_length,
     bool   object_is_kmem,
+#if CONFIG_MACF_KEXT
+    kmod_args_t user_data,
+    mach_msg_type_number_t user_data_length,
+#endif
 #endif /* KERNEL */
     const char * expected_kmod_name,
     const char * expected_kmod_vers,
@@ -742,6 +751,9 @@ dgraph_entry_t * dgraph_add_dependency(
     dependency = dgraph_add_dependent(dgraph, name,
 #ifdef KERNEL
          object, object_length, object_is_kmem,
+#if CONFIG_MACF_KEXT
+         user_data, user_data_length,
+#endif
 #endif /* KERNEL */
          expected_kmod_name, expected_kmod_vers, load_address,
          is_kernel_component);

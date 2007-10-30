@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 1998-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #ifndef _IOKIT_IOPM_H
 #define _IOKIT_IOPM_H
@@ -30,63 +36,115 @@
 #include <IOKit/pwr_mgt/IOPMDeprecated.h>
 #endif
 
+/*! @header IOPM.h
+    @abstract Defines power management constants and keys used by both in-kernel and user space power management.
+    @discussion IOPM.h defines a range of power management constants used in several in-kernel and user space APIs. Most significantly, the IOPMPowerFlags used to specify the fields of an IOPMPowerState struct are defined here.
 
+    Most of the constants defined in IOPM.h are deprecated or for Apple internal use only, and are not elaborated on in headerdoc.
+*/
 
 enum {
     kIOPMMaxPowerStates = 10,
     IOPMMaxPowerStates = kIOPMMaxPowerStates
 };
 
+/*! @enum IOPMPowerFlags
+    @abstract Bits are used in defining capabilityFlags, inputPowerRequirements, and outputPowerCharacter in the IOPMPowerState structure.
+    @discussion These bits may be bitwise-OR'd together in the IOPMPowerState capabilityFlags field, the outputPowerCharacter field, and/or the inputPowerRequirement field. 
+    
+    The comments clearly mark whether each flag should be used in the capabilityFlags field, outputPowerCharacter field, and inputPowerRequirement field, or all three.
+    
+    The value of capabilityFlags, inputPowerRequirement or outputPowerCharacter may be 0. Most drivers implement their 'OFF' state, used when asleep, by defininf each of the 3 fields as 0.
+    
+    The bits listed below are only the most common bits used to define a device's power states. Your device's IO family may require that your device specify other input or output power flags to interact properly. Consult family-specific documentation to determine if your IOPower plane parents or children require other power flags; they probably don't.
+
+    @constant kIOPMPowerOn Indicates the device is on, requires power, and provides power. Useful as a: Capability, InputPowerRequirement, OutputPowerCharacter
+
+    @constant kIOPMDeviceUsable Indicates the device is usable in this state. Useful only as a Capability
+
+    @constant kIOPMLowPower 
+    Indicates device is in a low power state. May be bitwis-OR'd together
+    with kIOPMDeviceUsable flag, to indicate the device is still usable.
+    
+    A device with a capability of kIOPMLowPower may:
+       Require either 0 or kIOPMPowerOn from its power parent
+       Offer either kIOPMLowPower, kIOPMPowerOn, or 0 (no power at all)
+         to its power plane children.
+
+    Useful only as a Capability, although USB drivers should consult USB family documentation for other valid circumstances to use the kIOPMLowPower bit.
+
+    @constant kIOPMPreventIdleSleep
+    In the capability field of a power state, disallows idle system sleep while the device is in that state.
+    
+    For example, displays and disks set this capability for their ON power state; since the system may not idle sleep while the display (and thus keyboard or mouse) or the disk is active.
+
+    Useful only as a Capability.
+    
+    @constant kIOPMSleepCapability 
+    Used only by certain IOKit Families (USB). Not defined or used by generic Power Management. Read your family documentation to see if you should define a powerstate using these capabilities.
+    
+    @constant kIOPMRestartCapability
+    Used only by certain IOKit Families (USB). Not defined or used by generic Power Management. Read your family documentation to see if you should define a powerstate using these capabilities.
+    
+    @constant kIOPMSleep
+    Used only by certain IOKit Families (USB). Not defined or used by generic Power Management. Read your family documentation to see if you should define a powerstate using these capabilities.
+
+    @constant kIOPMRestart
+    Used only by certain IOKit Families (USB). Not defined or used by generic Power Management. Read your family documentation to see if you should define a powerstate using these capabilities.
+*/
 typedef unsigned long IOPMPowerFlags;
 enum {
-    // The following  bits are used in the input and output power fields.
+    kIOPMPowerOn                    = 0x00000002,
+    kIOPMDeviceUsable               = 0x00008000,
+    kIOPMLowPower                   = 0x00010000,
+    kIOPMPreventIdleSleep           = 0x00000040,
+    kIOPMSleepCapability            = 0x00000004,
+    kIOPMRestartCapability          = 0x00000080,
+    kIOPMSleep                      = 0x00000001,
+    kIOPMRestart                    = 0x00000080
+};
+
+/*
+ * Private IOPMPowerFlags
+ *
+ * For Apple use only
+ * Not for use with non-Apple drivers
+ * Their behavior is undefined
+ */
+enum {
     kIOPMClockNormal                = 0x0004,
     kIOPMClockRunning               = 0x0008,
-    // Reserved - Used only between root and root parent.
-    kIOPMAuxPowerOn                 = 0x0020,
-    // Reserved - kIOPMPagingAvailable used only by now-defunct paging plexus
-    kIOPMPagingAvailable            = 0x0020,
-    kIOPMPassThrough                = 0x0100,
-    kIOPMDoze                       = 0x0400,
-    // Obsolete - use kIOPMDoze instead of kIOPMSoftSleep
-    kIOPMSoftSleep                  = 0x0400,
-    kIOPMSleep                      = 0x0001,
-    kIOPMRestart                    = 0x0080,
-
-    // The following bits are used in the capabilites field and the power fields
-    kIOPMPowerOn                    = 0x0002,
     kIOPMPreventSystemSleep         = 0x0010,
-    kIOPMPreventIdleSleep           = 0x0040,
-
-    // The following  bits are used in the capabilites field only.
-    // Used between a driver and its policy-maker
-    kIOPMNotAttainable              = 0x0001,
-    // Used internally in a power domain parent
+    kIOPMDoze                       = 0x0400,
     kIOPMChildClamp                 = 0x0080,
-    // Used internally in a power domain parent
     kIOPMChildClamp2                = 0x0200,
-    // Marks device as usable in this state
-    kIOPMDeviceUsable               = 0x8000,
-    // Device runs at max performance in this state
+    kIOPMNotPowerManaged            = 0x0800
+};
+
+
+/*
+ * Deprecated IOPMPowerFlags
+ * Their behavior is undefined when used in IOPMPowerState
+ * Capability, InputPowerRequirement, or OutputPowerCharacter fields.
+ */
+enum {
     kIOPMMaxPerformance             = 0x4000,
+    kIOPMPassThrough                = 0x0100,
+    kIOPMAuxPowerOn                 = 0x0020,
+    kIOPMNotAttainable              = 0x0001,
     kIOPMContextRetained            = 0x2000,
     kIOPMConfigRetained             = 0x1000,
-    // Device is capable of system sleep in this state
-    kIOPMSleepCapability            = 0x0004,
-    kIOPMRestartCapability          = 0x0080,
-
-    // Reserved - Error code. (this is an error return rather than a bit)
-    kIOPMNotPowerManaged            = 0x0800,
-    // Therefore this bit safely overloads it
     kIOPMStaticPowerValid           = 0x0800,
-    
+    kIOPMSoftSleep                  = 0x0400,
     kIOPMCapabilitiesMask =     kIOPMPowerOn | kIOPMDeviceUsable | 
                                 kIOPMMaxPerformance | kIOPMContextRetained | 
                                 kIOPMConfigRetained | kIOPMSleepCapability |
                                 kIOPMRestartCapability
 };
 
-
+/*
+ * Support for old names of IOPMPowerFlag constants
+ */
 enum {
     IOPMNotAttainable           = kIOPMNotAttainable,
     IOPMPowerOn                 = kIOPMPowerOn,
@@ -98,7 +156,6 @@ enum {
     IOPMContextRetained         = kIOPMContextRetained,
     IOPMConfigRetained          = kIOPMConfigRetained,
     IOPMNotPowerManaged         = kIOPMNotPowerManaged,
-    IOPMPagingAvailable         = kIOPMPagingAvailable,
     IOPMSoftSleep               = kIOPMSoftSleep
 };
 
@@ -290,6 +347,7 @@ enum {
 #define kIOPMPSLegacyBatteryInfoKey                 "LegacyBatteryInfo"
 #define kIOPMPSBatteryHealthKey                     "BatteryHealth"
 #define kIOPMPSHealthConfidenceKey                  "HealthConfidence"
+#define kIOPMPSCapacityEstimatedKey		    "CapacityEstimated"
 
 // Definitions for battery location, in case of multiple batteries.
 // A location of 0 is unspecified

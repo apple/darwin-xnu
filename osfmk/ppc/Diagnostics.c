@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_FREE_COPYRIGHT@
@@ -49,6 +55,7 @@
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_object.h>
 #include <ipc/ipc_port.h>
+#include <ipc/ipc_right.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
 #include <vm/vm_page.h>
@@ -84,9 +91,9 @@ int diagCall(struct savearea *save) {
 	natural_t tbu, tbu2, tbl;
 	struct per_proc_info *per_proc;					/* Area for my per_proc address */
 	int cpu, ret, subc;
-	unsigned int tstrt, tend, temp, temp2, *baddr, oldwar;
+	unsigned int temp, temp2, *baddr, oldwar;
 	addr64_t src, snk;
-	uint64_t scom, hid1, hid4, srrwrk, stat;
+	uint64_t srrwrk;
 	scomcomm sarea;
 	ipc_port_t port;
 	ipc_entry_t ientry;
@@ -231,7 +238,7 @@ int diagCall(struct savearea *save) {
 		case dgtest:
 		
 			kprintf("Trying to hang\n");
-			baddr = (unsigned int)&baddr | 1;		/* Make an odd address */
+			baddr = (unsigned *)((unsigned)&baddr | 1); /* Make an odd address */
 			__asm__ volatile("lwarx r2,0,%0" : : "r" (baddr));
 			kprintf("Didn't hang\n");
 
@@ -380,7 +387,7 @@ int diagCall(struct savearea *save) {
 				}
 				else {									/* Otherwise, tell the other processor */
 					(void)cpu_signal(sarea.scomcpu, SIGPcpureq, CPRQscom ,(unsigned int)&sarea);	/* Ask him to do this */
-					(void)hw_cpu_sync((unsigned long)&sarea.scomstat, LockTimeOut);	/* Wait for the other processor to get its temperature */
+					(void)hw_cpu_sync((unsigned int*)&sarea.scomstat, LockTimeOut);	/* Wait for the other processor to get its temperature */
 				}
 			}
 
@@ -396,7 +403,7 @@ int diagCall(struct savearea *save) {
 		case dgBind:
 
 			if(save->save_r4 == 0) {				/* Are we unbinding? */
-				thread_bind(current_thread(), PROCESSOR_NULL);	/* Unbind us */
+				thread_bind(PROCESSOR_NULL);		/* Unbind us */
 				save->save_r3 = KERN_SUCCESS;		/* Set success */
 				return -1;							/* Return and check asts */
 			}
@@ -430,7 +437,7 @@ int diagCall(struct savearea *save) {
 				return -1;							/* Return and check asts */
 			}
 		
-			thread_bind(current_thread(), prssr);	/* Bind us to the processor */
+			thread_bind(prssr);						/* Bind us to the processor */
 			thread_block(THREAD_CONTINUE_NULL);		/* Make it so */
 	
 			save->save_r3 = KERN_SUCCESS;			/* Set success */
@@ -461,7 +468,7 @@ int diagCall(struct savearea *save) {
 			prssr = (processor_t)port->ip_kobject;	/* Extract the processor */
 			is_write_unlock(current_space());		/* All done with the space now, unlock it */
 			
-			save->save_r3 = (uint64_t)PerProcTable[prssr->processor_data.slot_num].ppe_vaddr;	/* Pass back ther per proc */
+			save->save_r3 = (uint64_t)(uint32_t)PerProcTable[prssr->processor_data.slot_num].ppe_vaddr;	/* Pass back ther per proc */
 			return -1;								/* Return and check asts */
 
 /*
@@ -478,7 +485,7 @@ int diagCall(struct savearea *save) {
 			addrs = 0;								/* Clear just in case */
 			
 			ret = kmem_alloc_contig(kernel_map, &addrs, (vm_size_t)save->save_r4,
-				PAGE_MASK, 0);						/* That which does not make us stronger, kills us... */
+						PAGE_MASK, 0, 0);						/* That which does not make us stronger, kills us... */
 			if(ret != KERN_SUCCESS) addrs = 0;		/* Pass 0 if error */
 		
 			save->save_r3 = (uint64_t)addrs;		/* Pass back whatever */
@@ -550,15 +557,15 @@ int diagCall(struct savearea *save) {
 
 };
 
-kern_return_t testPerfTrap(int trapno, struct savearea *ss, 
-	unsigned int dsisr, addr64_t dar) {
+kern_return_t
+testPerfTrap(int trapno, struct savearea *ss, unsigned int dsisr, addr64_t dar)
+{
 
 	if(trapno != T_ALIGNMENT) return KERN_FAILURE;
 
-	kprintf("alignment exception at %08X, srr1 = %08X, dsisr = %08X, dar = %08X\n", ss->save_srr0,
-		ss->save_srr1, dsisr, dar);
+	kprintf("alignment exception at %08llX, srr1 = %08llX, dsisr = %08X, dar = %08llX\n",
+			ss->save_srr0, ss->save_srr1, dsisr, dar);
 		
 	return KERN_SUCCESS;
-
 }
 

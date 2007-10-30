@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 /*
@@ -51,8 +57,8 @@
 #include <vm/vm_map.h>
 #include <ipc/ipc_port.h>
 
-extern	vm_map_t	com_region_map32;   // the 32-bit shared submap, set up in vm init
-extern  vm_map_t	com_region_map64;   // the 64-bit shared submap
+extern	vm_map_t	commpage32_map;   // the 32-bit shared submap, set up in vm init
+extern  vm_map_t	commpage64_map;   // the 64-bit shared submap
 
 char	*commPagePtr32 = NULL;			// virtual address of 32-bit comm page in kernel map
 char	*commPagePtr64 = NULL;			// and 64-bit commpage
@@ -187,9 +193,9 @@ static	commpage_descriptor	*routines[] = {
  */
 static	void*
 commpage_allocate( 
-	vm_map_t			submap )					// com_region_map32 or com_region_map64
+	vm_map_t			submap )					// commpage32_map or commpage64_map
 {
-    vm_offset_t			kernel_addr;				// address of commpage in kernel map
+    vm_offset_t			kernel_addr = 0;		// address of commpage in kernel map
     vm_offset_t			zero = 0;
     vm_size_t			size = _COMM_PAGE_AREA_USED;	// size actually populated
     vm_map_entry_t		entry;
@@ -198,7 +204,7 @@ commpage_allocate(
     if (submap == NULL)
         panic("commpage submap is null");
     
-    if (vm_allocate(kernel_map,&kernel_addr,_COMM_PAGE_AREA_USED,VM_FLAGS_ANYWHERE))
+    if (vm_map(kernel_map,&kernel_addr,_COMM_PAGE_AREA_USED,0,VM_FLAGS_ANYWHERE,NULL,0,FALSE,VM_PROT_ALL,VM_PROT_ALL,VM_INHERIT_NONE))
         panic("cannot allocate commpage");
         
     if (vm_map_wire(kernel_map,kernel_addr,kernel_addr+_COMM_PAGE_AREA_USED,VM_PROT_DEFAULT,FALSE))
@@ -219,7 +225,7 @@ commpage_allocate(
     if (mach_make_memory_entry(	kernel_map,			// target map
                                 &size,				// size
                                 kernel_addr,		// offset (address in kernel map)
-                                VM_PROT_DEFAULT,	// map it RW
+                                VM_PROT_ALL,		// map it RWX
                                 &handle,			// this is the object handle we get
                                 NULL ))				// parent_entry
         panic("cannot make entry for commpage");
@@ -232,8 +238,8 @@ commpage_allocate(
                     handle,							// port is the memory entry we just made
                     0,								// offset (map 1st page in memory entry)
                     FALSE,							// copy
-                    VM_PROT_READ,					// cur_protection (R-only in user map)
-                    VM_PROT_READ,					// max_protection
+                    VM_PROT_READ|VM_PROT_EXECUTE,				// cur_protection (R-only in user map)
+                    VM_PROT_READ|VM_PROT_EXECUTE,				// max_protection
                     VM_INHERIT_SHARE ))				// inheritance
         panic("cannot map commpage");
         
@@ -313,7 +319,7 @@ commpage_stuff(
     char	*dest = commpage_addr_of(address);
     
     if (dest < next)
-        panic("commpage overlap: %08 - %08X", dest, next);
+        panic("commpage overlap: %p - %p", dest, next);
     
     bcopy((const char*)source,dest,length);
     
@@ -664,9 +670,9 @@ void
 commpage_populate( void )
 {
     commpage_init_cpu_capabilities();
-	commpage_populate_one( com_region_map32, &commPagePtr32, kCommPage32, "commpage 32-bit");
+	commpage_populate_one( commpage32_map, &commPagePtr32, kCommPage32, "commpage 32-bit");
 	if (_cpu_capabilities & k64Bit) {
-		commpage_populate_one( com_region_map64, &commPagePtr64, kCommPage64, "commpage 64-bit");
+		commpage_populate_one( commpage64_map, &commPagePtr64, kCommPage64, "commpage 64-bit");
 		pmap_init_sharedpage((vm_offset_t)commPagePtr64);			// Do the 64-bit version        
 	}
         

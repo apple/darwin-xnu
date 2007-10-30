@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*!
 	@header kern_control.h
@@ -188,10 +194,12 @@ typedef void * kern_ctl_ref;
 #define CTL_DATA_NOWAKEUP	0x1
 /*!
 	@defined CTL_DATA_EOR
-    @discussion The CTL_DATA_NOWAKEUP flag can be used for the enqueue
+    @discussion The CTL_DATA_EOR flag can be used for the enqueue
     	data and enqueue mbuf functions to mark the end of a record.
 */
 #define CTL_DATA_EOR		0x2
+
+__BEGIN_DECLS
 
 /*!
 	@typedef ctl_connect_func
@@ -206,8 +214,13 @@ typedef void * kern_ctl_ref;
 		If CTL_FLAG_REG_ID_UNIT was not set when the kernel control was 
 		registered, sc_unit is the dynamically allocated unit number of 
 		the new kernel control instance that is used for this connection.
-	@param unitinfo A place for the kernel control to store a pointer to
-		per-connection data.
+	@param unitinfo A placeholder for a pointer to the optional user-defined
+		private data associated with this kernel control instance.  This
+		opaque info will be provided to the user when the rest of the
+		callback routines are executed.  For example, it can be used
+		to pass a pointer to an instance-specific data structure in
+		order for the user to keep track of the states related to this
+		kernel control instance.
  */
 typedef errno_t (*ctl_connect_func)(kern_ctl_ref kctlref, 
 									struct sockaddr_ctl *sac,
@@ -224,8 +237,8 @@ typedef errno_t (*ctl_connect_func)(kern_ctl_ref kctlref,
 		disconnected from.
 	@param unit The unit number of the kernel control instance the client has
 		disconnected from.  
-	@param unitinfo The unitinfo value specified by the connect function
-		when the client connected.
+	@param unitinfo The user-defined private data initialized by the
+		ctl_connect_func callback.
  */
 typedef errno_t (*ctl_disconnect_func)(kern_ctl_ref kctlref, u_int32_t unit, void *unitinfo);
 
@@ -236,8 +249,8 @@ typedef errno_t (*ctl_disconnect_func)(kern_ctl_ref kctlref, u_int32_t unit, voi
 	@param kctlref The control ref of the kernel control.
 	@param unit The unit number of the kernel control instance the client has
 		connected to.
-	@param unitinfo The unitinfo value specified by the connect function
-		when the client connected.
+	@param unitinfo The user-defined private data initialized by the
+		ctl_connect_func callback.
 	@param m The data sent by the client to the kernel control in an
 		mbuf chain.
 	@param flags The flags specified by the client when calling
@@ -252,8 +265,8 @@ typedef errno_t (*ctl_send_func)(kern_ctl_ref kctlref, u_int32_t unit, void *uni
 		calls for the SYSPROTO_CONTROL option level.
 	@param kctlref The control ref of the kernel control.
 	@param unit The unit number of the kernel control instance.
-	@param unitinfo The unitinfo value specified by the connect function
-		when the client connected.
+	@param unitinfo The user-defined private data initialized by the
+		ctl_connect_func callback.
 	@param opt The socket option.
 	@param data A pointer to the socket option data. The data has
 		already been copied in to the kernel for you.
@@ -274,8 +287,8 @@ typedef errno_t (*ctl_setopt_func)(kern_ctl_ref kctlref, u_int32_t unit, void *u
 		return an error.
 	@param kctlref The control ref of the kernel control.
 	@param unit The unit number of the kernel control instance.
-	@param unitinfo The unitinfo value specified by the connect function
-		when the client connected.
+	@param unitinfo The user-defined private data initialized by the
+		ctl_connect_func callback.
 	@param opt The socket option.
 	@param data A buffer to copy the results in to. May be NULL, see
 		discussion.
@@ -414,13 +427,13 @@ ctl_enqueuembuf(kern_ctl_ref kctlref, u_int32_t unit, mbuf_t m, u_int32_t flags)
 	@param kctlref The control reference of the kernel control.
 	@param unit The unit number of the kernel control instance.
 	@param space The address where to return the current space available 
-	@result 0 - Data was enqueued to be read by the client.
+	@result 0 - Success; the amount of space is returned to caller.
 		EINVAL - Invalid parameters.
  */
 errno_t 
 ctl_getenqueuespace(kern_ctl_ref kctlref, u_int32_t unit, size_t *space);
 
-
+__END_DECLS
 #endif /* KERNEL */
 
 #endif /* KPI_KERN_CONTROL_H */

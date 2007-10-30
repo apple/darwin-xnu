@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_FREE_COPYRIGHT@
@@ -46,6 +52,12 @@
  * 
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
+ */
+/*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
  */
 /*
  */
@@ -79,6 +91,8 @@
 #include <ipc/ipc_notify.h>
 #include <ipc/ipc_print.h>
 #include <ipc/ipc_table.h>
+
+#include <security/mac_mach_internal.h>
 
 #if	MACH_KDB
 #include <machine/db_machdep.h>
@@ -499,6 +513,14 @@ ipc_port_alloc(
 
 	ipc_port_init(port, space, name);
 
+#if CONFIG_MACF_MACH
+	task_t issuer = current_task();
+	tasklabel_lock2 (issuer, space->is_task);
+	mac_port_label_associate(&issuer->maclabel, &space->is_task->maclabel,
+			 &port->ip_label);
+	tasklabel_unlock2 (issuer, space->is_task);
+#endif
+
 	*namep = name;
 	*portp = port;
 
@@ -537,6 +559,14 @@ ipc_port_alloc_name(
 	/* port is locked */
 
 	ipc_port_init(port, space, name);
+
+#if CONFIG_MACF_MACH
+	task_t issuer = current_task();
+	tasklabel_lock2 (issuer, space->is_task);
+	mac_port_label_associate(&issuer->maclabel, &space->is_task->maclabel,
+			 &port->ip_label);
+	tasklabel_unlock2 (issuer, space->is_task);
+#endif
 
 	*portp = port;
 
@@ -1116,6 +1146,18 @@ ipc_port_alloc_special(
 	port->ip_object.io_bits = io_makebits(TRUE, IOT_PORT, 0);
 
 	ipc_port_init(port, space, 1);
+
+#if CONFIG_MACF_MACH
+	/* Currently, ipc_port_alloc_special is used for two things:
+	 * - Reply ports for messages from the kernel
+	 * - Ports for communication with the kernel (e.g. task ports)
+	 * Since both of these would typically be labelled as kernel objects,
+	 * we will use a new entry point for this purpose, as current_task()
+	 * is often wrong (i.e. not kernel_task) or null.
+	 */
+	mac_port_label_init(&port->ip_label);
+	mac_port_label_associate_kernel(&port->ip_label, space == ipc_space_reply);
+#endif
 
 	return port;
 }

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -52,6 +58,12 @@
  *
  * 	Utah $Hdr: model_dep.c 1.34 94/12/14$
  */
+/*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 #include <debug.h>
 #include <mach_kdb.h>
@@ -83,18 +95,26 @@
 #include <ppc/exception.h>
 #include <ppc/hw_perfmon.h>
 #include <ppc/lowglobals.h>
+#include <ppc/machine_cpu.h>
+#include <ppc/db_machdep.h>
 
 #include <kern/clock.h>
 #include <kern/debug.h>
 #include <machine/trap.h>
 #include <kern/spl.h>
 #include <pexpert/pexpert.h>
+#include <kern/sched.h>
+#include <kern/task.h>
+#include <kern/machine.h>
+#include <vm/vm_map.h>
 
 #include <IOKit/IOPlatformExpert.h>
 
 #include <mach/vm_prot.h>
 #include <vm/pmap.h>
 #include <mach/time_value.h>
+#include <mach/mach_types.h>
+#include <mach/mach_vm.h>
 #include <machine/machparam.h>	/* for btop */
 
 #if	MACH_KDB
@@ -127,7 +147,7 @@ char env_buf[256];
 hw_lock_data_t debugger_lock;	/* debugger lock */
 hw_lock_data_t pbtlock;		/* backtrace print lock */
 
-int			debugger_cpu = -1;			/* current cpu running debugger	*/
+unsigned int debugger_cpu = (unsigned)-1; /* current cpu running debugger	*/
 int			debugger_debug = 0;			/* Debug debugger */
 int 		db_run_mode;				/* Debugger run mode */
 unsigned int debugger_sync = 0;			/* Cross processor debugger entry sync */
@@ -145,14 +165,15 @@ volatile unsigned int	cpus_holding_bkpts;	/* counter for number of cpus holding
 											   insert back breakpoints) */
 void unlock_debugger(void);
 void lock_debugger(void);
-void dump_backtrace(savearea *sv, unsigned int stackptr, unsigned int fence);
-void dump_savearea(savearea *sv, unsigned int fence);
-
-int packAsc (unsigned char *inbuf, unsigned int length);
+void dump_backtrace(struct savearea *sv,
+		    unsigned int stackptr,
+		    unsigned int fence);
+void dump_savearea(struct savearea *sv,
+		   unsigned int fence);
 
 #if !MACH_KDB
 boolean_t	db_breakpoints_inserted = TRUE;
-jmp_buf_t *db_recover = 0;
+jmp_buf_t *db_recover;
 #endif
 
 #if	MACH_KDB
@@ -168,11 +189,10 @@ extern int 	kdp_flag;
 #define	KDP_READY	0x1
 #endif
 
-boolean_t db_im_stepping = 0xFFFFFFFF;	/* Remember if we were stepping */
+unsigned int db_im_stepping = 0xFFFFFFFF; /* Remember if we were stepping */
 
 
-char *failNames[] = {	
-
+const char *failNames[] = {	
 	"Debugging trap",			/* failDebug */
 	"Corrupt stack",			/* failStack */
 	"Corrupt mapping tables",	/* failMapping */
@@ -187,31 +207,27 @@ char *failNames[] = {
 	"Unknown failure code"		/* Unknown failure code - must always be last */
 };
 
-char *invxcption = "Unknown code";
+const char *invxcption = "Unknown code";
 
-extern const char version[];
-extern char *trap_type[];
+static unsigned	commit_paniclog_to_nvram;
 
 #if !MACH_KDB
-void kdb_trap(int type, struct savearea *regs);
-void kdb_trap(int type, struct savearea *regs) {
-	return;
-}
-#endif
+void kdb_trap(__unused int type, __unused struct savearea *regs) {}
+#endif /* !MACH_KDB */
 
 #if !MACH_KDP
-void kdp_trap(int type, struct savearea *regs);
-void kdp_trap(int type, struct savearea *regs) {
-	return;
-}
-#endif
+void kdp_trap(__unused int type, __unused struct savearea *regs) {}
+#endif /* !MACH_KDP */
+
+extern int default_preemption_rate;
+extern int max_unsafe_quanta;
+extern int max_poll_quanta;
 
 void
-machine_startup(boot_args *args)
+machine_startup(void)
 {
 	int	boot_arg;
 	unsigned int wncpu;
-	unsigned int vmm_arg;
 
 	if (PE_parse_boot_arg("cpus", &wncpu)) {
 		if ((wncpu > 0) && (wncpu < MAX_CPUS))
@@ -223,12 +239,15 @@ machine_startup(boot_args *args)
 
 	if (PE_parse_boot_arg("debug", &boot_arg)) {
 		if (boot_arg & DB_HALT) halt_in_debugger=1;
-		if (boot_arg & DB_PRT) disableDebugOuput=FALSE; 
+		if (boot_arg & DB_PRT) disable_debug_output=FALSE; 
 		if (boot_arg & DB_SLOG) systemLogDiags=TRUE; 
 		if (boot_arg & DB_NMI) panicDebugging=TRUE; 
 		if (boot_arg & DB_LOG_PI_SCRN) logPanicDataToScreen=TRUE; 
 	}
 	
+	if (!PE_parse_boot_arg("nvram_paniclog", &commit_paniclog_to_nvram))
+		commit_paniclog_to_nvram = 1;
+
 	PE_parse_boot_arg("vmmforce", &lowGlo.lgVMMforcedFeats);
 
 	hw_lock_init(&debugger_lock);				/* initialize debugger lock */
@@ -258,23 +277,15 @@ machine_startup(boot_args *args)
 	}
 #endif /* MACH_KDB */
 	if (PE_parse_boot_arg("preempt", &boot_arg)) {
-		extern int default_preemption_rate;
-
 		default_preemption_rate = boot_arg;
 	}
 	if (PE_parse_boot_arg("unsafe", &boot_arg)) {
-		extern int max_unsafe_quanta;
-
 		max_unsafe_quanta = boot_arg;
 	}
 	if (PE_parse_boot_arg("poll", &boot_arg)) {
-		extern int max_poll_quanta;
-
 		max_poll_quanta = boot_arg;
 	}
 	if (PE_parse_boot_arg("yield", &boot_arg)) {
-		extern int sched_poll_yield_shift;
-
 		sched_poll_yield_shift = boot_arg;
 	}
 
@@ -288,9 +299,7 @@ machine_startup(boot_args *args)
 }
 
 char *
-machine_boot_info(
-	char *buf, 
-	vm_size_t size)
+machine_boot_info(__unused char *buf, __unused vm_size_t size)
 {
 	return(PE_boot_args());
 }
@@ -304,6 +313,7 @@ machine_conf(void)
 void
 machine_init(void)
 {
+	debug_log_init();
 	clock_config();
 /*	Note that we must initialize the stepper tables AFTER the clock is configured!!!!! */
 	if(pmsExperimental & 1) pmsCPUConf();	/* (EXPERIMENTAL) Initialize the stepper tables */
@@ -345,24 +355,18 @@ halt_cpu(void)
  * Machine-dependent routine to fill in an array with up to callstack_max
  * levels of return pc information.
  */
-void machine_callstack(
-	natural_t	*buf,
-	vm_size_t	callstack_max)
+void
+machine_callstack(__unused natural_t *buf, __unused vm_size_t callstack_max)
 {
 }
 #endif	/* MACH_ASSERT */
 
-
 void
 print_backtrace(struct savearea *ssp)
 {
-	unsigned int stackptr, *raddr, *rstack, trans, fence;
-	int i, frames_cnt, skip_top_frames, frames_max;
-	unsigned int store[8];			/* Buffer for real storage reads */
-	vm_offset_t backtrace_entries[32];
-	savearea *sv, *svssp;
-	int cpu;
-	savearea *psv;
+	unsigned int stackptr, fence;
+	struct savearea *sv, *svssp, *psv;
+	unsigned int cpu;
 
 /*
  *	We need this lock to make sure we don't hang up when we double panic on an MP.
@@ -370,14 +374,15 @@ print_backtrace(struct savearea *ssp)
 
 	cpu  = cpu_number();					/* Just who are we anyways? */
 	if(pbtcpu != cpu) {						/* Allow recursion */
-		hw_atomic_add((uint32_t *)&pbtcnt, 1); /* Remember we are trying */
+		(void)hw_atomic_add(&pbtcnt, 1); /* Remember we are trying */
 		while(!hw_lock_try(&pbtlock));		/* Spin here until we can get in. If we never do, well, we're crashing anyhow... */	
 		pbtcpu = cpu;						/* Mark it as us */	
 	}	
 
-	svssp = (savearea *)ssp;				/* Make this easier */
-	sv = 0;
-	if(current_thread()) sv = (savearea *)current_thread()->machine.pcb;	/* Find most current savearea if system has started */
+	svssp = (struct savearea *)ssp;				/* Make this easier */
+	sv = NULL;
+	if(current_thread())
+		sv = (struct savearea *)current_thread()->machine.pcb;	/* Find most current savearea if system has started */
 
 	fence = 0xFFFFFFFF;						/* Show we go all the way */
 	if(sv) fence = (unsigned int)sv->save_r1;	/* Stop at previous exception point */
@@ -385,31 +390,29 @@ print_backtrace(struct savearea *ssp)
 	if(!svssp) {							/* Should we start from stack? */
 		kdb_printf("Latest stack backtrace for cpu %d:\n", cpu_number());
 		__asm__ volatile("mr %0,r1" : "=r" (stackptr));	/* Get current stack */
-		dump_backtrace((savearea *)0,stackptr, fence);	/* Dump the backtrace */
+		dump_backtrace((struct savearea *)0,stackptr, fence);	/* Dump the backtrace */
 		if(!sv) {							/* Leave if no saveareas */
-			kdb_printf("\nKernel version:\n%s\n",version);	/* Print kernel version */
 			hw_lock_unlock(&pbtlock);		/* Allow another back trace to happen */
-			return;	
+			goto pbt_exit;
 		}
 	}
 	else {									/* Were we passed an exception? */
 		fence = 0xFFFFFFFF;					/* Show we go all the way */
 		if(svssp->save_hdr.save_prev) {
 			if((svssp->save_hdr.save_prev <= vm_last_addr) && ((unsigned int)pmap_find_phys(kernel_pmap, (addr64_t)svssp->save_hdr.save_prev))) {	/* Valid address? */	
-				psv = (savearea *)((unsigned int)svssp->save_hdr.save_prev);	/* Get the 64-bit back chain converted to a regualr pointer */
+				psv = (struct savearea *)((unsigned int)svssp->save_hdr.save_prev);	/* Get the 64-bit back chain converted to a regualr pointer */
 				fence = (unsigned int)psv->save_r1;	/* Stop at previous exception point */
 			}
 		}
 	
 		kdb_printf("Latest crash info for cpu %d:\n", cpu_number());
-		kdb_printf("   Exception state (sv=0x%08X)\n", sv);
+		kdb_printf("   Exception state (sv=%p)\n", svssp);
 		dump_savearea(svssp, fence);		/* Dump this savearea */	
 	}
 
 	if(!sv) {								/* Leave if no saveareas */
-		kdb_printf("\nKernel version:\n%s\n",version);	/* Print kernel version */
 		hw_lock_unlock(&pbtlock);			/* Allow another back trace to happen */
-		return;	
+		goto pbt_exit;
 	}
 	
 	kdb_printf("Proceeding back via exception chain:\n");
@@ -417,11 +420,11 @@ print_backtrace(struct savearea *ssp)
 	while(sv) {								/* Do them all... */
 		if(!(((addr64_t)((uintptr_t)sv) <= vm_last_addr) && 
 			(unsigned int)pmap_find_phys(kernel_pmap, (addr64_t)((uintptr_t)sv)))) {	/* Valid address? */	
-			kdb_printf("   Exception state (sv=0x%08X) Not mapped or invalid. stopping...\n", sv);
+			kdb_printf("   Exception state (sv=%p) Not mapped or invalid. stopping...\n", sv);
 			break;
 		}
 		
-		kdb_printf("   Exception state (sv=0x%08X)\n", sv);
+		kdb_printf("   Exception state (sv=%p)\n", sv);
 		if(sv == svssp) {					/* Did we dump it already? */
 			kdb_printf("      previously dumped as \"Latest\" state. skipping...\n");
 		}
@@ -429,33 +432,37 @@ print_backtrace(struct savearea *ssp)
 			fence = 0xFFFFFFFF;				/* Show we go all the way */
 			if(sv->save_hdr.save_prev) {
 				if((sv->save_hdr.save_prev <= vm_last_addr) && ((unsigned int)pmap_find_phys(kernel_pmap, (addr64_t)sv->save_hdr.save_prev))) {	/* Valid address? */	
-					psv = (savearea *)((unsigned int)sv->save_hdr.save_prev);	/* Get the 64-bit back chain converted to a regualr pointer */
+					psv = (struct savearea *)((unsigned int)sv->save_hdr.save_prev);	/* Get the 64-bit back chain converted to a regualr pointer */
 					fence = (unsigned int)psv->save_r1;	/* Stop at previous exception point */
 				}
 			}
 			dump_savearea(sv, fence);		/* Dump this savearea */	
 		}	
 		
-		sv = CAST_DOWN(savearea *, sv->save_hdr.save_prev);	/* Back chain */ 
+		sv = CAST_DOWN(struct savearea *, sv->save_hdr.save_prev);	/* Back chain */ 
 	}
 	
-	kdb_printf("\nKernel version:\n%s\n",version);	/* Print kernel version */
 
 	pbtcpu = -1;							/* Mark as unowned */
 	hw_lock_unlock(&pbtlock);				/* Allow another back trace to happen */
-	hw_atomic_sub((uint32_t *) &pbtcnt, 1);  /* Show we are done */
+	(void)hw_atomic_sub(&pbtcnt, 1);  /* Show we are done */
 
 	while(pbtcnt);							/* Wait for completion */
+pbt_exit:
+	panic_display_system_configuration();
 
 	return;
 }
 
-void dump_savearea(savearea *sv, unsigned int fence) {
-
-	char *xcode;
+void
+dump_savearea(struct savearea *sv, unsigned int fence)
+{
+	const char *xcode;
 	
-	if(sv->save_exception > T_MAX) xcode = invxcption;	/* Too big for table */
-	else xcode = trap_type[sv->save_exception / 4];		/* Point to the type */
+	if(sv->save_exception > T_MAX)
+		xcode = invxcption;	/* Too big for table */
+	else
+		xcode = trap_type[sv->save_exception / 4];		/* Point to the type */
 	
 	kdb_printf("      PC=0x%08X; MSR=0x%08X; DAR=0x%08X; DSISR=0x%08X; LR=0x%08X; R1=0x%08X; XCP=0x%08X (%s)\n",
 		(unsigned int)sv->save_srr0, (unsigned int)sv->save_srr1, (unsigned int)sv->save_dar, sv->save_dsisr,
@@ -468,19 +475,18 @@ void dump_savearea(savearea *sv, unsigned int fence) {
 	return;
 }
 
-
-
 #define DUMPFRAMES 34
 #define LRindex 2
 
-void dump_backtrace(savearea *sv, unsigned int stackptr, unsigned int fence) {
+void dump_backtrace(struct savearea *sv, unsigned int stackptr, unsigned int fence) {
 
 	unsigned int bframes[DUMPFRAMES];
 	unsigned int  sframe[8], raddr, dumbo;
 	int i, index=0;
+//	char syminfo[80];
 	
 	kdb_printf("      Backtrace:\n");
-	if (sv != (savearea *)0) {
+	if (sv != (struct savearea *)0) {
 		bframes[0] = (unsigned int)sv->save_srr0;
 		bframes[1] = (unsigned int)sv->save_lr;
 		index = 2;
@@ -509,6 +515,8 @@ void dump_backtrace(savearea *sv, unsigned int stackptr, unsigned int fence) {
 
 		bframes[i] = sframe[LRindex];				/* Save the link register */
 		
+//		syms_formataddr((vm_offset_t)bframes[i], syminfo, sizeof (syminfo));
+//		kdb_printf("        %s\n", syminfo);
 		if(!i) kdb_printf("         ");				/* Indent first time */
 		else if(!(i & 7)) kdb_printf("\n         ");	/* Skip to new line every 8 */
 		kdb_printf("0x%08X ", bframes[i]);			/* Dump the link register */
@@ -521,14 +529,56 @@ void dump_backtrace(savearea *sv, unsigned int stackptr, unsigned int fence) {
 	
 }
 	
+void commit_paniclog(void) {
+	unsigned long pi_size = 0;
 
+	if (debug_buf_size > 0)	{
+		if (commit_paniclog_to_nvram) {
+			unsigned int bufpos;
+			
+			/* XXX Consider using the WKdm compressor in the
+			 * future, rather than just packing - would need to
+			 * be co-ordinated with crashreporter, which decodes
+			 * this post-restart. The compressor should be
+			 * capable of in-place compression.
+			 */
+			bufpos = packA(debug_buf, (unsigned) (debug_buf_ptr - debug_buf), debug_buf_size);
+			/* If compression was successful,
+			 * use the compressed length
+			 */
+			pi_size = bufpos ? bufpos : (unsigned) (debug_buf_ptr - debug_buf);
+
+			/* Truncate if the buffer is larger than a
+			 * certain magic size - this really ought to
+			 * be some appropriate fraction of the NVRAM
+			 * image buffer, and is best done in the
+			 * savePanicInfo() or PESavePanicInfo() calls
+			 * This call must save data synchronously,
+			 * since we can subsequently halt the system.
+			 */
+			kprintf("Attempting to commit panic log to NVRAM\n");
+			/* N.B.: This routine (currently an IOKit wrapper that
+			 * calls through to the appropriate platform NVRAM
+			 * driver, must be panic context safe, i.e.
+			 * acquire no locks or require kernel services.
+			 * This does not appear to be the case currently
+			 * on some platforms, unfortunately (the driver
+			 * on command gate serialization).
+			 */
+			pi_size = PESavePanicInfo((unsigned char *)debug_buf,
+			    ((pi_size > 2040) ? 2040 : pi_size));
+			/* Uncompress in-place, to allow debuggers to examine
+			 * the panic log.
+			 */
+			if (bufpos) 
+				unpackA(debug_buf, bufpos);
+		}
+	}
+}
 
 void 
 Debugger(const char	*message) {
 
-	int i;
-	unsigned int store[8];
-	unsigned long pi_size = 0;
 	spl_t spl;
 	
 	spl = splhigh();								/* No interruptions from here on */
@@ -557,54 +607,24 @@ Debugger(const char	*message) {
  */
 	if ( panicstr != (char *)0 )
 	{
-		/* diable kernel preemptions */
 		disable_preemption();
-	
-		/* everything should be printed now so copy to NVRAM
-		*/
-		if( debug_buf_size > 0)
-
-		  {
-		    /* Do not compress the panic log unless kernel debugging 
-		     * is disabled - the panic log isn't synced to NVRAM if 
-		     * debugging is enabled, and the panic log is valuable 
-		     * whilst debugging
-		     */
-		    if (!panicDebugging)
-		      {
-			unsigned int bufpos;
-			
-			/* Now call the compressor */
-			bufpos = packAsc (debug_buf, (unsigned int) (debug_buf_ptr - debug_buf) );
-			/* If compression was successful, use the compressed length 	           */
-			if (bufpos)
-			  {
-			    debug_buf_ptr = debug_buf + bufpos;
-			  }
-		      }
-		    /* Truncate if the buffer is larger than a certain magic 
-		     * size - this really ought to be some appropriate fraction
-		     * of the NVRAM image buffer, and is best done in the 
-		     * savePanicInfo() or PESavePanicInfo() calls 
-		     */
-		    pi_size = debug_buf_ptr - debug_buf;
-		    pi_size = PESavePanicInfo( debug_buf, ((pi_size > 2040) ? 2040 : pi_size));
-		  }
-			
-		if( !panicDebugging && (pi_size != 0) ) {
-			int	my_cpu;
-			int	tcpu;
+		/* Commit the panic log buffer to NVRAM, unless otherwise
+		 * specified via a boot-arg.
+		 */
+		commit_paniclog();
+		if(!panicDebugging) {
+			unsigned int my_cpu, tcpu;
 
 			my_cpu = cpu_number();
 			debugger_cpu = my_cpu;
 
-			hw_atomic_add(&debug_mode, 1);
+			(void)hw_atomic_add(&debug_mode, 1);
 			PerProcTable[my_cpu].ppe_vaddr->debugger_active++;
 			lock_debugger();
 
 			for(tcpu = 0; tcpu < real_ncpus; tcpu++) {
 				if(tcpu == my_cpu) continue;
-				hw_atomic_add(&debugger_sync, 1);
+				(void)hw_atomic_add(&debugger_sync, 1);
 				(void)cpu_signal(tcpu, SIGPdebug, 0 ,0);
 			}
 			(void)hw_cpu_sync(&debugger_sync, LockTimeOut);
@@ -613,12 +633,16 @@ Debugger(const char	*message) {
 
 		draw_panic_dialog();
 		
-		if( !panicDebugging && (pi_size != 0))
+		if(!panicDebugging) {
+#if CONFIG_EMBEDDED
+					PEHaltRestart(kPEPanicRestartCPU);
+#else
 					PEHaltRestart( kPEHangCPU );
+#endif
+		}
 
 		enable_preemption();
 	}
-
 
 	if ((current_debugger != NO_CUR_DB)) {			/* If there is a debugger configured, enter it */
 		printf("Debugger(%s)\n", message);
@@ -645,25 +669,38 @@ Debugger(const char	*message) {
  *		save_r3 contains the failure reason code.
  */
 
-void SysChoked(int type, savearea *sv) {			/* The system is bad dead */
-
+void
+SysChoked(unsigned int type, struct savearea *sv)
+{
 	unsigned int failcode;
-	
+	const char * const pmsg = "System Failure: cpu=%d; code=%08X (%s)\n";
 	mp_disable_preemption();
-	disableDebugOuput = FALSE;
+	disable_debug_output = FALSE;
 	debug_mode = TRUE;
 
 	failcode = (unsigned int)sv->save_r3;			/* Get the failure code */
 	if(failcode > failUnknown) failcode = failUnknown;	/* Set unknown code code */
 	
-	kprintf("System Failure: cpu=%d; code=%08X (%s)\n", cpu_number(), (unsigned int)sv->save_r3, failNames[failcode]);
-	kdb_printf("System Failure: cpu=%d; code=%08X (%s)\n", cpu_number(), (unsigned int)sv->save_r3, failNames[failcode]);
+	kprintf(pmsg, cpu_number(), (unsigned int)sv->save_r3, failNames[failcode]);
+	kdb_printf(pmsg, cpu_number(), (unsigned int)sv->save_r3, failNames[failcode]);
 
 	print_backtrace(sv);							/* Attempt to print backtrace */
+
+	/* Commit the panic log buffer to NVRAM, unless otherwise
+	 * specified via a boot-arg. For certain types of panics
+	 * which result in a "choke" exception, this may well
+	 * be inadvisable, and setting the nvram_paniclog=0
+	 * boot-arg may be useful.
+	 */
+
+	if (panicDebugging)
+		commit_paniclog();
+
 	Call_DebuggerC(type, sv);						/* Attempt to get into debugger */
 
-	if ((current_debugger != NO_CUR_DB)) Call_DebuggerC(type, sv);	/* Attempt to get into debugger */
-
+	if ((current_debugger != NO_CUR_DB))
+		Call_DebuggerC(type, sv);	/* Attempt to get into debugger */
+	panic_plain(pmsg, cpu_number(), (unsigned int)sv->save_r3, failNames[failcode]);
 }
 
 
@@ -673,17 +710,14 @@ void SysChoked(int type, savearea *sv) {			/* The system is bad dead */
  *	Never, ever, ever, ever enable interruptions from here on
  */
 
-int Call_DebuggerC(
-        int	type,
-        struct savearea *saved_state)
+int
+Call_DebuggerC(unsigned int type, struct savearea *saved_state)
 {
 	int				directcall, wait;
-	addr64_t		instr_ptr;
+	addr64_t		instr_ptr = 0ULL;
 	ppnum_t			instr_pp;
-	unsigned int 	instr;
-	int 			my_cpu, tcpu, wasdebugger;
-	struct per_proc_info *pp;
-	uint64_t nowtime, poptime;
+	unsigned int 	instr, tcpu, my_cpu;
+	int 			wasdebugger;
 
 	my_cpu = cpu_number();								/* Get our CPU */
 
@@ -696,7 +730,7 @@ int Call_DebuggerC(
 	}
 #endif
 	
-	hw_atomic_add(&debug_mode, 1);						/* Indicate we are in debugger */
+	(void)hw_atomic_add(&debug_mode, 1); /* Indicate we are in debugger */
 	PerProcTable[my_cpu].ppe_vaddr->debugger_active++;	/* Show active on our CPU */
 	
 	lock_debugger();									/* Insure that only one CPU is in debugger */
@@ -708,9 +742,9 @@ int Call_DebuggerC(
 
 	if (debugger_debug) {
 #if 0
-		kprintf("Call_DebuggerC(%d): %08X %08X, debact = %d\n", my_cpu, type, saved_state, debug_mode);	/* (TEST/DEBUG) */
+		kprintf("Call_DebuggerC(%d): %08X %08X, debact = %d\n", my_cpu, type, (uint32_t)saved_state, debug_mode);	/* (TEST/DEBUG) */
 #endif
-		printf("Call_Debugger: enter - cpu %d, is_slave %d, debugger_cpu %d, pc %08X\n",
+		printf("Call_Debugger: enter - cpu %d, is_slave %d, debugger_cpu %d, pc %08llX\n",
 		   my_cpu, PerProcTable[my_cpu].ppe_vaddr->debugger_is_slave, debugger_cpu, saved_state->save_srr0);
 	}
 	
@@ -727,7 +761,8 @@ int Call_DebuggerC(
 #endif
 
 	if (db_breakpoints_inserted) cpus_holding_bkpts++;	/* Bump up the holding count */
-	if (debugger_cpu == -1 && !PerProcTable[my_cpu].ppe_vaddr->debugger_is_slave) {
+	if ((debugger_cpu == (unsigned)-1) &&
+		!PerProcTable[my_cpu].ppe_vaddr->debugger_is_slave) {
 #if 0
 		if (debugger_debug) kprintf("Call_DebuggerC(%d): lasttrace = %08X\n", my_cpu, lastTrace);	/* (TEST/DEBUG) */
 #endif
@@ -738,7 +773,7 @@ int Call_DebuggerC(
 
 		for(tcpu = 0; tcpu < real_ncpus; tcpu++) {		/* Stop all the other guys */
 			if(tcpu == my_cpu) continue;				/* Don't diddle ourselves */
-			hw_atomic_add(&debugger_sync, 1);			/* Count signal sent */
+			(void)hw_atomic_add(&debugger_sync, 1); /* Count signal sent */
 			(void)cpu_signal(tcpu, SIGPdebug, 0 ,0);	/* Tell 'em to enter debugger */
 		}
 		(void)hw_cpu_sync(&debugger_sync, LockTimeOut);	/* Wait for the other processors to enter debug */
@@ -748,7 +783,7 @@ int Call_DebuggerC(
 	
 
 	if (instr == TRAP_DIRECT_INST) {
-		disableDebugOuput = FALSE;
+		disable_debug_output = FALSE;
 		print_backtrace(saved_state);
 	}
 
@@ -872,29 +907,31 @@ debugger_exit:
 	if (wait) while(cpus_holding_bkpts);				/* Wait for breakpoints to clear */
 
 
-	hw_atomic_sub(&debug_mode, 1);						/* Set out of debug now */
+	(void)hw_atomic_sub(&debug_mode, 1); /* Set out of debug now */
 
 	return(1);											/* Exit debugger normally */
 
 debugger_error:
 	if(db_run_mode != STEP_ONCE) enable_preemption_no_check();	/* Enable preemption, but don't preempt here */
-	hw_atomic_sub(&debug_mode, 1);						/* Set out of debug now */
+	(void)hw_atomic_sub(&debug_mode, 1); /* Set out of debug now */
 	return(0);											/* Return in shame... */
 
 }
 
-void lock_debugger(void) {
-	int		my_cpu;
-	register int	i;
+void
+lock_debugger(void)
+{
+	unsigned int my_cpu;
 
 	my_cpu = cpu_number();								/* Get our CPU number */
 
-	while(1) {											/* Check until we get it */
-
-		if (debugger_cpu != -1 && debugger_cpu != my_cpu) continue;	/* Someone, not us, is debugger... */
-		if (hw_lock_try(&debugger_lock)) {				/* Get the debug lock */			
-			if (debugger_cpu == -1 || debugger_cpu == my_cpu) break;	/* Is it us? */
-			hw_lock_unlock(&debugger_lock);				/* Not us, release lock */
+	while(1) { /* Check until we get it */
+		if (debugger_cpu != (unsigned)-1 && debugger_cpu != my_cpu)
+			continue;	/* Someone, not us, is debugger... */
+		if (hw_lock_try(&debugger_lock)) { /* Get the debug lock */			
+			if (debugger_cpu == (unsigned)-1 || debugger_cpu == my_cpu)
+				break;	/* Is it us? */
+			hw_lock_unlock(&debugger_lock); /* Not us, release lock */
 		}
 	} 
 }
@@ -905,38 +942,102 @@ void unlock_debugger(void) {
 
 }
 
-struct pasc {
-  unsigned a: 7;
-  unsigned b: 7;
-  unsigned c: 7;
-  unsigned d: 7;
-  unsigned e: 7;
-  unsigned f: 7;
-  unsigned g: 7;
-  unsigned h: 7;
-}  __attribute__((packed));
-
-typedef struct pasc pasc_t;
-
-int packAsc (unsigned char *inbuf, unsigned int length)
+int patchInst(task_t task, addr64_t vaddr, uint32_t inst);
+int patchInst(task_t task, addr64_t vaddr, uint32_t inst)
 {
-  unsigned int i, j = 0;
-  pasc_t pack;
+	vm_map_t map;
+	addr64_t paddr;
+	uint32_t instr, nestingDepth;
+	kern_return_t ret;
+	vm_region_submap_short_info_data_64_t info;
+	mach_msg_type_number_t count;
+	mach_vm_address_t address;
+	mach_vm_size_t sizeOfRegion;
+	vm_prot_t reprotect;
 
-  for (i = 0; i < length; i+=8)
-    {
-      pack.a = inbuf[i];
-      pack.b = inbuf[i+1];
-      pack.c = inbuf[i+2];
-      pack.d = inbuf[i+3];
-      pack.e = inbuf[i+4];
-      pack.f = inbuf[i+5];
-      pack.g = inbuf[i+6];
-      pack.h = inbuf[i+7];
-      bcopy ((char *) &pack, inbuf + j, 7);
-      j += 7;
-    }
-  if (0 != (i - length))
-    inbuf[j - (i - length)] &= 0xFF << (8-(i - length));
-  return j-(((i-length) == 7) ? 6 : (i - length));
+	if(task == TASK_NULL) return -1;		/* Leave if task is bogus... */
+
+	task_lock(task);						/* Make sure the task doesn't go anywhaere */
+	if (!task->active) {					/* Is is alive? */
+		task_unlock(task);					/* Nope, unlock */
+		return -1;							/* Not a active task, fail... */
+	}
+	map = task->map;						/* Get his map */
+	vm_map_reference_swap(map);				/* Don't let it go away */
+	task_unlock(task);						/* Unleash the task */
+
+	/* Find the memory permissions. */
+	nestingDepth=999999;					/* Limit recursion */
+	
+	count = VM_REGION_SUBMAP_SHORT_INFO_COUNT_64;
+	address = (mach_vm_address_t)vaddr;
+	sizeOfRegion = (mach_vm_size_t)4;
+
+	ret = mach_vm_region_recurse(map, &address, &sizeOfRegion, &nestingDepth, (vm_region_recurse_info_t)&info, &count);
+	if (ret != KERN_SUCCESS) {				/* Leave if it didn't work */
+		vm_map_deallocate(map);				/* Drop reference on map */
+		return (-1);			
+	}
+
+/*
+ *	We need to check if there could be a problem if the dtrace probes are being removed and the code is being
+ *	executed at the same time.  This sequence may leave us with no-execute turned on temporarily when we execute
+ *	through it.
+ */
+ 
+	if (!(info.protection & VM_PROT_WRITE)) {
+		/* Save the original protection values for restoration later */
+		reprotect = info.protection;
+
+		if (info.max_protection & VM_PROT_WRITE) {
+			/* The memory is not currently writable, but can be made writable. */
+			ret = mach_vm_protect(map, (mach_vm_offset_t)vaddr, (mach_vm_size_t)4, 0, reprotect | VM_PROT_WRITE);
+		} 
+		else {
+			/*
+			 * The memory is not currently writable, and cannot be made writable. We need to COW this memory.
+			 *
+			 * Strange, we can't just say "reprotect | VM_PROT_COPY", that fails.
+			 */
+			ret = mach_vm_protect(map, (mach_vm_offset_t)vaddr, (mach_vm_size_t)4, 0, VM_PROT_COPY | VM_PROT_READ | VM_PROT_WRITE);
+		}
+
+		if (ret != KERN_SUCCESS) {
+			vm_map_deallocate(map);			/* Drop reference on map */
+			return (-1);		
+		}
+		
+	} 
+	else {
+		/* The memory was already writable. */
+		reprotect = VM_PROT_NONE;
+	}
+
+	instr = inst;							/* Place instruction in local memory */
+	ret = vm_map_write_user(map, &inst, (vm_map_address_t)vaddr, (vm_size_t)4);	/* Write the instruction */
+	if (ret != KERN_SUCCESS) {				/* Leave if it didn't work */
+	
+		if (reprotect != VM_PROT_NONE) {
+			ret = mach_vm_protect (map, (mach_vm_offset_t)vaddr, (mach_vm_size_t)4, 0, reprotect);
+		}
+
+		vm_map_deallocate(map);				/* Drop reference on map */
+		return (-1);			
+	}
+
+	paddr = (addr64_t)pmap_find_phys(map->pmap, vaddr) << 12;	/* Find the physical address of the patched address */
+	if(!paddr) {							/* Is address mapped now? */
+		vm_map_deallocate(map);				/* Drop reference on map */
+		return 0;							/* Leave... */
+	}
+	paddr = paddr | (vaddr & 4095);			/* Construct physical address */
+	invalidate_icache64(paddr, 4, 1);		/* Flush out the instruction cache here */
+
+	if (reprotect != VM_PROT_NONE) {
+		ret = mach_vm_protect(map, (mach_vm_offset_t)vaddr, (mach_vm_size_t)4, 0, reprotect);
+	}
+
+	vm_map_deallocate(map);
+
+	return (0);
 }

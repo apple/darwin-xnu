@@ -38,22 +38,28 @@
 .Dt UTIMES 2
 .Os
 .Sh NAME
-.Nm utimes ,
-.Nm futimes
+.Nm futimes ,
+.Nm utimes
 .Nd set file access and modification times
 .Sh LIBRARY
 .Lb libc
 .Sh SYNOPSIS
 .In sys/time.h
 .Ft int
-.Fn utimes "const char *path" "const struct timeval *times"
+.Fo futimes
+.Fa "int fildes"
+.Fa "const struct timeval times[2]"
+.Fc
 .Ft int
-.Fn futimes "int fd" "const struct timeval *times"
+.Fo utimes
+.Fa "const char *path"
+.Fa "const struct timeval times[2]"
+.Fc
 .Sh DESCRIPTION
 The access and modification times of the file named by
 .Fa path
 or referenced by
-.Fa fd
+.Fa fildes
 are changed as specified by the argument
 .Fa times .
 .Pp
@@ -79,9 +85,11 @@ time.
 .Sh RETURN VALUES
 .Rv -std
 .Sh ERRORS
+The
 .Fn utimes
-will fail if:
+system call will fail if:
 .Bl -tag -width Er
+.\" ===========
 .It Bq Er EACCES
 Search permission is denied for a component of the path prefix;
 or the
@@ -91,25 +99,33 @@ argument is
 and the effective user ID of the process does not
 match the owner of the file, and is not the super-user, and write
 access is denied.
+.\" ===========
 .It Bq Er EFAULT
 .Fa path
 or
 .Fa times
 points outside the process's allocated address space.
+.\" ===========
 .It Bq Er EIO
-An I/O error occurred while reading or writing the affected inode.
+An I/O error occurs while reading or writing the affected inode.
+.\" ===========
 .It Bq Er ELOOP
-Too many symbolic links were encountered in translating the pathname.
+Too many symbolic links are encountered in translating the pathname.
+This is taken to be indicative of a looping symbolic link.
+.\" ===========
 .It Bq Er ENAMETOOLONG
-A component of a pathname exceeded
+A component of a pathname exceeds
 .Dv NAME_MAX
 characters, or an entire path name exceeded
 .Dv PATH_MAX
 characters.
+.\" ===========
 .It Bq Er ENOENT
 The named file does not exist.
+.\" ===========
 .It Bq Er ENOTDIR
 A component of the path prefix is not a directory.
+.\" ===========
 .It Bq Er EPERM
 The
 .Fa times
@@ -117,20 +133,24 @@ argument is not
 .Dv NULL
 and the calling process's effective user ID
 does not match the owner of the file and is not the super-user.
+.\" ===========
 .It Bq Er EROFS
 The file system containing the file is mounted read-only.
 .El
 .Pp
+The
 .Fn futimes
-will fail if:
+system call will fail if:
 .Bl -tag -width Er
+.\" ===========
 .It Bq Er EBADF
-.Fa fd
+.Fa fildes
 does not refer to a valid descriptor.
 .El
 .Pp
 All of the functions will fail if:
 .Bl -tag -width Er
+.\" ===========
 .It Bq Er EACCES
 The
 .Fa times
@@ -139,11 +159,14 @@ argument is
 and the effective user ID of the process does not
 match the owner of the file, and is not the super-user, and write
 access is denied.
+.\" ===========
 .It Bq Er EFAULT
 .Fa times
 points outside the process's allocated address space.
+.\" ===========
 .It Bq Er EIO
 An I/O error occurred while reading or writing the affected inode.
+.\" ===========
 .It Bq Er EPERM
 The
 .Fa times
@@ -151,6 +174,7 @@ argument is not
 .Dv NULL
 and the calling process's effective user ID
 does not match the owner of the file and is not the super-user.
+.\" ===========
 .It Bq Er EROFS
 The file system containing the file is mounted read-only.
 .El

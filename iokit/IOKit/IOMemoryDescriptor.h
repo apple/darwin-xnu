@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #ifndef _IOMEMORYDESCRIPTOR_H
 #define _IOMEMORYDESCRIPTOR_H
@@ -25,6 +31,7 @@
 #include <sys/cdefs.h>
 
 #include <IOKit/IOTypes.h>
+#include <IOKit/IOLocks.h>
 #include <libkern/c++/OSContainers.h>
 
 __BEGIN_DECLS
@@ -71,7 +78,8 @@ enum {
     kIOMemoryAsReference	= 0x00000100,
     kIOMemoryBufferPageable	= 0x00000400,
     kIOMemoryDontMap		= 0x00000800,
-    kIOMemoryPersistent		= 0x00010000
+    kIOMemoryPersistent		= 0x00010000,
+    kIOMemoryThreadSafe		= 0x00020000
 };
 
 #define kIOMapperNone	((IOMapper *) -1)
@@ -183,16 +191,11 @@ typedef IOOptionBits DMACommandOps;
                                         IOByteCount offset, IOByteCount length );
     OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 4);
 
-#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
     // Used for dedicated communications for IODMACommand
     virtual IOReturn dmaCommandOperation(DMACommandOps op, void *vData, UInt dataSize) const;
     OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 5);
-#endif
 
 private:
-#if (defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
-    OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 5);
-#endif
     OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 6);
     OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 7);
     OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 8);
@@ -265,42 +268,38 @@ public:
                                             task_t           withTask,
                                             bool             asReference = false);
 
-#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
 /*! @function withAddressRange
     @abstract Create an IOMemoryDescriptor to describe one virtual range of the specified map.
-    @discussion This method creates and initializes an IOMemoryDescriptor for memory consisting of a single virtual memory range mapped into the specified map.
+    @discussion This method creates and initializes an IOMemoryDescriptor for memory consisting of a single virtual memory range mapped into the specified map. Note that unlike IOMemoryDescriptor::withAddress(), kernel_task memory must be explicitly prepared when passed to this api.
     @param address The virtual address of the first byte in the memory.
     @param withLength The length of memory.
     @param options
-        kIOMemoryDirectionMask (options:direction)     This nibble indicates the I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures. 
-        kIOMemoryNoAutoPrepare Indicates that the temporary AutoPrepare of kernel_task memory should not be performed.
-    @param task The task the virtual ranges are mapped into.
+        kIOMemoryDirectionMask (options:direction)	This nibble indicates the I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures. 
+    @param task The task the virtual ranges are mapped into. Note that unlike IOMemoryDescriptor::withAddress(), kernel_task memory must be explicitly prepared when passed to this api.
     @result The created IOMemoryDescriptor on success, to be released by the caller, or zero on failure. */
 
     static IOMemoryDescriptor * withAddressRange(
-                                       mach_vm_address_t address,
-                                       mach_vm_size_t    length,
-                                       IOOptionBits      options,
-                               task_t            task);
+					mach_vm_address_t address,
+					mach_vm_size_t	  length,
+					IOOptionBits      options,
+					task_t            task);
 
 /*! @function withAddressRanges
     @abstract Create an IOMemoryDescriptor to describe one or more virtual ranges.
-    @discussion This method creates and initializes an IOMemoryDescriptor for memory consisting of an array of virtual memory ranges each mapped into a specified source task.
+    @discussion This method creates and initializes an IOMemoryDescriptor for memory consisting of an array of virtual memory ranges each mapped into a specified source task. Note that unlike IOMemoryDescriptor::withAddress(), kernel_task memory must be explicitly prepared when passed to this api.
     @param ranges An array of IOAddressRange structures which specify the virtual ranges in the specified map which make up the memory to be described. IOAddressRange is the 64bit version of IOVirtualRange.
     @param rangeCount The member count of the ranges array.
     @param options
-        kIOMemoryDirectionMask (options:direction)     This nibble indicates the I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures. 
-        kIOMemoryAsReference   For options:type = Virtual or Physical this indicate that the memory descriptor need not copy the ranges array into local memory.  This is an optimisation to try to minimise unnecessary allocations.
-        kIOMemoryNoAutoPrepare Indicates that the temporary AutoPrepare of kernel_task memory should not be performed.
-    @param task The task each of the virtual ranges are mapped into.
+        kIOMemoryDirectionMask (options:direction)	This nibble indicates the I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures. 
+        kIOMemoryAsReference	For options:type = Virtual or Physical this indicate that the memory descriptor need not copy the ranges array into local memory.  This is an optimisation to try to minimise unnecessary allocations.
+    @param task The task each of the virtual ranges are mapped into. Note that unlike IOMemoryDescriptor::withAddress(), kernel_task memory must be explicitly prepared when passed to this api.
     @result The created IOMemoryDescriptor on success, to be released by the caller, or zero on failure. */
 
     static IOMemoryDescriptor * withAddressRanges(
-                                       IOAddressRange * ranges,
-                                       UInt32           rangeCount,
-                                       IOOptionBits     options,
-                                       task_t           withTask);
-#endif
+					IOAddressRange * ranges,
+					UInt32           rangeCount,
+					IOOptionBits     options,
+					task_t           withTask);
 
 /*! @function withOptions
     @abstract Master initialiser for all variants of memory descriptors.
@@ -469,7 +468,7 @@ public:
 
 /*! @function readBytes
     @abstract Copy data from the memory descriptor's buffer to the specified buffer.
-    @discussion This method copies data from the memory descriptor's memory at the given offset, to the caller's buffer.
+    @discussion This method copies data from the memory descriptor's memory at the given offset, to the caller's buffer.  The memory descriptor MUST have the kIODirectionOut direcction bit set  and be prepared.  kIODirectionOut means that this memory descriptor will be output to an external device, so readBytes is used to get memory into a local buffer for a PIO transfer to the device.
     @param offset A byte offset into the memory descriptor's memory.
     @param bytes The caller supplied buffer to copy the data to.
     @param withLength The length of the data to copy.
@@ -480,7 +479,7 @@ public:
 
 /*! @function writeBytes
     @abstract Copy data to the memory descriptor's buffer from the specified buffer.
-    @discussion This method copies data to the memory descriptor's memory at the given offset, from the caller's buffer.
+    @discussion This method copies data to the memory descriptor's memory at the given offset, from the caller's buffer.  The memory descriptor MUST have the kIODirectionIn direcction bit set  and be prepared.  kIODirectionIn means that this memory descriptor will be input from an external device, so writeBytes is used to write memory into the descriptor for PIO drivers.
     @param offset A byte offset into the memory descriptor's memory.
     @param bytes The caller supplied buffer to copy the data from.
     @param withLength The length of the data to copy.
@@ -532,8 +531,31 @@ public:
      * Mapping functions.
      */
 
-/*! @function map
+/*! @function createMappingInTask
     @abstract Maps a IOMemoryDescriptor into a task.
+    @discussion This is the general purpose method to map all or part of the memory described by a memory descriptor into a task at any available address, or at a fixed address if possible. Caching & read-only options may be set for the mapping. The mapping is represented as a returned reference to a IOMemoryMap object, which may be shared if the mapping is compatible with an existing mapping of the IOMemoryDescriptor. The IOMemoryMap object returned should be released only when the caller has finished accessing the mapping, as freeing the object destroys the mapping. 
+    @param intoTask Sets the target task for the mapping. Pass kernel_task for the kernel address space.
+    @param atAddress If a placed mapping is requested, atAddress specifies its address, and the kIOMapAnywhere should not be set. Otherwise, atAddress is ignored.
+    @param options Mapping options are defined in IOTypes.h,<br>
+	kIOMapAnywhere should be passed if the mapping can be created anywhere. If not set, the atAddress parameter sets the location of the mapping, if it is available in the target map.<br>
+	kIOMapDefaultCache to inhibit the cache in I/O areas, kIOMapCopybackCache in general purpose RAM.<br>
+	kIOMapInhibitCache, kIOMapWriteThruCache, kIOMapCopybackCache to set the appropriate caching.<br>
+	kIOMapReadOnly to allow only read only accesses to the memory - writes will cause and access fault.<br>
+	kIOMapReference will only succeed if the mapping already exists, and the IOMemoryMap object is just an extra reference, ie. no new mapping will be created.<br>
+	kIOMapUnique allows a special kind of mapping to be created that may be used with the IOMemoryMap::redirect() API. These mappings will not be shared as is the default - there will always be a unique mapping created for the caller, not an existing mapping with an extra reference.<br>
+    @param offset Is a beginning offset into the IOMemoryDescriptor's memory where the mapping starts. Zero is the default to map all the memory.
+    @param length Is the length of the mapping requested for a subset of the IOMemoryDescriptor. Zero is the default to map all the memory.
+    @result A reference to an IOMemoryMap object representing the mapping, which can supply the virtual address of the mapping and other information. The mapping may be shared with multiple callers - multiple maps are avoided if a compatible one exists. The IOMemoryMap object returned should be released only when the caller has finished accessing the mapping, as freeing the object destroys the mapping. The IOMemoryMap instance also retains the IOMemoryDescriptor it maps while it exists. */
+
+    IOMemoryMap * 	createMappingInTask(
+	task_t			intoTask,
+	mach_vm_address_t	atAddress,
+	IOOptionBits		options,
+	mach_vm_size_t		offset = 0,
+	mach_vm_size_t		length = 0 );
+
+/*! @function map
+    @abstract Maps a IOMemoryDescriptor into a task - deprecated, only safe for 32 bit tasks. Use createMappingInTask instead.
     @discussion This is the general purpose method to map all or part of the memory described by a memory descriptor into a task at any available address, or at a fixed address if possible. Caching & read-only options may be set for the mapping. The mapping is represented as a returned reference to a IOMemoryMap object, which may be shared if the mapping is compatible with an existing mapping of the IOMemoryDescriptor. The IOMemoryMap object returned should be released only when the caller has finished accessing the mapping, as freeing the object destroys the mapping. 
     @param intoTask Sets the target task for the mapping. Pass kernel_task for the kernel address space.
     @param atAddress If a placed mapping is requested, atAddress specifies its address, and the kIOMapAnywhere should not be set. Otherwise, atAddress is ignored.
@@ -555,11 +577,12 @@ public:
 	IOByteCount		offset = 0,
 	IOByteCount		length = 0 );
 
+
 /*! @function map
     @abstract Maps a IOMemoryDescriptor into the kernel map.
-    @discussion This is a shortcut method to map all the memory described by a memory descriptor into the kernel map at any available address. See the full version of the map method for further details.
-    @param options Mapping options as in the full version of the map method, with kIOMapAnywhere assumed.
-    @result See the full version of the map method. */
+    @discussion This is a shortcut method to map all the memory described by a memory descriptor into the kernel map at any available address. See the full version of the createMappingInTask method for further details.
+    @param options Mapping options as in the full version of the createMappingInTask method, with kIOMapAnywhere assumed.
+    @result See the full version of the createMappingInTask method. */
 
     virtual IOMemoryMap * 	map(
 	IOOptionBits		options = 0 );
@@ -585,15 +608,15 @@ public:
     IOReturn handleFault(
         void *			pager,
 	vm_map_t		addressMap,
-	IOVirtualAddress	address,
-	IOByteCount		sourceOffset,
-	IOByteCount		length,
+	mach_vm_address_t	address,
+	mach_vm_size_t		sourceOffset,
+	mach_vm_size_t		length,
         IOOptionBits		options );
 
 protected:
     virtual IOMemoryMap * 	makeMapping(
 	IOMemoryDescriptor *	owner,
-	task_t		intoTask,
+	task_t			intoTask,
 	IOVirtualAddress	atAddress,
 	IOOptionBits		options,
 	IOByteCount		offset,
@@ -702,6 +725,13 @@ public:
     virtual IOReturn		redirect(IOMemoryDescriptor * newBackingMemory,
 					 IOOptionBits         options,
 					 IOByteCount          offset = 0) = 0;
+
+    virtual IOReturn		redirect(IOMemoryDescriptor * newBackingMemory,
+					 IOOptionBits         options,
+					 mach_vm_size_t       offset = 0) = 0;
+
+    virtual mach_vm_address_t 	getAddress() = 0;
+    virtual mach_vm_size_t 	getSize() = 0;
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -752,9 +782,7 @@ protected:
 
     virtual void free();
 
-#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
     virtual IOReturn dmaCommandOperation(DMACommandOps op, void *vData, UInt dataSize) const;
-#endif
 
 private:
 
@@ -772,7 +800,8 @@ private:
     ppnum_t	    _highestPage;
     uint32_t	    __iomd_reservedA;
     uint32_t	    __iomd_reservedB;
-    uint32_t	    __iomd_reservedC;
+
+    IOLock *	    _prepareLock;
 
 public:
     /*
@@ -813,10 +842,8 @@ public:
                                         IODirection      withDirection,
                                         bool             asReference = false);
 
-#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
     virtual addr64_t getPhysicalSegment64( IOByteCount offset,
                                             IOByteCount * length );
-#endif
 
     virtual IOPhysicalAddress getPhysicalSegment(IOByteCount offset,
 						 IOByteCount * length);
@@ -842,11 +869,13 @@ public:
 	vm_map_t		addressMap,
 	IOVirtualAddress	logical,
 	IOByteCount		length );
+
     virtual bool serialize(OSSerialize *s) const;
 
     // Factory method for cloning a persistent IOMD, see IOMemoryDescriptor
     static IOMemoryDescriptor *
 	withPersistentMemoryDescriptor(IOGeneralMemoryDescriptor *originalMD);
+
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -894,10 +923,8 @@ protected:
     IOMemoryDescriptor::withRanges;
     IOMemoryDescriptor::withSubRange;
 
-#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
     // used by IODMACommand
     virtual IOReturn dmaCommandOperation(DMACommandOps op, void *vData, UInt dataSize) const;
-#endif
 
 public:
     /*
@@ -916,10 +943,8 @@ public:
      * IOMemoryDescriptor required methods
      */
 
-#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
     virtual addr64_t getPhysicalSegment64( IOByteCount offset,
                                             IOByteCount * length );
-#endif
 
     virtual IOPhysicalAddress getPhysicalSegment(IOByteCount offset,
 						 IOByteCount * length);
@@ -953,18 +978,18 @@ public:
 protected:
     virtual IOMemoryMap * 	makeMapping(
 	IOMemoryDescriptor *	owner,
-	task_t		intoTask,
+	task_t			intoTask,
 	IOVirtualAddress	atAddress,
 	IOOptionBits		options,
 	IOByteCount		offset,
 	IOByteCount		length );
 
     virtual IOReturn doMap(
-	vm_map_t		addressMap,
-	IOVirtualAddress *	atAddress,
-	IOOptionBits		options,
-	IOByteCount		sourceOffset = 0,
-	IOByteCount		length = 0 );
+       vm_map_t                addressMap,
+       IOVirtualAddress *      atAddress,
+       IOOptionBits            options,
+       IOByteCount             sourceOffset = 0,
+       IOByteCount             length = 0 );
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */

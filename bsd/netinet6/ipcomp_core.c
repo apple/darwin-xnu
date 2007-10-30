@@ -50,7 +50,9 @@
 
 #include <net/if.h>
 #include <net/route.h>
-#include <net/zlib.h>
+#if ZLIB
+#include <libkern/zlib.h>
+#endif
 #include <kern/cpu_number.h>
 
 #include <netinet6/ipcomp.h>
@@ -64,6 +66,7 @@
 
 #include <net/net_osdep.h>
 
+#if ZLIB
 static void *deflate_alloc(void *, u_int, u_int);
 static void deflate_free(void *, void *);
 static int deflate_common(struct mbuf *, struct mbuf *, size_t *, int);
@@ -83,16 +86,24 @@ static int deflate_memlevel = MAX_MEM_LEVEL;
 
 static z_stream	deflate_stream;
 static z_stream	inflate_stream;
+#endif /* ZLIB */
 
 static const struct ipcomp_algorithm ipcomp_algorithms[] = {
+#if ZLIB
 	{ deflate_compress, deflate_decompress, 90 },
+#endif /* ZLIB */
 };
 
 const struct ipcomp_algorithm *
-ipcomp_algorithm_lookup(idx)
-	int idx;
+ipcomp_algorithm_lookup(
+#if ZLIB
+		int idx
+#else
+		__unused int idx
+#endif
+		)
 {
-
+#if ZLIB
  	if (idx == SADB_X_CALG_DEFLATE) {
 		/*
 		 * Avert your gaze, ugly hack follows!
@@ -129,24 +140,26 @@ ipcomp_algorithm_lookup(idx)
 
 		return &ipcomp_algorithms[0];
 	}
+#endif /* ZLIB */
 	return NULL;
 }
 
+#if ZLIB
 static void *
-deflate_alloc(aux, items, siz)
-	void *aux;
-	u_int items;
-	u_int siz;
+deflate_alloc(
+	__unused void *aux,
+	u_int items,
+	u_int siz)
 {
 	void *ptr;
-	ptr = _MALLOC(items * siz, M_TEMP, M_WAIT);
+	ptr = _MALLOC(items * siz, M_TEMP, M_NOWAIT);
 	return ptr;
 }
 
 static void
-deflate_free(aux, ptr)
-	void *aux;
-	void *ptr;
+deflate_free(
+	__unused void *aux,
+	void *ptr)
 {
 	FREE(ptr, M_TEMP);
 }
@@ -259,8 +272,8 @@ do { \
 			/* inflate: Z_OK can indicate the end of decode */
 			if (mode && !p && zs->avail_out != 0)
 				goto terminate;
-			else
-				; /*once more.*/
+			
+			/* else once more.*/
 		} else {
 			if (zs->msg) {
 				ipseclog((LOG_ERR, "ipcomp_%scompress: "
@@ -397,3 +410,4 @@ deflate_decompress(m, md, lenp)
 
 	return deflate_common(m, md, lenp, 1);
 }
+#endif /* ZLIB */

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -65,17 +71,9 @@
 
 /* [XSI] The timeval structure shall be defined as described in
  * <sys/time.h>
- *
- * NB: We use __darwin_time_t and __darwin_suseconds_t here to avoid
- * improperly exposing time_t and suseconds_t into the namespace.
  */
-#ifndef _TIMEVAL
-#define _TIMEVAL
-struct timeval {
-	__darwin_time_t		tv_sec;		/* seconds */
-	__darwin_suseconds_t	tv_usec;	/* and microseconds */
-};
-#endif
+#define __need_struct_timeval
+#include <sys/_structs.h>
 
 /* The id_t type shall be defined as described in <sys/types.h> */
 #ifndef _ID_T
@@ -87,7 +85,7 @@ typedef __darwin_id_t	id_t;		/* can hold pid_t, gid_t, or uid_t */
 /*
  * Resource limit type (low 63 bits, excluding the sign bit)
  */
-typedef __int64_t	rlim_t;
+typedef __uint64_t	rlim_t;
 
 
 /*****
@@ -102,13 +100,22 @@ typedef __int64_t	rlim_t;
 #define	PRIO_PGRP	1		/* Second argument is a GID */
 #define	PRIO_USER	2		/* Second argument is a UID */
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+#define	PRIO_DARWIN_THREAD	3		/* Second argument is always 0 (current thread) */
+
 /*
  * Range limitations for the value of the third parameter to setpriority().
  */
 #define	PRIO_MIN	-20
 #define	PRIO_MAX	20
-#endif	/* !_POSIX_C_SOURCE */
+
+/* use PRIO_DARWIN_BG to set the current thread into "background" state
+ * which lowers CPU, disk IO, and networking priorites until thread terminates
+ * or "background" state is revoked
+ */
+#define PRIO_DARWIN_BG 0x1000
+
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 
 
@@ -133,38 +140,36 @@ typedef __int64_t	rlim_t;
  *       is discouraged for standards compliant programs.
  */
 struct	rusage {
-	struct timeval ru_utime;	/* user time used */
-	struct timeval ru_stime;	/* system time used */
-#ifdef _POSIX_C_SOURCE
+	struct timeval ru_utime;	/* user time used (PL) */
+	struct timeval ru_stime;	/* system time used (PL) */
+#if defined(_POSIX_C_SOURCE) && !defined(_DARWIN_C_SOURCE)
 	long	ru_opaque[14];		/* implementation defined */
-#else	/* !_POSIX_C_SOURCE */
+#else	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 	/*
 	 * Informational aliases for source compatibility with programs
 	 * that need more information than that provided by standards,
 	 * and which do not mind being OS-dependent.
 	 */
-	long	ru_maxrss;		/* max resident set size */
+	long	ru_maxrss;		/* max resident set size (PL) */
 #define	ru_first	ru_ixrss	/* internal: ruadd() range start */
-	long	ru_ixrss;		/* integral shared memory size */
-	long	ru_idrss;		/* integral unshared data " */
-	long	ru_isrss;		/* integral unshared stack " */
-	long	ru_minflt;		/* page reclaims */
-	long	ru_majflt;		/* page faults */
-	long	ru_nswap;		/* swaps */
-	long	ru_inblock;		/* block input operations */
-	long	ru_oublock;		/* block output operations */
-	long	ru_msgsnd;		/* messages sent */
-	long	ru_msgrcv;		/* messages received */
-	long	ru_nsignals;		/* signals received */
-	long	ru_nvcsw;		/* voluntary context switches */
+	long	ru_ixrss;		/* integral shared memory size (NU) */
+	long	ru_idrss;		/* integral unshared data (NU)  */
+	long	ru_isrss;		/* integral unshared stack (NU) */
+	long	ru_minflt;		/* page reclaims (NU) */
+	long	ru_majflt;		/* page faults (NU) */
+	long	ru_nswap;		/* swaps (NU) */
+	long	ru_inblock;		/* block input operations (atomic) */
+	long	ru_oublock;		/* block output operations (atomic) */
+	long	ru_msgsnd;		/* messages sent (atomic) */
+	long	ru_msgrcv;		/* messages received (atomic) */
+	long	ru_nsignals;		/* signals received (atomic) */
+	long	ru_nvcsw;		/* voluntary context switches (atomic) */
 	long	ru_nivcsw;		/* involuntary " */
 #define	ru_last		ru_nivcsw	/* internal: ruadd() range end */
-#endif	/* !_POSIX_C_SOURCE */
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 };
 
 
-
-// LP64todo - should this move?
 #ifdef KERNEL
 #include <machine/types.h>	/* user_time_t */
 
@@ -216,21 +221,22 @@ struct	user_rusage {
  * Possible values of the first parameter to getrlimit()/setrlimit(), to
  * indicate for which resource the operation is being performed.
  */
-#define	RLIMIT_CPU	0		/* cpu time per process, in ms */
+#define	RLIMIT_CPU	0		/* cpu time per process */
 #define	RLIMIT_FSIZE	1		/* file size */
 #define	RLIMIT_DATA	2		/* data segment size */
 #define	RLIMIT_STACK	3		/* stack size */
 #define	RLIMIT_CORE	4		/* core file size */
 #define	RLIMIT_AS	5		/* address space (resident set size) */
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	RLIMIT_RSS	RLIMIT_AS	/* source compatibility alias */
 #define	RLIMIT_MEMLOCK	6		/* locked-in-memory address space */
 #define	RLIMIT_NPROC	7		/* number of processes */
-#endif	/* !_POSIX_C_SOURCE */
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 #define	RLIMIT_NOFILE	8		/* number of open files */
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	RLIM_NLIMITS	9		/* total number of resource limits */
-#endif	/* !_POSIX_C_SOURCE */
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
+#define _RLIMIT_POSIX_FLAG	0x1000	/* Set bit for strict POSIX */
 
 /*
  * A structure representing a resource limit.  The address of an instance
@@ -241,15 +247,58 @@ struct rlimit {
 	rlim_t	rlim_max;		/* maximum value for rlim_cur */
 };
 
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+/* I/O type */
+#define IOPOL_TYPE_DISK	0
+
+/* scope */
+#define IOPOL_SCOPE_PROCESS   0
+#define IOPOL_SCOPE_THREAD    1
+
+/* I/O Priority */
+#define IOPOL_DEFAULT	0
+#define IOPOL_NORMAL	1
+#define IOPOL_PASSIVE	2
+#define IOPOL_THROTTLE	3
+
+#ifdef PRIVATE
+/*
+ * Structures for use in communicating via iopolicysys() between Lic and the
+ * kernel.  Not to be used by uesr programs directly.
+ */
+
+/*
+ * the command to iopolicysys()
+ */
+#define	IOPOL_CMD_GET		0x00000001	/* Get I/O policy */
+#define	IOPOL_CMD_SET		0x00000002	/* Set I/O policy */
+
+/*
+ * Second parameter to iopolicysys()
+ */
+struct _iopol_param_t {
+	int iop_scope;	/* current process or a thread */
+	int iop_iotype;
+	int iop_policy;
+};
+
+#endif	/* PRIVATE */
+#endif /* !_POSIX_C_SOURCE || _DARWIN_C_SOURCE */
 
 #ifndef KERNEL
 
 __BEGIN_DECLS
 int	getpriority(int, id_t);
-int	getrlimit(int, struct rlimit *);
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+int	getiopolicy_np(int, int);
+#endif /* !_POSIX_C_SOURCE || _DARWIN_C_SOURCE */
+int	getrlimit(int, struct rlimit *) __DARWIN_ALIAS(getrlimit);
 int	getrusage(int, struct rusage *);
 int	setpriority(int, id_t, int);
-int	setrlimit(int, const struct rlimit *);
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+int	setiopolicy_np(int, int, int);
+#endif /* !_POSIX_C_SOURCE || _DARWIN_C_SOURCE */
+int	setrlimit(int, const struct rlimit *) __DARWIN_ALIAS(setrlimit);
 __END_DECLS
 
 #endif	/* !KERNEL */

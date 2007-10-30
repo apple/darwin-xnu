@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #ifdef	XNU_KERNEL_PRIVATE
 
@@ -30,7 +36,7 @@
 
 #ifdef __APPLE_API_PRIVATE
 
-#ifdef	MACH_KERNEL_PRIVATE
+#if	defined(MACH_KERNEL_PRIVATE) || defined(BSD_KERNEL_PRIVATE)
 #include <stdint.h>
 #include <mach/vm_types.h>
 
@@ -76,15 +82,7 @@ typedef struct savearea_comm {
 												/* offset 0x0060 */
 } savearea_comm;
 #pragma pack()
-#endif
 
-#ifdef BSD_KERNEL_PRIVATE
-typedef struct savearea_comm {
-	unsigned int	save_000[24];
-} savearea_comm;
-#endif
-
-#if	defined(MACH_KERNEL_PRIVATE) || defined(BSD_KERNEL_PRIVATE)
 /*
  *	This type of savearea contains all of the general context.
  */
@@ -165,9 +163,9 @@ typedef struct savearea {
 
 	unsigned int	save_238[2];
 												/* offset 0x240 */
-	unsigned int	save_instr[16];				/* Instrumentation */
+	unsigned int	save_instr[16];				/* Instrumentation or emulation. Note: save_instr[0] is number of instructions */
 												/* offset 0x280 */
-} savearea;
+} savearea_t;
 #pragma pack()
 
 
@@ -320,7 +318,7 @@ struct Saveanchor {
 
 extern struct Saveanchor	saveanchor;			/* Aliged savearea anchor */
 
-#define sac_cnt		(4096 / sizeof(savearea))	/* Number of saveareas per page */
+#define sac_cnt		(4096 / sizeof(struct savearea))	/* Number of saveareas per page */
 #define sac_empty	(0xFFFFFFFF << (32 - sac_cnt))	/* Mask with all entries empty */
 #define sac_perm	0x40000000				/* Page permanently assigned */
 #define sac_permb	1						/* Page permanently assigned - bit position */
@@ -363,6 +361,7 @@ void 			save_fake_zone_info(		/* report savearea usage statistics as fake zone i
 
 void			save_snapshot(void);
 void			save_snapshot_restore(void);
+void save_release(struct savearea *);
 
 #endif /* MACH_KERNEL_PRIVATE */
 #endif /* __APPLE_API_PRIVATE */
@@ -378,6 +377,8 @@ void			save_snapshot_restore(void);
 #define	SAVinstrumentb 12					/* Indicates that we should return instrumentation data */
 #define	SAVeat 		0x00100000				/* Indicates that interruption should be ignored */
 #define	SAVeatb 	11						/* Indicates that interruption should be ignored */
+#define	SAVinject 	0x00200000				/* Indicates that save_instr contains code to inject */
+#define	SAVinjectb 	10						/* Indicates that save_instr contains code to inject */
 #define SAVtype		0x0000FF00				/* Shows type of savearea */
 #define SAVtypeshft	8						/* Shift to position type */
 #define SAVempty	0x86					/* Savearea is on free list */

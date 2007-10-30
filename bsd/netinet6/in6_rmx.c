@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ *
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ *
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ *
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/netinet6/in6_rmx.c,v 1.1.2.2 2001/07/03 11:01:52 ume Exp $	*/
 /*	$KAME: in6_rmx.c,v 1.10 2001/05/24 05:44:58 itojun Exp $	*/
 
@@ -103,7 +131,7 @@
 extern int	in6_inithead(void **head, int off);
 static void	in6_rtqtimo(void *rock);
 static void in6_mtutimo(void *rock);
-extern lck_mtx_t *rt_mtx;
+extern int tvtohz(struct timeval *);
 
 #define RTPRF_OURS		RTF_PROTO3	/* set on routes we manage */
 
@@ -251,11 +279,9 @@ SYSCTL_INT(_net_inet6_ip6, IPV6CTL_RTMAXCACHE, rtmaxcache,
  * timed out.
  */
 static void
-in6_clsroute(struct radix_node *rn, struct radix_node_head *head)
+in6_clsroute(struct radix_node *rn, __unused struct radix_node_head *head)
 {
 	struct rtentry *rt = (struct rtentry *)rn;
-	struct timeval timenow;
-
 
 	if (!(rt->rt_flags & RTF_UP))
 		return;		/* prophylactic measures */
@@ -263,24 +289,32 @@ in6_clsroute(struct radix_node *rn, struct radix_node_head *head)
 	if ((rt->rt_flags & (RTF_LLINFO | RTF_HOST)) != RTF_HOST)
 		return;
 
-	if ((rt->rt_flags & (RTF_WASCLONED | RTPRF_OURS))
-	   != RTF_WASCLONED)
+	if ((rt->rt_flags & (RTF_WASCLONED | RTPRF_OURS)) != RTF_WASCLONED)
 		return;
 
 	/*
-	 * As requested by David Greenman:
-	 * If rtq_reallyold is 0, just delete the route without
-	 * waiting for a timeout cycle to kill it.
+	 * Delete the route immediately if RTF_DELCLONE is set or
+	 * if route caching is disabled (rtq_reallyold set to 0).
+	 * Otherwise, let it expire and be deleted by in6_rtqkill().
 	 */
-	getmicrotime(&timenow);
-	if (rtq_reallyold != 0) {
+	if ((rt->rt_flags & RTF_DELCLONE) || rtq_reallyold == 0) {
+		/*
+		 * Delete the route from the radix tree but since we are
+		 * called when the route's reference count is 0, don't
+		 * deallocate it until we return from this routine by
+		 * telling rtrequest that we're interested in it.
+		 */
+		if (rtrequest_locked(RTM_DELETE, (struct sockaddr *)rt_key(rt),
+		    rt->rt_gateway, rt_mask(rt), rt->rt_flags, &rt) == 0) {
+			/* Now let the caller free it */
+			rtunref(rt);
+		}
+	} else {
+		struct timeval timenow;
+
+		getmicrotime(&timenow);
 		rt->rt_flags |= RTPRF_OURS;
 		rt->rt_rmx.rmx_expire = timenow.tv_sec + rtq_reallyold;
-	} else {
-		rtrequest_locked(RTM_DELETE,
-			  (struct sockaddr *)rt_key(rt),
-			  rt->rt_gateway, rt_mask(rt),
-			  rt->rt_flags, 0);
 	}
 }
 
@@ -308,8 +342,8 @@ in6_rtqkill(struct radix_node *rn, void *rock)
 	struct timeval timenow;
 
 	getmicrotime(&timenow);
-
 	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_OWNED);
+
 	if (rt->rt_flags & RTPRF_OURS) {
 		ap->found++;
 
@@ -353,13 +387,14 @@ in6_rtqtimo(void *rock)
 	static time_t last_adjusted_timeout = 0;
 	struct timeval timenow;
 
+	lck_mtx_lock(rt_mtx);
+	/* Get the timestamp after we acquire the lock for better accuracy */
 	getmicrotime(&timenow);
 
 	arg.found = arg.killed = 0;
 	arg.rnh = rnh;
 	arg.nextstop = timenow.tv_sec + rtq_timeout;
 	arg.draining = arg.updating = 0;
-	lck_mtx_lock(rt_mtx);
 	rnh->rnh_walktree(rnh, in6_rtqkill, &arg);
 
 	/*

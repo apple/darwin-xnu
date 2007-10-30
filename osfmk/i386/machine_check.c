@@ -26,6 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#include <kern/kalloc.h>
 #include <i386/cpu_data.h>
 #include <i386/cpuid.h>
 #include <i386/machine_check.h>
@@ -36,12 +37,29 @@
 static boolean_t	mca_initialized = FALSE;
 static boolean_t	mca_MCE_present = FALSE;
 static boolean_t	mca_MCA_present = FALSE;
+static uint32_t		mca_family = 0;
 static unsigned int	mca_error_bank_count = 0;
 static boolean_t	mca_control_MSR_present = FALSE;
 static boolean_t	mca_threshold_status_present = FALSE;
 static boolean_t	mca_extended_MSRs_present = FALSE;
 static unsigned int	mca_extended_MSRs_count = 0;
 static ia32_mcg_cap_t	ia32_mcg_cap;
+static boolean_t	mca_exception_taken = FALSE;
+
+decl_simple_lock_data(static, mca_lock);
+
+typedef struct {
+	ia32_mci_ctl_t		mca_mci_ctl;
+	ia32_mci_status_t	mca_mci_status;
+	ia32_mci_misc_t		mca_mci_misc;
+	ia32_mci_addr_t		mca_mci_addr;
+} mca_mci_bank_t;
+
+typedef struct mca_state {
+	ia32_mcg_ctl_t		mca_mcg_ctl;
+	ia32_mcg_status_t	mca_mcg_status;
+	mca_mci_bank_t		mca_error_bank[0];
+} mca_state_t;
 
 static void
 mca_get_availability(void)
@@ -51,6 +69,7 @@ mca_get_availability(void)
 
 	mca_MCE_present = (features & CPUID_FEATURE_MCE) != 0;
 	mca_MCA_present = (features & CPUID_FEATURE_MCA) != 0;
+	mca_family = family;
 	
 	/*
 	 * If MCA, the number of banks etc is reported by the IA32_MCG_CAP MSR.
@@ -79,6 +98,7 @@ mca_cpu_init(void)
 	if (!mca_initialized) {
 		mca_get_availability();
 		mca_initialized = TRUE;
+		simple_lock_init(&mca_lock, 0);
 	}
 
 	if (mca_MCA_present) {
@@ -87,7 +107,7 @@ mca_cpu_init(void)
 		if (mca_control_MSR_present)
 			wrmsr64(IA32_MCG_CTL, IA32_MCG_CTL_ENABLE);
 	
-		switch (cpuid_family()) {
+		switch (mca_family) {
 		case 0x06:
 			/* Enable all but mc0 */
 			for (i = 1; i < mca_error_bank_count; i++)
@@ -113,6 +133,68 @@ mca_cpu_init(void)
 	if (mca_MCE_present) {
 		set_cr4(get_cr4()|CR4_MCE);
 	}
+}
+
+void
+mca_cpu_alloc(cpu_data_t	*cdp)
+{
+	vm_size_t	mca_state_size;
+
+	/*
+	 * Allocate space for an array of error banks.
+	 */
+	mca_state_size = sizeof(mca_state_t) +
+				sizeof(mca_mci_bank_t) * mca_error_bank_count;
+	cdp->cpu_mca_state = kalloc(mca_state_size);
+	if (cdp->cpu_mca_state == NULL) {
+		printf("mca_cpu_alloc() failed for cpu %d\n", cdp->cpu_number);
+		return;
+	}
+	bzero((void *) cdp->cpu_mca_state, mca_state_size);
+
+	/*
+	 * If the boot processor is yet have its allocation made,
+	 * do this now.
+	 */
+	if (cpu_datap(master_cpu)->cpu_mca_state == NULL)
+		mca_cpu_alloc(cpu_datap(master_cpu));
+}
+
+static void
+mca_save_state(void)
+{
+	mca_state_t	*mca_state;
+	mca_mci_bank_t  *bank;
+	unsigned int	i;
+
+	assert(!ml_get_interrupts_enabled() || get_preemption_level() > 0);
+
+	mca_state = (mca_state_t *) current_cpu_datap()->cpu_mca_state;
+	if  (mca_state == NULL)
+		return;
+
+	mca_state->mca_mcg_ctl = mca_control_MSR_present ?
+					rdmsr64(IA32_MCG_CTL) : 0ULL;	
+	mca_state->mca_mcg_status.u64 = rdmsr64(IA32_MCG_STATUS);
+
+ 	bank = (mca_mci_bank_t *) &mca_state->mca_error_bank[0];
+	for (i = 0; i < mca_error_bank_count; i++, bank++) {
+		bank->mca_mci_ctl        = rdmsr64(IA32_MCi_CTL(i));	
+		bank->mca_mci_status.u64 = rdmsr64(IA32_MCi_STATUS(i));	
+		if (!bank->mca_mci_status.bits.val)
+			continue;
+		bank->mca_mci_misc = (bank->mca_mci_status.bits.miscv)?
+					rdmsr64(IA32_MCi_MISC(i)) : 0ULL;	
+		bank->mca_mci_addr = (bank->mca_mci_status.bits.addrv)?
+					rdmsr64(IA32_MCi_ADDR(i)) : 0ULL;	
+	} 
+}
+
+void
+mca_check_save(void)
+{
+	if (mca_exception_taken)
+		mca_save_state();
 }
 
 static void mca_dump_64bit_state(void)
@@ -226,11 +308,18 @@ mca_dump(void)
 {
 	ia32_mcg_status_t	status;
 
+	mca_exception_taken = TRUE;
+	mca_save_state();
+
+	/* Serialize in case of multiple simultaneous machine-checks */
+	simple_lock(&mca_lock);
+
 	/*
 	 * Report machine-check capabilities:
 	 */
 	kdb_printf(
-		"Machine-check capabilities 0x%016qx:\n", ia32_mcg_cap.u64);
+		"Machine-check capabilities (cpu %d) 0x%016qx:\n",
+		cpu_number(), ia32_mcg_cap.u64);
 	kdb_printf(
 		" %d error-reporting banks\n%s%s", mca_error_bank_count,
 		IF(mca_control_MSR_present,
@@ -265,4 +354,6 @@ mca_dump(void)
 		else
 			mca_dump_32bit_state();
 	}
+
+	simple_unlock(&mca_lock);
 }

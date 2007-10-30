@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <IOKit/IOLib.h>
@@ -108,7 +114,7 @@ void IODTNVRAM::registerNVRAMController(IONVRAMController *nvram)
 	freePartitionSize = currentLength;
       } else {
 	// Construct the partition ID from the signature and name.
-	sprintf(partitionID, "0x%02x,",
+	snprintf(partitionID, sizeof(partitionID), "0x%02x,",
 		*(UInt8 *)(_nvramImage + currentOffset));
 	strncpy(partitionID + 5,
 		(const char *)(_nvramImage + currentOffset + 4), 12);
@@ -556,9 +562,15 @@ UInt32 IODTNVRAM::savePanicInfo(UInt8 *buffer, IOByteCount length)
   *(UInt32 *)_piImage = length;
   
   _nvramImageDirty = true;
-  
+  /* 
+   * This prevents OF variables from being committed if the system has panicked
+   */
   _systemPaniced = true;
-  
+  /* The call to sync() forces the NVRAM controller to write the panic info
+   * partition to NVRAM.
+   */
+  sync();
+
   return length;
 }
 
@@ -656,7 +668,7 @@ IOReturn IODTNVRAM::initOFVariables(void)
     // Create the 'aapl,panic-info' property if needed.
     if (_piImage != 0) {
       propDataLength = *(UInt32 *)_piImage;
-      if ((propDataLength != 0) && (propDataLength < (_piPartitionSize - 4))) {
+      if ((propDataLength != 0) && (propDataLength <= (_piPartitionSize - 4))) {
 	propObject = OSData::withBytes(_piImage + 4, propDataLength);
 	_ofDict->setObject(kIODTNVRAMPanicInfoKey, propObject);
 	propObject->release();
@@ -1082,31 +1094,30 @@ bool IODTNVRAM::convertObjectToProp(UInt8 *buffer, UInt32 *length,
   if ((propNameLength + propDataLength + 2) > *length) return false;
   
   // Copy the property name equal sign.
-  sprintf((char *)buffer, "%s=", propName);
-  buffer += propNameLength + 1;
+  buffer += snprintf((char *)buffer, *length, "%s=", propName);
   
   switch (propType) {
   case kOFVariableTypeBoolean :
     if (tmpBoolean->getValue()) {
-      strcpy((char *)buffer, "true");
+      strlcpy((char *)buffer, "true", *length - propNameLength);
     } else {
-      strcpy((char *)buffer, "false");
+      strlcpy((char *)buffer, "false", *length - propNameLength);
     }
     break;
     
   case kOFVariableTypeNumber :
     tmpValue = tmpNumber->unsigned32BitValue();
     if (tmpValue == 0xFFFFFFFF) {
-      strcpy((char *)buffer, "-1");
+      strlcpy((char *)buffer, "-1", *length - propNameLength);
     } else if (tmpValue < 1000) {
-      sprintf((char *)buffer, "%ld", tmpValue);
+      snprintf((char *)buffer, *length - propNameLength, "%ld", tmpValue);
     } else {
-      sprintf((char *)buffer, "0x%lx", tmpValue);
+      snprintf((char *)buffer, *length - propNameLength, "0x%lx", tmpValue);
     }
     break;
     
   case kOFVariableTypeString :
-    strcpy((char *)buffer, tmpString->getCStringNoCopy());
+    strlcpy((char *)buffer, tmpString->getCStringNoCopy(), *length - propNameLength);
     break;
     
   case kOFVariableTypeData :
@@ -1199,9 +1210,8 @@ void IODTNVRAM::updateOWBootArgs(const OSSymbol *key, OSObject *value)
     tmpData = IONew(UInt8, tmpDataLength + 1);
     if (tmpData == 0) return;
     
-    strncpy((char *)tmpData, (const char *)bootCommandData, cnt);
-    tmpData[cnt] = '\0';
-    strcat((char *)tmpData, (const char *)bootArgsData);
+    cnt -= strlcpy((char *)tmpData, (const char *)bootCommandData, cnt);
+    strlcat((char *)tmpData, (const char *)bootArgsData, cnt);
     
     bootCommand = OSString::withCString((const char *)tmpData);
     if (bootCommand != 0) {
@@ -1604,8 +1614,8 @@ IOReturn IODTNVRAM::writeNVRAMPropertyType1(IORegistryEntry *entry,
 
 			name = entry->getName(gIODTPlane);
 			comp = entry->getLocation(gIODTPlane);
-			if( comp && (0 == strcmp("pci", name))
-			 && (0 == strcmp("80000000", comp))) {
+			if( comp && (0 == strncmp("pci", name, sizeof("pci")))
+			 && (0 == strncmp("80000000", comp, sizeof("80000000")))) {
 				// yosemite hack
 				comp = "/pci@80000000";
 			} else {

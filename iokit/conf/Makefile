@@ -18,10 +18,14 @@ ifndef IOKIT_KERNEL_CONFIG
 export IOKIT_KERNEL_CONFIG = $(KERNEL_CONFIG)
 endif
 
+ifneq ($(MACHINE_CONFIG), DEFAULT)
+export COMPOBJROOT=$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)_$(MACHINE_CONFIG)/$(COMPONENT)
+else
 export COMPOBJROOT=$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)
+endif
 
-$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/doconf:
-	make build_setup 
+$(COMPOBJROOT)/doconf:
+	@make build_setup 
 
 $(COMPOBJROOT)/$(IOKIT_KERNEL_CONFIG)/Makefile :  $(SOURCE)/MASTER  \
 	$(SOURCE)/MASTER.$(ARCH_CONFIG_LC) \
@@ -29,36 +33,32 @@ $(COMPOBJROOT)/$(IOKIT_KERNEL_CONFIG)/Makefile :  $(SOURCE)/MASTER  \
 	$(SOURCE)/Makefile.$(ARCH_CONFIG_LC)  \
 	$(SOURCE)/files \
 	$(SOURCE)/files.$(ARCH_CONFIG_LC) \
-	$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/doconf
-	@echo "Running doconf for $(IOKIT_KERNEL_CONFIG)";
-	(doconf_target=$(addsuffix /conf, $(TARGET)); \
+	$(COMPOBJROOT)/doconf
+	$(_v)(doconf_target=$(addsuffix /conf, $(TARGET)); \
 	echo $${doconf_target};\
 	$(MKDIR) $${doconf_target}; \
 	cd $${doconf_target}; \
 	rm -f $(notdir $?); \
 	cp  $? $${doconf_target}; \
-	$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/doconf -c -cpu $(ARCH_CONFIG_LC) -d  $(TARGET)/$(IOKIT_KERNEL_CONFIG) $(IOKIT_KERNEL_CONFIG); \
+	$(COMPOBJROOT)/doconf -c -cpu $(ARCH_CONFIG_LC) -d  $(TARGET)/$(IOKIT_KERNEL_CONFIG) $(IOKIT_KERNEL_CONFIG); \
 	);
 
 .ORDER: $(COMPOBJROOT)/$(IOKIT_KERNEL_CONFIG)/Makefile 
 
-do_setup_conf: $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/doconf \
+do_setup_conf: $(COMPOBJROOT)/doconf \
 		$(COMPOBJROOT)/$(IOKIT_KERNEL_CONFIG)/Makefile 
 
 do_all: do_setup_conf
-	@echo "[ $(SOURCE) ] Starting do_all  $(COMPONENT) $(IOKIT_KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";	\
-	next_source=$(subst conf/,,$(SOURCE));			\
+	$(_v)next_source=$(subst conf/,,$(SOURCE));			\
 	${MAKE} -C $(COMPOBJROOT)/$(IOKIT_KERNEL_CONFIG)	\
 		MAKEFILES=$(TARGET)/$(IOKIT_KERNEL_CONFIG)/Makefile	\
 		SOURCE=$${next_source}			\
 		TARGET=$(TARGET)					\
 		INCL_MAKEDEP=FALSE	\
 		KERNEL_CONFIG=$(IOKIT_KERNEL_CONFIG) \
-		build_all;	\
-	echo "[ $(SOURCE) ] Returning do_all $(COMPONENT) $(IOKIT_KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";
+		build_all;
 
 do_build_all:  do_all 
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-

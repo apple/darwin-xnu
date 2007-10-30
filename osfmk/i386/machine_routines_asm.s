@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
  
 #include <i386/asm.h>
@@ -27,17 +33,6 @@
 #include <i386/postcode.h>
 #include <i386/apic.h>
 #include <assym.s>
-
-#define	PA(addr)	(addr)
-#define	VA(addr)	(addr)
-	
-/*
- * GAS won't handle an intersegment jump with a relocatable offset.
- */
-#define	LJMP(segment,address)	\
-	.byte	0xea		;\
-	.long	address		;\
-	.word	segment
 
 /*
 **      ml_get_timebase()
@@ -57,7 +52,6 @@ ENTRY(ml_get_timebase)
 			movl    %eax, 4(%ecx)
 			
 			ret
-
 
 /*
  *  	Convert between various timer units 
@@ -136,16 +130,20 @@ LEXT(tmrCvt)
 			popl	%ebx					// Restore a volatile
 			popl	%ebp					// Restore a volatile
 
-			ret								// Leave...
+			ret						// Leave...
 
-			.globl	EXT(rtc_nanotime_store)
+			.globl	EXT(_rtc_nanotime_store)
 			.align	FALIGN
 
-LEXT(rtc_nanotime_store)
-		push	%ebp
-		mov		%esp,%ebp
+LEXT(_rtc_nanotime_store)
+		push		%ebp
+		movl		%esp,%ebp
+		push		%esi
 
-		mov		32(%ebp),%edx
+		mov		32(%ebp),%edx				/* get ptr to rtc_nanotime_info */
+		
+		movl		RNT_GENERATION(%edx),%esi		/* get current generation */
+		movl		$0,RNT_GENERATION(%edx)			/* flag data as being updated */
 
 		mov		8(%ebp),%eax
 		mov		%eax,RNT_TSC_BASE(%edx)
@@ -162,35 +160,142 @@ LEXT(rtc_nanotime_store)
 		mov		%eax,RNT_NS_BASE(%edx)
 		mov		20(%ebp),%eax
 		mov		%eax,RNT_NS_BASE+4(%edx)
+		
+		incl		%esi					/* next generation */
+		jnz		1f
+		incl		%esi					/* skip 0, which is a flag */
+1:		movl		%esi,RNT_GENERATION(%edx)		/* update generation and make usable */
 
+		pop		%esi
 		pop		%ebp
 		ret
 
-			.globl	EXT(rtc_nanotime_load)
-			.align	FALIGN
 
-LEXT(rtc_nanotime_load)
-		push	%ebp
-		mov		%esp,%ebp
+/* unint64_t _rtc_nanotime_read( rtc_nanotime_t *rntp, int slow );
+ *
+ * This is the same as the commpage nanotime routine, except that it uses the
+ * kernel internal "rtc_nanotime_info" data instead of the commpage data.  The two copies
+ * of data (one in the kernel and one in user space) are kept in sync by rtc_nanotime_update().
+ *
+ * There are actually two versions of the algorithm, one each for "slow" and "fast"
+ * processors.  The more common "fast" algorithm is:
+ *
+ *	nanoseconds = (((rdtsc - rnt_tsc_base) * rnt_tsc_scale) / 2**32) - rnt_ns_base;
+ *
+ * Of course, the divide by 2**32 is a nop.  rnt_tsc_scale is a constant computed during initialization:
+ *
+ *	rnt_tsc_scale = (10e9 * 2**32) / tscFreq;
+ *
+ * The "slow" algorithm uses long division:
+ *
+ *	nanoseconds = (((rdtsc - rnt_tsc_base) * 10e9) / tscFreq) - rnt_ns_base;
+ *
+ * Since this routine is not synchronized and can be called in any context, 
+ * we use a generation count to guard against seeing partially updated data.  In addition,
+ * the _rtc_nanotime_store() routine -- just above -- zeroes the generation before
+ * updating the data, and stores the nonzero generation only after all other data has been
+ * stored.  Because IA32 guarantees that stores by one processor must be seen in order
+ * by another, we can avoid using a lock.  We spin while the generation is zero.
+ *
+ * In accordance with the ABI, we return the 64-bit nanotime in %edx:%eax.
+ */
+ 
+		.globl	EXT(_rtc_nanotime_read)
+		.align	FALIGN
+LEXT(_rtc_nanotime_read)
+		pushl		%ebp
+		movl		%esp,%ebp
+		pushl		%esi
+		pushl		%edi
+		pushl		%ebx
+		movl		8(%ebp),%edi				/* get ptr to rtc_nanotime_info */
+		movl		12(%ebp),%eax				/* get "slow" flag */
+		testl		%eax,%eax
+		jnz		Lslow
+		
+		/* Processor whose TSC frequency is faster than SLOW_TSC_THRESHOLD */
+0:
+		movl		RNT_GENERATION(%edi),%esi		/* get generation (0 if being changed) */
+		testl		%esi,%esi				/* if being changed, loop until stable */
+		jz		0b
 
-		mov		8(%ebp),%ecx
-		mov		12(%ebp),%edx
+		rdtsc							/* get TSC in %edx:%eax */
+		subl		RNT_TSC_BASE(%edi),%eax
+		sbbl		RNT_TSC_BASE+4(%edi),%edx
 
-		mov		RNT_TSC_BASE(%ecx),%eax
-		mov		%eax,RNT_TSC_BASE(%edx)
-		mov		RNT_TSC_BASE+4(%ecx),%eax
-		mov		%eax,RNT_TSC_BASE+4(%edx)
+		movl		RNT_SCALE(%edi),%ecx
 
-		mov		RNT_SCALE(%ecx),%eax
-		mov		%eax,RNT_SCALE(%edx)
+		movl		%edx,%ebx
+		mull		%ecx
+		movl		%ebx,%eax
+		movl		%edx,%ebx
+		mull		%ecx
+		addl		%ebx,%eax
+		adcl		$0,%edx
 
-		mov		RNT_SHIFT(%ecx),%eax
-		mov		%eax,RNT_SHIFT(%edx)
+		addl		RNT_NS_BASE(%edi),%eax
+		adcl		RNT_NS_BASE+4(%edi),%edx
 
-		mov		RNT_NS_BASE(%ecx),%eax
-		mov		%eax,RNT_NS_BASE(%edx)
-		mov		RNT_NS_BASE+4(%ecx),%eax
-		mov		%eax,RNT_NS_BASE+4(%edx)
+		cmpl		RNT_GENERATION(%edi),%esi		/* have the parameters changed? */
+		jne		0b					/* yes, loop until stable */
 
-		pop		%ebp
+		popl		%ebx
+		popl		%edi
+		popl		%esi
+		popl		%ebp
 		ret
+
+		/* Processor whose TSC frequency is slower than or equal to SLOW_TSC_THRESHOLD */
+Lslow:
+		movl		RNT_GENERATION(%edi),%esi		/* get generation (0 if being changed) */
+		testl		%esi,%esi				/* if being changed, loop until stable */
+		jz		Lslow
+		pushl		%esi					/* save generation */
+		pushl		RNT_SHIFT(%edi)				/* save low 32 bits of tscFreq */
+
+		rdtsc							/* get TSC in %edx:%eax */
+		subl		RNT_TSC_BASE(%edi),%eax
+		sbbl		RNT_TSC_BASE+4(%edi),%edx
+
+		/*
+		* Do the math to convert tsc ticks to nanoseconds.  We first
+		* do long multiply of 1 billion times the tsc.  Then we do
+		* long division by the tsc frequency
+		*/
+		mov		$1000000000, %ecx			/* number of nanoseconds in a second */
+		mov		%edx, %ebx
+		mul		%ecx
+		mov		%edx, %edi
+		mov		%eax, %esi
+		mov		%ebx, %eax
+		mul		%ecx
+		add		%edi, %eax
+		adc		$0, %edx				/* result in edx:eax:esi */
+		mov		%eax, %edi
+		popl		%ecx					/* get low 32 tscFreq */
+		xor		%eax, %eax
+		xchg		%edx, %eax
+		div		%ecx
+		xor		%eax, %eax
+		mov		%edi, %eax
+		div		%ecx
+		mov		%eax, %ebx
+		mov		%esi, %eax
+		div		%ecx
+		mov		%ebx, %edx				/* result in edx:eax */
+		
+		movl		8(%ebp),%edi				/* recover ptr to rtc_nanotime_info */
+		popl		%esi					/* recover generation */
+
+		addl		RNT_NS_BASE(%edi),%eax
+		adcl		RNT_NS_BASE+4(%edi),%edx
+
+		cmpl		RNT_GENERATION(%edi),%esi		/* have the parameters changed? */
+		jne		Lslow					/* yes, loop until stable */
+
+		pop		%ebx
+		pop		%edi
+		pop		%esi
+		pop		%ebp
+		ret							/* result in edx:eax */
+

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #define __KPI__
@@ -30,9 +36,8 @@
 #include <libkern/OSAtomic.h>
 #include <kern/kalloc.h>
 #include <string.h>
-
-void mbuf_tag_id_first_last(u_long *first, u_long *last);
-errno_t mbuf_tag_id_find_internal(const char *string, u_long *out_id, int create);
+#include <netinet/in.h>
+#include "kpi_mbuf_internal.h"
 
 static const mbuf_flags_t mbuf_flags_mask = MBUF_EXT | MBUF_PKTHDR | MBUF_EOR |
 				MBUF_BCAST | MBUF_MCAST | MBUF_FRAG | MBUF_FIRSTFRAG |
@@ -40,7 +45,7 @@ static const mbuf_flags_t mbuf_flags_mask = MBUF_EXT | MBUF_PKTHDR | MBUF_EOR |
 
 void* mbuf_data(mbuf_t mbuf)
 {
-	return m_mtod(mbuf);
+	return mbuf->m_data;
 }
 
 void* mbuf_datastart(mbuf_t mbuf)
@@ -77,7 +82,7 @@ errno_t mbuf_align_32(mbuf_t mbuf, size_t len)
 
 addr64_t mbuf_data_to_physical(void* ptr)
 {
-	return (addr64_t)mcl_to_paddr(ptr);
+	return (addr64_t)(intptr_t)mcl_to_paddr(ptr);
 }
 
 errno_t mbuf_get(mbuf_how_t how, mbuf_type_t type, mbuf_t *mbuf)
@@ -96,13 +101,73 @@ errno_t mbuf_gethdr(mbuf_how_t how, mbuf_type_t type, mbuf_t *mbuf)
 	return (*mbuf == NULL) ? ENOMEM : 0;
 }
 
-extern struct mbuf * m_mbigget(struct mbuf *m, int nowait);
+errno_t
+mbuf_attachcluster(mbuf_how_t how, mbuf_type_t type, mbuf_t *mbuf,
+    caddr_t extbuf, void (*extfree)(caddr_t , u_int, caddr_t),
+    size_t extsize, caddr_t extarg)
+{
+	if (extbuf == NULL || extfree == NULL || extsize == 0)
+		return (EINVAL);
 
-errno_t mbuf_getcluster(mbuf_how_t how, mbuf_type_t type, size_t size, mbuf_t* mbuf)
+	if ((*mbuf = m_clattach(mbuf != NULL ? *mbuf : NULL, type, extbuf,
+	    extfree, extsize, extarg, how)) == NULL)
+		return (ENOMEM);
+
+	return (0);
+}
+
+errno_t
+mbuf_alloccluster(mbuf_how_t how, size_t *size, caddr_t *addr)
+{
+	if (size == NULL || *size == 0 || addr == NULL)
+		return (EINVAL);
+
+	*addr = NULL;
+
+	/* Jumbo cluster pool not available? */
+	if (*size > NBPG && njcl == 0)
+		return (ENOTSUP);
+
+	if (*size <= MCLBYTES && (*addr = m_mclalloc(how)) != NULL)
+		*size = MCLBYTES;
+	else if (*size > MCLBYTES && *size <= NBPG &&
+	    (*addr = m_bigalloc(how)) != NULL)
+		*size = NBPG;
+	else if (*size > NBPG && *size <= M16KCLBYTES &&
+	    (*addr = m_16kalloc(how)) != NULL)
+		*size = M16KCLBYTES;
+	else
+		*size = 0;
+
+	if (*addr == NULL)
+		return (ENOMEM);
+
+	return (0);
+}
+
+void
+mbuf_freecluster(caddr_t addr, size_t size)
+{
+	if (size != MCLBYTES && size != NBPG && size != M16KCLBYTES)
+		panic("%s: invalid size (%ld) for cluster %p", __func__,
+		    size, (void *)addr);
+
+	if (size == MCLBYTES)
+		m_mclfree(addr);
+	else if (size == NBPG)
+		m_bigfree(addr, NBPG, NULL);
+	else if (njcl > 0)
+		m_16kfree(addr, M16KCLBYTES, NULL);
+	else
+		panic("%s: freeing jumbo cluster to an empty pool", __func__);
+}
+
+errno_t
+mbuf_getcluster(mbuf_how_t how, mbuf_type_t type, size_t size, mbuf_t* mbuf)
 {
 	/* Must set *mbuf to NULL in failure case */
 	errno_t	error = 0;
-	int		created = 0;
+	int	created = 0;
 
 	if (mbuf == NULL)
 		return EINVAL;
@@ -113,13 +178,21 @@ errno_t mbuf_getcluster(mbuf_how_t how, mbuf_type_t type, size_t size, mbuf_t* m
 		created = 1;
 	}
 	/*
-	 * At the time this code was written, m_mclget and m_mbigget would always
-	 * return the same value that was passed in to it.
+	 * At the time this code was written, m_{mclget,mbigget,m16kget}
+	 * would always return the same value that was passed in to it.
 	 */
 	if (size == MCLBYTES) {
 		*mbuf = m_mclget(*mbuf, how);
 	} else if (size == NBPG) {
 		*mbuf = m_mbigget(*mbuf, how);
+	} else if (size == M16KCLBYTES) {
+		if (njcl > 0) {
+			*mbuf = m_m16kget(*mbuf, how);
+		} else {
+			/* Jumbo cluster pool not available? */
+			error = ENOTSUP;
+			goto out;
+		}
 	} else {
 		error = EINVAL;
 		goto out;
@@ -128,7 +201,6 @@ errno_t mbuf_getcluster(mbuf_how_t how, mbuf_type_t type, size_t size, mbuf_t* m
 		error = ENOMEM;
 out:
 	if (created && error != 0) {
-		error = ENOMEM;
 		mbuf_free(*mbuf);
 		*mbuf = NULL;
 	}
@@ -196,18 +268,18 @@ int	mbuf_freem_list(mbuf_t mbuf)
 	return m_freem_list(mbuf);
 }
 
-size_t mbuf_leadingspace(mbuf_t mbuf)
+size_t mbuf_leadingspace(const mbuf_t mbuf)
 {
 	return m_leadingspace(mbuf);
 }
 
-size_t mbuf_trailingspace(mbuf_t mbuf)
+size_t mbuf_trailingspace(const mbuf_t mbuf)
 {
 	return m_trailingspace(mbuf);
 }
 
 /* Manipulation */
-errno_t mbuf_copym(mbuf_t src, size_t offset, size_t len,
+errno_t mbuf_copym(const mbuf_t src, size_t offset, size_t len,
 				   mbuf_how_t how, mbuf_t *new_mbuf)
 {
 	/* Must set *mbuf to NULL in failure case */
@@ -216,7 +288,7 @@ errno_t mbuf_copym(mbuf_t src, size_t offset, size_t len,
 	return (*new_mbuf == NULL) ? ENOMEM : 0;
 }
 
-errno_t	mbuf_dup(mbuf_t src, mbuf_how_t how, mbuf_t *new_mbuf)
+errno_t	mbuf_dup(const mbuf_t src, mbuf_how_t how, mbuf_t *new_mbuf)
 {
 	/* Must set *new_mbuf to NULL in failure case */
 	*new_mbuf = m_dup(src, how);
@@ -264,10 +336,29 @@ void mbuf_adj(mbuf_t mbuf, int len)
 	m_adj(mbuf, len);
 }
 
-errno_t mbuf_copydata(mbuf_t m, size_t off, size_t len, void* out_data)
+errno_t mbuf_adjustlen(mbuf_t m, int amount)
+{
+	/* Verify m_len will be valid after adding amount */
+	if (amount > 0) {
+		int		used = (size_t)mbuf_data(m) - (size_t)mbuf_datastart(m) +
+					   m->m_len;
+		
+		if ((size_t)(amount + used) > mbuf_maxlen(m))
+			return EINVAL;
+	}
+	else if (-amount > m->m_len) {
+		return EINVAL;
+	}
+	
+	m->m_len += amount;
+	return 0;
+}
+
+errno_t mbuf_copydata(const mbuf_t m0, size_t off, size_t len, void* out_data)
 {
 	/* Copied m_copydata, added error handling (don't just panic) */
 	int count;
+	mbuf_t	m = m0;
 
 	while (off > 0) {
 		if (m == 0)
@@ -291,16 +382,6 @@ errno_t mbuf_copydata(mbuf_t m, size_t off, size_t len, void* out_data)
 	return 0;
 }
 
-int mbuf_mclref(mbuf_t mbuf)
-{
-	return m_mclref(mbuf);
-}
-
-int mbuf_mclunref(mbuf_t mbuf)
-{
-	return m_mclunref(mbuf);
-}
-
 int mbuf_mclhasreference(mbuf_t mbuf)
 {
 	if ((mbuf->m_flags & M_EXT))
@@ -311,7 +392,7 @@ int mbuf_mclhasreference(mbuf_t mbuf)
 
 
 /* mbuf header */
-mbuf_t mbuf_next(mbuf_t mbuf)
+mbuf_t mbuf_next(const mbuf_t mbuf)
 {
 	return mbuf->m_next;
 }
@@ -325,7 +406,7 @@ errno_t mbuf_setnext(mbuf_t mbuf, mbuf_t next)
 	return 0;
 }
 
-mbuf_t mbuf_nextpkt(mbuf_t mbuf)
+mbuf_t mbuf_nextpkt(const mbuf_t mbuf)
 {
 	return mbuf->m_nextpkt;
 }
@@ -335,7 +416,7 @@ void mbuf_setnextpkt(mbuf_t mbuf, mbuf_t nextpkt)
 	mbuf->m_nextpkt = nextpkt;
 }
 
-size_t mbuf_len(mbuf_t mbuf)
+size_t mbuf_len(const mbuf_t mbuf)
 {
 	return mbuf->m_len;
 }
@@ -345,14 +426,14 @@ void mbuf_setlen(mbuf_t mbuf, size_t len)
 	mbuf->m_len = len;
 }
 
-size_t mbuf_maxlen(mbuf_t mbuf)
+size_t mbuf_maxlen(const mbuf_t mbuf)
 {
 	if (mbuf->m_flags & M_EXT)
 		return mbuf->m_ext.ext_size;
 	return &mbuf->m_dat[MLEN] - ((char*)mbuf_datastart(mbuf));
 }
 
-mbuf_type_t mbuf_type(mbuf_t mbuf)
+mbuf_type_t mbuf_type(const mbuf_t mbuf)
 {
 	return mbuf->m_type;
 }
@@ -366,7 +447,7 @@ errno_t mbuf_settype(mbuf_t mbuf, mbuf_type_t new_type)
 	return 0;
 }
 
-mbuf_flags_t mbuf_flags(mbuf_t mbuf)
+mbuf_flags_t mbuf_flags(const mbuf_t mbuf)
 {
 	return mbuf->m_flags & mbuf_flags_mask;
 }
@@ -389,7 +470,7 @@ errno_t mbuf_setflags_mask(mbuf_t mbuf, mbuf_flags_t flags, mbuf_flags_t mask)
 	return 0;
 }
 
-errno_t mbuf_copy_pkthdr(mbuf_t dest, mbuf_t src)
+errno_t mbuf_copy_pkthdr(mbuf_t dest, const mbuf_t src)
 {
 	if (((src)->m_flags & M_PKTHDR) == 0)
 		return EINVAL;
@@ -399,7 +480,7 @@ errno_t mbuf_copy_pkthdr(mbuf_t dest, mbuf_t src)
 	return 0;
 }
 
-size_t mbuf_pkthdr_len(mbuf_t mbuf)
+size_t mbuf_pkthdr_len(const mbuf_t mbuf)
 {
 	return mbuf->m_pkthdr.len;
 }
@@ -409,7 +490,12 @@ void mbuf_pkthdr_setlen(mbuf_t mbuf, size_t len)
 	mbuf->m_pkthdr.len = len;
 }
 
-ifnet_t mbuf_pkthdr_rcvif(mbuf_t mbuf)
+void mbuf_pkthdr_adjustlen(mbuf_t mbuf, int amount)
+{
+	mbuf->m_pkthdr.len += amount;
+}
+
+ifnet_t mbuf_pkthdr_rcvif(const mbuf_t mbuf)
 {
 	// If we reference count ifnets, we should take a reference here before returning
 	return mbuf->m_pkthdr.rcvif;
@@ -422,7 +508,7 @@ errno_t mbuf_pkthdr_setrcvif(mbuf_t mbuf, ifnet_t ifnet)
 	return 0;
 }
 
-void* mbuf_pkthdr_header(mbuf_t mbuf)
+void* mbuf_pkthdr_header(const mbuf_t mbuf)
 {
 	return mbuf->m_pkthdr.header;
 }
@@ -430,23 +516,6 @@ void* mbuf_pkthdr_header(mbuf_t mbuf)
 void mbuf_pkthdr_setheader(mbuf_t mbuf, void *header)
 {
 	mbuf->m_pkthdr.header = (void*)header;
-}
-
-/* mbuf aux data */
-errno_t mbuf_aux_add(mbuf_t mbuf, int family, mbuf_type_t type, mbuf_t *aux_mbuf)
-{
-	*aux_mbuf = m_aux_add(mbuf, family, type);
-	return (*aux_mbuf == NULL) ? ENOMEM : 0;
-}
-
-mbuf_t mbuf_aux_find(mbuf_t mbuf, int family, mbuf_type_t type)
-{
-	return m_aux_find(mbuf, family, type);
-}
-
-void mbuf_aux_delete(mbuf_t mbuf, mbuf_t aux)
-{
-	m_aux_delete(mbuf, aux);
 }
 
 void
@@ -499,7 +568,7 @@ mbuf_outbound_finalize(mbuf_t mbuf, u_long protocol_family, size_t protocol_offs
 			 * Hardware checksum code looked pretty IPv4 specific.
 			 */
 			if ((mbuf->m_pkthdr.csum_flags & (CSUM_DELAY_DATA | CSUM_DELAY_IP)) != 0)
-				panic("mbuf_outbound_finalize - CSUM flags set for non-IPv4 packet (%d)!\n", protocol_family);
+				panic("mbuf_outbound_finalize - CSUM flags set for non-IPv4 packet (%lu)!\n", protocol_family);
 	}
 }
 
@@ -617,6 +686,70 @@ mbuf_clear_csum_performed(
 	return 0;
 }
 
+errno_t
+mbuf_inet_cksum(mbuf_t mbuf, int protocol, u_int32_t offset, u_int32_t length,
+    u_int16_t *csum)
+{
+	if (mbuf == NULL || length == 0 || csum == NULL ||
+	   (u_int32_t)mbuf->m_pkthdr.len < (offset + length))
+		return (EINVAL);
+
+	*csum = inet_cksum(mbuf, protocol, offset, length);
+	return (0);
+}
+
+#if INET6
+errno_t
+mbuf_inet6_cksum(mbuf_t mbuf, int protocol, u_int32_t offset, u_int32_t length,
+    u_int16_t *csum)
+{
+	if (mbuf == NULL || length == 0 || csum == NULL ||
+	   (u_int32_t)mbuf->m_pkthdr.len < (offset + length))
+		return (EINVAL);
+
+	*csum = inet6_cksum(mbuf, protocol, offset, length);
+	return (0);
+}
+#else /* INET6 */
+errno_t
+mbuf_inet6_cksum(__unused mbuf_t mbuf, __unused int protocol,
+		__unused u_int32_t offset, __unused u_int32_t length,
+		__unused u_int16_t *csum)
+{
+	panic("mbuf_inet6_cksum() doesn't exist on this platform\n");
+	return (0);
+}
+
+u_int16_t
+inet6_cksum(__unused struct mbuf *m, __unused unsigned int nxt,
+		__unused unsigned int off, __unused unsigned int len)
+{
+	panic("inet6_cksum() doesn't exist on this platform\n");
+	return (0);
+}
+
+void nd6_lookup_ipv6(void);
+void
+nd6_lookup_ipv6(void)
+{
+	panic("nd6_lookup_ipv6() doesn't exist on this platform\n");
+}
+
+int
+in6addr_local(__unused struct in6_addr *a)
+{
+	panic("in6addr_local() doesn't exist on this platform\n");
+	return (0);
+}
+
+void nd6_storelladdr(void);
+void
+nd6_storelladdr(void)
+{
+	panic("nd6_storelladdr() doesn't exist on this platform\n");
+}
+#endif /* INET6 */
+
 /*
  * Mbuf tag KPIs
  */
@@ -632,14 +765,14 @@ struct mbuf_tag_id_entry {
 	 strlen(__str) + 1)
 
 #define	MTAG_FIRST_ID					1000
-static u_long							mtag_id_next = MTAG_FIRST_ID;
+static mbuf_tag_id_t					mtag_id_next = MTAG_FIRST_ID;
 static SLIST_HEAD(,mbuf_tag_id_entry)	mtag_id_list = {NULL};
 static lck_mtx_t						*mtag_id_lock = NULL;
 
 __private_extern__ void
 mbuf_tag_id_first_last(
-	u_long	*first,
-	u_long	*last)
+	mbuf_tag_id_t * first,
+	mbuf_tag_id_t * last)
 {
 	*first = MTAG_FIRST_ID;
 	*last = mtag_id_next - 1;
@@ -647,11 +780,11 @@ mbuf_tag_id_first_last(
 
 __private_extern__ errno_t
 mbuf_tag_id_find_internal(
-	const char	*string,
-	u_long		*out_id,
-	int			create)
+	const char		*string,
+	mbuf_tag_id_t	*out_id,
+	int				create)
 {
-	struct mbuf_tag_id_entry				*entry = NULL;
+	struct mbuf_tag_id_entry			*entry = NULL;
 	
 	
 	*out_id = 0;
@@ -691,7 +824,7 @@ mbuf_tag_id_find_internal(
 	/* Look for an existing entry */
 	lck_mtx_lock(mtag_id_lock);
 	SLIST_FOREACH(entry, &mtag_id_list, next) {
-		if (strcmp(string, entry->string) == 0) {
+		if (strncmp(string, entry->string, strlen(string) + 1) == 0) {
 			break;
 		}
 	}
@@ -708,7 +841,7 @@ mbuf_tag_id_find_internal(
 			return ENOMEM;
 		}
 		
-		strcpy(entry->string, string);
+		strlcpy(entry->string, string, strlen(string)+1);
 		entry->id = mtag_id_next;
 		mtag_id_next++;
 		SLIST_INSERT_HEAD(&mtag_id_list, entry, next);
@@ -725,7 +858,7 @@ mbuf_tag_id_find(
 	const char		*string,
 	mbuf_tag_id_t	*out_id)
 {
-	return mbuf_tag_id_find_internal(string, (u_long*)out_id, 1);
+	return mbuf_tag_id_find_internal(string, out_id, 1);
 }
 
 errno_t
@@ -864,12 +997,46 @@ mbuf_allocpacket(mbuf_how_t how, size_t packetlen, unsigned int *maxchunks, mbuf
 		else
 			error = ENOMEM;
 	} else {
+		if (maxchunks)
+			*maxchunks = numchunks;
 		error = 0;
 		*mbuf = m;
 	}
 out:
 	return error;
 }
+
+errno_t
+mbuf_allocpacket_list(unsigned int numpkts, mbuf_how_t how, size_t packetlen, unsigned int *maxchunks, mbuf_t *mbuf)
+{
+	errno_t error;
+	struct mbuf *m;
+	unsigned int numchunks = maxchunks ? *maxchunks : 0;
+
+	if (numpkts == 0) {
+		error = EINVAL;
+		goto out;
+	}
+	if (packetlen == 0) {
+		error = EINVAL;
+		goto out;
+	}
+	m = m_allocpacket_internal(&numpkts, packetlen, maxchunks ? &numchunks : NULL, how, 1, 0);
+	if (m == 0) {
+		if (maxchunks && *maxchunks && numchunks > *maxchunks)
+			error = ENOBUFS;
+		else
+			error = ENOMEM;
+	} else {
+		if (maxchunks)
+			*maxchunks = numchunks;
+		error = 0;
+		*mbuf = m;
+	}
+out:
+	return error;
+}
+
 
 
 /*
@@ -949,3 +1116,12 @@ out:
 	
 	return result;
 }
+
+#if !INET6
+void inet6_unsupported(void);
+
+void inet6_unsupported(void)
+{
+	*((int *)0) = 0x1;
+}
+#endif /* !INET6 */

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* 
  * Mach Operating System
@@ -49,6 +55,7 @@
 
 #include <mach/mach_types.h>
 #include <mach/memory_object_types.h>
+#include <mach/sdt.h>
 
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
@@ -102,9 +109,18 @@ vnode_pager_get_pathname(
 kern_return_t
 vnode_pager_get_filename(
 	struct vnode	*vp,
-	char		**filename)
+	const char	**filename)
 {
 	*filename = vp->v_name;
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+vnode_pager_get_cs_blobs(
+	struct vnode	*vp,
+	void		**blobs)
+{
+	*blobs = ubc_get_cs_blobs(vp);
 	return KERN_SUCCESS;
 }
 
@@ -117,7 +133,6 @@ vnode_pageout(struct vnode *vp,
 	int			flags,
 	int			*errorp)
 {
-	struct proc 	*p = current_proc();
 	int		result = PAGER_SUCCESS;
 	int		error = 0;
 	int		error_ret = 0;
@@ -127,10 +142,7 @@ vnode_pageout(struct vnode *vp,
 	int base_index;
 	int offset;
 	upl_page_info_t *pl;
-	struct vfs_context context;
-
-	context.vc_proc = p;
-	context.vc_ucred = kauth_cred_get();
+	vfs_context_t ctx = vfs_context_current();	/* pager context */
 
 	isize = (int)size;
 
@@ -139,9 +151,8 @@ vnode_pageout(struct vnode *vp,
 		error_ret = EINVAL;
 		goto out;
 	}
-	UBCINFOCHECK("vnode_pageout", vp);
 
-	if (UBCINVALID(vp)) {
+	if (UBCINFOEXISTS(vp) == 0) {
 		result    = PAGER_ERROR;
 		error_ret = EINVAL;
 
@@ -161,7 +172,7 @@ vnode_pageout(struct vnode *vp,
 				      size, 1, 0, 0, 0);
 
 		if ( (error_ret = VNOP_PAGEOUT(vp, upl, upl_offset, (off_t)f_offset,
-					       (size_t)size, flags, &context)) )
+					       (size_t)size, flags, ctx)) )
 			result = PAGER_ERROR;
 
 		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 1)) | DBG_FUNC_END, 
@@ -232,7 +243,7 @@ vnode_pageout(struct vnode *vp,
 			goto out;
 		}
 	}
-	isize = (pg_index + 1) * PAGE_SIZE;
+	isize = ((pg_index + 1) - base_index) * PAGE_SIZE;
 
 	offset = upl_offset;
 	pg_index = base_index;
@@ -247,8 +258,9 @@ vnode_pageout(struct vnode *vp,
 			 * to get back empty slots in the UPL
 			 * just skip over them
 			 */
-			offset += PAGE_SIZE;
-			isize  -= PAGE_SIZE;
+		        f_offset += PAGE_SIZE;
+			offset   += PAGE_SIZE;
+			isize    -= PAGE_SIZE;
 			pg_index++;
 
 			continue;
@@ -269,11 +281,11 @@ vnode_pageout(struct vnode *vp,
 #if NFSCLIENT
 			if (vp->v_tag == VT_NFS)
 				/* check with nfs if page is OK to drop */
-				error = nfs_buf_page_inval(vp, (off_t)(f_offset + offset));
+				error = nfs_buf_page_inval(vp, (off_t)f_offset);
 			else
 #endif
 			{
-			        blkno = ubc_offtoblk(vp, (off_t)(f_offset + offset));
+			        blkno = ubc_offtoblk(vp, (off_t)f_offset);
 			        error = buf_invalblkno(vp, blkno, 0);
 			}
 			if (error) {
@@ -286,8 +298,9 @@ vnode_pageout(struct vnode *vp,
 			} else if ( !(flags & UPL_NOCOMMIT)) {
 			        ubc_upl_commit_range(upl, offset, PAGE_SIZE, UPL_COMMIT_FREE_ON_EMPTY);
 			}
-			offset += PAGE_SIZE;
-			isize  -= PAGE_SIZE;
+		        f_offset += PAGE_SIZE;
+			offset   += PAGE_SIZE;
+			isize    -= PAGE_SIZE;
 			pg_index++;
 
 			continue;
@@ -306,11 +319,10 @@ vnode_pageout(struct vnode *vp,
 		xsize = num_of_pages * PAGE_SIZE;
 
 		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 1)) | DBG_FUNC_START, 
-				      xsize, (int)(f_offset + offset), 0, 0, 0);
+				      xsize, (int)f_offset, 0, 0, 0);
 
-		if ( (error = VNOP_PAGEOUT(vp, upl, (vm_offset_t)offset,
-					(off_t)(f_offset + offset), xsize,
-					   flags, &context)) ) {
+		if ( (error = VNOP_PAGEOUT(vp, upl, (vm_offset_t)offset, (off_t)f_offset,
+					   xsize, flags, ctx)) ) {
 		        if (error_ret == 0)
 		                error_ret = error;
 			result = PAGER_ERROR;
@@ -318,8 +330,9 @@ vnode_pageout(struct vnode *vp,
 		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 1)) | DBG_FUNC_END, 
 				      xsize, 0, 0, 0, 0);
 
-		offset += xsize;
-		isize  -= xsize;
+	        f_offset += xsize;
+		offset   += xsize;
+		isize    -= xsize;
 		pg_index += num_of_pages;
 	}
 out:
@@ -330,7 +343,7 @@ out:
 }
 
 
-void IOSleep(int);
+extern void throttle_lowpri_io(int *lowpri_window,mount_t v_mount);
 
 pager_return_t
 vnode_pagein(
@@ -342,7 +355,6 @@ vnode_pagein(
 	int           		flags,
 	int 			*errorp)
 {
-        struct proc     *p = current_proc();
         struct uthread	*ut;
         upl_page_info_t *pl;
 	int	        result = PAGER_SUCCESS;
@@ -352,48 +364,59 @@ vnode_pagein(
         int             last_pg;
 	int             first_pg;
         int             xsize;
-	int             abort_needed = 1;
+	int		must_commit = 1;
 
+	if (flags & UPL_NOCOMMIT)
+	        must_commit = 0;
 
-	UBCINFOCHECK("vnode_pagein", vp);
-
-	if (UBCINVALID(vp)) {
+	if (UBCINFOEXISTS(vp) == 0) {
 		result = PAGER_ERROR;
 		error  = PAGER_ERROR;
-		if (upl && !(flags & UPL_NOCOMMIT)) {
+
+		if (upl && must_commit)
 			ubc_upl_abort_range(upl, upl_offset, size, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
-		}
+
 		goto out;
 	}
 	if (upl == (upl_t)NULL) {
 	        if (size > (MAX_UPL_TRANSFER * PAGE_SIZE)) {
+
+		  panic("vnode_pagein: size = %x\n", size);
+
 		        result = PAGER_ERROR;
 			error  = PAGER_ERROR;
 			goto out;
 		}
-	        ubc_create_upl(vp, f_offset, size, &upl, &pl, UPL_RET_ONLY_ABSENT | UPL_SET_LITE);
+	        ubc_create_upl(vp, f_offset, size, &upl, &pl, UPL_NOBLOCK | UPL_RET_ONLY_ABSENT | UPL_SET_LITE);
 
 		if (upl == (upl_t)NULL) {
+
+		  panic("vnode_pagein: ubc_create_upl failed\n");
+
 		        result =  PAGER_ABSENT;
 			error = PAGER_ABSENT;
 			goto out;
 		}
 		upl_offset = 0;
+		first_pg = 0;
+		
 		/*
 		 * if we get here, we've created the upl and
 		 * are responsible for commiting/aborting it
 		 * regardless of what the caller has passed in
 		 */
 		flags &= ~UPL_NOCOMMIT;
+		must_commit = 1;
 		
 		vp_pagein++;
 	} else {
 	        pl = ubc_upl_pageinfo(upl);
+		first_pg = upl_offset / PAGE_SIZE;
 
 		dp_pgins++;
 	}
 	pages_in_upl = size / PAGE_SIZE;
-	first_pg     = upl_offset / PAGE_SIZE;
+	DTRACE_VM2(pgpgin, int, pages_in_upl, (uint64_t *), NULL);
 
 	/*
 	 * before we start marching forward, we must make sure we end on 
@@ -403,30 +426,31 @@ vnode_pagein(
 	for (last_pg = pages_in_upl - 1; last_pg >= first_pg; last_pg--) {
 		if (upl_page_present(pl, last_pg))
 			break;
+		if (last_pg == first_pg) {
+		        /*
+			 * empty UPL, no pages are present
+			 */
+		        if (must_commit)
+			        ubc_upl_abort_range(upl, upl_offset, size, UPL_ABORT_FREE_ON_EMPTY);
+			goto out;
+		}
 	}
 	pages_in_upl = last_pg + 1;
+	last_pg = first_pg;
 
-	for (last_pg = first_pg; last_pg < pages_in_upl;) {
+	while (last_pg < pages_in_upl) {
 	        /*
-		 * scan the upl looking for the next
-		 * page that is present.... if all of the 
-		 * pages are absent, we're done
+		 * skip over missing pages...
 		 */
-	        for (start_pg = last_pg; last_pg < pages_in_upl; last_pg++) {
+	        for ( ; last_pg < pages_in_upl; last_pg++) {
 		        if (upl_page_present(pl, last_pg))
 			        break;
 		}
-		if (last_pg == pages_in_upl)
-		        break;
-
 	        /*
-		 * if we get here, we've sitting on a page 
-		 * that is present... we want to skip over
-		 * any range of 'valid' pages... if this takes
-		 * us to the end of the request, than we're done
+		 * skip over 'valid' pages... we don't want to issue I/O for these
 		 */
 	        for (start_pg = last_pg; last_pg < pages_in_upl; last_pg++) {
-		        if (!upl_valid_page(pl, last_pg) || !upl_page_present(pl, last_pg))
+		        if (!upl_valid_page(pl, last_pg))
 			        break;
 		}
 		if (last_pg > start_pg) {
@@ -438,22 +462,26 @@ vnode_pagein(
 			 */
 		        xsize = (last_pg - start_pg) * PAGE_SIZE;
 
-			if (!(flags & UPL_NOCOMMIT))
+			if (must_commit)
 			        ubc_upl_abort_range(upl, start_pg * PAGE_SIZE, xsize, UPL_ABORT_FREE_ON_EMPTY);
-
-			abort_needed = 0;
 		}
 		if (last_pg == pages_in_upl)
+		        /*
+			 * we're done... all pages that were present
+			 * have either had I/O issued on them or 
+			 * were aborted unchanged...
+			 */
 		        break;
 
-		if (!upl_page_present(pl, last_pg))
+		if (!upl_page_present(pl, last_pg)) {
 		        /*
-			 * if we found a range of valid pages 
-			 * terminated by a non-present page
-			 * than start over
+			 * we found a range of valid pages 
+			 * terminated by a missing page...
+			 * bump index to the next page and continue on
 			 */
+		        last_pg++;
 		        continue;
-
+		}
 		/*
 		 * scan from the found invalid page looking for a valid
 		 * or non-present page before the end of the upl is reached, if we
@@ -466,32 +494,25 @@ vnode_pagein(
 		}
 		if (last_pg > start_pg) {
 		        int xoff;
-			struct vfs_context context;
-
-			context.vc_proc = p;
-			context.vc_ucred = kauth_cred_get();
 		        xsize = (last_pg - start_pg) * PAGE_SIZE;
 			xoff  = start_pg * PAGE_SIZE;
 
 			if ( (error = VNOP_PAGEIN(vp, upl, (vm_offset_t) xoff,
 					       (off_t)f_offset + xoff,
-					       xsize, flags, &context)) ) {
+					       xsize, flags, vfs_context_current())) ) {
 				result = PAGER_ERROR;
 				error  = PAGER_ERROR;
 
 			}
-			abort_needed = 0;
 		}
         }
-	if (!(flags & UPL_NOCOMMIT) && abort_needed)
-	        ubc_upl_abort_range(upl, upl_offset, size, UPL_ABORT_FREE_ON_EMPTY);
 out:
 	if (errorp)
 		*errorp = result;
 
 	ut = get_bsdthread_info(current_thread());
 
-	if (ut->uu_lowpri_delay) {
+	if (ut->uu_lowpri_window && ut->v_mount) {
 	        /*
 		 * task is marked as a low priority I/O type
 		 * and the I/O we issued while in this system call
@@ -499,8 +520,7 @@ out:
 		 * delay in order to mitigate the impact of this
 		 * task on the normal operation of the system
 		 */
-		IOSleep(ut->uu_lowpri_delay);
-	        ut->uu_lowpri_delay = 0;
+		throttle_lowpri_io(&ut->uu_lowpri_window,ut->v_mount);
 	}
 	return (error);
 }

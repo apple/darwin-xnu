@@ -1,15 +1,16 @@
-#
 ######################################################################
 #  
-#  Standard NeXT Research Configurations:
-#  -------- ---- -------- ---------------
+#  Standard Apple Mac OS Configurations:
+#  -------- ----- ------ ---------------
 #
-#  RELEASE = [i386 mach mach_pe]
-#  PROFILE = [i386 mach mach_pe profile]
-#  DEBUG = [i386 mach mach_pe debug]
+#  RELEASE	= [ i386 mach mach_pe panic_info config_dtrace ]
+#  PROFILE	= [ RELEASE profile ]
+#  DEBUG	= [ RELEASE debug ]
+#
+#  EMBEDDED	= [ i386 mach mach_pe panic_info ]
+#  DEVELOPMENT	= [ EMBEDDED config_dtrace ]
 #
 ######################################################################
 
 machine		"i386"					# <i386>
 cpu		"i386"					# <i386>
-

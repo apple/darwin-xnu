@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*-
@@ -87,12 +93,7 @@
 #include <kern/thread_call.h>
 
 void bsd_uprofil(struct time_value *syst, user_addr_t pc);
-void get_procrustime(time_value_t *tv);
-int sysctl_clockrate(user_addr_t where, size_t *sizep);
 int tvtohz(struct timeval *tv);
-extern void psignal_sigprof(struct proc *);
-extern void psignal_vtalarm(struct proc *);
-extern void psignal_xcpu(struct proc *);
 
 /*
  * Clock handling routines.
@@ -111,143 +112,10 @@ extern void psignal_xcpu(struct proc *);
 
 /*
  * The hz hardware interval timer.
- * We update the events relating to real time.
- * If this timer is also being used to gather statistics,
- * we run through the statistics gathering routine as well.
  */
 
 int             hz = 100;                /* GET RID OF THIS !!! */
 int             tick = (1000000 / 100);  /* GET RID OF THIS !!! */
-
-int bsd_hardclockinit = 0;
-/*ARGSUSED*/
-void
-bsd_hardclock(
-                boolean_t usermode, 
-#ifdef GPROF
-                caddr_t pc, 
-#else
-                __unused caddr_t pc, 
-#endif
-                int numticks
-             )
-{
-	register struct proc *p;
-	register thread_t	thread;
-	int nusecs = numticks * tick;
-	struct timeval		tv;
-
-	if (!bsd_hardclockinit)
-		return;
-
-	if (bsd_hardclockinit < 0) {
-	    return;
-	}
-
-	thread = current_thread();
-	/*
-	 * Charge the time out based on the mode the cpu is in.
-	 * Here again we fudge for the lack of proper interval timers
-	 * assuming that the current state has been around at least
-	 * one tick.
-	 */
-	p = (struct proc *)current_proc();
-	if (p && ((p->p_flag & P_WEXIT) == 0)) {
-		if (usermode) {		
-			if (p->p_stats && p->p_stats->p_prof.pr_scale) {
-				p->p_flag |= P_OWEUPC;
-				astbsd_on();
-			}
-
-			/*
-			 * CPU was in user state.  Increment
-			 * user time counter, and process process-virtual time
-			 * interval timer. 
-			 */
-			if (p->p_stats && 
-				timerisset(&p->p_stats->p_timer[ITIMER_VIRTUAL].it_value) &&
-				!itimerdecr(&p->p_stats->p_timer[ITIMER_VIRTUAL], nusecs)) {
-                        
-				/* does psignal(p, SIGVTALRM) in a thread context */
-				thread_call_func((thread_call_func_t)psignal_vtalarm, p, FALSE);
-			}
-		}
-
-		/*
-		 * If the cpu is currently scheduled to a process, then
-		 * charge it with resource utilization for a tick, updating
-		 * statistics which run in (user+system) virtual time,
-		 * such as the cpu time limit and profiling timers.
-		 * This assumes that the current process has been running
-		 * the entire last tick.
-		 */
-		if (!is_thread_idle(thread)) {		
-			if (p->p_limit &&
-				p->p_limit->pl_rlimit[RLIMIT_CPU].rlim_cur != RLIM_INFINITY) {
-				time_value_t	sys_time, user_time;
-
-				thread_read_times(thread, &user_time, &sys_time);
-				if ((sys_time.seconds + user_time.seconds + 1) >
-					p->p_limit->pl_rlimit[RLIMIT_CPU].rlim_cur) {
-                        
-					/* does psignal(p, SIGXCPU) in a thread context */
-					thread_call_func((thread_call_func_t)psignal_xcpu, p, FALSE);
-
-					if (p->p_limit->pl_rlimit[RLIMIT_CPU].rlim_cur <
-						p->p_limit->pl_rlimit[RLIMIT_CPU].rlim_max)
-						p->p_limit->pl_rlimit[RLIMIT_CPU].rlim_cur += 5;
-				}
-			}
-			if (timerisset(&p->p_stats->p_timer[ITIMER_PROF].it_value) &&
-				!itimerdecr(&p->p_stats->p_timer[ITIMER_PROF], nusecs)) {
-                        
-				/* does psignal(p, SIGPROF) in a thread context */
-				thread_call_func((thread_call_func_t)psignal_sigprof, p, FALSE);
-			}
-		}
-	}
-
-#ifdef GPROF
-	/*
-	 * Gather some statistics.
-	 */
-	gatherstats(usermode, pc);
-#endif
-}
-
-/*
- * Gather some statistics.
- */
-/*ARGSUSED*/
-void
-gatherstats(
-#ifdef GPROF
-                boolean_t	usermode,
-                caddr_t		pc
-#else
-                __unused boolean_t	usermode,
-                __unused caddr_t		pc
-#endif
-	       )
-	        
-{
-#ifdef GPROF
-	if (!usermode) {
-		struct gmonparam *p = &_gmonparam;
-
-		if (p->state == GMON_PROF_ON) {
-			register int s;
-
-			s = pc - p->lowpc;
-			if (s < p->textsize) {
-				s /= (HISTFRACTION * sizeof(*p->kcount));
-				p->kcount[s]++;
-			}
-		}
-	}
-#endif
-}
-
 
 /*
  * Kernel timeout services.
@@ -277,8 +145,8 @@ timeout(
  */
 void
 untimeout(
-	register timeout_fcn_t		fcn,
-	register void				*param)
+	timeout_fcn_t		fcn,
+	void			*param)
 {
 	thread_call_func_cancel((thread_call_func_t)fcn, param, FALSE);
 }
@@ -311,8 +179,8 @@ bsd_timeout(
  */
 void
 bsd_untimeout(
-	register timeout_fcn_t		fcn,
-	register void				*param)
+	timeout_fcn_t		fcn,
+	void			*param)
 {
 	thread_call_func_cancel((thread_call_func_t)fcn, param, FALSE);
 }
@@ -324,12 +192,11 @@ bsd_untimeout(
  * absolute time.
  */
 int
-hzto(tv)
-	struct timeval *tv;
+hzto(struct timeval *tv)
 {
 	struct timeval now;
-	register long ticks;
-	register long sec;
+	long ticks;
+	long sec;
 
 	microtime(&now);
 	/*
@@ -357,8 +224,9 @@ hzto(tv)
 /*
  * Return information about system clocks.
  */
-int
-sysctl_clockrate(user_addr_t where, size_t *sizep)
+static int
+sysctl_clockrate
+(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, __unused struct sysctl_req *req)
 {
 	struct clockinfo clkinfo;
 
@@ -369,8 +237,12 @@ sysctl_clockrate(user_addr_t where, size_t *sizep)
 	clkinfo.tick = tick;
 	clkinfo.profhz = hz;
 	clkinfo.stathz = hz;
-	return sysctl_rdstruct(where, sizep, USER_ADDR_NULL, &clkinfo, sizeof(clkinfo));
+	return sysctl_io_opaque(req, &clkinfo, sizeof(clkinfo), NULL);
 }
+
+SYSCTL_PROC(_kern, KERN_CLOCKRATE, clockrate,
+		CTLTYPE_STRUCT | CTLFLAG_RD,
+		0, 0, sysctl_clockrate, "S,clockinfo", "");
 
 
 /*
@@ -379,8 +251,8 @@ sysctl_clockrate(user_addr_t where, size_t *sizep)
 int
 tvtohz(struct timeval *tv)
 {
-	register unsigned long ticks;
-	register long sec, usec;
+	unsigned long ticks;
+	long sec, usec;
 
 	/*
 	 * If the number of usecs in the whole seconds part of the time
@@ -439,31 +311,30 @@ tvtohz(struct timeval *tv)
  * keeps the profile clock running constantly.
  */
 void
-startprofclock(p)
-	register struct proc *p;
+startprofclock(struct proc *p)
 {
 	if ((p->p_flag & P_PROFIL) == 0)
-		p->p_flag |= P_PROFIL;
+		OSBitOrAtomic(P_PROFIL, (UInt32 *)&p->p_flag);
 }
 
 /*
  * Stop profiling on a process.
  */
 void
-stopprofclock(p)
-	register struct proc *p;
+stopprofclock(struct proc *p)
 {
 	if (p->p_flag & P_PROFIL)
-		p->p_flag &= ~P_PROFIL;
+		OSBitAndAtomic(~((uint32_t)P_PROFIL), (UInt32 *)&p->p_flag);
 }
 
+/* TBD locking user profiling is not resolved yet */
 void
 bsd_uprofil(struct time_value *syst, user_addr_t pc)
 {
-struct proc *p = current_proc();
-int		ticks;
-struct timeval	*tv;
-struct timeval st;
+	struct proc *p = current_proc();
+	int		ticks;
+	struct timeval	*tv;
+	struct timeval st;
 
 	if (p == NULL)
 	        return;
@@ -482,6 +353,7 @@ struct timeval st;
 		addupc_task(p, pc, ticks);
 }
 
+/* TBD locking user profiling is not resolved yet */
 void
 get_procrustime(time_value_t *tv)
 {
@@ -493,7 +365,9 @@ get_procrustime(time_value_t *tv)
 	if ( !(p->p_flag & P_PROFIL))
 	        return;
 
+	//proc_lock(p);
 	st = p->p_stats->p_ru.ru_stime;
+	//proc_unlock(p);
 	
 	tv->seconds = st.tv_sec;
 	tv->microseconds = st.tv_usec;

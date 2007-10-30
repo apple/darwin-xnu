@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1994-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*----------------------------------------------------------------------------
  *
@@ -42,7 +48,6 @@
  *
  *----------------------------------------------------------------------------
  *
- *      Copyright (c) 1994, 1996, 1997, 1998 Apple Computer, Inc.
  */
 
 #include <sys/errno.h>
@@ -65,10 +70,10 @@
 
 #include <netat/sysglue.h>
 #include <netat/appletalk.h>
+#include <netat/at_pcb.h>
 #include <netat/at_var.h>
 #include <netat/ddp.h>
 #include <netat/rtmp.h>
-#include <netat/at_pcb.h>
 #include <netat/zip.h>
 #include <netat/routing_tables.h>
 #include <netat/at_snmp.h>
@@ -90,16 +95,12 @@ extern snmpStats_t	snmpStats;
 short ErrorRTMPoverflow = 0;	/* flag if RTMP table is too small for this net */
 short ErrorZIPoverflow  = 0;	/* flag if ZIP table is too small for this net */
 
-	/* prototypes */
-void getIfUsage( int, at_ifnames_t *);
 
 /*
  * This a temporary function : just to display the router error 
  */
 
-void RouterError(port, err_number)
-short port, err_number;
-
+void RouterError(__unused short port, short err_number)
 {
 	switch (err_number) {
 
@@ -209,7 +210,9 @@ RT_entry *NewEntry;
 {
 	RT_entry *ptree = &RT_table_start;
 
+#if DEBUG
 	register at_net_al NetStart = NewEntry->NetStart;
+#endif
 	register at_net_al NetStop  = NewEntry->NetStop;
 
 	dPrintf(D_M_RTMP_LOW, D_L_ROUTING, ("rt_binsert: for Net %d-%d state=x%x NextIR %d:%d\n",
@@ -280,11 +283,10 @@ RT_entry *rt_insert(NStop, NStart, NxNet, NxNode, NtDist, NtPort, EntS)
  *
  */
 
-RT_entry *rt_bdelete (NetStop, NetStart)
-     at_net_al NetStop, NetStart;
+RT_entry *rt_bdelete (at_net_al NetStop, __unused at_net_al NetStart)
 {
 
-	RT_entry *rt_found, *pprevious, *pnext, *pnextl, *psub;
+	RT_entry *rt_found, *pprevious = NULL, *pnext, *pnextl, *psub;
 	at_net_al LowEnd;
 
 	rt_found = &RT_table_start;
@@ -385,8 +387,9 @@ RT_entry *rt_bdelete (NetStop, NetStart)
 }
 					
 
-RT_entry *rt_sortedshow(parent)
-RT_entry *parent;
+#if DEBUG
+RT_entry *rt_sortedshow(RT_entry *parent);
+RT_entry *rt_sortedshow(RT_entry *parent)
 {
 	RT_entry *me;
 	
@@ -408,7 +411,8 @@ RT_entry *parent;
  * debug only: display the contents of the routing table
  */
 
-void rt_show ()
+void rt_show(void);
+void rt_show(void)
 {
 	RT_entry *ptree;
 	int i=0;
@@ -429,11 +433,13 @@ void rt_show ()
 	i++;
 	}
 }
+#endif /* DEBUG */
 
 /*
  * prepare the indexing of the free entries in the RTMP table
  */
 
+int
 rt_table_init()
 {
 	short i;
@@ -473,6 +479,7 @@ rt_table_init()
  * zt_add_zone: add a zone name in the zone table.
  */
 
+int
 zt_add_zone(name, length)
 char *name;
 short length;
@@ -492,7 +499,7 @@ at_nvestr_t *zname;
 {
 	register short res,i;
 
-	if (res = zt_find_zname(zname))
+	if ((res = zt_find_zname(zname)))
 		return(res);
 
 	for (i = 0; i < ZT_maxentry ; i++) {
@@ -551,8 +558,9 @@ u_char *zmap;
 /*
  * zt_compute_hash: compute hash index from the zone name string
  */
+static short zt_compute_hash(at_nvestr_t *);
 
-short zt_compute_hash(zname)
+static short zt_compute_hash(zname)
 at_nvestr_t *zname;
 {
 	register u_short checksum=0, i;
@@ -591,6 +599,7 @@ at_nvestr_t *zname;
  * zt_upper_zname: translate the name string into uppercase
  */
 
+#if 0
 void zt_upper_zname(zname)
 at_nvestr_t *zname;
 {
@@ -608,6 +617,7 @@ at_nvestr_t *zname;
 			zname->str[i] = c1;
 	}
 }
+#endif
 
 /*
  * zt_get_zmcast: calcularte the zone multicast address for a
@@ -615,6 +625,7 @@ at_nvestr_t *zname;
  *                    Returns the result in "buffer"
  */
 
+int
 zt_get_zmcast(ifID, zname, buffer)
      at_ifaddr_t *ifID;		/* we want to know the media type */
      at_nvestr_t *zname;	/* source name for multicast address */
@@ -691,7 +702,7 @@ u_char *zmap;
 /*
  * zt_ent_zcount: count the number of actives zone for a routing entry
  */
-
+int
 zt_ent_zcount(ent)
 RT_entry *ent;
 {
@@ -720,6 +731,7 @@ RT_entry *ent;
 /*
  * zt_find_zname: match a zone name in the zone table and return the entry if found
  */
+int
 zt_find_zname(zname)
 at_nvestr_t *zname;
 {
@@ -766,7 +778,7 @@ at_nvestr_t *zname;
  */
 void zt_set_zmap(znum, zmap)
      u_short znum;
-     char *zmap;
+     unsigned char *zmap;
 {
 	register u_short num = znum -1;
 
@@ -780,6 +792,7 @@ void zt_set_zmap(znum, zmap)
 /*
  * zt_clr_zmap: clear a bit for the corresponding zone map in an entry bitmap
  */
+#if 0
 void zt_clr_zmap(znum, zmap)
      u_short znum;
      char *zmap;
@@ -791,7 +804,7 @@ void zt_clr_zmap(znum, zmap)
 		ZT_table[num].ZoneCount--;
 	}
 }
-
+#endif
 
 /*
  * routing_needed : 
@@ -976,7 +989,7 @@ RT_entry *rt_getNextRoute(first)
 		return(NULL);
 }
 
-
+int
 getRtmpTableSize()
 {
 	register int i;
@@ -994,7 +1007,8 @@ getRtmpTableSize()
 	return(0);
 }
 
-getZipTableSize()
+int
+getZipTableSize(void)
 {
 	register int i;
 	register ZT_entry *zt;
@@ -1011,6 +1025,7 @@ getZipTableSize()
 	return(0);
 }
 
+void
 getRtmpTable(d,s,c)
      RT_entry	*d;		/* destination */
      int 	s;		/* starting entry */
@@ -1026,6 +1041,7 @@ getRtmpTable(d,s,c)
 		}
 }
 
+void
 getZipTable(d,s,c)
      ZT_entry	*d;		/* destination */
      int 	s;		/* starting entry */
@@ -1038,7 +1054,7 @@ getZipTable(d,s,c)
 at_nvestr_t *getRTRLocalZone(ifz)
      zone_usage_t *ifz;
 {
-	char *zmap;
+	unsigned char *zmap = NULL;
 	RT_entry	*route;
 	int i, j, index;
 	int  zcnt=0;		/* zone we're pointing to in the list */

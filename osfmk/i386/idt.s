@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -63,7 +69,7 @@
  */
 #define	IDT_BASE_ENTRY(vec,seg,type) \
 	.data			;\
-	.long	EXT(vec) - EXT(hi_remap_text) + HIGH_MEM_BASE ;\
+	.long	EXT(vec) - EXT(hi_remap_text) + HIGH_MEM_BASE ; \
 	.word	seg		;\
 	.byte	0		;\
 	.byte	type		;\
@@ -71,7 +77,7 @@
 
 #define	IDT_BASE_ENTRY_INT(vec,seg,type) \
 	.data			;\
-	.long	vec - EXT(hi_remap_text) + HIGH_MEM_BASE ;\
+	.long	vec - EXT(hi_remap_text) + HIGH_MEM_BASE ; \
 	.word	seg		;\
 	.byte	0		;\
 	.byte	type		;\
@@ -79,7 +85,7 @@
 
 #define	IDT_BASE_ENTRY_TG(vec,seg,type) \
 	.data			;\
-	.long	0		;\
+	.long	0		; \
 	.word	seg		;\
 	.byte	0		;\
 	.byte	type		;\
@@ -316,7 +322,7 @@ INTERRUPT(0x7b)
 INTERRUPT(0x7c)
 INTERRUPT(0x7d)
 INTERRUPT(0x7e)
-INTERRUPT(0x7f)
+EXCEP_USR(0x7f, t_dtrace_ret)
 
 EXCEP_SPC_USR(0x80,hi_unix_scall)
 EXCEP_SPC_USR(0x81,hi_mach_scall)
@@ -542,15 +548,13 @@ EXT(ret_popl_ds):
 EXT(ret_iret):
         iret                            /* return from interrupt */
 fast_exit:
-	popl    %edx                    /* user return eip */
-        popl    %ecx                    /* pop and toss cs */
+	popl	%edx			/* user return eip */
+	popl	%ecx			/* pop and toss cs */
 	andl	$(~EFL_IF),(%esp)	/* clear intrs enabled, see sti below */
-        popf                            /* flags - carry denotes failure */
-        popl    %ecx                    /* user return esp */
+	popf				/* flags - carry denotes failure */
+	popl	%ecx			/* user return esp */
 	sti				/* interrupts enabled after sysexit */
-        sysexit
-
-/*******************************************************************************************************/
+	sysexit
 
 		
 Entry(hi_unix_scall)
@@ -606,10 +610,9 @@ Entry(hi_sysenter)
 	pushf				/* flags */
 	/*
 	* Clear, among others, the Nested Task (NT) flags bit;
-	* This is cleared by INT, but not by sysenter, which only
-	* clears RF, VM and IF.
+	* This is cleared by INT, but not by SYSENTER.
 	*/
-	pushl	$0
+	pushl   $0
 	popfl
 	pushl	$(SYSENTER_CS)		/* cs */
 hi_sysenter_2:
@@ -624,8 +627,8 @@ enter_lohandler:
 	pushl   %es
         pushl   %fs
         pushl   %gs
-enter_lohandler1:
 	pushl	$(SS_32)		/* 32-bit state flavor */
+enter_lohandler1:
 	mov	%ss,%eax
 	mov	%eax,%ds
 	mov	%eax,%fs
@@ -657,7 +660,7 @@ enter_lohandler1:
 2:
 	movl	R_TRAPNO(%esp),%ecx			// Get the interrupt vector
 	addl	$1,%gs:hwIntCnt(,%ecx,4)	// Bump the count
-	jmp	*%ebx
+	jmp		*%ebx
 
 	
 /*
@@ -830,6 +833,7 @@ push_fs:
 push_gs:
 	pushl	%gs			/* restore gs. */
 push_none:
+	pushl	$(SS_32)		/* 32-bit state flavor */
 	movl	%eax,R_TRAPNO(%esp)	/* set trap number */
 	movl	%edx,R_ERR(%esp)	/* set error code */
 					/* now treat as fault from user */

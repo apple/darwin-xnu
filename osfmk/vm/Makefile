@@ -11,13 +11,12 @@ DATAFILES =
 
 EXPORT_ONLY_FILES = \
 	pmap.h \
-	task_working_set.h \
 	vm_fault.h \
 	vm_kern.h \
 	vm_map.h \
 	vm_pageout.h \
 	vm_protos.h \
-	vm_shared_memory_server.h
+	vm_shared_region.h
 
 INSTALL_MI_LIST = ${DATAFILES}
 

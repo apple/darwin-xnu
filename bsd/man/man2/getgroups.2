@@ -40,57 +40,71 @@
 .Nm getgroups
 .Nd get group access list
 .Sh SYNOPSIS
-.Fd #include <sys/param.h>
-.Fd #include <sys/types.h>
 .Fd #include <unistd.h>
 .Ft int
-.Fn getgroups "int gidsetlen" "gid_t *gidset"
+.Fo getgroups
+.Fa "int gidsetsize"
+.Fa "gid_t grouplist[]"
+.Fc
 .Sh DESCRIPTION
 .Fn Getgroups
 gets the current group access list of the current user process
 and stores it in the array 
-.Fa gidset .
+.Fa grouplist[] .
 The parameter
-.Fa gidsetlen
+.Fa gidsetsize
 indicates the number of entries that may be placed in 
-.Fa gidset .
+.Fa grouplist[] .
 .Fn Getgroups
 returns the actual number of groups returned in
-.Fa gidset .
+.Fa grouplist[] .
 No more than
 .Dv {NGROUPS_MAX}
 will ever
 be returned.
 If
-.Fa gidsetlen
+.Fa gidsetsize
 is 0, 
 .Fn getgroups
 returns the number of groups without modifying the
-.Fa gidset
+.Fa grouplist[]
 array.
 .Sh RETURN VALUES
 A successful call returns the number of groups in the group set.
-A value of -1 indicates that an error occurred, and the error
-code is stored in the global variable
-.Va errno .
+Otherwise, a value of -1 is returned and the global integer variable
+.Va errno
+is set to indicate the error.
 .Sh ERRORS
 The possible errors for
 .Fn getgroups
 are:
 .Bl -tag -width Er
-.It Bq Er EINVAL
-The argument
-.Fa gidsetlen
-is smaller than the number of groups in the group set.
+.\" ==========
 .It Bq Er EFAULT
 The argument
-.Fa gidset
-specifies
-an invalid address.
+.Fa grouplist
+specifies an invalid address.
+.\" ==========
+.It Bq Er EINVAL
+The argument
+.Fa gidsetsize ,
+although non-zero,
+is smaller than the number of groups in the group set.
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/param.h>
+.Fd #include <sys/types.h>
+.Fd #include <unistd.h>
+.Pp
+The include files
+.In sys/param.h
+and
+.In sys/types.h
+are necessary.
 .Sh SEE ALSO
 .Xr setgroups 2 ,
-.Xr initgroups 3
+.Xr initgroups 3 ,
+.Xr compat 5
 .Sh HISTORY
 The
 .Fn getgroups

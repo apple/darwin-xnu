@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 /*
@@ -111,7 +117,7 @@ struct kauth_scope {
 static TAILQ_HEAD(,kauth_scope)	kauth_scopes;
 
 static int kauth_add_callback_to_scope(kauth_scope_t sp, kauth_listener_t klp);
-static void	kauth_scope_init(void);
+static void	kauth_scope_init(void) __attribute__((section("__TEXT, initcode")));
 static kauth_scope_t kauth_alloc_scope(const char *identifier, kauth_scope_callback_t callback, void *idata);
 static kauth_listener_t kauth_alloc_listener(const char *identifier, kauth_scope_callback_t callback, void *idata);
 #if 0
@@ -126,7 +132,7 @@ static int	kauth_authorize_generic_callback(kauth_cred_t _credential, void *_ida
     uintptr_t arg0, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3);
 kauth_scope_t	kauth_scope_fileop;
 
-extern int 		cansignal(struct proc *, kauth_cred_t, struct proc *, int);
+extern int 		cansignal(struct proc *, kauth_cred_t, struct proc *, int, int);
 extern char *	get_pathbuff(void);
 extern void		release_pathbuff(char *path);
 
@@ -222,7 +228,8 @@ kauth_register_scope(const char *identifier, kauth_scope_callback_t callback, vo
 	KAUTH_SCOPELOCK();
 	TAILQ_FOREACH(tsp, &kauth_scopes, ks_link) {
 		/* duplicate! */
-		if (strcmp(tsp->ks_identifier, identifier) == 0) {
+		if (strncmp(tsp->ks_identifier, identifier, 
+					strlen(tsp->ks_identifier) + 1) == 0) {
 			KAUTH_SCOPEUNLOCK();
 			FREE(sp, M_KAUTH);
 			return(NULL);
@@ -238,7 +245,8 @@ kauth_register_scope(const char *identifier, kauth_scope_callback_t callback, vo
 	 */
 restart:
 	TAILQ_FOREACH(klp, &kauth_dangling_listeners, kl_link) {
-		if (strcmp(klp->kl_identifier, sp->ks_identifier) == 0) {
+		if (strncmp(klp->kl_identifier, sp->ks_identifier,
+					strlen(klp->kl_identifier) + 1) == 0) {
 			/* found a match on the dangling listener list.  add it to the
 			 * the active scope.
 			 */
@@ -301,7 +309,8 @@ kauth_listen_scope(const char *identifier, kauth_scope_callback_t callback, void
 	 */
 	KAUTH_SCOPELOCK();
 	TAILQ_FOREACH(sp, &kauth_scopes, ks_link) {
-		if (strcmp(sp->ks_identifier, identifier) == 0) {
+		if (strncmp(sp->ks_identifier, identifier,
+					strlen(sp->ks_identifier) + 1) == 0) {
 			/* scope exists, add it to scope listener table */
 			if (kauth_add_callback_to_scope(sp, klp) == 0) {
 				KAUTH_SCOPEUNLOCK();
@@ -376,6 +385,12 @@ kauth_unlisten_scope(kauth_listener_t listener)
 
 /*
  * Authorization requests.
+ *
+ * Returns:	0			Success
+ *		EPERM			Operation not permitted
+ *
+ * Imputed:	*arg3, modified		Callback return - depends on callback
+ *					modification of *arg3, if any
  */
 int
 kauth_authorize_action(kauth_scope_t scope, kauth_cred_t credential, kauth_action_t action,
@@ -467,7 +482,7 @@ kauth_authorize_process_callback(kauth_cred_t credential, __unused void *idata, 
 		/* arg0 - process to signal
 		 * arg1 - signal to send the process
 		 */
-		if (cansignal(current_proc(), credential, (struct proc *)arg0, (int)arg1))
+		if (cansignal(current_proc(), credential, (struct proc *)arg0, (int)arg1, 0))
 			return(KAUTH_RESULT_ALLOW);
 		break;
 	case KAUTH_PROCESS_CANTRACE:
@@ -611,6 +626,7 @@ kauth_acl_evaluate(kauth_cred_t cred, kauth_acl_eval_t eval)
 	}
 
 	eval->ae_residual = eval->ae_requested;
+	eval->ae_found_deny = FALSE;
 
 	/*
 	 * Get our guid for comparison purposes.
@@ -656,6 +672,7 @@ kauth_acl_evaluate(kauth_cred_t cred, kauth_acl_eval_t eval)
 		case KAUTH_ACE_DENY:
 			if (!(eval->ae_requested & rights))
 				continue;
+			eval->ae_found_deny = TRUE;
 			break;
 		default:
 			/* we don't recognise this ACE, skip it */
@@ -765,9 +782,13 @@ kauth_acl_inherit(vnode_t dvp, kauth_acl_t initial, kauth_acl_t *product, int is
 	kauth_acl_t inherit, result;
 
 	/*
-	 * Fetch the ACL from the directory.  This should never fail.  Note that we don't
-	 * manage inheritance when the remote server is doing authorization; we just
-	 * want to compose the umask-ACL and any initial ACL.
+	 * Fetch the ACL from the directory.  This should never fail.
+	 * Note that we don't manage inheritance when the remote server is
+	 * doing authorization, since this means server enforcement of
+	 * inheritance semantics; we just want to compose the initial
+	 * ACL and any inherited ACE entries from the container object.
+	 *
+	 * XXX TODO: <rdar://3634665> wants a "umask ACL" from the process.
 	 */
 	inherit = NULL;
 	if ((dvp != NULL) && !vfs_authopaque(vnode_mount(dvp))) {
@@ -782,7 +803,8 @@ kauth_acl_inherit(vnode_t dvp, kauth_acl_t initial, kauth_acl_t *product, int is
 	}
 
 	/*
-	 * Compute the number of entries in the result ACL by scanning the input lists.
+	 * Compute the number of entries in the result ACL by scanning the
+	 * input lists.
 	 */
 	entries = 0;
 	if (inherit != NULL) {
@@ -793,16 +815,23 @@ kauth_acl_inherit(vnode_t dvp, kauth_acl_t initial, kauth_acl_t *product, int is
 	}
 
 	if (initial == NULL) {
-		/* XXX 3634665 TODO: fetch umask ACL from the process, set in initial */
+		/*
+		 * XXX 3634665 TODO: if the initial ACL is not specfied by
+		 * XXX the caller, fetch the umask ACL from the process,
+		 * and use it in place of "initial".
+		 */
 	}
 
 	if (initial != NULL) {
-		entries += initial->acl_entrycount;
+		if (initial->acl_entrycount != KAUTH_FILESEC_NOACL)
+			entries += initial->acl_entrycount;
+		else
+			initial = NULL;
 	}
 
 	/*
 	 * If there is no initial ACL, and no inheritable entries, the
-	 * object should have no ACL at all.
+	 * object should be created with no ACL at all.
 	 * Note that this differs from the case where the initial ACL
 	 * is empty, in which case the object must also have an empty ACL.
 	 */
@@ -816,7 +845,7 @@ kauth_acl_inherit(vnode_t dvp, kauth_acl_t initial, kauth_acl_t *product, int is
 	 * Allocate the result buffer.
 	 */
 	if ((result = kauth_acl_alloc(entries)) == NULL) {
-		KAUTH_DEBUG("    ERROR - could not allocate %d-entry result buffer for inherited ACL");
+		KAUTH_DEBUG("    ERROR - could not allocate %d-entry result buffer for inherited ACL", entries);
 		error = ENOMEM;
 		goto out;
 	}
@@ -834,14 +863,27 @@ kauth_acl_inherit(vnode_t dvp, kauth_acl_t initial, kauth_acl_t *product, int is
 	}
 	if (inherit != NULL) {
 		for (i = 0; i < inherit->acl_entrycount; i++) {
-			/* inherit onto this object? */
+			/*
+			 * Inherit onto this object?  We inherit only if
+			 * the target object is a container object and the
+			 * KAUTH_ACE_DIRECTORY_INHERIT bit is set, OR if
+			 * if the target object is not a container, and
+			 * the KAUTH_ACE_FILE_INHERIT bit is set.
+			 */
 			if (inherit->acl_ace[i].ace_flags & (isdir ? KAUTH_ACE_DIRECTORY_INHERIT : KAUTH_ACE_FILE_INHERIT)) {
 				result->acl_ace[index] = inherit->acl_ace[i];
 				result->acl_ace[index].ace_flags |= KAUTH_ACE_INHERITED;
-				/* don't re-inherit? */
-				if (result->acl_ace[index].ace_flags & KAUTH_ACE_LIMIT_INHERIT)
+				/*
+				 * We do not re-inherit inheritance flags
+				 * if the ACE from the container has a
+				 * KAUTH_ACE_LIMIT_INHERIT, OR if the new
+				 * object is not itself a container (since
+				 * inheritance is always container-based).
+				 */
+				if ((result->acl_ace[index].ace_flags & KAUTH_ACE_LIMIT_INHERIT) || !isdir) {
 					result->acl_ace[index].ace_flags &=
-					    ~(KAUTH_ACE_DIRECTORY_INHERIT | KAUTH_ACE_FILE_INHERIT | KAUTH_ACE_LIMIT_INHERIT);
+					    ~(KAUTH_ACE_INHERIT_CONTROL_FLAGS);
+				}
 				index++;
 			}
 		}

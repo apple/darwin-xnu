@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <sys/systm.h>
@@ -27,9 +33,11 @@
 #include <sys/stat.h>
 #include <sys/buf.h>
 #include <sys/mount.h>
+#include <sys/vnode_if.h>
 #include <sys/vnode_internal.h>
 #include <sys/malloc.h>
 #include <sys/ubc.h>
+#include <sys/ubc_internal.h>
 #include <sys/paths.h>
 #include <sys/quota.h>
 #include <sys/time.h>
@@ -56,8 +64,6 @@
 #include "hfscommon/headers/BTreesInternal.h"
 #include "hfscommon/headers/FileMgrInternal.h"
 
-#define MAKE_DELETED_NAME(NAME,FID) \
-	    (void) sprintf((NAME), "%s%d", HFS_DELETE_PREFIX, (FID))
 
 #define KNDETACH_VNLOCKED 0x00000001
 
@@ -70,19 +76,28 @@
 int always_do_fullfsync = 0;
 SYSCTL_INT (_kern, OID_AUTO, always_do_fullfsync, CTLFLAG_RW, &always_do_fullfsync, 0, "always F_FULLFSYNC when fsync is called");
 
-extern unsigned long strtoul(const char *, char **, int);
-
 static int hfs_makenode(struct vnode *dvp, struct vnode **vpp,
                         struct componentname *cnp, struct vnode_attr *vap,
                         vfs_context_t ctx);
 
-static int hfs_metasync(struct hfsmount *hfsmp, daddr64_t node, struct proc *p);
+static int hfs_metasync(struct hfsmount *hfsmp, daddr64_t node, __unused struct proc *p);
+static int hfs_metasync_all(struct hfsmount *hfsmp);
 
 static int hfs_removedir(struct vnode *, struct vnode *, struct componentname *,
                          int);
 
 static int hfs_removefile(struct vnode *, struct vnode *, struct componentname *,
-                          int, int);
+                          int, int, int);
+
+#if FIFO
+static int hfsfifo_read(struct vnop_read_args *);
+static int hfsfifo_write(struct vnop_write_args *);
+static int hfsfifo_close(struct vnop_close_args *);
+static int hfsfifo_kqfilt_add(struct vnop_kqfilt_add_args *);
+static int hfsfifo_kqfilt_remove(struct vnop_kqfilt_remove_args *);
+
+extern int (**fifo_vnodeop_p)(void *);
+#endif /* FIFO */
 
 static int hfs_vnop_close(struct vnop_close_args*);
 static int hfs_vnop_create(struct vnop_create_args*);
@@ -98,17 +113,19 @@ static int hfs_vnop_rename(struct vnop_rename_args*);
 static int hfs_vnop_rmdir(struct vnop_rmdir_args*);
 static int hfs_vnop_symlink(struct vnop_symlink_args*);
 static int hfs_vnop_setattr(struct vnop_setattr_args*);
+static int hfs_vnop_readlink(struct vnop_readlink_args *);
+static int hfs_vnop_pathconf(struct vnop_pathconf_args *);
+static int hfs_vnop_kqfiltremove(struct vnop_kqfilt_remove_args *);
+static int hfs_vnop_whiteout(struct vnop_whiteout_args *);
+static int hfsspec_read(struct vnop_read_args *);
+static int hfsspec_write(struct vnop_write_args *);
+static int hfsspec_close(struct vnop_close_args *);
 
 /* Options for hfs_removedir and hfs_removefile */
 #define HFSRM_SKIP_RESERVE  0x01
 
 
-int hfs_write_access(struct vnode *vp, kauth_cred_t cred, struct proc *p, Boolean considerFlags);
 
-int hfs_chmod(struct vnode *vp, int mode, kauth_cred_t cred,
-			struct proc *p);
-int hfs_chown(struct vnode *vp, uid_t uid, gid_t gid,
-			kauth_cred_t cred, struct proc *p);
 
 /*****************************************************************************
 *
@@ -122,7 +139,41 @@ int hfs_chown(struct vnode *vp, uid_t uid, gid_t gid,
 static int
 hfs_vnop_create(struct vnop_create_args *ap)
 {
-	return hfs_makenode(ap->a_dvp, ap->a_vpp, ap->a_cnp, ap->a_vap, ap->a_context);
+	int error;
+
+again:
+	error = hfs_makenode(ap->a_dvp, ap->a_vpp, ap->a_cnp, ap->a_vap, ap->a_context);
+
+	/*
+	 * We speculatively skipped the original lookup of the leaf
+	 * for CREATE.  Since it exists, go get it as long as they
+	 * didn't want an exclusive create.
+	 */
+	if ((error == EEXIST) && !(ap->a_vap->va_vaflags & VA_EXCLUSIVE)) {
+		struct vnop_lookup_args args;
+
+		args.a_desc = &vnop_lookup_desc;
+		args.a_dvp = ap->a_dvp;
+		args.a_vpp = ap->a_vpp;
+		args.a_cnp = ap->a_cnp;
+		args.a_context = ap->a_context;
+		args.a_cnp->cn_nameiop = LOOKUP;
+		error = hfs_vnop_lookup(&args);
+		/*
+		 * We can also race with remove for this file.
+		 */
+		if (error == ENOENT) {
+			goto again;
+		}
+
+		/* Make sure it was file. */
+		if ((error == 0) && !vnode_isreg(*args.a_vpp)) {
+			vnode_put(*args.a_vpp);
+			error = EEXIST;
+		}
+		args.a_cnp->cn_nameiop = CREATE;
+	}
+	return (error);
 }
 
 /*
@@ -188,7 +239,11 @@ hfs_vnop_open(struct vnop_open_args *ap)
 	 */
 	if ((VTOHFS(vp)->hfs_flags & HFS_READ_ONLY) ||
 	    (VTOHFS(vp)->jnl == NULL) ||
+#if NAMEDSTREAMS
+	    !vnode_isreg(vp) || vnode_isinuse(vp, 0) || vnode_isnamedstream(vp)) {
+#else
 	    !vnode_isreg(vp) || vnode_isinuse(vp, 0)) {
+#endif
 		return (0);
 	}
 
@@ -198,11 +253,18 @@ hfs_vnop_open(struct vnop_open_args *ap)
 	if (fp->ff_blocks &&
 	    fp->ff_extents[7].blockCount != 0 &&
 	    fp->ff_size <= (20 * 1024 * 1024)) {
+		struct timeval now;
+		struct cnode *cp = VTOC(vp);
 		/* 
 		 * Wait until system bootup is done (3 min).
+		 * And don't relocate a file that's been modified
+		 * within the past minute -- this can lead to
+		 * system thrashing.
 		 */
 		microuptime(&tv);
-		if (tv.tv_sec > (60 * 3)) {
+		microtime(&now);
+		if (tv.tv_sec > (60 * 3) &&
+		   ((now.tv_sec - cp->c_mtime) > 60)) {
 			(void) hfs_relocate(vp, VTOVCB(vp)->nextAllocation + 4096,
 			                    vfs_context_ucred(ap->a_context),
 			                    vfs_context_proc(ap->a_context));
@@ -264,59 +326,139 @@ hfs_vnop_close(ap)
 static int
 hfs_vnop_getattr(struct vnop_getattr_args *ap)
 {
+#define VNODE_ATTR_TIMES  \
+	(VNODE_ATTR_va_access_time|VNODE_ATTR_va_change_time|VNODE_ATTR_va_modify_time)
+#define VNODE_ATTR_AUTH  \
+	(VNODE_ATTR_va_mode | VNODE_ATTR_va_uid | VNODE_ATTR_va_gid | \
+         VNODE_ATTR_va_flags | VNODE_ATTR_va_acl)
+
 	struct vnode *vp = ap->a_vp;
 	struct vnode_attr *vap = ap->a_vap;
 	struct vnode *rvp = NULL;
 	struct hfsmount *hfsmp;
 	struct cnode *cp;
+	uint64_t data_size;
 	enum vtype v_type;
 	int error = 0;
 
-	if ((error = hfs_lock(VTOC(vp), HFS_SHARED_LOCK))) {
-		return (error);
-	}
 	cp = VTOC(vp);
+
+	/*
+	 * Shortcut for vnode_authorize path.  Each of the attributes
+	 * in this set is updated atomically so we don't need to take
+	 * the cnode lock to access them.
+	 */
+	if ((vap->va_active & ~VNODE_ATTR_AUTH) == 0) {
+		/* Make sure file still exists. */
+		if (cp->c_flag & C_NOEXISTS)
+			return (ENOENT);
+
+		vap->va_uid = cp->c_uid;
+		vap->va_gid = cp->c_gid;
+		vap->va_mode = cp->c_mode;
+		vap->va_flags = cp->c_flags;
+		vap->va_supported |= VNODE_ATTR_AUTH & ~VNODE_ATTR_va_acl;
+
+		if ((cp->c_attr.ca_recflags & kHFSHasSecurityMask) == 0) {
+			vap->va_acl = (kauth_acl_t) KAUTH_FILESEC_NONE;
+			VATTR_SET_SUPPORTED(vap, va_acl);
+		}
+		return (0);
+	}
 	hfsmp = VTOHFS(vp);
-	hfs_touchtimes(hfsmp, cp);
 	v_type = vnode_vtype(vp);
 
-	VATTR_RETURN(vap, va_rdev, (v_type == VBLK || v_type == VCHR) ? cp->c_rdev : 0);
+	/*
+	 * If time attributes are requested and we have cnode times
+	 * that require updating, then acquire an exclusive lock on
+	 * the cnode before updating the times.  Otherwise we can
+	 * just acquire a shared lock.
+	 */
+	if ((vap->va_active & VNODE_ATTR_TIMES) &&
+	    (cp->c_touch_acctime || cp->c_touch_chgtime || cp->c_touch_modtime)) {
+		if ((error = hfs_lock(cp, HFS_EXCLUSIVE_LOCK)))
+			return (error);
+		hfs_touchtimes(hfsmp, cp);
+	} else {
+		if ((error = hfs_lock(cp, HFS_SHARED_LOCK)))
+			return (error);
+	}
+
 	if (v_type == VDIR) {
+		data_size = (cp->c_entries + 2) * AVERAGE_HFSDIRENTRY_SIZE;
+
 		if (VATTR_IS_ACTIVE(vap, va_nlink)) {
-			int entries;
+			int nlink;
 	
-			entries = cp->c_nlink;
-			if (vnode_isvroot(vp)) {
-				if (hfsmp->hfs_privdir_desc.cd_cnid != 0)
-					--entries;     /* hide private dir */
-				if (hfsmp->jnl || ((HFSTOVCB(hfsmp)->vcbAtrb & kHFSVolumeJournaledMask) && (hfsmp->hfs_flags & HFS_READ_ONLY)))
-					entries -= 2;  /* hide the journal files */
+			/*
+			 * For directories, the va_nlink is esentially a count
+			 * of the ".." references to a directory plus the "."
+			 * reference and the directory itself. So for HFS+ this
+			 * becomes the sub-directory count plus two.
+			 *
+			 * In the absence of a sub-directory count we use the
+			 * directory's item count.  This will be too high in
+			 * most cases since it also includes files.
+			 */
+			if ((hfsmp->hfs_flags & HFS_FOLDERCOUNT) && 
+			    (cp->c_attr.ca_recflags & kHFSHasFolderCountMask))
+				nlink = cp->c_attr.ca_dircount;  /* implied ".." entries */
+			else
+				nlink = cp->c_entries;
+
+			/* Account for ourself and our "." entry */
+			nlink += 2;  
+			 /* Hide our private directories. */
+			if (cp->c_cnid == kHFSRootFolderID) {
+				if (hfsmp->hfs_private_desc[FILE_HARDLINKS].cd_cnid != 0) {
+					--nlink;    
+				}
+				if (hfsmp->hfs_private_desc[DIR_HARDLINKS].cd_cnid != 0) {
+					--nlink;
+				}
 			}
-			VATTR_RETURN(vap, va_nlink, (uint64_t)entries);
-		}
-		
+			VATTR_RETURN(vap, va_nlink, (u_int64_t)nlink);
+		}		
 		if (VATTR_IS_ACTIVE(vap, va_nchildren)) {
 			int entries;
 	
 			entries = cp->c_entries;
-			if (vnode_isvroot(vp)) {
-				if (hfsmp->hfs_privdir_desc.cd_cnid != 0)
-					--entries;     /* hide private dir */
-				if (hfsmp->jnl)
-					entries -= 2;  /* hide the journal files */
+			/* Hide our private files and directories. */
+			if (cp->c_cnid == kHFSRootFolderID) {
+				if (hfsmp->hfs_private_desc[FILE_HARDLINKS].cd_cnid != 0)
+					--entries;
+				if (hfsmp->hfs_private_desc[DIR_HARDLINKS].cd_cnid != 0)
+					--entries;
+				if (hfsmp->jnl || ((hfsmp->vcbAtrb & kHFSVolumeJournaledMask) && (hfsmp->hfs_flags & HFS_READ_ONLY)))
+					entries -= 2;   /* hide the journal files */
 			}
 			VATTR_RETURN(vap, va_nchildren, entries);
 		}
-	} else {
-		VATTR_RETURN(vap, va_nlink, (uint64_t)cp->c_nlink);
+		/*
+		 * The va_dirlinkcount is the count of real directory hard links.
+		 * (i.e. its not the sum of the implied "." and ".." references)
+		 */
+		if (VATTR_IS_ACTIVE(vap, va_dirlinkcount)) {
+			VATTR_RETURN(vap, va_dirlinkcount, (uint32_t)cp->c_linkcount);
+		}
+	} else /* !VDIR */ {
+		data_size = VCTOF(vp, cp)->ff_size;
+
+		VATTR_RETURN(vap, va_nlink, (u_int64_t)cp->c_linkcount);
+		if (VATTR_IS_ACTIVE(vap, va_data_alloc)) {
+			u_int64_t blocks;
+	
+			blocks = VCTOF(vp, cp)->ff_blocks;
+			VATTR_RETURN(vap, va_data_alloc, blocks * (u_int64_t)hfsmp->blockSize);
+		}
 	}
 
 	/* conditional because 64-bit arithmetic can be expensive */
 	if (VATTR_IS_ACTIVE(vap, va_total_size)) {
 		if (v_type == VDIR) {
-			VATTR_RETURN(vap, va_total_size, cp->c_nlink * AVERAGE_HFSDIRENTRY_SIZE);
+			VATTR_RETURN(vap, va_total_size, (cp->c_entries + 2) * AVERAGE_HFSDIRENTRY_SIZE);
 		} else {
-			uint64_t total_size = 0;
+			u_int64_t total_size = 0;
 			struct cnode *rcp;
 			
 			if (cp->c_datafork) {
@@ -324,8 +466,7 @@ hfs_vnop_getattr(struct vnop_getattr_args *ap)
 			}
 
 			if (cp->c_blocks - VTOF(vp)->ff_blocks) {
-				/* hfs_vgetrsrc does not use struct proc - therefore passing NULL */ 
-				error = hfs_vgetrsrc(hfsmp, vp, &rvp, NULL);
+				error = hfs_vgetrsrc(hfsmp, vp, &rvp, TRUE);
 				if (error) {
 					goto out;
 				}
@@ -337,44 +478,15 @@ hfs_vnop_getattr(struct vnop_getattr_args *ap)
 			}
 
 			VATTR_RETURN(vap, va_total_size, total_size);
-			/* Include size of attibute data (extents), if any */
-			if (cp->c_attrblks) {
-				vap->va_total_size += (uint64_t)cp->c_attrblks * (uint64_t)hfsmp->blockSize;
-			}
 		}
 	}
 	if (VATTR_IS_ACTIVE(vap, va_total_alloc)) {
 		if (v_type == VDIR) {
 			VATTR_RETURN(vap, va_total_alloc, 0);
 		} else {
-			VATTR_RETURN(vap, va_total_alloc, (uint64_t)cp->c_blocks * (uint64_t)hfsmp->blockSize);
-			/* Include size of attibute data (extents), if any */
-			if (cp->c_attrblks) {
-				vap->va_total_alloc += (uint64_t)cp->c_attrblks * (uint64_t)hfsmp->blockSize;
-			}
+			VATTR_RETURN(vap, va_total_alloc, (u_int64_t)cp->c_blocks * (u_int64_t)hfsmp->blockSize);
 		}
 	}
-	/* XXX broken... if ask for "data size" of rsrc fork vp you get rsrc fork size! */
-	if (v_type == VDIR) {
-		VATTR_RETURN(vap, va_data_size, cp->c_nlink * AVERAGE_HFSDIRENTRY_SIZE);
-	} else {
-		VATTR_RETURN(vap, va_data_size, VTOF(vp)->ff_size);
-	}	
-	if (VATTR_IS_ACTIVE(vap, va_data_alloc) && (v_type != VDIR)) {
-			/* XXX do we need to account for ff_unallocblocks ? */
-		VATTR_RETURN(vap, va_data_alloc, (uint64_t)VTOF(vp)->ff_blocks * (uint64_t)hfsmp->blockSize);
-	}
-	/* XXX is this really a good 'optimal I/O size'? */
-	VATTR_RETURN(vap, va_iosize, hfsmp->hfs_logBlockSize);
-	VATTR_RETURN(vap, va_uid, cp->c_uid);
-	VATTR_RETURN(vap, va_gid, cp->c_gid);
-	VATTR_RETURN(vap, va_mode, cp->c_mode);
-#if 0
-	/* XXX is S_IFXATTR still needed ??? */
-	if (VNODE_IS_RSRC(vp))
-		vap->va_mode |= S_IFXATTR;
-#endif
-	VATTR_RETURN(vap, va_flags, cp->c_flags);
 
 	/*
 	 * If the VFS wants extended security data, and we know that we
@@ -385,16 +497,12 @@ hfs_vnop_getattr(struct vnop_getattr_args *ap)
 	 */
 	if (VATTR_IS_ACTIVE(vap, va_acl)) {
 		if ((cp->c_attr.ca_recflags & kHFSHasSecurityMask) == 0) {
-			vap->va_acl = KAUTH_FILESEC_NONE;
+			vap->va_acl = (kauth_acl_t) KAUTH_FILESEC_NONE;
 			VATTR_SET_SUPPORTED(vap, va_acl);
 		}
 	}
-	vap->va_create_time.tv_sec = cp->c_itime;
-	vap->va_create_time.tv_nsec = 0;
-	VATTR_SET_SUPPORTED(vap, va_create_time);
-
 	if (VATTR_IS_ACTIVE(vap, va_access_time)) {
-		/* Access times are lazyily updated, get current time if needed */
+		/* Access times are lazily updated, get current time if needed */
 		if (cp->c_touch_acctime) {
 			struct timeval tv;
 	
@@ -406,15 +514,21 @@ hfs_vnop_getattr(struct vnop_getattr_args *ap)
 		vap->va_access_time.tv_nsec = 0;
 		VATTR_SET_SUPPORTED(vap, va_access_time);
 	}
+	vap->va_create_time.tv_sec = cp->c_itime;
+	vap->va_create_time.tv_nsec = 0;
 	vap->va_modify_time.tv_sec = cp->c_mtime;
 	vap->va_modify_time.tv_nsec = 0;
-	VATTR_SET_SUPPORTED(vap, va_modify_time);
 	vap->va_change_time.tv_sec = cp->c_ctime;
 	vap->va_change_time.tv_nsec = 0;
-	VATTR_SET_SUPPORTED(vap, va_change_time);
 	vap->va_backup_time.tv_sec = cp->c_btime;
-	vap->va_backup_time.tv_nsec = 0;
-	VATTR_SET_SUPPORTED(vap, va_backup_time);
+	vap->va_backup_time.tv_nsec = 0;	
+
+	/* XXX is this really a good 'optimal I/O size'? */
+	vap->va_iosize = hfsmp->hfs_logBlockSize;
+	vap->va_uid = cp->c_uid;
+	vap->va_gid = cp->c_gid;
+	vap->va_mode = cp->c_mode;
+	vap->va_flags = cp->c_flags;
 
 	/*
 	 * Exporting file IDs from HFS Plus:
@@ -427,29 +541,96 @@ hfs_vnop_getattr(struct vnop_getattr_args *ap)
 	 * The stat call (getattr) uses va_fileid and the Carbon APIs,
 	 * which are hardlink-ignorant, will ask for va_linkid.
 	 */
-	VATTR_RETURN(vap, va_fileid, (uint64_t)cp->c_fileid);
-	VATTR_RETURN(vap, va_linkid, (uint64_t)cp->c_cnid);
-	VATTR_RETURN(vap, va_parentid, (uint64_t)cp->c_parentcnid);
-	VATTR_RETURN(vap, va_fsid, cp->c_dev);
-	VATTR_RETURN(vap, va_filerev, 0);
+	vap->va_fileid = (u_int64_t)cp->c_fileid;
+	/* Hardlinked directories have multiple cnids and parents (one per link). */
+	if ((v_type == VDIR) && (cp->c_flag & C_HARDLINK)) {
+		vap->va_linkid = (u_int64_t)hfs_currentcnid(cp);
+		vap->va_parentid = (u_int64_t)hfs_currentparent(cp);
+	} else {
+		vap->va_linkid = (u_int64_t)cp->c_cnid;
+		vap->va_parentid = (u_int64_t)cp->c_parentcnid;
+	}
+	vap->va_fsid = cp->c_dev;
+	vap->va_filerev = 0;
+	vap->va_encoding = cp->c_encoding;
+	vap->va_rdev = (v_type == VBLK || v_type == VCHR) ? cp->c_rdev : 0;
+	vap->va_data_size = data_size;
 
-	VATTR_RETURN(vap, va_encoding, cp->c_encoding);
+	/* Mark them all at once instead of individual VATTR_SET_SUPPORTED calls. */
+	vap->va_supported |= VNODE_ATTR_va_create_time | VNODE_ATTR_va_modify_time |
+	                     VNODE_ATTR_va_change_time| VNODE_ATTR_va_backup_time |
+	                     VNODE_ATTR_va_iosize | VNODE_ATTR_va_uid |
+	                     VNODE_ATTR_va_gid | VNODE_ATTR_va_mode |
+	                     VNODE_ATTR_va_flags |VNODE_ATTR_va_fileid |
+	                     VNODE_ATTR_va_linkid | VNODE_ATTR_va_parentid |
+	                     VNODE_ATTR_va_fsid | VNODE_ATTR_va_filerev |
+	                     VNODE_ATTR_va_encoding | VNODE_ATTR_va_rdev |
+	                     VNODE_ATTR_va_data_size;
 
 	/* if this is the root, let VFS to find out the mount name, which may be different from the real name */
-	if (VATTR_IS_ACTIVE(vap, va_name) && !vnode_isvroot(vp)) {
+	if (VATTR_IS_ACTIVE(vap, va_name) && (cp->c_cnid != kHFSRootFolderID)) {
 		/* Return the name for ATTR_CMN_NAME */
 		if (cp->c_desc.cd_namelen == 0) {
+		    if ((cp->c_flag & C_HARDLINK) && ((cp->c_flag & C_DELETED) == 0 || (cp->c_linkcount > 1))) {
+			cnid_t nextlinkid;
+			cnid_t prevlinkid;
+			struct vnode *file_vp;
+			
+			if ((error = hfs_lookuplink(hfsmp, cp->c_fileid, &prevlinkid, &nextlinkid))) {
+			    goto out;
+			}
+
+			//
+			// don't bother trying to get a linkid that's the same
+			// as the current cnid
+			//
+			if (nextlinkid == VTOC(vp)->c_cnid) {
+			    if (prevlinkid == VTOC(vp)->c_cnid) {
+				hfs_unlock(cp);
+				goto out2;
+			    } else {
+				nextlinkid = prevlinkid;
+			    }
+			}
+			    
+			hfs_unlock(cp);
+
+			if (nextlinkid == 0 || (error = hfs_vget(hfsmp, nextlinkid, &file_vp, 1))) {
+			    if (prevlinkid == 0 || (error = hfs_vget(hfsmp, prevlinkid, &file_vp, 1))) {
+				goto out2;
+			    }
+			}
+				
+			cp = VTOC(file_vp);
+			if (hfs_lock(cp, HFS_SHARED_LOCK) == 0) {
+			    if (cp->c_desc.cd_namelen) {
+				strlcpy(vap->va_name, (const char *)cp->c_desc.cd_nameptr, MAXPATHLEN);
+			    }
+			    hfs_unlock(cp);
+			    vnode_put(file_vp);
+			    goto out2;
+			}
+			
+			if (vnode_name(file_vp)) {
+			    strlcpy(vap->va_name, vnode_name(file_vp), MAXPATHLEN);
+			} else {
+			    error = ENOENT;
+			}
+			vnode_put(file_vp);
+			goto out2;
+		    } else {
 			error = ENOENT;
 			goto out;
+		    }
+		} else {
+		    strlcpy(vap->va_name, (const char *)cp->c_desc.cd_nameptr, MAXPATHLEN);
+		    VATTR_SET_SUPPORTED(vap, va_name);
 		}
-		
-		strncpy(vap->va_name, cp->c_desc.cd_nameptr, MAXPATHLEN);
-		vap->va_name[MAXPATHLEN-1] = '\0';
-		VATTR_SET_SUPPORTED(vap, va_name);
 	}
 
 out:
 	hfs_unlock(cp);
+out2:
 	if (rvp) {
 		vnode_put(rvp);
 	}
@@ -491,15 +672,19 @@ hfs_vnop_setattr(ap)
 
 		/* Take truncate lock before taking cnode lock. */
 		hfs_lock_truncate(VTOC(vp), TRUE);
+		
+		/* Perform the ubc_setsize before taking the cnode lock. */
+		ubc_setsize(vp, vap->va_data_size);
+
 		if ((error = hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK))) {
-			hfs_unlock_truncate(VTOC(vp));
+			hfs_unlock_truncate(VTOC(vp), TRUE);
 			return (error);
 		}
 		cp = VTOC(vp);
 
-		error = hfs_truncate(vp, vap->va_data_size, vap->va_vaflags & 0xffff, 0, ap->a_context);
+		error = hfs_truncate(vp, vap->va_data_size, vap->va_vaflags & 0xffff, 1, ap->a_context);
 
-		hfs_unlock_truncate(cp);
+		hfs_unlock_truncate(cp, TRUE);
 		if (error)
 			goto out;
 	}
@@ -508,6 +693,21 @@ hfs_vnop_setattr(ap)
 			return (error);
 		cp = VTOC(vp);
 	}
+
+	/*
+	 * If it is just an access time update request by itself
+	 * we know the request is from kernel level code, and we
+	 * can delay it without being as worried about consistency.
+	 * This change speeds up mmaps, in the rare case that they
+	 * get caught behind a sync.
+	 */
+
+	if (vap->va_active == VNODE_ATTR_va_access_time) {
+		cp->c_touch_acctime=TRUE;
+		goto out;
+	}
+
+
 
 	/*
 	 * Owner/group change request.
@@ -538,31 +738,23 @@ hfs_vnop_setattr(ap)
 	 */
 	VATTR_SET_SUPPORTED(vap, va_flags);
 	if (VATTR_IS_ACTIVE(vap, va_flags)) {
+		u_int16_t *fdFlags;
+
 		cp->c_flags = vap->va_flags;
 		cp->c_touch_chgtime = TRUE;
-	}
-
-	/*
-	 * If the file's extended security data is being changed, we
-	 * need to note the change.  Note that because we don't store
-	 * the data, we do not set the SUPPORTED bit; this will cause
-	 * the VFS to use a fallback strategy.
-	 */
-	if (VATTR_IS_ACTIVE(vap, va_acl)) {
-		/* Remember if any ACL data was set or cleared. */
-		if (vap->va_acl == NULL) {
-			/* being cleared */
-			if (cp->c_attr.ca_recflags & kHFSHasSecurityMask) {
-				cp->c_attr.ca_recflags &= ~kHFSHasSecurityMask;
-				cp->c_touch_chgtime = TRUE;
-			}
-		} else {
-			/* being set */
-			if ((cp->c_attr.ca_recflags & kHFSHasSecurityMask) == 0) {
-				cp->c_attr.ca_recflags |= kHFSHasSecurityMask;
-				cp->c_touch_chgtime = TRUE;
-			}
-		}
+		
+		/*
+		 * Mirror the UF_HIDDEN flag to the invisible bit of the Finder Info.
+		 *
+		 * The fdFlags for files and frFlags for folders are both 8 bytes
+		 * into the userInfo (the first 16 bytes of the Finder Info).  They
+		 * are both 16-bit fields.
+		 */
+		fdFlags = (u_int16_t *) &cp->c_finderinfo[8];
+		if (vap->va_flags & UF_HIDDEN)
+			*fdFlags |= OSSwapHostToBigConstInt16(kFinderInvisibleMask);
+		else
+			*fdFlags &= ~OSSwapHostToBigConstInt16(kFinderInvisibleMask);
 	}
 
 	/*
@@ -577,8 +769,6 @@ hfs_vnop_setattr(ap)
 	    VATTR_IS_ACTIVE(vap, va_access_time) ||
 	    VATTR_IS_ACTIVE(vap, va_modify_time) ||
 	    VATTR_IS_ACTIVE(vap, va_backup_time)) {
-		if (vnode_islnk(vp))
-			goto done;
 		if (VATTR_IS_ACTIVE(vap, va_create_time))
 			cp->c_itime = vap->va_create_time.tv_sec;
 		if (VATTR_IS_ACTIVE(vap, va_access_time)) {
@@ -616,9 +806,8 @@ hfs_vnop_setattr(ap)
 		hfs_setencodingbits(hfsmp, cp->c_encoding);
 	}
 
-done:
 	if ((error = hfs_update(vp, TRUE)) != 0)
-	    goto out;
+		goto out;
 	HFS_KNOTE(vp, NOTE_ATTRIB);
 out:
 	if (cp)
@@ -633,10 +822,9 @@ out:
  */
 __private_extern__
 int
-hfs_chmod(struct vnode *vp, int mode, kauth_cred_t cred, struct proc *p)
+hfs_chmod(struct vnode *vp, int mode, __unused kauth_cred_t cred, __unused struct proc *p)
 {
 	register struct cnode *cp = VTOC(vp);
-	int error;
 
 	if (VTOVCB(vp)->vcbSigWord != kHFSPlusSigWord)
 		return (0);
@@ -715,15 +903,19 @@ hfs_write_access(struct vnode *vp, kauth_cred_t cred, struct proc *p, Boolean co
  */
 __private_extern__
 int
+#if !QUOTA
+hfs_chown(struct vnode *vp, uid_t uid, gid_t gid, __unused kauth_cred_t cred,
+	__unused struct proc *p)
+#else 
 hfs_chown(struct vnode *vp, uid_t uid, gid_t gid, kauth_cred_t cred,
-	struct proc *p)
+	__unused struct proc *p)
+#endif
 {
 	register struct cnode *cp = VTOC(vp);
 	uid_t ouid;
 	gid_t ogid;
-	int error = 0;
-	int is_member;
 #if QUOTA
+	int error = 0;
 	register int i;
 	int64_t change;
 #endif /* QUOTA */
@@ -825,7 +1017,12 @@ good:
 		panic("hfs_chown: lost quota");
 #endif /* QUOTA */
 
-	if (ouid != uid || ogid != gid)
+
+	/*
+	  According to the SUSv3 Standard, chown() shall mark
+	  for update the st_ctime field of the file.
+	  (No exceptions mentioned)
+	*/
 		cp->c_touch_chgtime = TRUE;
 	return (0);
 }
@@ -854,6 +1051,13 @@ hfs_vnop_exchange(ap)
 	struct hfsmount *hfsmp;
 	struct cat_desc tempdesc;
 	struct cat_attr tempattr;
+	const unsigned char *from_nameptr;
+	const unsigned char *to_nameptr;
+	char from_iname[32];
+	char to_iname[32];
+	u_int32_t tempflag;
+	cnid_t  from_parid;
+	cnid_t  to_parid;
 	int lockflags;
 	int error = 0, started_tr = 0, got_cookie = 0;
 	cat_cookie_t cookie;
@@ -874,7 +1078,6 @@ hfs_vnop_exchange(ap)
 
 	/* Only normal files can be exchanged. */
 	if (!vnode_isreg(from_vp) || !vnode_isreg(to_vp) ||
-	    (from_cp->c_flag & C_HARDLINK) || (to_cp->c_flag & C_HARDLINK) ||
 	    VNODE_IS_RSRC(from_vp) || VNODE_IS_RSRC(to_vp)) {
 		error = EINVAL;
 		goto exit;
@@ -909,26 +1112,42 @@ hfs_vnop_exchange(ap)
 	/*
 	 * Reserve some space in the Catalog file.
 	 */
-	bzero(&cookie, sizeof(cookie));
 	if ((error = cat_preflight(hfsmp, CAT_EXCHANGE, &cookie, vfs_context_proc(ap->a_context)))) {
 		goto exit;
 	}
 	got_cookie = 1;
 
 	/* The backend code always tries to delete the virtual
-	 * extent id for exchanging files so we neeed to lock
+	 * extent id for exchanging files so we need to lock
 	 * the extents b-tree.
 	 */
 	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG | SFL_EXTENTS | SFL_ATTRIBUTE, HFS_EXCLUSIVE_LOCK);
 
+	/* Account for the location of the catalog objects. */
+	if (from_cp->c_flag & C_HARDLINK) {
+		MAKE_INODE_NAME(from_iname, sizeof(from_iname),
+				from_cp->c_attr.ca_linkref);
+		from_nameptr = (unsigned char *)from_iname;
+		from_parid = hfsmp->hfs_private_desc[FILE_HARDLINKS].cd_cnid;
+		from_cp->c_hint = 0;
+	} else {
+		from_nameptr = from_cp->c_desc.cd_nameptr;
+		from_parid = from_cp->c_parentcnid;
+	}
+	if (to_cp->c_flag & C_HARDLINK) {
+		MAKE_INODE_NAME(to_iname, sizeof(to_iname),
+				to_cp->c_attr.ca_linkref);
+		to_nameptr = (unsigned char *)to_iname;
+		to_parid = hfsmp->hfs_private_desc[FILE_HARDLINKS].cd_cnid;
+		to_cp->c_hint = 0;
+	} else {
+		to_nameptr = to_cp->c_desc.cd_nameptr;
+		to_parid = to_cp->c_parentcnid;
+	}
+
 	/* Do the exchange */
-	error = ExchangeFileIDs(hfsmp,
-	                        from_cp->c_desc.cd_nameptr,
-	                        to_cp->c_desc.cd_nameptr,
-	                        from_cp->c_parentcnid,
-	                        to_cp->c_parentcnid,
-	                        from_cp->c_hint,
-	                        to_cp->c_hint);
+	error = ExchangeFileIDs(hfsmp, from_nameptr, to_nameptr, from_parid,
+	                        to_parid, from_cp->c_hint, to_cp->c_hint);
 	hfs_systemfile_unlock(hfsmp, lockflags);
 
 	/*
@@ -950,6 +1169,7 @@ hfs_vnop_exchange(ap)
 	/* Save a copy of from attributes before swapping. */
 	bcopy(&from_cp->c_desc, &tempdesc, sizeof(struct cat_desc));
 	bcopy(&from_cp->c_attr, &tempattr, sizeof(struct cat_attr));
+	tempflag = from_cp->c_flag & (C_HARDLINK | C_HASXATTRS);
 
 	/*
 	 * Swap the descriptors and all non-fork related attributes.
@@ -967,6 +1187,8 @@ hfs_vnop_exchange(ap)
 	from_cp->c_uid = to_cp->c_uid;
 	from_cp->c_flags = to_cp->c_flags;
 	from_cp->c_mode = to_cp->c_mode;
+	from_cp->c_linkcount = to_cp->c_linkcount;
+	from_cp->c_flag = to_cp->c_flag & (C_HARDLINK | C_HASXATTRS);
 	from_cp->c_attr.ca_recflags = to_cp->c_attr.ca_recflags;
 	bcopy(to_cp->c_finderinfo, from_cp->c_finderinfo, 32);
 
@@ -981,6 +1203,8 @@ hfs_vnop_exchange(ap)
 	to_cp->c_uid = tempattr.ca_uid;
 	to_cp->c_flags = tempattr.ca_flags;
 	to_cp->c_mode = tempattr.ca_mode;
+	to_cp->c_linkcount = tempattr.ca_linkcount;
+	to_cp->c_flag = tempflag;
 	to_cp->c_attr.ca_recflags = tempattr.ca_recflags;
 	bcopy(tempattr.ca_finderinfo, to_cp->c_finderinfo, 32);
 
@@ -1035,7 +1259,9 @@ hfs_fsync(struct vnode *vp, int waitfor, int fullsync, struct proc *p)
 	int took_trunc_lock = 0;
 
 	wait = (waitfor == MNT_WAIT);
-
+	if (always_do_fullfsync)
+		fullsync = 1;
+	
 	/* HFS directories don't have any data blocks. */
 	if (vnode_isdir(vp))
 		goto metasync;
@@ -1057,7 +1283,7 @@ hfs_fsync(struct vnode *vp, int waitfor, int fullsync, struct proc *p)
 		took_trunc_lock = 1;
 
 		/* Don't hold cnode lock when calling into cluster layer. */
-		(void) cluster_push(vp, 0);
+		(void) cluster_push(vp, wait ? IO_SYNC : 0);
 
 		hfs_lock(cp, HFS_FORCE_LOCK);
 	}
@@ -1070,10 +1296,10 @@ hfs_fsync(struct vnode *vp, int waitfor, int fullsync, struct proc *p)
 	 */
 	if ((wait || (cp->c_flag & C_ZFWANTSYNC)) &&
 	    ((cp->c_flags & UF_NODUMP) == 0) &&
-	    UBCINFOEXISTS(vp) && (fp = VTOF(vp)) &&
+	    UBCINFOEXISTS(vp) && (vnode_issystem(vp) ==0) && (fp = VTOF(vp)) &&
 	    cp->c_zftimeout != 0) {
 		microuptime(&tv);
-		if (tv.tv_sec < cp->c_zftimeout) {
+		if (!fullsync && tv.tv_sec < (long)cp->c_zftimeout) {
 			/* Remember that a force sync was requested. */
 			cp->c_flag |= C_ZFWANTSYNC;
 			goto datasync;
@@ -1105,7 +1331,7 @@ hfs_fsync(struct vnode *vp, int waitfor, int fullsync, struct proc *p)
 			cp->c_flag |= C_MODIFIED;
 		}
 		hfs_unlock(cp);
-		(void) cluster_push(vp, 0);
+		(void) cluster_push(vp, wait ? IO_SYNC : 0);
 		hfs_lock(cp, HFS_FORCE_LOCK);
 
 		cp->c_flag &= ~C_ZFWANTSYNC;
@@ -1113,7 +1339,7 @@ hfs_fsync(struct vnode *vp, int waitfor, int fullsync, struct proc *p)
 	}
 datasync:
 	if (took_trunc_lock)
-		hfs_unlock_truncate(cp);
+		hfs_unlock_truncate(cp, TRUE);
 	
 	/*
 	 * if we have a journal and if journal_active() returns != 0 then the
@@ -1147,20 +1373,26 @@ metasync:
 	} else if ( !(vp->v_flag & VSWAP) ) /* User file */ {
 		retval = hfs_update(vp, wait);
 
-		/* When MNT_WAIT is requested push out any delayed meta data */
-   		if ((retval == 0) && wait && cp->c_hint &&
+		/*
+		 * When MNT_WAIT is requested push out the catalog record for
+		 * this file.  If they asked for a full fsync, we can skip this
+		 * because the journal_flush or hfs_metasync_all will push out
+		 * all of the metadata changes.
+		 */
+   		if ((retval == 0) && wait && !fullsync && cp->c_hint &&
    		    !ISSET(cp->c_flag, C_DELETED | C_NOEXISTS)) {
    			hfs_metasync(VTOHFS(vp), (daddr64_t)cp->c_hint, p);
-   		}
+		}
 
-		// make sure that we've really been called from the user
-		// fsync() and if so push out any pending transactions 
-		// that this file might is a part of (and get them on
-		// stable storage).
-		if (fullsync || always_do_fullfsync) {
+		/*
+		 * If this was a full fsync, make sure all metadata
+		 * changes get to stable storage.
+		 */
+		if (fullsync) {
 		    if (hfsmp->jnl) {
 			journal_flush(hfsmp->jnl);
 		    } else {
+			retval = hfs_metasync_all(hfsmp);
 		    	/* XXX need to pass context! */
 			VNOP_IOCTL(hfsmp->hfs_devvp, DKIOCSYNCHRONIZECACHE, NULL, FWRITE, NULL);
 		    }
@@ -1173,7 +1405,7 @@ metasync:
 
 /* Sync an hfs catalog b-tree node */
 static int
-hfs_metasync(struct hfsmount *hfsmp, daddr64_t node, struct proc *p)
+hfs_metasync(struct hfsmount *hfsmp, daddr64_t node, __unused struct proc *p)
 {
 	vnode_t	vp;
 	buf_t	bp;
@@ -1212,9 +1444,46 @@ hfs_metasync(struct hfsmount *hfsmp, daddr64_t node, struct proc *p)
 }
 
 
+/*
+ * Sync all hfs B-trees.  Use this instead of journal_flush for a volume
+ * without a journal.  Note that the volume bitmap does not get written;
+ * we rely on fsck_hfs to fix that up (which it can do without any loss
+ * of data).
+ */
+static int
+hfs_metasync_all(struct hfsmount *hfsmp)
+{
+	int lockflags;
+
+	/* Lock all of the B-trees so we get a mutually consistent state */
+	lockflags = hfs_systemfile_lock(hfsmp,
+		SFL_CATALOG|SFL_EXTENTS|SFL_ATTRIBUTE, HFS_EXCLUSIVE_LOCK);
+
+	/* Sync each of the B-trees */
+	if (hfsmp->hfs_catalog_vp)
+		hfs_btsync(hfsmp->hfs_catalog_vp, 0);
+	if (hfsmp->hfs_extents_vp)
+		hfs_btsync(hfsmp->hfs_extents_vp, 0);
+	if (hfsmp->hfs_attribute_vp)
+		hfs_btsync(hfsmp->hfs_attribute_vp, 0);
+	
+	/* Wait for all of the writes to complete */
+	if (hfsmp->hfs_catalog_vp)
+		vnode_waitforwrites(hfsmp->hfs_catalog_vp, 0, 0, 0, "hfs_metasync_all");
+	if (hfsmp->hfs_extents_vp)
+		vnode_waitforwrites(hfsmp->hfs_extents_vp, 0, 0, 0, "hfs_metasync_all");
+	if (hfsmp->hfs_attribute_vp)
+		vnode_waitforwrites(hfsmp->hfs_attribute_vp, 0, 0, 0, "hfs_metasync_all");
+
+	hfs_systemfile_unlock(hfsmp, lockflags);
+	
+	return 0;
+}
+
+
 /*ARGSUSED 1*/
 static int
-hfs_btsync_callback(struct buf *bp, void *dummy)
+hfs_btsync_callback(struct buf *bp, __unused void *dummy)
 {
 	buf_clearflags(bp, B_LOCKED);
 	(void) buf_bawrite(bp);
@@ -1262,20 +1531,21 @@ hfs_vnop_rmdir(ap)
 {
 	struct vnode *dvp = ap->a_dvp;
 	struct vnode *vp = ap->a_vp;
+	struct cnode *dcp = VTOC(dvp);
+	struct cnode *cp = VTOC(vp);
 	int error;
 
-	if (!vnode_isdir(vp)) {
+	if (!S_ISDIR(cp->c_mode)) {
 		return (ENOTDIR);
 	}
 	if (dvp == vp) {
 		return (EINVAL);
 	}
-	if ((error = hfs_lockpair(VTOC(dvp), VTOC(vp), HFS_EXCLUSIVE_LOCK)))
+	if ((error = hfs_lockpair(dcp, cp, HFS_EXCLUSIVE_LOCK))) {
 		return (error);
-
+	}
 	error = hfs_removedir(dvp, vp, ap->a_cnp, 0);
-
-	hfs_unlockpair(VTOC(dvp), VTOC(vp));
+	hfs_unlockpair(dcp, cp);
 
 	return (error);
 }
@@ -1289,41 +1559,49 @@ static int
 hfs_removedir(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
               int skip_reserve)
 {
-	vfs_context_t ctx = cnp->cn_context;
-	struct proc *p = vfs_context_proc(ctx);
 	struct cnode *cp;
 	struct cnode *dcp;
 	struct hfsmount * hfsmp;
 	struct cat_desc desc;
-	cat_cookie_t cookie;
 	int lockflags;
-	int error = 0, started_tr = 0, got_cookie = 0;
+	int error = 0, started_tr = 0;
 
 	cp = VTOC(vp);
 	dcp = VTOC(dvp);
 	hfsmp = VTOHFS(vp);
 
-	if (dcp == cp)
+	if (dcp == cp) {
 		return (EINVAL);	/* cannot remove "." */
+	}
+	if (cp->c_flag & (C_NOEXISTS | C_DELETED)) {
+		return (0);
+	}
+	if (cp->c_entries != 0) {
+		return (ENOTEMPTY);
+	}
+
+	/* Check if we're removing the last link to an empty directory. */
+	if (cp->c_flag & C_HARDLINK) {
+		/* We could also return EBUSY here */
+		return hfs_unlink(hfsmp, dvp, vp, cnp, skip_reserve);
+	}
+
+	if ((hfsmp->hfs_attribute_vp != NULL) &&
+	    (cp->c_attr.ca_recflags & kHFSHasAttributesMask) != 0) {
+
+	    return hfs_removefile(dvp, vp, cnp, 0, 0, 1);
+	}
+
+	dcp->c_flag |= C_DIR_MODIFICATION;
 
 #if QUOTA
-	(void)hfs_getinoquota(cp);
+	if (hfsmp->hfs_flags & HFS_QUOTAS)
+		(void)hfs_getinoquota(cp);
 #endif
 	if ((error = hfs_start_transaction(hfsmp)) != 0) {
 	    goto out;
 	}
 	started_tr = 1;
-
-	if (!skip_reserve) {
-		/*
-		 * Reserve some space in the Catalog file.
-		 */
-		bzero(&cookie, sizeof(cookie));
-		if ((error = cat_preflight(hfsmp, CAT_DELETE, &cookie, p))) {
-			goto out;
-		}
-		got_cookie = 1;
-	}
 
 	/*
 	 * Verify the directory is empty (and valid).
@@ -1332,17 +1610,10 @@ hfs_removedir(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 	 *  the current directory and thus be
 	 *  non-empty.)
 	 */
-	if (cp->c_entries != 0) {
-		error = ENOTEMPTY;
-		goto out;
-	}
 	if ((dcp->c_flags & APPEND) || (cp->c_flags & (IMMUTABLE | APPEND))) {
 		error = EPERM;
 		goto out;
 	}
-
-	if (cp->c_entries > 0)
-		panic("hfs_rmdir: attempting to delete a non-empty directory!");
 
 	/* Remove the entry from the namei cache: */
 	cache_purge(vp);
@@ -1352,51 +1623,77 @@ hfs_removedir(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 	 * name passed in and parent id from dvp (instead of using 
 	 * the cp->c_desc which may have changed).
 	 */
-	bzero(&desc, sizeof(desc));
-	desc.cd_nameptr = cnp->cn_nameptr;
+	desc.cd_nameptr = (const u_int8_t *)cnp->cn_nameptr;
 	desc.cd_namelen = cnp->cn_namelen;
-	desc.cd_parentcnid = dcp->c_cnid;
+	desc.cd_parentcnid = dcp->c_fileid;
 	desc.cd_cnid = cp->c_cnid;
+	desc.cd_flags = CD_ISDIR;
+	desc.cd_encoding = cp->c_encoding;
+	desc.cd_hint = 0;
+
+	if (!hfs_valid_cnode(hfsmp, dvp, cnp, cp->c_fileid)) {
+	    error = 0;
+	    goto out;
+	}
 
 	/* Remove entry from catalog */
-	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG | SFL_ATTRIBUTE, HFS_EXCLUSIVE_LOCK);
+	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG | SFL_ATTRIBUTE | SFL_BITMAP, HFS_EXCLUSIVE_LOCK);
+
+	if (!skip_reserve) {
+		/*
+		 * Reserve some space in the Catalog file.
+		 */
+		if ((error = cat_preflight(hfsmp, CAT_DELETE, NULL, 0))) {
+			hfs_systemfile_unlock(hfsmp, lockflags);
+			goto out;
+		}
+	}
+
 	error = cat_delete(hfsmp, &desc, &cp->c_attr);
 	if (error == 0) {
-		/* Delete any attributes, ignore errors */
-		(void) hfs_removeallattr(hfsmp, cp->c_fileid);
+		/* The parent lost a child */
+		if (dcp->c_entries > 0)
+			dcp->c_entries--;
+		DEC_FOLDERCOUNT(hfsmp, dcp->c_attr);
+		dcp->c_dirchangecnt++;
+		dcp->c_touch_chgtime = TRUE;
+		dcp->c_touch_modtime = TRUE;
+		hfs_touchtimes(hfsmp, cp);
+		(void) cat_update(hfsmp, &dcp->c_desc, &dcp->c_attr, NULL, NULL);
+		cp->c_flag &= ~(C_MODIFIED | C_FORCEUPDATE);
 	}
+
 	hfs_systemfile_unlock(hfsmp, lockflags);
 
 	if (error)
 		goto out;
 
 #if QUOTA
-	(void)hfs_chkiq(cp, -1, NOCRED, 0);
+	if (hfsmp->hfs_flags & HFS_QUOTAS)
+		(void)hfs_chkiq(cp, -1, NOCRED, 0);
 #endif /* QUOTA */
 
-	/* The parent lost a child */
-	if (dcp->c_entries > 0)
-		dcp->c_entries--;
-	if (dcp->c_nlink > 0)
-		dcp->c_nlink--;
-	dcp->c_touch_chgtime = TRUE;
-	dcp->c_touch_modtime = TRUE;
-
-	dcp->c_flag |= C_FORCEUPDATE;  // XXXdbg - don't screw around, force this guy out
-	
-	(void) hfs_update(dvp, 0);
-	HFS_KNOTE(dvp, NOTE_WRITE | NOTE_LINK);
+	HFS_KNOTE(dvp, NOTE_WRITE | NOTE_LINK | NOTE_ATTRIB);
 
 	hfs_volupdate(hfsmp, VOL_RMDIR, (dcp->c_cnid == kHFSRootFolderID));
 
-	cp->c_mode = 0;  /* Makes the vnode go away...see inactive */
-	cp->c_flag |= C_NOEXISTS;
+	/*
+	 * directory open or in use (e.g. opendir() or current working
+	 * directory for some process); wait for inactive to actually
+	 * remove catalog entry
+	 */
+	if (vnode_isinuse(vp, 0)) {
+		cp->c_flag |= C_DELETED;
+	} else {
+		cp->c_mode = 0;  /* Makes the vnode go away...see inactive */
+		cp->c_flag |= C_NOEXISTS;
+	}
 out:
+	dcp->c_flag &= ~C_DIR_MODIFICATION;
+	wakeup((caddr_t)&dcp->c_flag);
+
 	HFS_KNOTE(vp, NOTE_DELETE);
 
-	if (got_cookie) {
-		cat_postflight(hfsmp, &cookie, p);
-	}
 	if (started_tr) { 
 	    hfs_end_transaction(hfsmp);
 	}
@@ -1420,22 +1717,46 @@ hfs_vnop_remove(ap)
 {
 	struct vnode *dvp = ap->a_dvp;
 	struct vnode *vp = ap->a_vp;
-	int error;
+	struct cnode *dcp = VTOC(dvp);
+	struct cnode *cp = VTOC(vp);
+	struct vnode *rvp = cp->c_rsrc_vp;
+	int error=0, recycle_rsrc=0, rvid=0;
 
 	if (dvp == vp) {
 		return (EINVAL);
 	}
 
-	hfs_lock_truncate(VTOC(vp), TRUE);
+	hfs_lock_truncate(cp, TRUE);
 
-	if ((error = hfs_lockpair(VTOC(dvp), VTOC(vp), HFS_EXCLUSIVE_LOCK)))
+	if ((error = hfs_lockpair(dcp, cp, HFS_EXCLUSIVE_LOCK)))
 		goto out;
 
-	error = hfs_removefile(dvp, vp, ap->a_cnp, ap->a_flags, 0);
+	error = hfs_removefile(dvp, vp, ap->a_cnp, ap->a_flags, 0, 0);
 
-	hfs_unlockpair(VTOC(dvp), VTOC(vp));
+	//
+	// If the remove succeeded and it's an open-unlinked file that has
+	// a resource fork vnode that's not in use, we will want to recycle
+	// the rvp *after* we're done unlocking everything.  Otherwise the
+	// resource vnode will keep a v_parent reference on this vnode which
+	// prevents it from going through inactive/reclaim which means that
+	// the disk space associated with this file won't get free'd until
+	// something forces the resource vnode to get recycled (and that can
+	// take a very long time).
+	//
+	if (error == 0 && (cp->c_flag & C_DELETED) && rvp && !vnode_isinuse(rvp, 0)) {
+	    rvid = vnode_vid(rvp);
+	    recycle_rsrc = 1;
+	}
+
+	hfs_unlockpair(dcp, cp);
 out:
-	hfs_unlock_truncate(VTOC(vp));
+	hfs_unlock_truncate(cp, TRUE);
+
+	if (recycle_rsrc && vnode_getwithvid(rvp, rvid) == 0) {
+		vnode_recycle(rvp);
+		vnode_put(rvp);
+	} 
+	
 	return (error);
 }
 
@@ -1444,7 +1765,7 @@ static int
 hfs_removefile_callback(struct buf *bp, void *hfsmp) {
 
         if ( !(buf_flags(bp) & B_META))
-	        panic("hfs: symlink bp @ 0x%x is not marked meta-data!\n", bp);
+	        panic("hfs: symlink bp @ %p is not marked meta-data!\n", bp);
 	/*
 	 * it's part of the current transaction, kill it.
 	 */
@@ -1462,7 +1783,7 @@ hfs_removefile_callback(struct buf *bp, void *hfsmp) {
  */
 static int
 hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
-               int flags, int skip_reserve)
+               int flags, int skip_reserve, int allow_dirs)
 {
 	struct vnode *rvp = NULL;
 	struct cnode *cp;
@@ -1474,73 +1795,100 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 	int dataforkbusy = 0;
 	int rsrcforkbusy = 0;
 	int truncated = 0;
-	cat_cookie_t cookie;
 	int lockflags;
 	int error = 0;
-	int started_tr = 0, got_cookie = 0;
-	int isbigfile = 0;
-	cnid_t real_cnid = 0;
-
-	/* Directories should call hfs_rmdir! */
-	if (vnode_isdir(vp)) {
-		return (EISDIR);
-	}
+	int started_tr = 0;
+	int isbigfile = 0, hasxattrs=0, isdir=0;
 
 	cp = VTOC(vp);
 	dcp = VTOC(dvp);
 	hfsmp = VTOHFS(vp);
 
+	/* Check if we lost a race post lookup. */
 	if (cp->c_flag & (C_NOEXISTS | C_DELETED)) {
-	    return 0;
+		return (0);
 	}
-	
-	// if it's not a hardlink, check that the parent
-	// cnid is the same as the directory cnid
-	if (   (cp->c_flag & C_HARDLINK) == 0
-	    && (cp->c_parentcnid != hfsmp->hfs_privdir_desc.cd_cnid)
-	    && (cp->c_parentcnid != dcp->c_cnid)) {
-		error = EINVAL;
-		goto out;
+
+	if (!hfs_valid_cnode(hfsmp, dvp, cnp, cp->c_fileid)) {
+	    return 0;
 	}
 
 	/* Make sure a remove is permitted */
 	if (VNODE_IS_RSRC(vp)) {
-		error = EPERM;
-		goto out;
+		return (EPERM);
 	}
-
+	/* Don't allow deleting the journal or journal_info_block. */
+	if (hfsmp->jnl &&
+	    (cp->c_fileid == hfsmp->hfs_jnlfileid || cp->c_fileid == hfsmp->hfs_jnlinfoblkid)) {
+		return (EPERM);
+	}
 	/*
-	 * Aquire a vnode for a non-empty resource fork.
-	 * (needed for hfs_truncate)
+	 * Hard links require special handling.
 	 */
-	if (cp->c_blocks - VTOF(vp)->ff_blocks) {
-		error = hfs_vgetrsrc(hfsmp, vp, &rvp, 0);
-		if (error)
-			goto out;
-	}
-
-	// XXXdbg - don't allow deleting the journal or journal_info_block
-	if (hfsmp->jnl && cp->c_datafork) {
-		struct HFSPlusExtentDescriptor *extd;
-
-		extd = &cp->c_datafork->ff_extents[0];
-		if (extd->startBlock == HFSTOVCB(hfsmp)->vcbJinfoBlock || extd->startBlock == hfsmp->jnl_start) {
-			error = EPERM;
-			goto out;
+	if (cp->c_flag & C_HARDLINK) {
+		if ((flags & VNODE_REMOVE_NODELETEBUSY) && vnode_isinuse(vp, 0)) {
+			return (EBUSY);
+		} else {
+			/* A directory hard link with a link count of one is 
+			 * treated as a regular directory.  Therefore it should 
+			 * only be removed using rmdir().
+			 */
+			if ((vnode_isdir(vp) == 1) && (cp->c_linkcount == 1) && 
+			    (allow_dirs == 0)) {
+			    	return (EPERM);
+			}
+			return hfs_unlink(hfsmp, dvp, vp, cnp, skip_reserve);
 		}
 	}
+	/* Directories should call hfs_rmdir! (unless they have a lot of attributes) */
+	if (vnode_isdir(vp)) {
+		if (allow_dirs == 0)
+			return (EPERM);  /* POSIX */
+		isdir = 1;
+	}
+	/* Sanity check the parent ids. */
+	if ((cp->c_parentcnid != hfsmp->hfs_private_desc[FILE_HARDLINKS].cd_cnid) &&
+	    (cp->c_parentcnid != dcp->c_fileid)) {
+		return (EINVAL);
+	}
+
+	dcp->c_flag |= C_DIR_MODIFICATION;
+
+	// this guy is going away so mark him as such
+	cp->c_flag |= C_DELETED;
+
+
+	/* Remove our entry from the namei cache. */
+	cache_purge(vp);
 
 	/*
-	 * Check if this file is being used.
+	 * Acquire a vnode for a non-empty resource fork.
+	 * (needed for hfs_truncate)
 	 */
-	if (vnode_isinuse(vp, 0))
-		dataforkbusy = 1;
-	if (rvp && vnode_isinuse(rvp, 0))
-		rsrcforkbusy = 1;
+	if (isdir == 0 && (cp->c_blocks - VTOF(vp)->ff_blocks)) {
+		error = hfs_vgetrsrc(hfsmp, vp, &rvp, FALSE);
+		if (error)
+			goto out;
+		/* Defer the vnode_put on rvp until the hfs_unlock(). */
+		cp->c_flag |= C_NEED_RVNODE_PUT;
+	}
+	/* Check if this file is being used. */
+	if (isdir == 0) {
+		dataforkbusy = vnode_isinuse(vp, 0);
+		rsrcforkbusy = rvp ? vnode_isinuse(rvp, 0) : 0;
+	}
+	
+	/* Check if we have to break the deletion into multiple pieces. */
+	if (isdir == 0) {
+		isbigfile = ((cp->c_datafork->ff_size >= HFS_BIGFILE_SIZE) && overflow_extents(VTOF(vp)));
+	}
 
-	// need this to check if we have to break the deletion 
-	// into multiple pieces
-	isbigfile = (VTOC(vp)->c_datafork->ff_size >= HFS_BIGFILE_SIZE);
+	/* Check if the file has xattrs.  If it does we'll have to delete them in
+	   individual transactions in case there are too many */
+	if ((hfsmp->hfs_attribute_vp != NULL) &&
+	    (cp->c_attr.ca_recflags & kHFSHasAttributesMask) != 0) {
+	    hasxattrs = 1;
+	}
 
 	/*
 	 * Carbon semantics prohibit deleting busy files.
@@ -1548,22 +1896,19 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 	 */
 	if (dataforkbusy || rsrcforkbusy) {
 		if ((flags & VNODE_REMOVE_NODELETEBUSY) ||
-		    (hfsmp->hfs_privdir_desc.cd_cnid == 0)) {
+		    (hfsmp->hfs_private_desc[FILE_HARDLINKS].cd_cnid == 0)) {
 			error = EBUSY;
 			goto out;
 		}
 	}
 
 #if QUOTA
-	(void)hfs_getinoquota(cp);
+	if (hfsmp->hfs_flags & HFS_QUOTAS)
+		(void)hfs_getinoquota(cp);
 #endif /* QUOTA */
 
-	/*
-	 * We do the ubc_setsize before the hfs_truncate
-	 * since we'll be inside a transaction.
-	 */
-	if ((cp->c_flag & C_HARDLINK) == 0 &&
-	    (!dataforkbusy || !rsrcforkbusy)) {
+	/* Check if we need a ubc_setsize. */
+	if (isdir == 0 && (!dataforkbusy || !rsrcforkbusy)) {
 		/*
 		 * A ubc_setsize can cause a pagein so defer it
 		 * until after the cnode lock is dropped.  The
@@ -1576,28 +1921,6 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 		if (!rsrcforkbusy && rvp) {
 			cp->c_flag |= C_NEED_RSRC_SETSIZE;
 		}
-	} else {
-	    struct cat_desc cndesc;
-
-	    // for hard links, re-lookup the name that was passed
-	    // in so we get the correct cnid for the name (as
-	    // opposed to the c_cnid in the cnode which could have
-	    // been changed before this node got locked).
-	    bzero(&cndesc, sizeof(cndesc));
-	    cndesc.cd_nameptr = cnp->cn_nameptr;
-	    cndesc.cd_namelen = cnp->cn_namelen;
-	    cndesc.cd_parentcnid = VTOC(dvp)->c_cnid;
-	    cndesc.cd_hint = VTOC(dvp)->c_childhint;
-	    
-	    lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
-
-	    if (cat_lookup(hfsmp, &cndesc, 0, NULL, NULL, NULL, &real_cnid) != 0) {
-		hfs_systemfile_unlock(hfsmp, lockflags);
-		error = ENOENT;
-		goto out;
-	    }
-	    
-	    hfs_systemfile_unlock(hfsmp, lockflags);
 	}
 
 	if ((error = hfs_start_transaction(hfsmp)) != 0) {
@@ -1605,33 +1928,18 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 	}
 	started_tr = 1;
 
-	if (!skip_reserve) {
-		/*
-		 * Reserve some space in the Catalog file.
-		 */
-		if ((error = cat_preflight(hfsmp, CAT_DELETE, &cookie, 0))) {
-			goto out;
-		}
-		got_cookie = 1;
-	}
-
-	/* Remove our entry from the namei cache. */
-	cache_purge(vp);
-
 	// XXXdbg - if we're journaled, kill any dirty symlink buffers 
 	if (hfsmp->jnl && vnode_islnk(vp))
 	        buf_iterate(vp, hfs_removefile_callback, BUF_SKIP_NONLOCKED, (void *)hfsmp);
 
 	/*
 	 * Truncate any non-busy forks.  Busy forks will
-	 * get trucated when their vnode goes inactive.
+	 * get truncated when their vnode goes inactive.
 	 *
 	 * Since we're already inside a transaction,
 	 * tell hfs_truncate to skip the ubc_setsize.
-	 *
-	 * (Note: hard links are truncated in VOP_INACTIVE)
 	 */
-	if ((cp->c_flag & C_HARDLINK) == 0) {
+	if (isdir == 0) {
 		int mode = cp->c_mode;
 
 		if (!dataforkbusy && !isbigfile && cp->c_datafork->ff_blocks != 0) {
@@ -1643,7 +1951,7 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 			truncated = 1;
 		}
 		if (!rsrcforkbusy && rvp) {
-			cp->c_mode = 0;            /* Suppress hfs_update */
+			cp->c_mode = 0;  /* Suppress hfs_update */
 			error = hfs_truncate(rvp, (off_t)0, IO_NDELAY, 1, ctx);
 			cp->c_mode = mode;
 			if (error)
@@ -1659,93 +1967,19 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 	 */
 	desc.cd_flags = 0;
 	desc.cd_encoding = cp->c_desc.cd_encoding;
-	desc.cd_nameptr = cnp->cn_nameptr;
+	desc.cd_nameptr = (const u_int8_t *)cnp->cn_nameptr;
 	desc.cd_namelen = cnp->cn_namelen;
-	desc.cd_parentcnid = dcp->c_cnid;
+	desc.cd_parentcnid = dcp->c_fileid;
 	desc.cd_hint = cp->c_desc.cd_hint;
-	if (real_cnid) {
-	    // if it was a hardlink we had to re-lookup the cnid
-	    desc.cd_cnid = real_cnid;
-	} else {
-	    desc.cd_cnid = cp->c_cnid;
-	}
+	desc.cd_cnid = cp->c_cnid;
 	microtime(&tv);
 
 	/*
-	 * There are 3 remove cases to consider:
-	 *   1. File is a hardlink    ==> remove the link
-	 *   2. File is busy (in use) ==> move/rename the file
-	 *   3. File is not in use    ==> remove the file
+	 * There are two cases to consider:
+	 *  1. File is busy/big   ==> move/rename the file
+	 *  2. File is not in use ==> remove the file
 	 */
-
-	if (cp->c_flag & C_HARDLINK) {
-		lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_EXCLUSIVE_LOCK);
-
-		/* Delete the link record */
-		error = cat_delete(hfsmp, &desc, &cp->c_attr);
-		if (error == 0) {
-			/* Update the parent directory */
-			if (dcp->c_entries > 0)
-				dcp->c_entries--;
-			if (dcp->c_nlink > 0)
-				dcp->c_nlink--;
-			dcp->c_ctime = tv.tv_sec;
-			dcp->c_mtime = tv.tv_sec;
-			(void ) cat_update(hfsmp, &dcp->c_desc, &dcp->c_attr, NULL, NULL);
-
-			if (--cp->c_nlink < 1) {
-				char inodename[32];
-				char delname[32];
-				struct cat_desc to_desc;
-				struct cat_desc from_desc;
-
-				/*
-			 	 * This is now esentially an open deleted file.
-				 * Rename it to reflect this state which makes
-				 * orphan file cleanup easier (see hfs_remove_orphans).
-			 	 * Note: a rename failure here is not fatal.
-			 	 */	
-				MAKE_INODE_NAME(inodename, cp->c_rdev);
-				bzero(&from_desc, sizeof(from_desc));
-				from_desc.cd_nameptr = inodename;
-				from_desc.cd_namelen = strlen(inodename);
-				from_desc.cd_parentcnid = hfsmp->hfs_privdir_desc.cd_cnid;
-				from_desc.cd_flags = 0;
-				from_desc.cd_cnid = cp->c_fileid;
-
-				MAKE_DELETED_NAME(delname, cp->c_fileid);		
-				bzero(&to_desc, sizeof(to_desc));
-				to_desc.cd_nameptr = delname;
-				to_desc.cd_namelen = strlen(delname);
-				to_desc.cd_parentcnid = hfsmp->hfs_privdir_desc.cd_cnid;
-				to_desc.cd_flags = 0;
-				to_desc.cd_cnid = cp->c_fileid;
-	
-				error = cat_rename(hfsmp, &from_desc, &hfsmp->hfs_privdir_desc,
-						   &to_desc, (struct cat_desc *)NULL);
-				if (error != 0) {
-				    panic("hfs_removefile: error %d from cat_rename(%s %s) cp 0x%x\n",
-					  inodename, delname, cp);
-				}
-				if (error == 0) {
-					/* Update the file's state */
-					cp->c_flag |= C_DELETED;
-					cp->c_ctime = tv.tv_sec;	
-					(void) cat_update(hfsmp, &to_desc, &cp->c_attr, NULL, NULL);
-				}
-			} else {
-				/* Update the file's state */
-				cp->c_ctime = tv.tv_sec;	
-				(void) cat_update(hfsmp, &cp->c_desc, &cp->c_attr, NULL, NULL);
-			}
-		}
-		hfs_systemfile_unlock(hfsmp, lockflags);
-		if (error != 0)
-			goto out;
-
-		hfs_volupdate(hfsmp, VOL_RMFILE, (dcp->c_cnid == kHFSRootFolderID));
-
-	} else if (dataforkbusy || rsrcforkbusy || isbigfile) {
+	if (dataforkbusy || rsrcforkbusy || isbigfile || hasxattrs) {
 		char delname[32];
 		struct cat_desc to_desc;
 		struct cat_desc todir_desc;
@@ -1756,29 +1990,40 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 		bzero(&todir_desc, sizeof(todir_desc));
 		todir_desc.cd_parentcnid = 2;
 
-		MAKE_DELETED_NAME(delname, cp->c_fileid);		
+		MAKE_DELETED_NAME(delname, sizeof(delname), cp->c_fileid);
 		bzero(&to_desc, sizeof(to_desc));
-		to_desc.cd_nameptr = delname;
+		to_desc.cd_nameptr = (const u_int8_t *)delname;
 		to_desc.cd_namelen = strlen(delname);
-		to_desc.cd_parentcnid = hfsmp->hfs_privdir_desc.cd_cnid;
+		to_desc.cd_parentcnid = hfsmp->hfs_private_desc[FILE_HARDLINKS].cd_cnid;
 		to_desc.cd_flags = 0;
 		to_desc.cd_cnid = cp->c_cnid;
 
 		lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_EXCLUSIVE_LOCK);
+		if (!skip_reserve) {
+			if ((error = cat_preflight(hfsmp, CAT_RENAME, NULL, 0))) {
+				hfs_systemfile_unlock(hfsmp, lockflags);
+				goto out;
+			}
+		}
 
 		error = cat_rename(hfsmp, &desc, &todir_desc,
 				&to_desc, (struct cat_desc *)NULL);
 
 		if (error == 0) {
-			hfsmp->hfs_privdir_attr.ca_entries++;
-			(void) cat_update(hfsmp, &hfsmp->hfs_privdir_desc,
-			                  &hfsmp->hfs_privdir_attr, NULL, NULL);
+			hfsmp->hfs_private_attr[FILE_HARDLINKS].ca_entries++;
+			if (isdir == 1) {
+				INC_FOLDERCOUNT(hfsmp, hfsmp->hfs_private_attr[FILE_HARDLINKS]);
+			}
+			(void) cat_update(hfsmp, &hfsmp->hfs_private_desc[FILE_HARDLINKS],
+			                  &hfsmp->hfs_private_attr[FILE_HARDLINKS], NULL, NULL);
 
 			/* Update the parent directory */
 			if (dcp->c_entries > 0)
 				dcp->c_entries--;
-			if (dcp->c_nlink > 0)
-				dcp->c_nlink--;
+			if (isdir == 1) {
+				DEC_FOLDERCOUNT(hfsmp, dcp->c_attr);
+			}
+			dcp->c_dirchangecnt++;
 			dcp->c_ctime = tv.tv_sec;
 			dcp->c_mtime = tv.tv_sec;
 			(void) cat_update(hfsmp, &dcp->c_desc, &dcp->c_attr, NULL, NULL);
@@ -1786,7 +2031,7 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 			/* Update the file's state */
 			cp->c_flag |= C_DELETED;
 			cp->c_ctime = tv.tv_sec;
-			--cp->c_nlink;
+			--cp->c_linkcount;
 			(void) cat_update(hfsmp, &to_desc, &cp->c_attr, NULL, NULL);
 		}
 		hfs_systemfile_unlock(hfsmp, lockflags);
@@ -1802,7 +2047,13 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 			goto out;
 		}
 
-		lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG | SFL_ATTRIBUTE, HFS_EXCLUSIVE_LOCK);
+		lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG | SFL_ATTRIBUTE | SFL_BITMAP, HFS_EXCLUSIVE_LOCK);
+		if (!skip_reserve) {
+			if ((error = cat_preflight(hfsmp, CAT_DELETE, NULL, 0))) {
+				hfs_systemfile_unlock(hfsmp, lockflags);
+				goto out;
+			}
+		}
 
 		error = cat_delete(hfsmp, &desc, &cp->c_attr);
 
@@ -1817,14 +2068,10 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 			}
 		}
 		if (error == 0) {
-			/* Delete any attributes, ignore errors */
-			(void) hfs_removeallattr(hfsmp, cp->c_fileid);
-
 			/* Update the parent directory */
 			if (dcp->c_entries > 0)
 				dcp->c_entries--;
-			if (dcp->c_nlink > 0)
-				dcp->c_nlink--;
+			dcp->c_dirchangecnt++;
 			dcp->c_ctime = tv.tv_sec;
 			dcp->c_mtime = tv.tv_sec;
 			(void) cat_update(hfsmp, &dcp->c_desc, &dcp->c_attr, NULL, NULL);
@@ -1834,14 +2081,16 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 			goto out;
 
 #if QUOTA
-		(void)hfs_chkiq(cp, -1, NOCRED, 0);
+		if (hfsmp->hfs_flags & HFS_QUOTAS)
+			(void)hfs_chkiq(cp, -1, NOCRED, 0);
 #endif /* QUOTA */
 
 		cp->c_mode = 0;
 		truncated  = 0;    // because the catalog entry is gone
 		cp->c_flag |= C_NOEXISTS;
+		cp->c_flag &= ~C_DELETED;
 		cp->c_touch_chgtime = TRUE;   /* XXX needed ? */
-		--cp->c_nlink;
+		--cp->c_linkcount;
 
 		hfs_volupdate(hfsmp, VOL_RMFILE, (dcp->c_cnid == kHFSRootFolderID));
 	}
@@ -1849,18 +2098,18 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 	/*
 	 * All done with this cnode's descriptor...
 	 *
-	 * Note: all future catalog calls for this cnode must be
-	 * by fileid only.  This is OK for HFS (which doesn't have
-	 * file thread records) since HFS doesn't support hard
-	 * links or the removal of busy files.
+	 * Note: all future catalog calls for this cnode must be by
+	 * fileid only.  This is OK for HFS (which doesn't have file
+	 * thread records) since HFS doesn't support the removal of
+	 * busy files.
 	 */
 	cat_releasedesc(&cp->c_desc);
 
 	HFS_KNOTE(dvp, NOTE_WRITE);
 
 out:
-	if (got_cookie) {
-		cat_postflight(hfsmp, &cookie, 0);
+	if (error) {
+	    cp->c_flag &= ~C_DELETED;
 	}
 
 	/* Commit the truncation to the catalog record */
@@ -1875,12 +2124,13 @@ out:
 	    hfs_end_transaction(hfsmp);
 	}
 
+	dcp->c_flag &= ~C_DIR_MODIFICATION;
+	wakeup((caddr_t)&dcp->c_flag);
+
 	HFS_KNOTE(vp, NOTE_DELETE);
 	if (rvp) {
 		HFS_KNOTE(rvp, NOTE_DELETE);
-		/* Defer the vnode_put on rvp until the hfs_unlock(). */
-		cp->c_flag |= C_NEED_RVNODE_PUT;
-	};
+	}
 
 	return (error);
 }
@@ -1889,18 +2139,19 @@ out:
 __private_extern__ void
 replace_desc(struct cnode *cp, struct cat_desc *cdp)
 {
+	// fixes 4348457 and 4463138
 	if (&cp->c_desc == cdp) {
-		return;
+	    return;
 	}
 
 	/* First release allocated name buffer */
 	if (cp->c_desc.cd_flags & CD_HASBUF && cp->c_desc.cd_nameptr != 0) {
-		char *name = cp->c_desc.cd_nameptr;
+		const u_int8_t *name = cp->c_desc.cd_nameptr;
 
 		cp->c_desc.cd_nameptr = 0;
 		cp->c_desc.cd_namelen = 0;
 		cp->c_desc.cd_flags &= ~CD_HASBUF;
-		vfs_removename(name);
+		vfs_removename((const char *)name);
 	}
 	bcopy(cdp, &cp->c_desc, sizeof(cp->c_desc));
 
@@ -1956,16 +2207,17 @@ hfs_vnop_rename(ap)
 	int error;
 
 	/* When tvp exist, take the truncate lock for the hfs_removefile(). */
-	if (tvp && vnode_isreg(tvp)) {
+	if (tvp && (vnode_isreg(tvp) || vnode_islnk(tvp))) {
 		hfs_lock_truncate(VTOC(tvp), TRUE);
 		took_trunc_lock = 1;
 	}
 
+  retry:
 	error = hfs_lockfour(VTOC(fdvp), VTOC(fvp), VTOC(tdvp), tvp ? VTOC(tvp) : NULL,
 	                     HFS_EXCLUSIVE_LOCK);
 	if (error) {
 		if (took_trunc_lock)
-			hfs_unlock_truncate(VTOC(tvp));	
+			hfs_unlock_truncate(VTOC(tvp), TRUE);	
 		return (error);
 	}
 
@@ -1976,9 +2228,56 @@ hfs_vnop_rename(ap)
 	hfsmp = VTOHFS(tdvp);
 
 	/* Check for a race against unlink. */
-	if (fcp->c_flag & C_NOEXISTS) {
+	if ((fcp->c_flag & (C_NOEXISTS | C_DELETED)) || !hfs_valid_cnode(hfsmp, fdvp, fcnp, fcp->c_fileid)) {
 		error = ENOENT;
 		goto out;
+	}
+
+	if (tcp && ((tcp->c_flag & (C_NOEXISTS | C_DELETED)) || !hfs_valid_cnode(hfsmp, tdvp, tcnp, tcp->c_fileid))) {
+	    //
+	    // hmm, the destination vnode isn't valid any more.
+	    // in this case we can just drop him and pretend he
+	    // never existed in the first place.
+	    //
+	    if (took_trunc_lock) {
+		hfs_unlock_truncate(VTOC(tvp), TRUE);
+		took_trunc_lock = 0;
+	    }
+
+	    hfs_unlockfour(fdcp, fcp, tdcp, tcp);
+
+	    tcp = NULL;
+	    tvp = NULL;
+	    
+	    // retry the locking with tvp null'ed out
+	    goto retry;
+	}
+
+	fdcp->c_flag |= C_DIR_MODIFICATION;
+	if (fdvp != tdvp) {
+	    tdcp->c_flag |= C_DIR_MODIFICATION;
+	}
+
+	/*
+	 * Disallow renaming of a directory hard link if the source and 
+	 * destination parent directories are different, or a directory whose 
+	 * descendant is a directory hard link and the one of the ancestors
+	 * of the destination directory is a directory hard link.
+	 */
+	if (vnode_isdir(fvp) && (fdvp != tdvp)) {
+		if (fcp->c_flag & C_HARDLINK) {
+			error = EPERM;
+			goto out;
+		}
+		if (fcp->c_attr.ca_recflags & kHFSHasChildLinkMask) {
+		    lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
+		    if (cat_check_link_ancestry(hfsmp, tdcp->c_fileid, 0)) {
+				error = EPERM;
+				hfs_systemfile_unlock(hfsmp, lockflags);
+				goto out;
+			}
+			hfs_systemfile_unlock(hfsmp, lockflags);
+		}
 	}
 
 	/*
@@ -1996,7 +2295,7 @@ hfs_vnop_rename(ap)
 	 *     /
 	 *    o tvp
 	 */
-	if (tdcp->c_parentcnid == fcp->c_cnid) {
+	if (tdcp->c_parentcnid == fcp->c_fileid) {
 		error = EINVAL;
 		goto out;
 	}
@@ -2075,23 +2374,25 @@ hfs_vnop_rename(ap)
 	    vnode_isreg(fvp) &&
 	    (fdvp != tdvp) &&
 	    (fdcp->c_desc.cd_nameptr != NULL) &&
-	    (strcmp(fdcp->c_desc.cd_nameptr, CARBON_TEMP_DIR_NAME) == 0)) {
+	    (strncmp((const char *)fdcp->c_desc.cd_nameptr,
+		     CARBON_TEMP_DIR_NAME,
+		     sizeof(CARBON_TEMP_DIR_NAME)) == 0)) {
 		fcp->c_flags &= ~UF_NODUMP;
 		fcp->c_touch_chgtime = TRUE;
 		(void) hfs_update(fvp, 0);
 	}
 
 	bzero(&from_desc, sizeof(from_desc));
-	from_desc.cd_nameptr = fcnp->cn_nameptr;
+	from_desc.cd_nameptr = (const u_int8_t *)fcnp->cn_nameptr;
 	from_desc.cd_namelen = fcnp->cn_namelen;
-	from_desc.cd_parentcnid = fdcp->c_cnid;
+	from_desc.cd_parentcnid = fdcp->c_fileid;
 	from_desc.cd_flags = fcp->c_desc.cd_flags & ~(CD_HASBUF | CD_DECOMPOSED);
 	from_desc.cd_cnid = fcp->c_cnid;
 
 	bzero(&to_desc, sizeof(to_desc));
-	to_desc.cd_nameptr = tcnp->cn_nameptr;
+	to_desc.cd_nameptr = (const u_int8_t *)tcnp->cn_nameptr;
 	to_desc.cd_namelen = tcnp->cn_namelen;
-	to_desc.cd_parentcnid = tdcp->c_cnid;
+	to_desc.cd_parentcnid = tdcp->c_fileid;
 	to_desc.cd_flags = fcp->c_desc.cd_flags & ~(CD_HASBUF | CD_DECOMPOSED);
 	to_desc.cd_cnid = fcp->c_cnid;
 
@@ -2099,6 +2400,25 @@ hfs_vnop_rename(ap)
 	    goto out;
 	}
 	started_tr = 1;
+
+	/* hfs_vnop_link() and hfs_vnop_rename() set kHFSHasChildLinkMask 
+	 * inside a journal transaction and without holding a cnode lock.  
+	 * As setting of this bit depends on being in journal transaction for 
+	 * concurrency, check this bit again after we start journal transaction for rename
+	 * to ensure that this directory does not have any descendant that
+	 * is a directory hard link. 
+	 */
+	if (vnode_isdir(fvp) && (fdvp != tdvp)) {
+		if (fcp->c_attr.ca_recflags & kHFSHasChildLinkMask) {
+		    lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
+		    if (cat_check_link_ancestry(hfsmp, tdcp->c_fileid, 0)) {
+				error = EPERM;
+				hfs_systemfile_unlock(hfsmp, lockflags);
+				goto out;
+			}
+			hfs_systemfile_unlock(hfsmp, lockflags);
+		}
+	}
 
 	// if it's a hardlink then re-lookup the name so
 	// that we get the correct cnid in from_desc (see
@@ -2108,11 +2428,12 @@ hfs_vnop_rename(ap)
 	    struct cat_desc tmpdesc;
 	    cnid_t real_cnid;
 
-	    bzero(&tmpdesc, sizeof(tmpdesc));
-	    tmpdesc.cd_nameptr = fcnp->cn_nameptr;
+	    tmpdesc.cd_nameptr = (const u_int8_t *)fcnp->cn_nameptr;
 	    tmpdesc.cd_namelen = fcnp->cn_namelen;
-	    tmpdesc.cd_parentcnid = fdcp->c_cnid;
+	    tmpdesc.cd_parentcnid = fdcp->c_fileid;
 	    tmpdesc.cd_hint = fdcp->c_childhint;
+	    tmpdesc.cd_flags = fcp->c_desc.cd_flags & CD_ISDIR;
+	    tmpdesc.cd_encoding = 0;
 	    
 	    lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
 
@@ -2129,7 +2450,6 @@ hfs_vnop_rename(ap)
 	/*
 	 * Reserve some space in the Catalog file.
 	 */
-	bzero(&cookie, sizeof(cookie));
 	if ((error = cat_preflight(hfsmp, CAT_RENAME + CAT_DELETE, &cookie, p))) {
 		goto out;
 	}
@@ -2140,36 +2460,36 @@ hfs_vnop_rename(ap)
 	 */
 	if (tvp) {
 		/*
-		 * When fvp matches tvp they must be case variants
-		 * or hard links.
+		 * When fvp matches tvp they could be case variants
+		 * or matching hard links.
 		 */
 		if (fvp == tvp) {
-			/*
-			 * If this a hard link with different parents
-			 * and its not a case variant then tvp should
-			 * be removed.
-			 */
-			if (!((fcp->c_flag & C_HARDLINK) &&
-			    ((fdvp != tdvp) ||
-			     (hfs_namecmp(fcnp->cn_nameptr, fcnp->cn_namelen,
-					  tcnp->cn_nameptr, tcnp->cn_namelen) != 0)))) {
-				goto skip;
+			if (!(fcp->c_flag & C_HARDLINK)) {
+				goto skip_rm;  /* simple case variant */
+
+			} else if ((fdvp != tdvp) ||
+			           (hfsmp->hfs_flags & HFS_CASE_SENSITIVE)) {
+				goto out;  /* matching hardlinks, nothing to do */
+
+			} else if (hfs_namecmp((const u_int8_t *)fcnp->cn_nameptr, fcnp->cn_namelen,
+			                       (const u_int8_t *)tcnp->cn_nameptr, tcnp->cn_namelen) == 0) {
+				goto skip_rm;  /* case-variant hardlink in the same dir */
+			} else {
+				goto out;  /* matching hardlink, nothing to do */
 			}
-		} else {
-			cache_purge(tvp);
 		}
 
 		if (vnode_isdir(tvp))
 			error = hfs_removedir(tdvp, tvp, tcnp, HFSRM_SKIP_RESERVE);
 		else {
-			error = hfs_removefile(tdvp, tvp, tcnp, 0, HFSRM_SKIP_RESERVE);
+			error = hfs_removefile(tdvp, tvp, tcnp, 0, HFSRM_SKIP_RESERVE, 0);
 		}
 
 		if (error)
 			goto out;
 		tvp_deleted = 1;
 	}
-skip:
+skip_rm:
 	/*
 	 * All done with tvp and fvp
 	 */
@@ -2183,12 +2503,14 @@ skip:
 	}
 
 	/* Invalidate negative cache entries in the destination directory */
-	if (hfsmp->hfs_flags & HFS_CASE_SENSITIVE)
+	if (tdcp->c_flag & C_NEG_ENTRIES) {
 		cache_purge_negatives(tdvp);
+		tdcp->c_flag &= ~C_NEG_ENTRIES;
+	}
 
 	/* Update cnode's catalog descriptor */
 	replace_desc(fcp, &out_desc);
-	fcp->c_parentcnid = tdcp->c_cnid;
+	fcp->c_parentcnid = tdcp->c_fileid;
 	fcp->c_hint = 0;
 
 	hfs_volupdate(hfsmp, vnode_isdir(fvp) ? VOL_RMDIR : VOL_RMFILE,
@@ -2198,12 +2520,30 @@ skip:
 
 	/* Update both parent directories. */
 	if (fdvp != tdvp) {
-		tdcp->c_nlink++;
+		if (vnode_isdir(fvp)) {
+			/* If the source directory has directory hard link 
+			 * descendants, set the kHFSHasChildLinkBit in the 
+			 * destination parent hierarchy 
+			 */
+			if ((fcp->c_attr.ca_recflags & kHFSHasChildLinkMask) && 
+			    !(tdcp->c_attr.ca_recflags & kHFSHasChildLinkMask)) {
+
+				tdcp->c_attr.ca_recflags |= kHFSHasChildLinkMask;
+
+				error = cat_set_childlinkbit(hfsmp, tdcp->c_parentcnid);
+				if (error) {
+					printf ("hfs_vnop_rename: error updating parent chain for %u\n", tdcp->c_cnid);
+					error = 0;
+				}
+			}
+			INC_FOLDERCOUNT(hfsmp, tdcp->c_attr);
+			DEC_FOLDERCOUNT(hfsmp, fdcp->c_attr);
+		}
 		tdcp->c_entries++;
-		if (fdcp->c_nlink > 0)
-			fdcp->c_nlink--;
+		tdcp->c_dirchangecnt++;
 		if (fdcp->c_entries > 0)
 			fdcp->c_entries--;
+		fdcp->c_dirchangecnt++;
 		fdcp->c_touch_chgtime = TRUE;
 		fdcp->c_touch_modtime = TRUE;
 
@@ -2233,8 +2573,15 @@ out:
 		if (tdvp != fdvp) HFS_KNOTE(tdvp, NOTE_WRITE);
 	};
 
+	fdcp->c_flag &= ~C_DIR_MODIFICATION;
+	wakeup((caddr_t)&fdcp->c_flag);
+	if (fdvp != tdvp) {
+	    tdcp->c_flag &= ~C_DIR_MODIFICATION;
+	    wakeup((caddr_t)&tdcp->c_flag);
+	}
+
 	if (took_trunc_lock)
-		hfs_unlock_truncate(VTOC(tvp));	
+		hfs_unlock_truncate(VTOC(tvp), TRUE);	
 
 	hfs_unlockfour(fdcp, fcp, tdcp, tcp);
 
@@ -2267,12 +2614,14 @@ hfs_vnop_symlink(struct vnop_symlink_args *ap)
 	struct vnode **vpp = ap->a_vpp;
 	struct vnode *dvp = ap->a_dvp;
 	struct vnode *vp = NULL;
+	struct cnode *cp = NULL;
 	struct hfsmount *hfsmp;
 	struct filefork *fp;
 	struct buf *bp = NULL;
 	char *datap;
 	int started_tr = 0;
-	int len, error;
+	u_int32_t len;
+	int error;
 
 	/* HFS standard disks don't support symbolic links */
 	if (VTOVCB(dvp)->vcbSigWord != kHFSPlusSigWord)
@@ -2282,20 +2631,32 @@ hfs_vnop_symlink(struct vnop_symlink_args *ap)
 	if (ap->a_target[0] == 0)
 		return (EINVAL);
 
+	hfsmp = VTOHFS(dvp);
+	len = strlen(ap->a_target);
+
+	/* Check for free space */
+	if (((u_int64_t)hfs_freeblks(hfsmp, 0) * (u_int64_t)hfsmp->blockSize) < len) {
+		return (ENOSPC);
+	}
+
 	/* Create the vnode */
 	ap->a_vap->va_mode |= S_IFLNK;
 	if ((error = hfs_makenode(dvp, vpp, ap->a_cnp, ap->a_vap, ap->a_context))) {
 		goto out;
 	}
 	vp = *vpp;
-	if ((error = hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK)))
-		return (error);
+	if ((error = hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK))) {
+		goto out;
+	}
+	cp = VTOC(vp);
 	fp = VTOF(vp);
-	hfsmp = VTOHFS(dvp);
-	len = strlen(ap->a_target);
+
+	if (cp->c_flag & (C_NOEXISTS | C_DELETED)) {
+	    goto out;
+	}
 
 #if QUOTA
-	(void)hfs_getinoquota(VTOC(vp));
+	(void)hfs_getinoquota(cp);
 #endif /* QUOTA */
 
 	if ((error = hfs_start_transaction(hfsmp)) != 0) {
@@ -2312,8 +2673,30 @@ hfs_vnop_symlink(struct vnop_symlink_args *ap)
 	 * Don't need truncate lock since a symlink is treated as a system file.
 	 */
 	error = hfs_truncate(vp, len, IO_NOZEROFILL, 1, ap->a_context);
-	if (error)
-		goto out;	/* XXX need to remove link */
+
+	/* On errors, remove the symlink file */
+	if (error) {
+		/*
+		 * End the transaction so we don't re-take the cnode lock
+		 * below while inside a transaction (lock order violation).
+		 */
+		hfs_end_transaction(hfsmp);
+
+		/* hfs_removefile() requires holding the truncate lock */
+		hfs_unlock(cp);
+		hfs_lock_truncate(cp, TRUE);
+		hfs_lock(cp, HFS_FORCE_LOCK);
+
+		if (hfs_start_transaction(hfsmp) != 0) {
+			started_tr = 0;
+			hfs_unlock_truncate(cp, TRUE);
+			goto out;
+		}
+		
+		(void) hfs_removefile(dvp, vp, ap->a_cnp, 0, 0, 0);
+		hfs_unlock_truncate(cp, TRUE);
+		goto out;	
+	}
 
 	/* Write the link to disk */
 	bp = buf_getblk(vp, (daddr64_t)0, roundup((int)fp->ff_size, VTOHFS(vp)->hfs_phys_block_size),
@@ -2326,7 +2709,7 @@ hfs_vnop_symlink(struct vnop_symlink_args *ap)
 	bcopy(ap->a_target, datap, len);
 
 	if (hfsmp->jnl) {
-		journal_modify_block_end(hfsmp->jnl, bp);
+		journal_modify_block_end(hfsmp->jnl, bp, NULL, NULL);
 	} else {
 		buf_bawrite(bp);
 	}
@@ -2341,8 +2724,14 @@ hfs_vnop_symlink(struct vnop_symlink_args *ap)
 out:
 	if (started_tr)
 	    hfs_end_transaction(hfsmp);
-	if (vp) {
-		hfs_unlock(VTOC(vp));
+	if ((cp != NULL) && (vp != NULL)) {
+		hfs_unlock(cp);
+	}
+	if (error) {
+		if (vp) {
+			vnode_put(vp);
+		}
+		*vpp = NULL;
 	}
 	return (error);
 }
@@ -2397,6 +2786,9 @@ typedef union {
  *  Each tag/index pair is tied to a unique directory hint.  The hint
  *  contains information (filename) needed to build the catalog b-tree
  *  key for finding the next set of entries.
+ *
+ * If the directory is marked as deleted-but-in-use (cp->c_flag & C_DELETED),
+ * do NOT synthesize entries for "." and "..".
  */
 static int
 hfs_vnop_readdir(ap)
@@ -2457,9 +2849,10 @@ hfs_vnop_readdir(ap)
 		}
 	}
 	/*
-	 * Synthesize entries for "." and ".."
+	 * Synthesize entries for "." and "..", unless the directory has
+	 * been deleted, but not closed yet (lazy delete in progress).
 	 */
-	if (offset == 0) {
+	if (offset == 0 && !(cp->c_flag & C_DELETED)) {
 		hfs_dotentry_t  dotentry[2];
 		size_t  uiosize;
 
@@ -2528,7 +2921,7 @@ hfs_vnop_readdir(ap)
 	// here and we can't service our page fault because VM is
 	// blocked trying to start a transaction as a result of
 	// trying to free up pages for our page fault.  It's messy
-	// but it does happen on dual-procesors that are paging
+	// but it does happen on dual-processors that are paging
 	// heavily (see radar 3082639 for more info).  By locking
 	// the buffer up-front we prevent ourselves from faulting
 	// while holding the shared catalog file lock.
@@ -2556,7 +2949,7 @@ hfs_vnop_readdir(ap)
 	/* When called from NFS, try and resolve a cnid hint. */
 	if (nfs_cookies && cnid_hint != 0) {
 		if (cat_findname(hfsmp, cnid_hint, &localhint.dh_desc) == 0) {
-			if ( localhint.dh_desc.cd_parentcnid == cp->c_cnid) {
+			if ( localhint.dh_desc.cd_parentcnid == cp->c_fileid) {
 				localhint.dh_index = index - 1;
 				localhint.dh_time = 0;
 				bzero(&localhint.dh_link, sizeof(localhint.dh_link));
@@ -2569,7 +2962,7 @@ hfs_vnop_readdir(ap)
 
 	/* Get a directory hint (cnode must be locked exclusive) */
 	if (dirhint == NULL) {
-		dirhint = hfs_getdirhint(cp, ((index - 1) & HFS_INDEX_MASK) | tag);
+		dirhint = hfs_getdirhint(cp, ((index - 1) & HFS_INDEX_MASK) | tag, 0);
 
 		/* Hide tag from catalog layer. */
 		dirhint->dh_index &= HFS_INDEX_MASK;
@@ -2578,8 +2971,16 @@ hfs_vnop_readdir(ap)
 		}
 	}
 	
+	if (index == 0) {
+		dirhint->dh_threadhint = cp->c_dirthreadhint;
+	}
+
 	/* Pack the buffer with dirent entries. */
 	error = cat_getdirentries(hfsmp, cp->c_entries, dirhint, uio, extended, &items, &eofflag);
+
+	if (index == 0 && error == 0) {
+		cp->c_dirthreadhint = dirhint->dh_threadhint;
+	}
 
 	hfs_systemfile_unlock(hfsmp, lockflags);
 
@@ -2657,7 +3058,7 @@ hfs_vnop_readlink(ap)
    
 	/* Zero length sym links are not allowed */
 	if (fp->ff_size == 0 || fp->ff_size > MAXPATHLEN) {
-		VTOVCB(vp)->vcbFlags |= kHFS_DamagedVolume;
+		printf("hfs: zero length symlink on fileid %d\n", cp->c_fileid);
 		error = EINVAL;
 		goto exit;
 	}
@@ -2745,10 +3146,10 @@ hfs_vnop_pathconf(ap)
 		*ap->a_retval = PIPE_BUF;
 		break;
 	case _PC_CHOWN_RESTRICTED:
-		*ap->a_retval = 1;
+		*ap->a_retval = 200112;		/* _POSIX_CHOWN_RESTRICTED */
 		break;
 	case _PC_NO_TRUNC:
-		*ap->a_retval = 0;
+		*ap->a_retval = 200112;		/* _POSIX_NO_TRUNC */
 		break;
 	case _PC_NAME_CHARS_MAX:
 		*ap->a_retval = kHFSPlusMaxFileNameChars;
@@ -2761,6 +3162,9 @@ hfs_vnop_pathconf(ap)
 		break;
 	case _PC_CASE_PRESERVING:
 		*ap->a_retval = 1;
+		break;
+	case _PC_FILESIZEBITS:
+		*ap->a_retval = 64;	/* number of bits to store max file size */
 		break;
 	default:
 		return (EINVAL);
@@ -2794,7 +3198,8 @@ hfs_update(struct vnode *vp, __unused int waitfor)
 	p = current_proc();
 	hfsmp = VTOHFS(vp);
 
-	if (vnode_issystem(vp) && (cp->c_cnid < kHFSFirstUserCatalogNodeID)) {
+	if (((vnode_issystem(vp) && (cp->c_cnid < kHFSFirstUserCatalogNodeID))) || 
+	   	hfsmp->hfs_catalog_vp == NULL){
 		return (0);
 	}
 	if ((hfsmp->hfs_flags & HFS_READ_ONLY) || (cp->c_mode == 0)) {
@@ -2828,7 +3233,7 @@ hfs_update(struct vnode *vp, __unused int waitfor)
 	 * we have to do the update.
 	 */
 	if (ISSET(cp->c_flag, C_FORCEUPDATE) == 0 &&
-	    (ISSET(cp->c_flag, C_DELETED) ||
+	    (ISSET(cp->c_flag, C_DELETED) || 
 	    (dataforkp && cp->c_datafork->ff_unallocblocks) ||
 	    (rsrcforkp && cp->c_rsrcfork->ff_unallocblocks))) {
 	//	cp->c_flag &= ~(C_ACCESS | C_CHANGE | C_UPDATE);
@@ -2869,10 +3274,8 @@ hfs_update(struct vnode *vp, __unused int waitfor)
 
 	/*
 	 * Lock the Catalog b-tree file.
-	 * A shared lock is sufficient since an update doesn't change
-	 * the tree and the lock on vp protects the cnode.
 	 */
-	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
+	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_EXCLUSIVE_LOCK);
 
 	/* XXX - waitfor is not enforced */
 	error = cat_update(hfsmp, &cp->c_desc, &cp->c_attr, dataforkp, rsrcforkp);
@@ -2891,6 +3294,7 @@ hfs_update(struct vnode *vp, __unused int waitfor)
 
 /*
  * Allocate a new node
+ * Note - Function does not create and return a vnode for whiteout creation.
  */
 static int
 hfs_makenode(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
@@ -2903,29 +3307,30 @@ hfs_makenode(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 	struct cat_desc in_desc, out_desc;
 	struct cat_attr attr;
 	struct timeval tv;
-	cat_cookie_t cookie;
 	int lockflags;
-	int error, started_tr = 0, got_cookie = 0;
+	int error, started_tr = 0;
 	enum vtype vnodetype;
 	int mode;
 
-	if ((error = hfs_lock(VTOC(dvp), HFS_EXCLUSIVE_LOCK)))
-		return (error);
 	dcp = VTOC(dvp);
+	if ((error = hfs_lock(dcp, HFS_EXCLUSIVE_LOCK)))
+		return (error);
+
+	dcp->c_flag |= C_DIR_MODIFICATION;
+	
 	hfsmp = VTOHFS(dvp);
 	*vpp = NULL;
 	tvp = NULL;
 	out_desc.cd_flags = 0;
 	out_desc.cd_nameptr = NULL;
 
-	mode = MAKEIMODE(vap->va_type, vap->va_mode);
-
-	if ((mode & S_IFMT) == 0)
-		mode |= S_IFREG;
-	vnodetype = IFTOVT(mode);
+	vnodetype = vap->va_type;
+	if (vnodetype == VNON)
+		vnodetype = VREG;
+	mode = MAKEIMODE(vnodetype, vap->va_mode);
 
 	/* Check if were out of usable disk space. */
-	if ((hfs_freeblks(hfsmp, 1) <= 0) && (suser(vfs_context_ucred(ctx), NULL) != 0)) {
+	if ((hfs_freeblks(hfsmp, 1) == 0) && (vfs_context_suser(ctx) != 0)) {
 		error = ENOSPC;
 		goto exit;
 	}
@@ -2935,16 +3340,38 @@ hfs_makenode(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 	/* Setup the default attributes */
 	bzero(&attr, sizeof(attr));
 	attr.ca_mode = mode;
-	attr.ca_nlink = vnodetype == VDIR ? 2 : 1;
-	attr.ca_mtime = tv.tv_sec;
-	if ((VTOVCB(dvp)->vcbSigWord == kHFSSigWord) && gTimeZone.tz_dsttime) {
-		attr.ca_mtime += 3600;	/* Same as what hfs_update does */
+	attr.ca_linkcount = 1;
+	if (VATTR_IS_ACTIVE(vap, va_rdev)) {
+		attr.ca_rdev = vap->va_rdev;
 	}
-	attr.ca_atime = attr.ca_ctime = attr.ca_itime = attr.ca_mtime;
+	if (VATTR_IS_ACTIVE(vap, va_create_time)) {
+		VATTR_SET_SUPPORTED(vap, va_create_time);
+		attr.ca_itime = vap->va_create_time.tv_sec;
+	} else {
+		attr.ca_itime = tv.tv_sec;
+	}
+	if ((hfsmp->hfs_flags & HFS_STANDARD) && gTimeZone.tz_dsttime) {
+		attr.ca_itime += 3600;	/* Same as what hfs_update does */
+	}
+	attr.ca_atime = attr.ca_ctime = attr.ca_mtime = attr.ca_itime;
 	attr.ca_atimeondisk = attr.ca_atime;
-	/* On HFS+ the ThreadExists flag must always be set for files. */
-	if (vnodetype != VDIR && (hfsmp->hfs_flags & HFS_STANDARD) == 0)
-		attr.ca_recflags = kHFSThreadExistsMask;
+	if (VATTR_IS_ACTIVE(vap, va_flags)) {
+		VATTR_SET_SUPPORTED(vap, va_flags);
+		attr.ca_flags = vap->va_flags;
+	}
+	
+	/* 
+	 * HFS+ only: all files get ThreadExists
+	 * HFSX only: dirs get HasFolderCount
+	 */
+	if (!(hfsmp->hfs_flags & HFS_STANDARD)) {
+		if (vnodetype == VDIR) {
+			if (hfsmp->hfs_flags & HFS_FOLDERCOUNT)
+				attr.ca_recflags = kHFSHasFolderCountMask;
+		} else {
+			attr.ca_recflags = kHFSThreadExistsMask;
+		}
+	}
 
 	attr.ca_uid = vap->va_uid;
 	attr.ca_gid = vap->va_gid;
@@ -2964,9 +3391,9 @@ hfs_makenode(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 		attr.ca_flags |= UF_OPAQUE;
 
 	/* Setup the descriptor */
-	in_desc.cd_nameptr = cnp->cn_nameptr;
+	in_desc.cd_nameptr = (const u_int8_t *)cnp->cn_nameptr;
 	in_desc.cd_namelen = cnp->cn_namelen;
-	in_desc.cd_parentcnid = dcp->c_cnid;
+	in_desc.cd_parentcnid = dcp->c_fileid;
 	in_desc.cd_flags = S_ISDIR(mode) ? CD_ISDIR : 0;
 	in_desc.cd_hint = dcp->c_childhint;
 	in_desc.cd_encoding = 0;
@@ -2976,25 +3403,25 @@ hfs_makenode(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 	}
 	started_tr = 1;
 
-	/*
-	 * Reserve some space in the Catalog file.
-	 *
-	 * (we also add CAT_DELETE since our getnewvnode
-	 *  request can cause an hfs_inactive call to
-	 *  delete an unlinked file)
-	 */
-	if ((error = cat_preflight(hfsmp, CAT_CREATE | CAT_DELETE, &cookie, 0))) {
+	// have to also lock the attribute file because cat_create() needs
+	// to check that any fileID it wants to use does not have orphaned
+	// attributes in it.
+	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG | SFL_ATTRIBUTE, HFS_EXCLUSIVE_LOCK);
+
+	/* Reserve some space in the Catalog file. */
+	if ((error = cat_preflight(hfsmp, CAT_CREATE, NULL, 0))) {
+		hfs_systemfile_unlock(hfsmp, lockflags);
 		goto exit;
 	}
-	got_cookie = 1;
-
-	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_EXCLUSIVE_LOCK);
 	error = cat_create(hfsmp, &in_desc, &attr, &out_desc);
 	if (error == 0) {
 		/* Update the parent directory */
 		dcp->c_childhint = out_desc.cd_hint;	/* Cache directory's location */
-		dcp->c_nlink++;
 		dcp->c_entries++;
+		if (vnodetype == VDIR) {
+			INC_FOLDERCOUNT(hfsmp, dcp->c_attr);
+		}
+		dcp->c_dirchangecnt++;
 		dcp->c_ctime = tv.tv_sec;
 		dcp->c_mtime = tv.tv_sec;
 		(void) cat_update(hfsmp, &dcp->c_desc, &dcp->c_attr, NULL, NULL);
@@ -3005,8 +3432,10 @@ hfs_makenode(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 		goto exit;
 	
 	/* Invalidate negative cache entries in the directory */
-	if (hfsmp->hfs_flags & HFS_CASE_SENSITIVE)
+	if (dcp->c_flag & C_NEG_ENTRIES) {
 		cache_purge_negatives(dvp);
+		dcp->c_flag &= ~C_NEG_ENTRIES;
+	}
 
 	if (vnodetype == VDIR) {
 		HFS_KNOTE(dvp, NOTE_WRITE | NOTE_LINK);
@@ -3034,17 +3463,19 @@ hfs_makenode(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 	    started_tr = 0;
 	}
 
+	/* Do not create vnode for whiteouts */
+	if (S_ISWHT(mode)) {
+		goto exit;
+	}
+
 	/*
 	 * Create a vnode for the object just created.
 	 *
 	 * The cnode is locked on successful return.
 	 */
-	error = hfs_getnewvnode(hfsmp, dvp, cnp, &out_desc, 0, &attr, NULL, &tvp);
+	error = hfs_getnewvnode(hfsmp, dvp, cnp, &out_desc, GNV_CREATE, &attr, NULL, &tvp);
 	if (error)
 		goto exit;
-
-	// XXXdbg
-	//cache_enter(dvp, tvp, cnp);
 
 	cp = VTOC(tvp);
 #if QUOTA
@@ -3053,7 +3484,7 @@ hfs_makenode(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 	 * fall through to the rmdir we actually have 
 	 * accounted for the inode
 	*/
-	if (vfs_flags(HFSTOVFS(hfsmp)) & MNT_QUOTA) {
+	if (hfsmp->hfs_flags & HFS_QUOTAS) {
 		if ((error = hfs_getinoquota(cp)) ||
 		    (error = hfs_chkiq(cp, 1, vfs_context_ucred(ctx), FORCE))) {
 	
@@ -3063,8 +3494,8 @@ hfs_makenode(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 				hfs_unlock(cp);
 				hfs_lock_truncate(cp, TRUE);
 				hfs_lock(cp, HFS_FORCE_LOCK);
-				(void) hfs_removefile(dvp, tvp, cnp, 0, 0);
-				hfs_unlock_truncate(cp);
+				(void) hfs_removefile(dvp, tvp, cnp, 0, 0, 0);
+				hfs_unlock_truncate(cp, TRUE);
 			}
 			/*
 			 * we successfully allocated a new vnode, but
@@ -3079,20 +3510,10 @@ hfs_makenode(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 	}
 #endif /* QUOTA */
 
-	/* Remember if any ACL data was set. */
-	if (VATTR_IS_ACTIVE(vap, va_acl) &&
-	    (vap->va_acl != NULL)) {
-		cp->c_attr.ca_recflags |= kHFSHasSecurityMask;
-		cp->c_touch_chgtime = TRUE;
-		(void) hfs_update(tvp, TRUE);
-	}
 	*vpp = tvp;
 exit:
 	cat_releasedesc(&out_desc);
 
-	if (got_cookie) {
-		cat_postflight(hfsmp, &cookie, 0);
-	}
 	/*
 	 * Check if a file is located in the "Cleanup At Startup"
 	 * directory.  If it is then tag it as NODUMP so that we
@@ -3100,8 +3521,13 @@ exit:
 	 */
 	if ((error == 0) && dvp && (vnodetype == VREG) &&
 	    (dcp->c_desc.cd_nameptr != NULL) &&
-	    (strcmp(dcp->c_desc.cd_nameptr, CARBON_TEMP_DIR_NAME) == 0)) {
+	    (strncmp((const char *)dcp->c_desc.cd_nameptr,
+		     CARBON_TEMP_DIR_NAME,
+		     sizeof(CARBON_TEMP_DIR_NAME)) == 0)) {
 	   	struct vnode *ddvp;
+
+		dcp->c_flag &= ~C_DIR_MODIFICATION;
+		wakeup((caddr_t)&dcp->c_flag);
 
 		hfs_unlock(dcp);
 		dvp = NULL;
@@ -3114,7 +3540,7 @@ exit:
 			if (VTOC(ddvp)->c_desc.cd_nameptr) {
 				uid_t uid;
 
-				uid = strtoul(VTOC(ddvp)->c_desc.cd_nameptr, 0, 0);
+				uid = strtoul((const char *)VTOC(ddvp)->c_desc.cd_nameptr, 0, 0);
 				if ((uid == cp->c_uid) ||
 				    (uid == vfs_context_ucred(ctx)->cr_uid)) {
 					cp->c_flags |= UF_NODUMP;
@@ -3126,6 +3552,9 @@ exit:
 		}
 	}
 	if (dvp) {
+		dcp->c_flag &= ~C_DIR_MODIFICATION;
+		wakeup((caddr_t)&dcp->c_flag);
+		
 		hfs_unlock(dcp);
 	}
 	if (error == 0 && cp != NULL) {
@@ -3141,24 +3570,48 @@ exit:
 
 
 /*
- * WARNING - assumes caller has cnode lock.
+ * Return a referenced vnode for the resource fork
+ *
+ * cnode for vnode vp must already be locked.
+ *
+ * can_drop_lock is true if its safe to temporally drop/re-acquire the cnode lock
  */
 __private_extern__
 int
-hfs_vgetrsrc(struct hfsmount *hfsmp, struct vnode *vp, struct vnode **rvpp, __unused struct proc *p)
+hfs_vgetrsrc(struct hfsmount *hfsmp, struct vnode *vp, struct vnode **rvpp, int can_drop_lock)
 {
 	struct vnode *rvp;
 	struct cnode *cp = VTOC(vp);
 	int error;
 	int vid;
 
+	/* Attempt to use exising vnode */
 	if ((rvp = cp->c_rsrc_vp)) {
 	        vid = vnode_vid(rvp);
 
-		/* Use exising vnode */
+		/*
+		 * It is not safe to hold the cnode lock when calling vnode_getwithvid()
+		 * for the alternate fork -- vnode_getwithvid() could deadlock waiting
+		 * for a VL_WANTTERM while another thread has an iocount on the alternate
+		 * fork vnode and is attempting to acquire the common cnode lock.
+		 *
+		 * But it's also not safe to drop the cnode lock when we're holding
+		 * multiple cnode locks, like during a hfs_removefile() operation
+		 * since we could lock out of order when re-acquiring the cnode lock.
+		 *
+		 * So we can only drop the lock here if its safe to drop it -- which is
+		 * most of the time with the exception being hfs_removefile().
+		 */
+		if (can_drop_lock)
+			hfs_unlock(cp);
+
 		error = vnode_getwithvid(rvp, vid);
+
+		if (can_drop_lock)
+			(void) hfs_lock(cp, HFS_FORCE_LOCK);
+
 		if (error) {
-			char * name = VTOC(vp)->c_desc.cd_nameptr;
+			const char * name = (const char *)VTOC(vp)->c_desc.cd_nameptr;
 
 			if (name)
 				printf("hfs_vgetrsrc: couldn't get"
@@ -3177,11 +3630,13 @@ hfs_vgetrsrc(struct hfsmount *hfsmp, struct vnode *vp, struct vnode **rvpp, __un
 		 * and that its safe to have the cnode lock dropped and reacquired.
 		 */
 		if (cp->c_lockowner != current_thread()) {
+			if (!can_drop_lock)
+				return (EINVAL);
 			/*
 			 * If the upgrade fails we loose the lock and
 			 * have to take the exclusive lock on our own.
 			 */
-			if (lck_rw_lock_shared_to_exclusive(&cp->c_rwlock) != 0)
+			if (lck_rw_lock_shared_to_exclusive(&cp->c_rwlock) == FALSE)
 				lck_rw_lock_exclusive(&cp->c_rwlock);
 			cp->c_lockowner = current_thread();
 		}
@@ -3209,10 +3664,13 @@ hfs_vgetrsrc(struct hfsmount *hfsmp, struct vnode *vp, struct vnode **rvpp, __un
 			cn.cn_nameptr = cn.cn_pnbuf;
 			cn.cn_hash = 0;
 			cn.cn_consume = 0;
-			cn.cn_namelen = sprintf(cn.cn_nameptr, "%s%s", cp->c_desc.cd_nameptr, _PATH_RSRCFORKSPEC);
+			cn.cn_namelen = snprintf(cn.cn_nameptr, MAXPATHLEN,
+						 "%s%s", cp->c_desc.cd_nameptr,
+						 _PATH_RSRCFORKSPEC);
 		}
 		error = hfs_getnewvnode(hfsmp, vnode_parent(vp), cn.cn_pnbuf ? &cn : NULL,
-		                        &cp->c_desc, 2, &cp->c_attr, &rsrcfork, &rvp);
+		                        &cp->c_desc, GNV_WANTRSRC | GNV_SKIPLOCK, &cp->c_attr,
+		                        &rsrcfork, &rvp);
 		if (cn.cn_pnbuf)
 			FREE_ZONE(cn.cn_pnbuf, cn.cn_pnlen, M_NAMEI);
 		if (error)
@@ -3266,8 +3724,19 @@ filt_hfsread(struct knote *kn, long hint)
 	}
 
 	/* poll(2) semantics dictate always saying there is data */
-	kn->kn_data = (!(kn->kn_flags & EV_POLL)) ?
-		VTOF(vp)->ff_size - kn->kn_fp->f_fglob->fg_offset : 1;
+	if (!(kn->kn_flags & EV_POLL)) {
+		off_t amount;
+ 
+		amount = VTOF(vp)->ff_size - kn->kn_fp->f_fglob->fg_offset;
+		if (amount > (off_t)INTPTR_MAX)
+			kn->kn_data = INTPTR_MAX;
+		else if (amount < (off_t)INTPTR_MIN)
+			kn->kn_data = INTPTR_MIN;
+		else
+			kn->kn_data = (intptr_t)amount;
+	} else {
+		kn->kn_data = 1;
+	}
 
 	if  (dropvp)
 		vnode_put(vp);
@@ -3279,13 +3748,13 @@ filt_hfsread(struct knote *kn, long hint)
 static int
 filt_hfswrite(struct knote *kn, long hint)
 {
-	int dropvp = 0;
-	
+	struct vnode *vp = (struct vnode *)kn->kn_hook;
+
 	if (hint == 0)  {
-		if ((vnode_getwithvid(kn->kn_hook, kn->kn_hookid) != 0)) {
+		if ((vnode_getwithvid(vp, kn->kn_hookid) != 0)) {
 			hint = NOTE_REVOKE;
 		} else 
-			vnode_put(kn->kn_hook);
+			vnode_put(vp);
 	}
 	if (hint == NOTE_REVOKE) {
 		/*
@@ -3303,12 +3772,13 @@ filt_hfswrite(struct knote *kn, long hint)
 static int
 filt_hfsvnode(struct knote *kn, long hint)
 {
+	struct vnode *vp = (struct vnode *)kn->kn_hook;
 
 	if (hint == 0)  {
-		if ((vnode_getwithvid(kn->kn_hook, kn->kn_hookid) != 0)) {
+		if ((vnode_getwithvid(vp, kn->kn_hookid) != 0)) {
 			hint = NOTE_REVOKE;
 		} else
-			vnode_put(kn->kn_hook);
+			vnode_put(vp);
 	}
 	if (kn->kn_sfflags & hint)
 		kn->kn_fflags |= hint;
@@ -3385,7 +3855,7 @@ hfs_vnop_kqfiltremove(ap)
 		struct vnode *a_vp;
 		uintptr_t ident;
 		vfs_context_t a_context;
-	} */ *ap;
+	} */__unused *ap;
 {
 	int result;
 
@@ -3472,8 +3942,6 @@ hfsfifo_read(ap)
 		vfs_context_t a_context;
 	} */ *ap;
 {
-	extern int (**fifo_vnodeop_p)(void *);
-
 	/*
 	 * Set access flag.
 	 */
@@ -3493,8 +3961,6 @@ hfsfifo_write(ap)
 		vfs_context_t a_context;
 	} */ *ap;
 {
-	extern int (**fifo_vnodeop_p)(void *);
-
 	/*
 	 * Set update and change flags.
 	 */
@@ -3516,7 +3982,6 @@ hfsfifo_close(ap)
 		vfs_context_t a_context;
 	} */ *ap;
 {
-	extern int (**fifo_vnodeop_p)(void *);
 	struct vnode *vp = ap->a_vp;
 	struct cnode *cp;
 
@@ -3539,7 +4004,6 @@ int
 hfsfifo_kqfilt_add(ap)
 	struct vnop_kqfilt_add_args *ap;
 {
-	extern int (**fifo_vnodeop_p)(void *);
 	int error;
 
 	error = VOCALL(fifo_vnodeop_p, VOFFSET(vnop_kqfilt_add), ap);
@@ -3557,7 +4021,6 @@ int
 hfsfifo_kqfilt_remove(ap)
 	struct vnop_kqfilt_remove_args *ap;
 {
-	extern int (**fifo_vnodeop_p)(void *);
 	int error;
 
 	error = VOCALL(fifo_vnodeop_p, VOFFSET(vnop_kqfilt_remove), ap);
@@ -3596,34 +4059,73 @@ hfs_vnop_fsync(ap)
 	return (error);
 }
 
-/*****************************************************************************
-*
-*	VOP Tables
-*
-*****************************************************************************/
-int hfs_vnop_readdirattr(struct vnop_readdirattr_args *);  /* in hfs_attrlist.c */
-int hfs_vnop_inactive(struct vnop_inactive_args *);        /* in hfs_cnode.c */
-int hfs_vnop_reclaim(struct vnop_reclaim_args *);          /* in hfs_cnode.c */
-int hfs_vnop_link(struct vnop_link_args *);                /* in hfs_link.c */
-int hfs_vnop_lookup(struct vnop_lookup_args *);            /* in hfs_lookup.c */
-int hfs_vnop_search(struct vnop_searchfs_args *);          /* in hfs_search.c */
 
-int hfs_vnop_read(struct vnop_read_args *);           /* in hfs_readwrite.c */
-int hfs_vnop_write(struct vnop_write_args *);         /* in hfs_readwrite.c */
-int hfs_vnop_ioctl(struct vnop_ioctl_args *);         /* in hfs_readwrite.c */
-int hfs_vnop_select(struct vnop_select_args *);       /* in hfs_readwrite.c */
-int hfs_vnop_strategy(struct vnop_strategy_args *);   /* in hfs_readwrite.c */
-int hfs_vnop_allocate(struct vnop_allocate_args *);   /* in hfs_readwrite.c */
-int hfs_vnop_pagein(struct vnop_pagein_args *);       /* in hfs_readwrite.c */
-int hfs_vnop_pageout(struct vnop_pageout_args *);     /* in hfs_readwrite.c */
-int hfs_vnop_bwrite(struct vnop_bwrite_args *);       /* in hfs_readwrite.c */
-int hfs_vnop_blktooff(struct vnop_blktooff_args *);   /* in hfs_readwrite.c */
-int hfs_vnop_offtoblk(struct vnop_offtoblk_args *);   /* in hfs_readwrite.c */
-int hfs_vnop_blockmap(struct vnop_blockmap_args *);   /* in hfs_readwrite.c */
-int hfs_vnop_getxattr(struct vnop_getxattr_args *);        /* in hfs_xattr.c */
-int hfs_vnop_setxattr(struct vnop_setxattr_args *);        /* in hfs_xattr.c */
-int hfs_vnop_removexattr(struct vnop_removexattr_args *);  /* in hfs_xattr.c */
-int hfs_vnop_listxattr(struct vnop_listxattr_args *);      /* in hfs_xattr.c */
+static int
+hfs_vnop_whiteout(ap) 
+	struct vnop_whiteout_args /* {
+		struct vnode *a_dvp;
+		struct componentname *a_cnp;
+		int a_flags;
+		vfs_context_t a_context;
+	} */ *ap;
+{
+	int error = 0;
+	struct vnode *vp = NULL;
+	struct vnode_attr va;
+	struct vnop_lookup_args lookup_args;
+	struct vnop_remove_args remove_args;
+	struct hfsmount *hfsmp;
+
+	hfsmp = VTOHFS(ap->a_dvp);
+	if (hfsmp->hfs_flags & HFS_STANDARD) {
+		error = ENOTSUP;
+		goto exit;
+	}
+
+	switch (ap->a_flags) {
+		case LOOKUP:
+			error = 0;
+			break;
+
+		case CREATE: 
+			VATTR_INIT(&va);
+			VATTR_SET(&va, va_type, VREG);
+			VATTR_SET(&va, va_mode, S_IFWHT);
+			VATTR_SET(&va, va_uid, 0);
+			VATTR_SET(&va, va_gid, 0);
+			
+			error = hfs_makenode(ap->a_dvp, &vp, ap->a_cnp, &va, ap->a_context);
+			/* No need to release the vnode as no vnode is created for whiteouts */
+			break;
+
+		case DELETE:
+			lookup_args.a_dvp = ap->a_dvp;
+			lookup_args.a_vpp = &vp;
+			lookup_args.a_cnp = ap->a_cnp;
+			lookup_args.a_context = ap->a_context;
+
+			error = hfs_vnop_lookup(&lookup_args);
+			if (error) {
+				break;
+			}
+			
+			remove_args.a_dvp = ap->a_dvp;
+			remove_args.a_vp = vp;
+			remove_args.a_cnp = ap->a_cnp;
+			remove_args.a_flags = 0;
+			remove_args.a_context = ap->a_context;
+
+			error = hfs_vnop_remove(&remove_args);
+			vnode_put(vp);
+			break;
+
+		default:
+			panic("hfs_vnop_whiteout: unknown operation (flag = %x)\n", ap->a_flags);
+	};
+	
+exit:
+	return (error);
+}
 
 int (**hfs_vnodeop_p)(void *);
 
@@ -3675,6 +4177,12 @@ struct vnodeopv_entry_desc hfs_vnodeop_entries[] = {
     { &vnop_setxattr_desc, (VOPFUNC)hfs_vnop_setxattr},
     { &vnop_removexattr_desc, (VOPFUNC)hfs_vnop_removexattr},
     { &vnop_listxattr_desc, (VOPFUNC)hfs_vnop_listxattr},
+    { &vnop_whiteout_desc, (VOPFUNC)hfs_vnop_whiteout},
+#if NAMEDSTREAMS
+    { &vnop_getnamedstream_desc, (VOPFUNC)hfs_vnop_getnamedstream },
+    { &vnop_makenamedstream_desc, (VOPFUNC)hfs_vnop_makenamedstream },
+    { &vnop_removenamedstream_desc, (VOPFUNC)hfs_vnop_removenamedstream },
+#endif
     { NULL, (VOPFUNC)NULL }
 };
 

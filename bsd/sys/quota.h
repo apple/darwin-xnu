@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1993
@@ -238,7 +244,7 @@ dqhashshift(u_long size)
 
 #ifndef KERNEL
 __BEGIN_DECLS
-int quotactl(char *, int, int, caddr_t);
+int quotactl(const char *, int, int, caddr_t);
 __END_DECLS
 #endif /* !KERNEL */
 
@@ -252,7 +258,7 @@ __END_DECLS
 struct quotafile {
   	lck_mtx_t     qf_lock;	     /* quota file mutex */
 	struct vnode *qf_vp;         /* quota file vnode */
-	struct ucred *qf_cred;       /* quota file access cred */
+	kauth_cred_t  qf_cred;       /* quota file access cred */
 	int           qf_shift;      /* primary hash shift */
 	int           qf_maxentries; /* size of hash table (power of 2) */
 	int           qf_entrycnt;   /* count of active entries */
@@ -283,14 +289,15 @@ struct quotafile {
 struct dquot {
 	LIST_ENTRY(dquot) dq_hash;	/* hash list */
 	TAILQ_ENTRY(dquot) dq_freelist;	/* free list */
-	uint32_t  dq_cnt;		/* count of active references */
 	u_int16_t dq_flags;		/* flags, see below */
+	u_int16_t dq_cnt_unused;	/* Replaced by dq_cnt below */
         u_int16_t dq_lflags;		/* protected by the quota list lock */
 	u_int16_t dq_type;		/* quota type of this dquot */
 	u_int32_t dq_id;		/* identifier this applies to */
 	u_int32_t dq_index;		/* index into quota file */
 	struct	quotafile *dq_qfile;	/* quota file that this is taken from */
 	struct	dqblk dq_dqb;		/* actual usage & quotas */
+	uint32_t  dq_cnt;		/* count of active references */
 };
 
 /*
@@ -343,7 +350,9 @@ int	dqfileopen(struct quotafile *, int);
 void	dqfileclose(struct quotafile *, int);
 void	dqflush(struct vnode *);
 int	dqget(u_long, struct quotafile *, int, struct dquot **);
+void	dqhashinit(void);
 void	dqinit(void);
+int	dqisinitialized(void);
 void	dqref(struct dquot *);
 void	dqrele(struct dquot *);
 void	dqreclaim(struct dquot *);

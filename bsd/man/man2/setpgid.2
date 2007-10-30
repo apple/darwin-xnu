@@ -43,15 +43,20 @@
 .Sh SYNOPSIS
 .Fd #include <unistd.h>
 .Ft int
-.Fn setpgid "pid_t pid" "pid_t pgrp"
-.Ft int
-.Fn setpgrp "pid_t pid" "pid_t pgrp"
+.Fo setpgid
+.Fa "pid_t pid"
+.Fa "pid_t pgid"
+.Fc
+.Ft pid_t
+.Fo setpgrp
+.Fa void
+.Fc
 .Sh DESCRIPTION
 .Fn Setpgid
 sets the process group of the specified process
 .Ar pid
 to the specified
-.Ar pgrp .
+.Ar pgid .
 If
 .Ar pid
 is zero, then the call applies to the current process.
@@ -59,6 +64,12 @@ is zero, then the call applies to the current process.
 If the invoker is not the super-user, then the affected process
 must have the same effective user-id as the invoker or be a descendant
 of the invoking process.
+.Pp
+If the calling process is not already a session leader,
+.Fn setpgrp
+sets the process group ID of the calling process
+to that of the calling process.
+Any new session that this creates will have no controlling terminal.
 .Sh RETURN VALUES
 .Fn Setpgid
 returns 0 when the operation was successful.
@@ -69,32 +80,81 @@ indicates the reason.
 .Fn Setpgid
 will fail and the process group will not be altered if:
 .Bl -tag -width Er
+.\" ===========
 .It Bq Er EACCES
 The value of the
 .Fa pid
 argument matches the process ID of a child process of the calling process, 
 and the child process has successfully executed one of the exec functions.
+.\" ===========
+.It Bq Er EINVAL
+The value of the
+.Fa pgid
+argument is less than 0
+or is not a value supported by the implementation.
+.\" ===========
+.It Bq Er EPERM
+The process indicated by the
+.Fa pid
+argument is a session leader.
+.\" ===========
 .It Bq Er EPERM
 The effective user ID of the requested process is different
 from that of the caller and the process is not a descendant
 of the calling process.
+.\" ===========
+.It Bq Er EPERM
+The value of the
+.Fa pgid argument
+is valid, but does not match the process ID
+of the process indicated by the
+.Fa pid
+argument and there is no process with a process group ID
+that matches the value of the
+.Fa pgid
+argument in the same session as the calling process.
+.\" ===========
 .It Bq Er ESRCH
 The value of the 
 .Fa pid 
 argument does not match the process ID of the calling process or of a 
 child process of the calling process.
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <unistd.h>
+.Pp
+.Ft int
+.br
+.Fo setpgrp
+.Fa "pid_t pid"
+.Fa "pid_t pgid"
+.Fc ;
+.Pp
+The legacy
+.Fn setpgrp
+function is a clone of the
+.Fn setpgid
+function, retained for calling convention compatibility
+with historical versions of
+.Bx .
+.Sh COMPATIBILITY
+Use of the legacy version of the
+.Fn setpgrp
+call will cause compiler diagnostics.
+Use
+.Fn setpgid
+instead.
+.Pp
+Use of private (and conflicting) prototypes for
+.Fn setpgrp
+will cause compiler diagnostics.
+Delete the private prototypes and include
+.In unistd.h .
 .Sh SEE ALSO
-.Xr getpgrp 2
+.Xr getpgrp 2 ,
+.Xr compat 5
 .Sh STANDARDS
 The
 .Fn setpgid
 function conforms to 
 .St -p1003.1-88 .
-.Sh COMPATIBILITY
-.Fn Setpgrp
-is identical to
-.Fn setpgid ,
-and is retained for calling convention compatibility with historical
-versions of
-.Bx .

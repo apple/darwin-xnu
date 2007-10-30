@@ -36,9 +36,9 @@
 .Dt READ 2
 .Os
 .Sh NAME
+.Nm pread ,
 .Nm read ,
-.Nm readv ,
-.Nm pread
+.Nm readv
 .Nd read input
 .Sh LIBRARY
 .Lb libc
@@ -47,29 +47,43 @@
 .In sys/uio.h
 .In unistd.h
 .Ft ssize_t
-.Fn read "int d" "void *buf" "size_t nbytes"
+.Fo pread
+.Fa "int d"
+.Fa "void *buf"
+.Fa "size_t nbyte"
+.Fa "off_t offset"
+.Fc
 .Ft ssize_t
-.Fn readv "int d" "const struct iovec *iov" "int iovcnt"
+.Fo read
+.Fa "int fildes"
+.Fa "void *buf"
+.Fa "size_t nbyte"
+.Fc
 .Ft ssize_t
-.Fn pread "int d" "void *buf" "size_t nbytes" "off_t offset"
+.Fo readv
+.Fa "int d"
+.Fa "const struct iovec *iov"
+.Fa "int iovcnt"
+.Fc
 .Sh DESCRIPTION
 .Fn Read
 attempts to read
-.Fa nbytes
-of data from the object referenced by the descriptor
-.Fa d
+.Fa nbyte
+bytes of data from the object referenced by the descriptor
+.Fa fildes
 into the buffer pointed to by
 .Fa buf .
 .Fn Readv
-performs the same action, but scatters the input data
-into the
+performs the same action,
+but scatters the input data into the
 .Fa iovcnt
 buffers specified by the members of the
 .Fa iov
 array: iov[0], iov[1], ..., iov[iovcnt\|\-\|1].
 .Fn Pread
-performs the same function, but reads from the specified position in
-the file without modifying the file pointer.
+performs the same function,
+but reads from the specified position in the file
+without modifying the file pointer.
 .Pp
 For
 .Fn readv ,
@@ -96,7 +110,7 @@ On objects capable of seeking, the
 .Fn read
 starts at a position
 given by the pointer associated with
-.Fa d
+.Fa fildes
 (see
 .Xr lseek 2 ) .
 Upon return from
@@ -125,66 +139,141 @@ Otherwise, a -1 is returned and the global variable
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
-.Fn Read ,
-.Fn readv ,
+The
+.Fn pread ,
+.Fn read ,
 and
-.Fn pread
+.Fn readv
+calls
 will succeed unless:
 .Bl -tag -width Er
+.\" ===========
+.It Bq Er EAGAIN
+The file was marked for non-blocking I/O,
+and no data were ready to be read.
+.\" ===========
 .It Bq Er EBADF
-.Fa D
+.Fa fildes
 is not a valid file or socket descriptor open for reading.
+.\" ===========
 .It Bq Er EFAULT
 .Fa Buf
 points outside the allocated address space.
-.It Bq Er EIO
-An I/O error occurred while reading from the file system.
+.\" ===========
 .It Bq Er EINTR
 A read from a slow device was interrupted before
 any data arrived by the delivery of a signal.
 .It Bq Er EINVAL
 The pointer associated with
-.Fa d
+.Fa fildes
 was negative.
-.It Bq Er EAGAIN
-The file was marked for non-blocking I/O,
-and no data were ready to be read.
-.El
-.Pp
-In addition,
-.Fn readv
-may return one of the following errors:
-.Bl -tag -width Er
-.It Bq Er EINVAL
-.Fa Iovcnt
-was less than or equal to 0, or greater than 16.
-.It Bq Er EINVAL
-One of the
-.Fa iov_len
-values in the
-.Fa iov
-array was negative.
-.It Bq Er EINVAL
-The sum of the
-.Fa iov_len
-values in the
-.Fa iov
-array overflowed a 32-bit integer.
-.It Bq Er EFAULT
-Part of the
-.Fa iov
-points outside the process's allocated address space.
+.\" ===========
+.It Bq Er EIO
+An I/O error occurred while reading from the file system.
+.\" ===========
+.\" .It Bq Er EIO
+.\" The process is a member of a background process
+.\" attempting to read from its controlling terminal.
+.\" ===========
+.\" .It Bq Er EIO
+.\" The process is ignoring or blocking the SIGTTIN signal.
+.\" ===========
+.It Bq Er EIO
+The process group is orphaned.
+.\" ===========
+.It Bq Er EIO
+The file is a regular file,
+.Fa nbyte
+is greater than 0,
+the starting position is before the end-of-file,
+and the starting position is greater than or equal
+to the offset maximum established
+for the open file descriptor associated with
+.Fa fildes .
+.\" ===========
+.It Bq Er EISDIR
+An attempt is made to read a directory.
+.\" ===========
+.It Bq Er ENOBUFS
+An attempt to allocate a memory buffer fails.
+.\" ===========
+.It Bq Er ENOMEM
+Insufficient memory is available.
+.\" ===========
+.It Bq Er ENXIO
+An action is requested of a device that does not exist..
+.\" ===========
+.It Bq Er ENXIO
+A requested action cannot be performed by the device.
 .El
 .Pp
 The
 .Fn pread
 call may also return the following errors:
 .Bl -tag -width Er
+.\" ===========
 .It Bq Er EINVAL
 The specified file offset is invalid.
+.\" ===========
 .It Bq Er ESPIPE
 The file descriptor is associated with a pipe, socket, or FIFO.
 .El
+.Pp
+The
+.Fn read
+call may also return the following errors:
+.Bl -tag -width Er
+.\" ===========
+.It Bq Er ECONNRESET
+The connection is closed by the peer
+during a read attempt on a socket.
+.\" ===========
+.It Bq Er ENOTCONN
+A read is attempted on an unconnected socket.
+.\" ===========
+.It Bq Er ETIMEDOUT
+A transmission timeout occurs
+during a read attempt on a socket.
+.El
+.Pp
+The
+.Fn readv
+call may also return one of the following errors:
+.Bl -tag -width Er
+.\" ===========
+.It Bq Er EFAULT
+Part of the
+.Fa iov
+points outside the process's allocated address space.
+.\" ===========
+.It Bq Er EINVAL
+.Fa Iovcnt
+was less than or equal to 0, or greater than 16.
+.\" ===========
+.It Bq Er EINVAL
+One of the
+.Fa iov_len
+values in the
+.Fa iov
+array was negative.
+.\" ===========
+.It Bq Er EINVAL
+The sum of the
+.Fa iov_len
+values in the
+.Fa iov
+array overflowed a 32-bit integer.
+.El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/uio.h>
+.Fd #include <unistd.h>
+.Pp
+The include files
+.In sys/types.h
+and
+.In sys/uio.h
+are necessary for all functions.
 .Sh SEE ALSO
 .Xr dup 2 ,
 .Xr fcntl 2 ,
@@ -192,7 +281,8 @@ The file descriptor is associated with a pipe, socket, or FIFO.
 .Xr pipe 2 ,
 .Xr select 2 ,
 .Xr socket 2 ,
-.Xr socketpair 2
+.Xr socketpair 2 ,
+.Xr compat 5
 .Sh STANDARDS
 The
 .Fn read

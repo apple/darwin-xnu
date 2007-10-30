@@ -98,14 +98,7 @@
 #include <netinet6/ipsec.h>
 #include <netinet6/ipsec6.h>
 extern int ipsec_bypass;
-extern lck_mtx_t *sadb_mutex;
 #endif /*IPSEC*/
-
-
-#include "faith.h"
-#if defined(NFAITH) && 0 < NFAITH
-#include <net/if_faith.h>
-#endif
 
 #define	satosin6(sa)	((struct sockaddr_in6 *)(sa))
 #define	ifatoia6(ifa)	((struct in6_ifaddr *)(ifa))
@@ -180,14 +173,10 @@ rip6_input(
 			/*
 			 * Check AH/ESP integrity.
 			 */
-			if (ipsec_bypass == 0 && n) {
-				lck_mtx_lock(sadb_mutex);
-				if (ipsec6_in_reject_so(n, last->inp_socket)) {
+			if (ipsec_bypass == 0 && n && ipsec6_in_reject_so(n, last->inp_socket)) {
 					m_freem(n);
-					ipsec6stat.in_polvio++;
+					IPSEC_STAT_INCREMENT(ipsec6stat.in_polvio);
 					/* do not inject data into pcb */
-			        }
-				lck_mtx_unlock(sadb_mutex);
 			} else
 #endif /*IPSEC*/
 			if (n) {
@@ -212,15 +201,11 @@ rip6_input(
 	/*
 	 * Check AH/ESP integrity.
 	 */
-	if (ipsec_bypass == 0 && last) {
-		lck_mtx_lock(sadb_mutex);
-		if  (ipsec6_in_reject_so(m, last->inp_socket)) {
+	if (ipsec_bypass == 0 && last && ipsec6_in_reject_so(m, last->inp_socket)) {
 			m_freem(m);
-			ipsec6stat.in_polvio++;
+			IPSEC_STAT_INCREMENT(ipsec6stat.in_polvio);
 			ip6stat.ip6s_delivered--;
 			/* do not inject data into pcb */
-		}
-		lck_mtx_unlock(sadb_mutex);
 	} else
 #endif /*IPSEC*/
 	if (last) {
@@ -290,7 +275,7 @@ rip6_ctlinput(
 		sa6_src = &sa6_any;
 	}
 
-	(void) in6_pcbnotify(&ripcbinfo, sa, 0, (struct sockaddr *)sa6_src,
+	(void) in6_pcbnotify(&ripcbinfo, sa, 0, (const struct sockaddr *)sa6_src,
 			     0, cmd, notify);
 }
 
@@ -470,8 +455,10 @@ rip6_output(
 		m_freem(m);
 
  freectl:
-	if (optp == &opt && optp->ip6po_rthdr && optp->ip6po_route.ro_rt)
+	if (optp == &opt && optp->ip6po_rthdr && optp->ip6po_route.ro_rt) {
 		rtfree(optp->ip6po_route.ro_rt);
+		optp->ip6po_route.ro_rt = NULL;
+	}
 	if (control) {
 		if (optp == &opt)
 			ip6_clearpktopts(optp, 0, -1);
@@ -481,7 +468,7 @@ rip6_output(
 }
 
 static void
-load_ip6fw()
+load_ip6fw(void)
 {
 	ip6_fw_init();
 }
@@ -569,10 +556,10 @@ rip6_ctloutput(
 }
 
 static int
-rip6_attach(struct socket *so, int proto, struct proc *p)
+rip6_attach(struct socket *so, int proto, __unused struct proc *p)
 {
 	struct inpcb *inp;
-	int error, s;
+	int error;
 
 	inp = sotoinpcb(so);
 	if (inp)
@@ -583,9 +570,7 @@ rip6_attach(struct socket *so, int proto, struct proc *p)
 	error = soreserve(so, rip_sendspace, rip_recvspace);
 	if (error)
 		return error;
-	s = splnet();
 	error = in_pcballoc(so, &ripcbinfo, p);
-	splx(s);
 	if (error)
 		return error;
 	inp = (struct inpcb *)so->so_pcb;
@@ -639,7 +624,7 @@ rip6_disconnect(struct socket *so)
 }
 
 static int
-rip6_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
+rip6_bind(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 {
 	struct inpcb *inp = sotoinpcb(so);
 	struct sockaddr_in6 *addr = (struct sockaddr_in6 *)nam;
@@ -665,13 +650,14 @@ rip6_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 	    if (ia) ifafree(ia);
 		return(EADDRNOTAVAIL);
 	}
-	ifafree(ia);
+	if (ia != NULL)
+		ifafree(ia);
 	inp->in6p_laddr = addr->sin6_addr;
 	return 0;
 }
 
 static int
-rip6_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
+rip6_connect(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 {
 	struct inpcb *inp = sotoinpcb(so);
 	struct sockaddr_in6 *addr = (struct sockaddr_in6 *)nam;
@@ -716,8 +702,8 @@ rip6_shutdown(struct socket *so)
 }
 
 static int
-rip6_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
-	 struct mbuf *control, struct proc *p)
+rip6_send(struct socket *so, __unused int flags, struct mbuf *m, struct sockaddr *nam,
+	 struct mbuf *control, __unused struct proc *p)
 {
 	struct inpcb *inp = sotoinpcb(so);
 	struct sockaddr_in6 tmp;
@@ -759,3 +745,14 @@ struct pr_usrreqs rip6_usrreqs = {
 	pru_rcvoob_notsupp, rip6_send, pru_sense_null, rip6_shutdown,
 	in6_setsockaddr, sosend, soreceive, pru_sopoll_notsupp
 };
+
+__private_extern__ struct pr_usrreqs icmp6_dgram_usrreqs = {
+        rip6_abort, pru_accept_notsupp, icmp6_dgram_attach, rip6_bind, rip6_connect,
+        pru_connect2_notsupp, in6_control, rip6_detach, rip6_disconnect,
+        pru_listen_notsupp, in6_setpeeraddr, pru_rcvd_notsupp,
+        pru_rcvoob_notsupp, icmp6_dgram_send, pru_sense_null, rip6_shutdown,
+        in6_setsockaddr, sosend, soreceive, pru_sopoll_notsupp
+};
+
+
+

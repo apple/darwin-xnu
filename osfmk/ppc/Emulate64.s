@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2007 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */ 																							
 
 /* Emulate64.s
@@ -223,8 +229,8 @@ a64AlignAssistJoin:										// join here from program interrupt handler
 //		r29 = SRR1 (ie, MSR at interrupt)
 // Note that EE and IR are always off, and SF is always on in this code.
 
-		rlwinm	r3,r29,0,MSR_DR_BIT,MSR_DR_BIT			// was translation on at fault?
-        rlwimi	r3,r3,32-MSR_RI_BIT+MSR_DR_BIT,MSR_RI_BIT,MSR_RI_BIT	// if DR was set, set RI too
+		rlwinm	r3,r29,31,MSR_DR_BIT,MSR_DR_BIT			// Move instruction translate bit to DR
+        rlwimi	r3,r3,32-MSR_RI_BIT+MSR_DR_BIT,MSR_RI_BIT,MSR_RI_BIT	// if DR is now set, set RI too
         or		r25,r26,r3								// assemble MSR to use accessing target space
         
 
@@ -248,6 +254,10 @@ a64AlignAssistJoin:										// join here from program interrupt handler
         crnot	kTrace,cr0_eq
         rlwinm.	r0,r19,0,enaNotifyEMb,enaNotifyEMb			// Should we notify?
         crnot	kNotify,cr0_eq        
+
+		rlwinm	r3,r29,0,MSR_DR_BIT,MSR_DR_BIT			// was data translation on at fault?
+        rlwimi	r3,r3,32-MSR_RI_BIT+MSR_DR_BIT,MSR_RI_BIT,MSR_RI_BIT	// if DR is now set, set RI too
+        or		r25,r26,r3								// assemble MSR to use accessing target space
 
 
 // Hash the intruction into a 5-bit value "AAAAB" used to index the branch table, and a
@@ -888,7 +898,7 @@ a64RedriveAsISI:						// this DSI happened fetching the opcode (r1==DSISR  r4==D
         mtmsr	r26						// turn DR back off
         isync							// wait for it to happen
         li		r30,T_INSTRUCTION_ACCESS
-        rlwimi	r29,r1,0,0,4			// insert the fault type from DSI's DSISR
+        rlwimi	r29,r1,0,1,4			// insert the fault type from DSI's DSISR
         std		r29,savesrr1(r13)		// update SRR1 to look like an ISI
         b		a64Redrive
 

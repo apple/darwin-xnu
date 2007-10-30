@@ -3,11 +3,6 @@ export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
-
-export COMP_LDFLAGS_COMPONENT_PPC = -Wl,-i_OSCompareAndSwap:_hw_compare_and_store \
-                                    -Wl,-i_OSDequeueAtomic:_hw_dequeue_atomic \
-                                    -Wl,-i_OSEnqueueAtomic:_hw_queue_atomic
-
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
@@ -19,6 +14,9 @@ INSTINC_SUBDIRS_PPC = ${INSTINC_SUBDIRS}
 
 INSTINC_SUBDIRS_I386 = ${INSTINC_SUBDIRS}
 
+INSTINC_SUBDIRS_ARM = ${INSTINC_SUBDIRS}
+
+
 EXPINC_SUBDIRS = \
 	libkern \
 	uuid
@@ -26,6 +24,8 @@ EXPINC_SUBDIRS = \
 EXPINC_SUBDIRS_PPC = ${EXPINC_SUBDIRS}
 
 EXPINC_SUBDIRS_I386 = ${EXPINC_SUBDIRS}
+
+EXPINC_SUBDIRS_ARM = ${EXPINC_SUBDIRS}
 
 SETUP_SUBDIRS = conf
 

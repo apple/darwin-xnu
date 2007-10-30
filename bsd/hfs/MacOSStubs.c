@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -25,10 +31,11 @@
 #include <sys/malloc.h>
 #include <sys/types.h>
 
+#include <pexpert/pexpert.h>
+
 #include "hfs.h"
 #include "hfs_dbg.h"
 #include "hfscommon/headers/FileMgrInternal.h"
-
 
 /* 
  * gTimeZone should only be used for HFS volumes!
@@ -41,7 +48,7 @@ struct timezone gTimeZone = {8*60,1};
  *
  * called by the Catalog Manager when creating/updating HFS Plus records
  */
-UInt32 GetTimeUTC(void)
+u_int32_t GetTimeUTC(void)
 {
 	struct timeval tv;
 
@@ -55,9 +62,9 @@ UInt32 GetTimeUTC(void)
  * LocalToUTC - convert from Mac OS local time to Mac OS GMT time.
  * This should only be called for HFS volumes (not for HFS Plus).
  */
-UInt32 LocalToUTC(UInt32 localTime)
+u_int32_t LocalToUTC(u_int32_t localTime)
 {
-	UInt32 gtime = localTime;
+	u_int32_t gtime = localTime;
 	
 	if (gtime != 0) {
 		gtime += (gTimeZone.tz_minuteswest * 60);
@@ -76,9 +83,9 @@ UInt32 LocalToUTC(UInt32 localTime)
  * UTCToLocal - convert from Mac OS GMT time to Mac OS local time.
  * This should only be called for HFS volumes (not for HFS Plus).
  */
-UInt32 UTCToLocal(UInt32 utcTime)
+u_int32_t UTCToLocal(u_int32_t utcTime)
 {
-	UInt32 ltime = utcTime;
+	u_int32_t ltime = utcTime;
 	
 	if (ltime != 0) {
 		ltime -= (gTimeZone.tz_minuteswest * 60);
@@ -150,7 +157,14 @@ void DisposePtr (Ptr p)
 }
 
 
-void DebugStr (ConstStr255Param  debuggerMsg)
+void
+DebugStr(
+#if CONFIG_NO_KPRINTF_STRINGS
+	__unused ConstStr255Param debuggerMsg
+#else
+	ConstStr255Param debuggerMsg
+#endif
+	)
 {
     kprintf ("*** Mac OS Debugging Message: %s\n", &debuggerMsg[1]);
 	DEBUG_BREAK;

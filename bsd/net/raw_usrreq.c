@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1980, 1986, 1993
@@ -75,7 +81,7 @@ lck_grp_attr_t 	*raw_mtx_grp_attr;
  * Initialize raw connection block q.
  */
 void
-raw_init()
+raw_init(void)
 {
 	raw_mtx_grp_attr = lck_grp_attr_alloc_init();
 
@@ -100,14 +106,12 @@ raw_init()
  * Raw protocol interface.
  */
 void
-raw_input(m0, proto, src, dst)
-	struct mbuf *m0;
-	register struct sockproto *proto;
-	struct sockaddr *src, *dst;
+raw_input(struct mbuf *m0, struct sockproto *proto, struct sockaddr *src,
+	  struct sockaddr *dst)
 {
-	register struct rawcb *rp;
-	register struct mbuf *m = m0;
-	register int sockets = 0;
+	struct rawcb *rp;
+	struct mbuf *m = m0;
+	int sockets = 0;
 	struct socket *last;
 	int error;
 
@@ -115,7 +119,7 @@ raw_input(m0, proto, src, dst)
 //####LD socket we'll find and need to append to is unlocked.
 //####LD calls from the output (locked) path need to make sure the socket is not locked when
 //####LD we call in raw_input
-	last = 0;
+	last = NULL;
 	lck_mtx_lock(raw_mtx);
 	LIST_FOREACH(rp, &rawcb_list, list) {
 		if (rp->rcb_proto.sp_family != proto->sp_family)
@@ -167,10 +171,7 @@ raw_input(m0, proto, src, dst)
 
 /*ARGSUSED*/
 void
-raw_ctlinput(cmd, arg, dummy)
-	int cmd;
-	struct sockaddr *arg;
-	void *dummy;
+raw_ctlinput(int cmd, __unused struct sockaddr *arg, __unused void *dummy)
 {
 
 	if (cmd < 0 || cmd > PRC_NCMDS)
@@ -201,33 +202,25 @@ raw_uabort(struct socket *so)
 /* pru_accept is EOPNOTSUPP */
 
 static int
-raw_uattach(struct socket *so, int proto, struct proc *p)
+raw_uattach(struct socket *so, int proto, __unused struct proc *p)
 {
 	struct rawcb *rp = sotorawcb(so);
-#ifndef __APPLE__
-	int error;
-#endif
 
 	if (rp == 0)
 		return EINVAL;
-#ifdef __APPLE__
 		if ((so->so_state & SS_PRIV) == 0)
 			return (EPERM);
-#else
-	if (p && (error = suser(p)) != 0)
-		return error;
-#endif
 	return raw_attach(so, proto);
 }
 
 static int
-raw_ubind(struct socket *so, struct sockaddr *nam, struct proc *p)
+raw_ubind(__unused struct socket *so, __unused struct sockaddr *nam, __unused struct proc *p)
 {
 	return EINVAL;
 }
 
 static int
-raw_uconnect(struct socket *so, struct sockaddr *nam, struct proc *p)
+raw_uconnect(__unused struct socket *so, __unused struct sockaddr *nam, __unused struct proc *p)
 {
 	return EINVAL;
 }
@@ -289,7 +282,7 @@ raw_upeeraddr(struct socket *so, struct sockaddr **nam)
 
 static int
 raw_usend(struct socket *so, int flags, struct mbuf *m,
-	  struct sockaddr *nam, struct mbuf *control, struct proc *p)
+	  struct sockaddr *nam, struct mbuf *control, __unused struct proc *p)
 {
 	int error;
 	struct rawcb *rp = sotorawcb(so);
@@ -328,7 +321,7 @@ raw_usend(struct socket *so, int flags, struct mbuf *m,
 	error = (*so->so_proto->pr_output)(m, so);
 	m = NULL;
 	if (nam)
-		rp->rcb_faddr = 0;
+		rp->rcb_faddr = NULL;
 release:
 	if (m != NULL)
 		m_freem(m);

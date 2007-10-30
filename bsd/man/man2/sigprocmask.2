@@ -42,12 +42,16 @@
 .Sh SYNOPSIS
 .Fd #include <signal.h>
 .Ft int
-.Fn sigprocmask "int how" "const sigset_t *set" "sigset_t *oset"
+.Fo sigprocmask
+.Fa "int how"
+.Fa "const sigset_t *restrict set"
+.Fa "sigset_t *restrict oset"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn sigprocmask
-function examines and/or changes the current signal mask (those signals
-that are blocked from delivery).
+function examines and/or changes the current signal mask
+(those signals that are blocked from delivery).
 Signals are blocked if they are members of the current signal mask set.
 .Pp
 If
@@ -105,6 +109,7 @@ The
 call will fail and the signal mask will be unchanged if one
 of the following occurs:
 .Bl -tag -width Er
+.\" ===========
 .It Bq Er EINVAL
 .Fa how
 has a value other than those listed here.
@@ -112,8 +117,8 @@ has a value other than those listed here.
 .Sh SEE ALSO
 .Xr kill 2 ,
 .Xr sigaction 2 ,
-.Xr sigsetops 3 ,
-.Xr sigsuspend 2
+.Xr sigsuspend 2 ,
+.Xr sigsetops 3
 .Sh STANDARDS
 The
 .Fn sigprocmask

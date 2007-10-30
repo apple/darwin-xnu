@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1998, 1999 Apple Computer, Inc. All Rights Reserved */
 /*!
@@ -35,7 +41,7 @@
 
 #define KEVENTS_ON  1
 #define KEV_SNDSPACE (4 * 1024)
-#define KEV_RECVSPACE (8 * 1024)
+#define KEV_RECVSPACE (32 * 1024)
 
 #define KEV_ANY_VENDOR    0
 #define KEV_ANY_CLASS     0
@@ -83,6 +89,12 @@
 #define KEV_APPLESHARE_CLASS	4
 
 /*!
+	@defined KEV_FIREWALL_CLASS
+	@discussion Firewall kernel event class.
+*/
+#define KEV_FIREWALL_CLASS	5
+
+/*!
 	@struct kern_event_msg
 	@discussion This structure is prepended to all kernel events. This structure
 		is used to determine the format of the remainder of the kernel event.
@@ -104,22 +116,21 @@
 		KEV_MSG_HEADER_SIZE.
 */
 struct kern_event_msg {
-     u_long	total_size;		/* Size of entire event msg */
-     u_long	vendor_code;	/* For non-Apple extensibility */
-     u_long	kev_class;		/* Layer of event source */
-     u_long	kev_subclass;	/* Component within layer */
-     u_long	id;				/* Monotonically increasing value */
-     u_long	event_code;		/* unique code */
-     u_long	event_data[1];	/* One or more data longwords */
-
+	u_int32_t	total_size;	/* Size of entire event msg */
+	u_int32_t	vendor_code;	/* For non-Apple extensibility */
+	u_int32_t	kev_class;	/* Layer of event source */
+	u_int32_t	kev_subclass;	/* Component within layer */
+	u_int32_t	id;		/* Monotonically increasing value */
+	u_int32_t	event_code;	/* unique code */
+	u_int32_t	event_data[1];	/* One or more data words */
 };
 
 /*!
 	@defined KEV_MSG_HEADER_SIZE
-    @discussion Size of the header portion of the kern_event_msg structure. This
-    	accounts for everything right up to event_data. The size of the data can
-    	be found by subtracting KEV_MSG_HEADER_SIZE from the total size from the
-    	kern_event_msg.
+	@discussion Size of the header portion of the kern_event_msg structure. This
+		accounts for everything right up to event_data. The size of the data can
+		be found by subtracting KEV_MSG_HEADER_SIZE from the total size from the
+		kern_event_msg.
 */
 #define KEV_MSG_HEADER_SIZE (offsetof(struct kern_event_msg, event_data[0]))
 
@@ -140,9 +151,9 @@ struct kern_event_msg {
 		subclass.
 */
 struct kev_request {
-     u_long	vendor_code;
-     u_long	kev_class;
-     u_long	kev_subclass;
+	u_int32_t	vendor_code;
+	u_int32_t	kev_class;
+	u_int32_t	kev_subclass;
 };
 
 /*!
@@ -151,6 +162,8 @@ struct kev_request {
 		to identify a vendor or kext when looking up a vendor code.
 */
 #define KEV_VENDOR_CODE_MAX_STR_LEN	200
+
+#pragma pack(4)
 
 /*!
 	@struct kev_vendor_code
@@ -162,17 +175,18 @@ struct kev_request {
 	@field vendor_string A bundle style identifier.
 */
 struct kev_vendor_code {
-     u_long	vendor_code;
-     char	vendor_string[KEV_VENDOR_CODE_MAX_STR_LEN];
+	u_int32_t	vendor_code;
+	char		vendor_string[KEV_VENDOR_CODE_MAX_STR_LEN];
 };
 
+#pragma pack()
 
 /*!
 	@defined SIOCGKEVID
 	@discussion Retrieve the current event id. Each event generated will have
 		a new idea. The next event to be generated will have an id of id+1.
 */
-#define SIOCGKEVID	_IOR('e', 1, u_long)
+#define SIOCGKEVID	_IOR('e', 1, u_int32_t)
 
 /*!
 	@defined SIOCSKEVFILT
@@ -209,12 +223,12 @@ struct kev_vendor_code {
 	@field data_ptr A pointer to data.
 */
 struct kev_d_vectors {
-     u_long	data_length;	/* Length of the event data */
-     void	*data_ptr;    /* Pointer to event data */
+	u_int32_t	data_length;	/* Length of the event data */
+	void		*data_ptr;	/* Pointer to event data */
 };
 
 /*!
-	@struct kev_d_vectors
+	@struct kev_msg
 	@discussion This structure is used when posting a kernel event.
 	@field vendor_code The vendor code assigned by kev_vendor_code_find.
 	@field kev_class The event's class.
@@ -224,11 +238,11 @@ struct kev_d_vectors {
 		the kernel event.
 */
 struct kev_msg {
-     u_long	       vendor_code;     /* For non-Apple extensibility */
-     u_long	       kev_class;	/* Layer of event source */
-     u_long	       kev_subclass;    /* Component within layer    */
-     u_long	       event_code;      /* The event code        */
-     struct kev_d_vectors  dv[N_KEV_VECTORS];      /* Up to n data vectors  */
+	u_int32_t		vendor_code;		/* For non-Apple extensibility	*/
+	u_int32_t		kev_class;		/* Layer of event source	*/
+	u_int32_t		kev_subclass;		/* Component within layer	*/
+	u_int32_t		event_code;		/* The event code		*/
+	struct kev_d_vectors	dv[N_KEV_VECTORS];	/* Up to n data vectors		*/
 };
 
 /*!
@@ -238,12 +252,12 @@ struct kev_msg {
 		that string. Vendor codes will remain the same until the machine is
 		rebooted.
 	@param vendor_string A bundle style vendor identifier (i.e. com.apple).
-	@param vender_code Upon return, a unique vendor code for use when posting
+	@param vendor_code Upon return, a unique vendor code for use when posting
 		kernel events.
 	@result May return ENOMEM if memory constraints prevent allocation of a new
 		vendor code.
  */
-errno_t	kev_vendor_code_find(const char *vendor_string, u_long *vender_code);
+errno_t	kev_vendor_code_find(const char *vendor_string, u_int32_t *vendor_code);
 
 /*!
 	@function kev_msg_post
@@ -262,16 +276,16 @@ errno_t kev_msg_post(struct kev_msg *event_msg);
  * Internal version of kev_post_msg. Allows posting Apple vendor code kernel
  * events.
  */
-int		kev_post_msg(struct kev_msg *event);
+int	kev_post_msg(struct kev_msg *event);
 
 LIST_HEAD(kern_event_head, kern_event_pcb);
 
 struct  kern_event_pcb {
-     LIST_ENTRY(kern_event_pcb) ev_link;     /* glue on list of all PCBs */
-     struct  socket *ev_socket;     /* pointer back to socket */
-     u_long	    vendor_code_filter;
-     u_long	    class_filter;
-     u_long	    subclass_filter;
+	LIST_ENTRY(kern_event_pcb) ev_link;	/* glue on list of all PCBs */
+	struct socket	*ev_socket;		/* pointer back to socket */
+	u_int32_t	vendor_code_filter;
+	u_int32_t	class_filter;
+	u_int32_t	subclass_filter;
 };
 
 #define sotoevpcb(so)   ((struct kern_event_pcb *)((so)->so_pcb))

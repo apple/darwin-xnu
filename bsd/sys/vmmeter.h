@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*-
@@ -68,47 +74,47 @@ struct vmmeter {
 	/*
 	 * General system activity.
 	 */
-	u_int v_swtch;		/* context switches */
-	u_int v_trap;		/* calls to trap */
-	u_int v_syscall;	/* calls to syscall() */
-	u_int v_intr;		/* device interrupts */
-	u_int v_soft;		/* software interrupts */
-	u_int v_faults;		/* total faults taken */
+	unsigned int v_swtch;		/* context switches */
+	unsigned int v_trap;		/* calls to trap */
+	unsigned int v_syscall;	/* calls to syscall() */
+	unsigned int v_intr;		/* device interrupts */
+	unsigned int v_soft;		/* software interrupts */
+	unsigned int v_faults;		/* total faults taken */
 	/*
 	 * Virtual memory activity.
 	 */
-	u_int v_lookups;	/* object cache lookups */
-	u_int v_hits;		/* object cache hits */
-	u_int v_vm_faults;	/* number of address memory faults */
-	u_int v_cow_faults;	/* number of copy-on-writes */
-	u_int v_swpin;		/* swapins */
-	u_int v_swpout;		/* swapouts */
-	u_int v_pswpin;		/* pages swapped in */
-	u_int v_pswpout;	/* pages swapped out */
-	u_int v_pageins;	/* number of pageins */
-	u_int v_pageouts;	/* number of pageouts */
-	u_int v_pgpgin;		/* pages paged in */
-	u_int v_pgpgout;	/* pages paged out */
-	u_int v_intrans;	/* intransit blocking page faults */
-	u_int v_reactivated;	/* number of pages reactivated from free list */
-	u_int v_rev;		/* revolutions of the hand */
-	u_int v_scan;		/* scans in page out daemon */
-	u_int v_dfree;		/* pages freed by daemon */
-	u_int v_pfree;		/* pages freed by exiting processes */
-	u_int v_zfod;		/* pages zero filled on demand */
-	u_int v_nzfod;		/* number of zfod's created */
+	unsigned int v_lookups;	/* object cache lookups */
+	unsigned int v_hits;		/* object cache hits */
+	unsigned int v_vm_faults;	/* number of address memory faults */
+	unsigned int v_cow_faults;	/* number of copy-on-writes */
+	unsigned int v_swpin;		/* swapins */
+	unsigned int v_swpout;		/* swapouts */
+	unsigned int v_pswpin;		/* pages swapped in */
+	unsigned int v_pswpout;	/* pages swapped out */
+	unsigned int v_pageins;	/* number of pageins */
+	unsigned int v_pageouts;	/* number of pageouts */
+	unsigned int v_pgpgin;		/* pages paged in */
+	unsigned int v_pgpgout;	/* pages paged out */
+	unsigned int v_intrans;	/* intransit blocking page faults */
+	unsigned int v_reactivated;	/* number of pages reactivated from free list */
+	unsigned int v_rev;		/* revolutions of the hand */
+	unsigned int v_scan;		/* scans in page out daemon */
+	unsigned int v_dfree;		/* pages freed by daemon */
+	unsigned int v_pfree;		/* pages freed by exiting processes */
+	unsigned int v_zfod;		/* pages zero filled on demand */
+	unsigned int v_nzfod;		/* number of zfod's created */
 	/*
 	 * Distribution of page usages.
 	 */
-	u_int v_page_size;	/* page size in bytes */
-	u_int v_kernel_pages;	/* number of pages in use by kernel */
-	u_int v_free_target;	/* number of pages desired free */
-	u_int v_free_min;	/* minimum number of pages desired free */
-	u_int v_free_count;	/* number of pages free */
-	u_int v_wire_count;	/* number of pages wired down */
-	u_int v_active_count;	/* number of pages active */
-	u_int v_inactive_target; /* number of pages desired inactive */
-	u_int v_inactive_count;  /* number of pages inactive */
+	unsigned int v_page_size;	/* page size in bytes */
+	unsigned int v_kernel_pages;	/* number of pages in use by kernel */
+	unsigned int v_free_target;	/* number of pages desired free */
+	unsigned int v_free_min;	/* minimum number of pages desired free */
+	unsigned int v_free_count;	/* number of pages free */
+	unsigned int v_wire_count;	/* number of pages wired down */
+	unsigned int v_active_count;	/* number of pages active */
+	unsigned int v_inactive_target; /* number of pages desired inactive */
+	unsigned int v_inactive_count;  /* number of pages inactive */
 };
 
 /* systemwide totals computed every five seconds */

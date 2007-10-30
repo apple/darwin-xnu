@@ -27,8 +27,7 @@ OBJS_NO_WERROR=				\
 	IOMemoryCursor.cpo		\
 	IOMemoryDescriptor.cpo	\
 	IOPlatformExpert.cpo	\
-	IOPMPowerStateQueue.cpo		\
-	IOPMchangeNoteList.cpo		\
+	IOPMPowerStateQueue.cpo	\
 	IOPMrootDomain.cpo		\
 	IORangeAllocator.cpo	\
 	IORegistryEntry.cpo		\

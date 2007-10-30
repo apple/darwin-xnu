@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
  * Copyright (c) 1999 John D. Polstra
@@ -50,55 +56,163 @@
 #define _SYS_LINKER_SET_H_
 
 #include <sys/appleapiopts.h>
-
 #if !defined(KERNEL) || defined(__APPLE_API_PRIVATE)
+
 /*
  * The following macros are used to declare global sets of objects, which
- * are collected by the linker into a `struct linker_set' as defined below.
- * For ELF, this is done by constructing a separate segment for each set.
- * For a.out, it is done automatically by the linker.
+ * are collected by the linker into a `linker set' as defined below.
+ * For Mach-O, this is done by constructing a separate segment inside the
+ * __DATA section for each set.  The contents of this segment are an array
+ * of pointers to the objects in the set.
+ * 
+ * Note that due to limitations of the Mach-O format, there cannot
+ * be more than 255 sections in a segment, so linker set usage should be
+ * conserved.  Set names may not exceed 16 characters.
  */
 
-#define __ELF__
-#ifdef __ELF__
-
-#define MAKE_SET(seg, set, sym)						\
-	static void const * const __set_##set##_sym_##sym = &sym;	\
-	__asm(".section  seg, " #set ""); 	\
-	__asm(".long " #sym);						
-
-/*	__asm(".previous") */
-
-
-#define TEXT_SET(set, sym) MAKE_SET(__TEXT, set, sym)
-#define DATA_SET(set, sym) MAKE_SET(__DATA, set, sym)
-#define BSS_SET(set, sym)  MAKE_SET(__BSS,  set, sym)
-#define ABS_SET(set, sym)  MAKE_SET(__ABS,  set, sym)
-
+#ifdef KERNEL
+# define MACH_KERNEL	1
+# include "mach-o/loader.h"
+typedef int _ls_size_t;
+# ifndef _KERN_MACH_HEADER_
+extern void *getsectdatafromheader(struct mach_header *, const char *, const char *, _ls_size_t *);
+extern struct mach_header _mh_execute_header;
+# endif
 #else
-
-/*
- * NB: the constants defined below must match those defined in
- * nlist.h.  Since their calculation requires arithmetic, we
- * can't name them symbolically (e.g., 7 is N_DATA | N_EXT).
- */
-#define MAKE_SET(set, sym, type) \
-	static void const * const __set_##set##_sym_##sym = &sym; \
-	__asm(".stabs \"_" #set "\", " #type ", 0, 0, _" #sym)
-
-#define TEXT_SET(set, sym) MAKE_SET(set, sym, 5)
-#define DATA_SET(set, sym) MAKE_SET(set, sym, 7)
-#define BSS_SET(set, sym)  MAKE_SET(set, sym, 9)
-#define ABS_SET(set, sym)  MAKE_SET(set, sym, 3)
-
+# include <mach-o/ldsyms.h>
+# include <mach-o/getsect.h>
+# include <mach-o/loader.h>
+typedef unsigned long  _ls_size_t;
 #endif
 
-struct linker_set {
-	int		ls_length;
-	const void	*ls_items[1];		/* really ls_length of them,
-						 * trailing NULL */
-};
+
+/*
+ * Private macros, not to be used outside this header file.
+ *
+ * The objective of this macro stack is to produce the following output,
+ * given SET and SYM as arguments:
+ *
+ *  void const * __set_SET_sym_SYM __attribute__((section("__DATA,SET"))) = & SYM
+ */
+#ifdef __LS_VA_STRINGIFY__
+#  undef __LS_VA_STRINGIFY__
+#endif
+#ifdef __LS_VA_STRCONCAT__
+#  undef __LS_VA_STRCONCAT__
+#endif
+#define __LS_VA_STRINGIFY(_x...)	#_x
+#define __LS_VA_STRCONCAT(_x,_y)	__LS_VA_STRINGIFY(_x,_y)
+#define __LINKER_MAKE_SET(_set, _sym)					\
+	/*__unused*/ /*static*/ void const * /*const*/ __set_##_set##_sym_##_sym		\
+	__attribute__ ((section(__LS_VA_STRCONCAT(__DATA,_set)))) = (void *)&_sym
+/* the line above is very fragile - if your compiler breaks linker sets,
+   just play around with "static", "const" etc. :-) */
+
+/*
+ * Public macros.
+ */
+#define LINKER_SET_ENTRY(_set, _sym)	__LINKER_MAKE_SET(_set, _sym)
+
+/*
+ * FreeBSD compatibility.
+ */
+#ifdef __APPLE_API_OBSOLETE
+# define TEXT_SET(_set, _sym)	__LINKER_MAKE_SET(_set, _sym)
+# define DATA_SET(_set, _sym)	__LINKER_MAKE_SET(_set, _sym)
+# define BSS_SET(_set, _sym)	__LINKER_MAKE_SET(_set, _sym)
+# define ABS_SET(_set, _sym)	__LINKER_MAKE_SET(_set, _sym)
+# define SET_ENTRY(_set, _sym)	__LINKER_MAKE_SET(_set, _sym)
+#endif /* __APPLE_API_OBSOLETE */
+
+/*
+ * Extended linker set API.
+ *
+ * Since linker sets are per-object-file, and we may have multiple
+ * object files, we need to be able to specify which object's set
+ * to scan.
+ *
+ * The set itself is a contiguous array of pointers to the objects
+ * within the set.
+ */
+
+/*
+ * Public interface.
+ *
+ * void **LINKER_SET_OBJECT_BEGIN(_object, _set)
+ *	Preferred interface to linker_set_object_begin(), takes set name unquoted.
+ * void **LINKER_SET_OBJECT_LIMIT(_object, _set)
+ *	Preferred interface to linker_set_object_begin(), takes set name unquoted.
+ * LINKER_SET_OBJECT_FOREACH(_object, (set_member_type **)_pvar, _set)
+ *	Iterates over the members of _set within _object.  Since the set contains
+ *	pointers to its elements, for a set of elements of type etyp, _pvar must
+ *	be (etyp **).
+ * set_member_type **LINKER_SET_OBJECT_ITEM(_object, _set, _i)
+ *	Returns a pointer to the _i'th element of _set within _object.
+ *
+ * void **LINKER_SET_BEGIN(_set)
+ * void **LINKER_SET_LIMINT(_set)
+ * LINKER_SET_FOREACH((set_member_type **)_pvar, _set)
+ * set_member_type **LINKER_SET_ITEM(_set, _i)
+ *	These versions implicitly reference the kernel/application object.
+ */
+
+#define LINKER_SET_OBJECT_BEGIN(_object, _set)	__linker_set_object_begin(_object, _set)
+#define LINKER_SET_OBJECT_LIMIT(_object, _set)	__linker_set_object_limit(_object, _set)
+
+#define LINKER_SET_OBJECT_FOREACH(_object, _pvar, _set)			\
+	for ((void **)_pvar = LINKER_SET_OBJECT_BEGIN(_object, _set);		\
+     	     (void **)_pvar < LINKER_SET_OBJECT_LIMIT(_object, _set);	\
+	     ((void **)_pvar)++)
+
+#define LINKER_SET_OBJECT_ITEM(_object, _set, _i)			\
+	((LINKER_SET_OBJECT_BEGIN(_object, _set))[_i])
+
+#define LINKER_SET_BEGIN(_set)						\
+		LINKER_SET_OBJECT_BEGIN((struct mach_header *)&_mh_execute_header, _set)
+#define LINKER_SET_LIMIT(_set)						\
+		LINKER_SET_OBJECT_LIMIT((struct mach_header *)&_mh_execute_header, _set)
+#define LINKER_SET_FOREACH(_pvar, _set)					\
+	LINKER_SET_OBJECT_FOREACH((struct mach_header *)&_mh_execute_header, _pvar, _set)
+#define LINKER_SET_ITEM(_set, _i)					\
+      	LINKER_SET_OBJECT_ITEM((struct mach_header *)&_mh_execute_header, _set, _i)
+
+/*
+ * Implementation.
+ *
+ * void **__linker_set_object_begin(_header, _set)
+ *	Returns a pointer to the first pointer in the linker set.
+ * void **__linker_set_object_limi(_header, _set)
+ *	Returns an upper bound to the linker set (base + size).
+ */
+
+static __inline void **
+__linker_set_object_begin(struct mach_header *_header, const char *_set)
+     __attribute__((__const__));
+static __inline void **
+__linker_set_object_begin(struct mach_header *_header, const char *_set)
+{
+	void *_set_begin;
+	_ls_size_t _size;
+
+	_set_begin = getsectdatafromheader(_header, "__DATA", _set, &_size);
+	return((void **)_set_begin);
+}
+
+static __inline void **
+__linker_set_object_limit(struct mach_header *_header, const char *_set)
+     __attribute__((__const__));
+static __inline void **
+__linker_set_object_limit(struct mach_header *_header, const char *_set)
+{
+	void *_set_begin;
+	_ls_size_t _size;
+
+	_set_begin = getsectdatafromheader(_header, "__DATA", _set, &_size);
+	return((void **)((uintptr_t)_set_begin + _size));
+}
+
 #endif /* !KERNEL || __APPLE_API_PRIVATE */
 
 #endif /* _SYS_LINKER_SET_H_ */
+
 

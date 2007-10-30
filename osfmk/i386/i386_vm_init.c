@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -78,7 +84,6 @@
 
 vm_size_t	mem_size = 0; 
 vm_offset_t	first_avail = 0;/* first after page tables */
-vm_offset_t	last_addr;
 
 uint64_t	max_mem;        /* Size of physical memory (bytes), adjusted by maxmem */
 uint64_t        mem_actual;
@@ -96,7 +101,7 @@ uint32_t	bounce_pool_size = 0;
 static void	reserve_bouncepool(uint32_t);
 
 
-pmap_paddr_t	avail_start, avail_end;
+pmap_paddr_t     avail_start, avail_end;
 vm_offset_t	virtual_avail, virtual_end;
 static pmap_paddr_t	avail_remaining;
 vm_offset_t     static_memory_end = 0;
@@ -253,7 +258,7 @@ i386_vm_init(uint64_t	maxmem,
 		        pmap_type = mptr->Type;
 		}
 
-		kprintf("EFI region: type = %d/%d,  base = 0x%x,  top = 0x%x\n", mptr->Type, pmap_type, base, top);
+		kprintf("EFI region: type = %u/%d,  base = 0x%x,  top = 0x%x\n", mptr->Type, pmap_type, base, top);
 
 		if (maxpg) {
 		        if (base >= maxpg)
@@ -264,11 +269,8 @@ i386_vm_init(uint64_t	maxmem,
 		/*
 		 * handle each region
 		 */
-		if (kEfiACPIMemoryNVS == pmap_type) {
-		        prev_pmptr = 0;
-			continue;
-		} else if ((mptr->Attribute & EFI_MEMORY_RUNTIME) == EFI_MEMORY_RUNTIME ||
-			   pmap_type != kEfiConventionalMemory) {
+		if ((mptr->Attribute & EFI_MEMORY_RUNTIME) == EFI_MEMORY_RUNTIME ||
+		    pmap_type != kEfiConventionalMemory) {
 		        prev_pmptr = 0;
 			continue;
 		} else {
@@ -394,11 +396,36 @@ i386_vm_init(uint64_t	maxmem,
 	 */
 	if ( (maxmem > (uint64_t)first_avail) && (maxmem < sane_size)) {
 		ppnum_t discarded_pages  = (sane_size - maxmem) >> I386_PGSHIFT;
-		sane_size                = maxmem;
+		ppnum_t	highest_pn = 0;
+		ppnum_t	cur_alloc  = 0;
+		uint64_t	pages_to_use;
+		unsigned	cur_region = 0;
+
+		sane_size = maxmem;
+
 		if (avail_remaining > discarded_pages)
 			avail_remaining -= discarded_pages;
 		else
 			avail_remaining = 0;
+		
+		pages_to_use = avail_remaining;
+
+		while (cur_region < pmap_memory_region_count && pages_to_use) {
+		        for (cur_alloc = pmap_memory_regions[cur_region].alloc;
+			     cur_alloc < pmap_memory_regions[cur_region].end && pages_to_use;
+			     cur_alloc++) {
+			        if (cur_alloc > highest_pn)
+				        highest_pn = cur_alloc;
+				pages_to_use--;
+			}
+			if (pages_to_use == 0)
+			        pmap_memory_regions[cur_region].end = cur_alloc;
+
+			cur_region++;
+		}
+		pmap_memory_region_count = cur_region;
+
+		avail_end = i386_ptob(highest_pn + 1);
 	}
 
 	/*
@@ -411,7 +438,7 @@ i386_vm_init(uint64_t	maxmem,
 	        mem_size = (vm_size_t)sane_size;
 	max_mem = sane_size;
 
-	kprintf("Physical memory %d MB\n", sane_size/MEG);
+	kprintf("Physical memory %llu MB\n", sane_size/MEG);
 
 	if (!PE_parse_boot_arg("max_valid_dma_addr", &maxdmaaddr))
 	        max_valid_dma_address = 1024ULL * 1024ULL * 4096ULL;
@@ -439,9 +466,9 @@ i386_vm_init(uint64_t	maxmem,
 		        reserve_bouncepool(maxbouncepoolsize);
 
 		if (maxloreserve)
-			vm_lopage_poolsize = maxloreserve / PAGE_SIZE;
+		        vm_lopage_poolsize = maxloreserve / PAGE_SIZE;
 	}
-
+	
 	/*
 	 *	Initialize kernel physical map.
 	 *	Kernel virtual address starts at VM_KERNEL_MIN_ADDRESS.
@@ -486,7 +513,7 @@ pmap_valid_page(
 
 	assert(pn);
 	for (i = 0; i < pmap_memory_region_count; i++, pmptr++) {
-                if ( (pn >= pmptr->base) && (pn <= pmptr->end) && pmptr->type == kEfiConventionalMemory )
+	        if ( (pn >= pmptr->base) && (pn <= pmptr->end) )
 	                return TRUE;
 	}
 	return FALSE;
@@ -504,7 +531,7 @@ reserve_bouncepool(uint32_t bounce_pool_wanted)
 	pages_needed = bounce_pool_wanted / PAGE_SIZE;
 
 	for (i = 0; i < pmap_memory_region_count; i++, pmptr++) {
-	        if ( (pmptr->type == kEfiConventionalMemory) && ((pmptr->end - pmptr->alloc) >= pages_needed) ) {
+	        if ( (pmptr->end - pmptr->alloc) >= pages_needed ) {
 		        if ( (lowest == NULL) || (pmptr->alloc < lowest->alloc) )
 			        lowest = pmptr;
 		}

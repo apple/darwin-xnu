@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1980, 1986, 1991, 1993
@@ -62,6 +68,7 @@
 #include <sys/socket.h>
 #include <sys/domain.h>
 #include <sys/syslog.h>
+#include <sys/queue.h>
 #include <kern/lock.h>
 #include <kern/zalloc.h>
 
@@ -73,7 +80,15 @@
 
 #include <net/if_dl.h>
 
+#include <libkern/OSAtomic.h>
+#include <libkern/OSDebug.h>
+
+#include <pexpert/pexpert.h>
+
+#define	equal(a1, a2) (bcmp((caddr_t)(a1), (caddr_t)(a2), (a1)->sa_len) == 0)
 #define	SA(p) ((struct sockaddr *)(p))
+
+extern void kdp_set_gateway_mac (void *gatewaymac);
 
 extern struct domain routedomain;
 struct route_cb route_cb;
@@ -86,25 +101,78 @@ lck_grp_t 	*rt_mtx_grp;
 lck_grp_attr_t 	*rt_mtx_grp_attr;
 
 lck_mtx_t 	*route_domain_mtx;	/*### global routing tables mutex for now */
-__private_extern__ int	rttrash = 0;		/* routes not in table but not freed */
+int rttrash = 0;		/* routes not in table but not freed */
+
+static unsigned int rte_debug;
+
+/* Possible flags for rte_debug */
+#define	RTD_DEBUG	0x1	/* enable or disable rtentry debug facility */
+#define	RTD_TRACE	0x2	/* trace alloc, free and refcnt */
+#define	RTD_NO_FREE	0x4	/* don't free (good to catch corruptions) */
 
 static struct zone *rte_zone;			/* special zone for rtentry */
 #define	RTE_ZONE_MAX		65536		/* maximum elements in zone */
 #define	RTE_ZONE_NAME		"rtentry"	/* name of rtentry zone */
 
+#define	RTD_INUSE		0xFEEDFACE	/* entry is in use */
+#define	RTD_FREED		0xDEADBEEF	/* entry is freed */
+
+#define	RTD_TRSTACK_SIZE	8		/* depth of stack trace */
+#define	RTD_REFHIST_SIZE	4		/* refcnt history size */
+
+/*
+ * Debug variant of rtentry structure.
+ */
+struct rtentry_dbg {
+	struct rtentry	rtd_entry;			/* rtentry */
+	struct rtentry	rtd_entry_saved;		/* saved rtentry */
+	u_int32_t	rtd_inuse;			/* in use pattern */
+	u_int16_t	rtd_refhold_cnt;		/* # of rtref */
+	u_int16_t	rtd_refrele_cnt;		/* # of rtunref */
+	/*
+	 * Thread and PC stack trace up to RTD_TRSTACK_SIZE
+	 * deep during alloc and free.
+	 */
+	struct thread	*rtd_alloc_thread;
+	void		*rtd_alloc_stk_pc[RTD_TRSTACK_SIZE];
+	struct thread	*rtd_free_thread;
+	void		*rtd_free_stk_pc[RTD_TRSTACK_SIZE];
+	/*
+	 * Circular lists of rtref and rtunref callers.
+	 */
+	u_int16_t	rtd_refhold_next;
+	u_int16_t	rtd_refrele_next;
+	struct {
+		struct thread *th;
+		void *pc[RTD_TRSTACK_SIZE];
+	} rtd_refhold[RTD_REFHIST_SIZE];
+	struct {
+		struct thread *th;
+		void *pc[RTD_TRSTACK_SIZE];
+	} rtd_refrele[RTD_REFHIST_SIZE];
+	/*
+	 * Trash list linkage
+	 */
+	TAILQ_ENTRY(rtentry_dbg) rtd_trash_link;
+};
+
+/* List of trash route entries protected by rt_mtx */
+static TAILQ_HEAD(, rtentry_dbg) rttrash_head;
+
+static inline struct rtentry *rte_alloc_debug(void);
+static inline void rte_free_debug(struct rtentry *);
 static void rt_maskedcopy(struct sockaddr *,
 	    struct sockaddr *, struct sockaddr *);
 static void rtable_init(void **);
-static struct rtentry *rte_alloc(void);
-static void rte_free(struct rtentry *);
+static inline void rtref_audit(struct rtentry_dbg *);
+static inline void rtunref_audit(struct rtentry_dbg *);
 
 __private_extern__ u_long route_generation = 0;
 extern int use_routegenid;
 
 
 static void
-rtable_init(table)
-	void **table;
+rtable_init(void **table)
 {
 	struct domain *dom;
 	for (dom = domains; dom; dom = dom->dom_next)
@@ -114,8 +182,14 @@ rtable_init(table)
 }
 
 void
-route_init()
+route_init(void)
 {
+	int size;
+
+	PE_parse_boot_arg("rte_debug", &rte_debug);
+	if (rte_debug != 0)
+		rte_debug |= RTD_DEBUG;
+
 	rt_mtx_grp_attr = lck_grp_attr_alloc_init();
 
 	rt_mtx_grp = lck_grp_alloc_init("route", rt_mtx_grp_attr);
@@ -133,28 +207,31 @@ route_init()
 	rtable_init((void **)rt_tables);
 	route_domain_mtx = routedomain.dom_mtx;
 
-	rte_zone = zinit(sizeof (struct rtentry),
-	    RTE_ZONE_MAX * sizeof (struct rtentry), 0, RTE_ZONE_NAME);
+	if (rte_debug & RTD_DEBUG)
+		size = sizeof (struct rtentry_dbg);
+	else
+		size = sizeof (struct rtentry);
+
+	rte_zone = zinit(size, RTE_ZONE_MAX * size, 0, RTE_ZONE_NAME);
 	if (rte_zone == NULL)
 		panic("route_init: failed allocating rte_zone");
 
 	zone_change(rte_zone, Z_EXPAND, TRUE);
+
+	TAILQ_INIT(&rttrash_head);
 }
 
 /*
  * Packet routing routines.
  */
 void
-rtalloc(ro)
-	register struct route *ro;
+rtalloc(struct route *ro)
 {
 	rtalloc_ign(ro, 0UL);
 }
 
 void
-rtalloc_ign_locked(ro, ignore)
-	register struct route *ro;
-	u_long ignore;
+rtalloc_ign_locked(struct route *ro, u_long ignore)
 {
 	struct rtentry *rt;
 
@@ -170,9 +247,7 @@ rtalloc_ign_locked(ro, ignore)
 		ro->ro_rt->generation_id = route_generation;
 }
 void
-rtalloc_ign(ro, ignore)
-	register struct route *ro;
-	u_long ignore;
+rtalloc_ign(struct route *ro, u_long ignore)
 {
 	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(rt_mtx);
@@ -185,14 +260,11 @@ rtalloc_ign(ro, ignore)
  * Or, at least try.. Create a cloned route if needed.
  */
 struct rtentry *
-rtalloc1_locked(dst, report, ignflags)
-	const struct sockaddr *dst;
-	int report;
-	u_long ignflags;
+rtalloc1_locked(struct sockaddr *dst, int report, u_long ignflags)
 {
-	register struct radix_node_head *rnh = rt_tables[dst->sa_family];
-	register struct rtentry *rt;
-	register struct radix_node *rn;
+	struct radix_node_head *rnh = rt_tables[dst->sa_family];
+	struct rtentry *rt;
+	struct radix_node *rn;
 	struct rtentry *newrt = 0;
 	struct rt_addrinfo info;
 	u_long nflags;
@@ -257,10 +329,7 @@ rtalloc1_locked(dst, report, ignflags)
 }
 
 struct rtentry *
-rtalloc1(dst, report, ignflags)
-	register struct sockaddr *dst;
-	int report;
-	u_long ignflags;
+rtalloc1(struct sockaddr *dst, int report, u_long ignflags)
 {
 	struct rtentry * entry;
 	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_NOTOWNED);
@@ -275,14 +344,13 @@ rtalloc1(dst, report, ignflags)
  * If the count gets low enough, take it out of the routing table
  */
 void
-rtfree_locked(rt)
-	register struct rtentry *rt;
+rtfree_locked(struct rtentry *rt)
 {
 	/*
 	 * find the tree for that address family
 	 * Note: in the case of igmp packets, there might not be an rnh
 	 */
-	register struct radix_node_head *rnh;
+	struct radix_node_head *rnh;
 
 	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_OWNED);
 
@@ -298,28 +366,47 @@ rtfree_locked(rt)
 	 * decrement the reference count by one and if it reaches 0,
 	 * and there is a close function defined, call the close function
 	 */
-	rt->rt_refcnt--;
-	if(rnh && rnh->rnh_close && rt->rt_refcnt == 0) {
+	rtunref(rt);
+	if (rt->rt_refcnt > 0)
+		return;
+
+	if ((rt->rt_flags & RTF_TRACKREFS) != 0)
+		printf("%s rt(%p)->rt_refcnt(%d), caller=%p\n", __FUNCTION__,
+			rt, rt->rt_refcnt, __builtin_return_address(0));
+	
+	/*
+	 * On last reference give the "close method" a chance to cleanup
+	 * private state.  This also permits (for IPv4 and IPv6) a chance
+	 * to decide if the routing table entry should be purged immediately
+	 * or at a later time.  When an immediate purge is to happen the
+	 * close routine typically issues RTM_DELETE which clears the RTF_UP
+	 * flag on the entry so that the code below reclaims the storage.
+	 */
+	if (rnh->rnh_close && rt->rt_refcnt == 0)
 		rnh->rnh_close((struct radix_node *)rt, rnh);
-	}
 
 	/*
 	 * If we are no longer "up" (and ref == 0)
 	 * then we can free the resources associated
 	 * with the route.
 	 */
-	if (rt->rt_refcnt <= 0 && (rt->rt_flags & RTF_UP) == 0) {
+	if (!(rt->rt_flags & RTF_UP)) {
 		if (rt->rt_nodes->rn_flags & (RNF_ACTIVE | RNF_ROOT))
 			panic ("rtfree 2");
 		/*
 		 * the rtentry must have been removed from the routing table
 		 * so it is represented in rttrash.. remove that now.
 		 */
-		rttrash--;
+		(void) OSDecrementAtomic((SInt32 *)&rttrash);
+		if (rte_debug & RTD_DEBUG) {
+			TAILQ_REMOVE(&rttrash_head, (struct rtentry_dbg *)rt,
+			    rtd_trash_link);
+		}
 
 #ifdef	DIAGNOSTIC
 		if (rt->rt_refcnt < 0) {
-			printf("rtfree: %p not freed (neg refs) cnt=%d\n", rt, rt->rt_refcnt);
+			printf("rtfree: %p not freed (neg refs) cnt=%d\n",
+			    rt, rt->rt_refcnt);
 			return;
 		}
 #endif
@@ -351,8 +438,7 @@ rtfree_locked(rt)
 }
 
 void
-rtfree(rt)
-	register struct rtentry *rt;
+rtfree(struct rtentry *rt)
 {
 	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(rt_mtx);	
@@ -366,31 +452,78 @@ rtfree(rt)
  * use rtfree not rtunref.
  */
 void
-rtunref(struct rtentry* rt)
+rtunref(struct rtentry *p)
 {
 	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_OWNED);
 
-	if (rt == NULL)
-		panic("rtunref");
-	rt->rt_refcnt--;
-#if DEBUG
-	if (rt->rt_refcnt <= 0 && (rt->rt_flags & RTF_UP) == 0)
-		printf("rtunref - if rtfree were called, we would have freed route\n");
-#endif
+	if (p->rt_refcnt <= 0)
+		panic("rtunref: bad refcnt %d for rt=%p\n", p->rt_refcnt, p);
+
+	if (rte_debug & RTD_DEBUG)
+		rtunref_audit((struct rtentry_dbg *)p);
+
+	p->rt_refcnt--;
+}
+
+static inline void
+rtunref_audit(struct rtentry_dbg *rte)
+{
+	if (rte->rtd_inuse != RTD_INUSE)
+		panic("rtunref: on freed rte=%p\n", rte);
+
+	rte->rtd_refrele_cnt++;
+
+	if (rte_debug & RTD_TRACE) {
+		rte->rtd_refrele[rte->rtd_refrele_next].th = current_thread();
+		bzero(rte->rtd_refrele[rte->rtd_refrele_next].pc,
+		    sizeof (rte->rtd_refrele[rte->rtd_refrele_next].pc));
+		(void) OSBacktrace(rte->rtd_refrele[rte->rtd_refrele_next].pc,
+		    RTD_TRSTACK_SIZE);
+
+		rte->rtd_refrele_next =
+		    (rte->rtd_refrele_next + 1) % RTD_REFHIST_SIZE;
+	}
 }
 
 /*
  * Add a reference count from an rtentry.
  */
 void
-rtref(struct rtentry* rt)
+rtref(struct rtentry *p)
 {
 	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_OWNED);
 
-	if (rt == NULL)
-		panic("rtref");
+	if (p->rt_refcnt < 0)
+		panic("rtref: bad refcnt %d for rt=%p\n", p->rt_refcnt, p);
 
-	rt->rt_refcnt++;
+	if (rte_debug & RTD_DEBUG)
+		rtref_audit((struct rtentry_dbg *)p);
+
+	p->rt_refcnt++;
+	
+	if ((p->rt_flags & RTF_TRACKREFS) != 0)
+		printf("%s rt(%p)->rt_refcnt(%d), caller=%p\n", __FUNCTION__,
+			p, p->rt_refcnt, __builtin_return_address(0));
+}
+
+static inline void
+rtref_audit(struct rtentry_dbg *rte)
+{
+	if (rte->rtd_inuse != RTD_INUSE)
+		panic("rtref_audit: on freed rte=%p\n", rte);
+
+	rte->rtd_refhold_cnt++;
+
+	if (rte_debug & RTD_TRACE) {
+		rte->rtd_refhold[rte->rtd_refhold_next].th = current_thread();
+		bzero(rte->rtd_refhold[rte->rtd_refhold_next].pc,
+		    sizeof (rte->rtd_refhold[rte->rtd_refhold_next].pc));
+		(void) OSBacktrace(rte->rtd_refhold[rte->rtd_refhold_next].pc,
+		    RTD_TRSTACK_SIZE);
+
+		rte->rtd_refhold_next =
+		    (rte->rtd_refhold_next + 1) % RTD_REFHIST_SIZE;
+	}
 }
 
 void
@@ -415,19 +548,17 @@ rtsetifa(struct rtentry *rt, struct ifaddr* ifa)
 }
 
 void
-ifafree(ifa)
-	register struct ifaddr *ifa;
+ifafree(struct ifaddr *ifa)
 {
-	int i, oldval;
-	u_char *ptr = (u_char*)ifa;
-	
+	int oldval;
+
 	if (ifa == NULL)
 		panic("ifafree");
-	
-	oldval = OSAddAtomic(-1, &ifa->ifa_refcnt);
+
+	oldval = OSAddAtomic(-1, (SInt32 *)&ifa->ifa_refcnt);
 
 	if (oldval == 0) {
-		if  ((ifa->ifa_flags & IFA_ATTACHED) != 0) {
+		if  ((ifa->ifa_debug & IFA_ATTACHED) != 0) {
 			panic("ifa attached to ifp is being freed\n");
 		}
 		FREE(ifa, M_IFADDR);
@@ -440,7 +571,7 @@ ifaref(struct ifaddr *ifa)
 	if (ifa == NULL)
 		panic("ifaref");
 
-	if (OSAddAtomic(1, &ifa->ifa_refcnt) == 0xffffffff)
+	if (OSAddAtomic(1, (SInt32 *)&ifa->ifa_refcnt) == 0xffffffff)
 		panic("ifaref - reference count rolled over!");
 }
 
@@ -454,12 +585,11 @@ ifaref(struct ifaddr *ifa)
  *
  */
 void
-rtredirect(dst, gateway, netmask, flags, src, rtp)
-	struct sockaddr *dst, *gateway, *netmask, *src;
-	int flags;
-	struct rtentry **rtp;
+rtredirect(struct sockaddr *dst, struct sockaddr *gateway,
+	   struct sockaddr *netmask, int flags, struct sockaddr *src,
+	   struct rtentry **rtp)
 {
-	register struct rtentry *rt;
+	struct rtentry *rt;
 	int error = 0;
 	short *stat = 0;
 	struct rt_addrinfo info;
@@ -474,18 +604,18 @@ rtredirect(dst, gateway, netmask, flags, src, rtp)
 		goto out;
 	}
 
-	rt = rtalloc1_locked(dst, 0, 0UL);
+	rt = rtalloc1_locked(dst, 0, RTF_CLONING | RTF_PRCLONING);
 	/*
 	 * If the redirect isn't from our current router for this dst,
 	 * it's either old or wrong.  If it redirects us to ourselves,
 	 * we have a routing loop, perhaps as a result of an interface
 	 * going down recently.
 	 */
-#define	equal(a1, a2) (bcmp((caddr_t)(a1), (caddr_t)(a2), (a1)->sa_len) == 0)
 	if (!(flags & RTF_DONE) && rt &&
-	     (!equal(src, rt->rt_gateway) || rt->rt_ifa != ifa))
+	     (!equal(src, rt->rt_gateway) || !equal(rt->rt_ifa->ifa_addr,
+	     ifa->ifa_addr))) {
 		error = EINVAL;
-	else {
+	} else {
 		ifafree(ifa);
 		if ((ifa = ifa_ifwithaddr(gateway))) {
 			ifafree(ifa);
@@ -565,21 +695,14 @@ out:
 * Routing table ioctl interface.
 */
 int
-rtioctl(req, data, p)
-	int req;
-	caddr_t data;
-	struct proc *p;
+rtioctl(int req, caddr_t data, struct proc *p)
 {
-#if INET
-	/* Multicast goop, grrr... */
-#if MROUTING
+#pragma unused(p)
+#if INET && MROUTING
 	return mrt_ioctl(req, data);
 #else
-	return mrt_ioctl(req, data, p);
-#endif
-#else /* INET */
 	return ENXIO;
-#endif /* INET */
+#endif
 }
 
 struct ifaddr *
@@ -588,11 +711,27 @@ ifa_ifwithroute(
 	const struct sockaddr	*dst,
 	const struct sockaddr *gateway)
 {
+	struct ifaddr *ifa;
+
+	lck_mtx_lock(rt_mtx);
+	ifa = ifa_ifwithroute_locked(flags, dst, gateway);
+	lck_mtx_unlock(rt_mtx);
+
+	return (ifa);
+}
+
+struct ifaddr *
+ifa_ifwithroute_locked(
+	int flags,
+	const struct sockaddr *dst,
+	const struct sockaddr *gateway)
+{
+	struct ifaddr *ifa = NULL;
+	struct rtentry *rt = NULL;
 
 	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_OWNED);
 
-	struct ifaddr *ifa = 0;
-	if ((flags & RTF_GATEWAY) == 0) {
+	if (!(flags & RTF_GATEWAY)) {
 		/*
 		 * If we are adding a route to an interface,
 		 * and the interface is a pt to pt link
@@ -603,7 +742,7 @@ ifa_ifwithroute(
 		if (flags & RTF_HOST) {
 			ifa = ifa_ifwithdstaddr(dst);
 		}
-		if (ifa == 0)
+		if (ifa == NULL)
 			ifa = ifa_ifwithaddr(gateway);
 	} else {
 		/*
@@ -613,26 +752,46 @@ ifa_ifwithroute(
 		 */
 		ifa = ifa_ifwithdstaddr(gateway);
 	}
-	if (ifa == 0)
+	if (ifa == NULL)
 		ifa = ifa_ifwithnet(gateway);
-	if (ifa == 0) {
-		struct rtentry *rt = rtalloc1_locked(dst, 0, 0UL);
-		if (rt == 0)
-			return (0);
-		ifa = rt->rt_ifa;
-		if (ifa)
-			ifaref(ifa);
-		rtunref(rt);
-		if (ifa == 0)
-			return 0;
+	if (ifa == NULL) {
+		/* Workaround to avoid gcc warning regarding const variable */
+		rt = rtalloc1_locked((struct sockaddr *)(size_t)dst, 0, 0UL);
+		if (rt != NULL) {
+			ifa = rt->rt_ifa;
+			if (ifa != NULL)
+				ifaref(ifa);
+			rtunref(rt);
+			rt = NULL;
+		}
 	}
-	if (ifa->ifa_addr->sa_family != dst->sa_family) {
+	if (ifa != NULL && ifa->ifa_addr->sa_family != dst->sa_family) {
 		struct ifaddr *newifa;
+		/* Callee adds reference to newifa upon success */
 		newifa = ifaof_ifpforaddr(dst, ifa->ifa_ifp);
-		if (newifa != 0) {
+		if (newifa != NULL) {
 			ifafree(ifa);
 			ifa = newifa;
 		}
+	}
+	/*
+	 * If we are adding a gateway, it is quite possible that the
+	 * routing table has a static entry in place for the gateway,
+	 * that may not agree with info garnered from the interfaces.
+	 * The routing table should carry more precedence than the
+	 * interfaces in this matter.  Must be careful not to stomp
+	 * on new entries from rtinit, hence (ifa->ifa_addr != gateway).
+	 */
+	if ((ifa == NULL ||
+	    !equal(ifa->ifa_addr, (struct sockaddr *)(size_t)gateway)) &&
+	    (rt = rtalloc1_locked((struct sockaddr *)(size_t)gateway,
+	    0, 0UL)) != NULL) {
+		if (ifa != NULL)
+			ifafree(ifa);
+		ifa = rt->rt_ifa;
+		if (ifa != NULL)
+			ifaref(ifa);
+		rtunref(rt);
 	}
 	return (ifa);
 }
@@ -651,6 +810,7 @@ struct rtfc_arg {
  * Do appropriate manipulations of a routing tree given
  * all the bits of info needed
  */
+int
 rtrequest_locked(
 	int req,
 	struct sockaddr *dst,
@@ -660,9 +820,9 @@ rtrequest_locked(
 	struct rtentry **ret_nrt)
 {
 	int error = 0;
-	register struct rtentry *rt;
-	register struct radix_node *rn;
-	register struct radix_node_head *rnh;
+	struct rtentry *rt;
+	struct radix_node *rn;
+	struct radix_node_head *rnh;
 	struct ifaddr *ifa = NULL;
 	struct sockaddr *ndst;
 #define senderr(x) { error = x ; goto bad; }
@@ -692,6 +852,18 @@ rtrequest_locked(
 		rt = (struct rtentry *)rn;
 
 		/*
+		 * Take an extra reference to handle the deletion of a route
+		 * entry whose reference count is already 0; e.g. an expiring
+		 * cloned route entry or an entry that was added to the table
+		 * with 0 reference. If the caller is interested in this route,
+		 * we will return it with the reference intact. Otherwise we
+		 * will decrement the reference via rtfree_locked() and then
+		 * possibly deallocate it.
+		 */
+		rtref(rt);
+		rt->rt_flags &= ~RTF_UP;
+
+		/*
 		 * Now search what's left of the subtree for any cloned
 		 * routes which might have been formed from this node.
 		 */
@@ -713,15 +885,6 @@ rtrequest_locked(
 		}
 
 		/*
-		 * NB: RTF_UP must be set during the search above,
-		 * because we might delete the last ref, causing
-		 * rt to get freed prematurely.
-		 *  eh? then why not just add a reference?
-		 * I'm not sure how RTF_UP helps matters. (JRE)
-		 */
-		rt->rt_flags &= ~RTF_UP;
-
-		/*
 		 * give the protocol a chance to keep things in sync.
 		 */
 		if ((ifa = rt->rt_ifa) && ifa->ifa_rtrequest)
@@ -732,17 +895,22 @@ rtrequest_locked(
 		 * one more rtentry floating around that is not
 		 * linked to the routing table.
 		 */
-		rttrash++;
+		(void) OSIncrementAtomic((SInt32 *)&rttrash);
+		if (rte_debug & RTD_DEBUG) {
+			TAILQ_INSERT_TAIL(&rttrash_head,
+			    (struct rtentry_dbg *)rt, rtd_trash_link);
+		}
 
 		/*
 		 * If the caller wants it, then it can have it,
 		 * but it's up to it to free the rtentry as we won't be
 		 * doing it.
 		 */
-		if (ret_nrt)
+		if (ret_nrt != NULL) {
+			/* Return the route to caller with reference intact */
 			*ret_nrt = rt;
-		else if (rt->rt_refcnt <= 0) {
-			rt->rt_refcnt++; /* make a 1->0 transition */
+		} else {
+			/* Dereference or deallocate the route */
 			rtfree_locked(rt);
 		}
 		break;
@@ -764,7 +932,7 @@ rtrequest_locked(
 		if ((flags & RTF_GATEWAY) && !gateway)
 			panic("rtrequest: GATEWAY but no gateway");
 
-		if ((ifa = ifa_ifwithroute(flags, dst, gateway)) == 0)
+		if ((ifa = ifa_ifwithroute_locked(flags, dst, gateway)) == 0)
 			senderr(ENETUNREACH);
 
 	makeroute:
@@ -815,7 +983,8 @@ rtrequest_locked(
 			 * mechanism, then we just blow it away and retry
 			 * the insertion of the new one.
 			 */
-			rt2 = rtalloc1_locked(dst, 0, RTF_PRCLONING);
+			rt2 = rtalloc1_locked(dst, 0,
+			    RTF_CLONING | RTF_PRCLONING);
 			if (rt2 && rt2->rt_parent) {
 				rtrequest_locked(RTM_DELETE,
 					  (struct sockaddr *)rt_key(rt2),
@@ -923,16 +1092,15 @@ rtrequest(
  * the late parent (passed in as VP here) are themselves deleted.
  */
 static int
-rt_fixdelete(rn, vp)
-	struct radix_node *rn;
-	void *vp;
+rt_fixdelete(struct radix_node *rn, void *vp)
 {
 	struct rtentry *rt = (struct rtentry *)rn;
 	struct rtentry *rt0 = vp;
 
 	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_OWNED);
 
-	if (rt->rt_parent == rt0 && !(rt->rt_flags & RTF_PINNED)) {
+	if (rt->rt_parent == rt0 &&
+	    !(rt->rt_flags & (RTF_PINNED | RTF_CLONING | RTF_PRCLONING))) {
 		return rtrequest_locked(RTM_DELETE, rt_key(rt),
 				 (struct sockaddr *)0, rt_mask(rt),
 				 rt->rt_flags, (struct rtentry **)0);
@@ -958,9 +1126,7 @@ static int rtfcdebug = 0;
 #endif
 
 static int
-rt_fixchange(rn, vp)
-	struct radix_node *rn;
-	void *vp;
+rt_fixchange(struct radix_node *rn, void *vp)
 {
 	struct rtentry *rt = (struct rtentry *)rn;
 	struct rtfc_arg *ap = vp;
@@ -976,7 +1142,8 @@ rt_fixchange(rn, vp)
 
 	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_OWNED);
 
-	if (!rt->rt_parent || (rt->rt_flags & RTF_PINNED)) {
+	if (!rt->rt_parent ||
+	    (rt->rt_flags & (RTF_PINNED | RTF_CLONING | RTF_PRCLONING))) {
 #ifdef DEBUG
 		if(rtfcdebug) printf("no parent or pinned\n");
 #endif
@@ -1046,15 +1213,12 @@ rt_fixchange(rn, vp)
 }
 
 int
-rt_setgate(rt0, dst, gate)
-	struct rtentry *rt0;
-	struct sockaddr *dst, *gate;
+rt_setgate(struct rtentry *rt0, struct sockaddr *dst, struct sockaddr *gate)
 {
 	caddr_t new, old;
 	int dlen = ROUNDUP(dst->sa_len), glen = ROUNDUP(gate->sa_len);
-	register struct rtentry *rt = rt0;
+	struct rtentry *rt = rt0;
 	struct radix_node_head *rnh = rt_tables[dst->sa_family];
-	extern void kdp_set_gateway_mac (void *gatewaymac);
 	/*
 	 * A host route with the destination equal to the gateway
 	 * will interfere with keeping LLINFO in the routing
@@ -1161,12 +1325,12 @@ rt_setgate(rt0, dst, gate)
 }
 
 static void
-rt_maskedcopy(src, dst, netmask)
-	struct sockaddr *src, *dst, *netmask;
+rt_maskedcopy(struct sockaddr *src, struct sockaddr *dst,
+	      struct sockaddr *netmask)
 {
-	register u_char *cp1 = (u_char *)src;
-	register u_char *cp2 = (u_char *)dst;
-	register u_char *cp3 = (u_char *)netmask;
+	u_char *cp1 = (u_char *)src;
+	u_char *cp2 = (u_char *)dst;
+	u_char *cp3 = (u_char *)netmask;
 	u_char *cplim = cp2 + *cp3;
 	u_char *cplim2 = cp2 + *cp1;
 
@@ -1185,9 +1349,7 @@ rt_maskedcopy(src, dst, netmask)
  * for an interface.
  */
 int
-rtinit(ifa, cmd, flags)
-	register struct ifaddr *ifa;
-	int cmd, flags;
+rtinit(struct ifaddr *ifa, int cmd, int flags)
 {
 	int error;
 	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_NOTOWNED);
@@ -1198,13 +1360,11 @@ rtinit(ifa, cmd, flags)
 }
 
 int
-rtinit_locked(ifa, cmd, flags)
-	register struct ifaddr *ifa;
-	int cmd, flags;
+rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 {
-	register struct rtentry *rt;
-	register struct sockaddr *dst;
-	register struct sockaddr *deldst;
+	struct rtentry *rt;
+	struct sockaddr *dst;
+	struct sockaddr *deldst;
 	struct mbuf *m = 0;
 	struct rtentry *nrt = 0;
 	int error;
@@ -1290,10 +1450,7 @@ rtinit_locked(ifa, cmd, flags)
 		rt_newaddrmsg(cmd, ifa, error, nrt);
 		if (use_routegenid)
 			route_generation++;
-		if (rt->rt_refcnt <= 0) {
-			rt->rt_refcnt++; /* need a 1->0 transition to free */
-			rtfree_locked(rt);
-		}
+		rtfree_locked(rt);
 	}
 
 	/*
@@ -1301,10 +1458,6 @@ rtinit_locked(ifa, cmd, flags)
 	 * We need to sanity check the result.
 	 */
 	if (cmd == RTM_ADD && error == 0 && (rt = nrt)) {
-		/*
-		 * We just wanted to add it.. we don't actually need a reference
-		 */
-		rtunref(rt);
 		/*
 		 * If it came back with an unexpected interface, then it must
 		 * have already existed or something. (XXX)
@@ -1344,23 +1497,82 @@ rtinit_locked(ifa, cmd, flags)
 		rt_newaddrmsg(cmd, ifa, error, nrt);
 		if (use_routegenid)
 			route_generation++;
-	}	
+		/*
+		 * We just wanted to add it; we don't actually need a
+		 * reference.  This will result in a route that's added
+		 * to the routing table without a reference count.  The
+		 * RTM_DELETE code will do the necessary step to adjust
+		 * the reference count at deletion time.
+		 */
+		rtunref(rt);
+	}
 	return (error);
 }
 
-static struct rtentry *
+struct rtentry *
 rte_alloc(void)
 {
+	if (rte_debug & RTD_DEBUG)
+		return (rte_alloc_debug());
+
 	return ((struct rtentry *)zalloc(rte_zone));
 }
 
-static void
+void
 rte_free(struct rtentry *p)
 {
+	if (rte_debug & RTD_DEBUG) {
+		rte_free_debug(p);
+		return;
+	}
+
 	if (p->rt_refcnt != 0)
 		panic("rte_free: rte=%p refcnt=%d non-zero\n", p, p->rt_refcnt);
 
-	bzero((caddr_t)p, sizeof (*p));
 	zfree(rte_zone, p);
 }
 
+static inline struct rtentry *
+rte_alloc_debug(void)
+{
+	struct rtentry_dbg *rte;
+
+	rte = ((struct rtentry_dbg *)zalloc(rte_zone));
+	if (rte != NULL) {
+		bzero(rte, sizeof (*rte));
+		if (rte_debug & RTD_TRACE) {
+			rte->rtd_alloc_thread = current_thread();
+			(void) OSBacktrace(rte->rtd_alloc_stk_pc,
+			    RTD_TRSTACK_SIZE);
+		}
+		rte->rtd_inuse = RTD_INUSE;
+	}
+	return ((struct rtentry *)rte);
+}
+
+static inline void
+rte_free_debug(struct rtentry *p)
+{
+	struct rtentry_dbg *rte = (struct rtentry_dbg *)p;
+
+	if (p->rt_refcnt != 0)
+		panic("rte_free: rte=%p refcnt=%d\n", p, p->rt_refcnt);
+
+	if (rte->rtd_inuse == RTD_FREED)
+		panic("rte_free: double free rte=%p\n", rte);
+	else if (rte->rtd_inuse != RTD_INUSE)
+		panic("rte_free: corrupted rte=%p\n", rte);
+
+	bcopy((caddr_t)p, (caddr_t)&rte->rtd_entry_saved, sizeof (*p));
+	bzero((caddr_t)p, sizeof (*p));
+
+	rte->rtd_inuse = RTD_FREED;
+
+	if (rte_debug & RTD_TRACE) {
+		rte->rtd_free_thread = current_thread();
+		(void) OSBacktrace(rte->rtd_free_stk_pc, RTD_TRSTACK_SIZE);
+	}
+
+	if (!(rte_debug & RTD_NO_FREE))
+		zfree(rte_zone, p);
+}

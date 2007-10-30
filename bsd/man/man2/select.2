@@ -37,28 +37,55 @@
 .Dt SELECT 2
 .Os BSD 4.2
 .Sh NAME
+.Nm FD_CLR ,
+.Nm FD_COPY ,
+.Nm FD_ISSET ,
+.Nm FD_SET ,
+.Nm FD_ZERO ,
 .Nm select
 .Nd synchronous I/O multiplexing
 .Sh SYNOPSIS
 .Fd #include <sys/select.h>
-.D1 "- or -"
-.Fd #include <sys/types.h>
-.Fd #include <sys/time.h>
-.Fd #include <unistd.h>
+.\"
+.Ft void
+.Fo FD_CLR
+.Fa fd
+.Fa "fd_set *fdset"
+.Fc
+.Ft void
+.Fo FD_COPY
+.Fa "fd_set *fdset_orig"
+.Fa "fd_set *fdset_copy"
+.Fc
 .Ft int
-.Fn select "int nfds" "fd_set *readfds" "fd_set *writefds" "fd_set *exceptfds" "struct timeval *timeout"
-.Fn FD_SET fd &fdset
-.Fn FD_CLR fd &fdset
-.Fn FD_ISSET fd &fdset
-.Fn FD_COPY &fdset_orig &fdset_copy
-.Fn FD_ZERO &fdset
+.Fo FD_ISSET
+.Fa fd
+.Fa "fd_set *fdset"
+.Fc
+.Ft void
+.Fo FD_SET
+.Fa fd
+.Fa "fd_set *fdset"
+.Fc
+.Ft void
+.Fo FD_ZERO
+.Fa "fd_set *fdset"
+.Fc
+.Ft int
+.Fo select
+.Fa "int nfds"
+.Fa "fd_set *restrict readfds"
+.Fa "fd_set *restrict writefds"
+.Fa "fd_set *restrict errorfds"
+.Fa "struct timeval *restrict timeout"
+.Fc
 .Sh DESCRIPTION
 .Fn Select
 examines the I/O descriptor sets whose addresses are passed in
 .Fa readfds ,
 .Fa writefds ,
 and
-.Fa exceptfds
+.Fa errorfds
 to see if some of their descriptors
 are ready for reading, are ready for writing, or have an exceptional
 condition pending, respectively.
@@ -130,7 +157,7 @@ Any of
 .Fa readfds ,
 .Fa writefds ,
 and
-.Fa exceptfds
+.Fa errorfds
 may be given as nil pointers if no descriptors are of interest.
 .Sh RETURN VALUES
 .Fn Select
@@ -144,21 +171,74 @@ If
 .Fn select
 returns with an error,
 including one due to an interrupted call,
-the descriptor sets will be unmodified.
+the descriptor sets will be unmodified and the global variable
+.Va errno
+will be set to indicate the error.
 .Sh ERRORS
 An error return from
 .Fn select
 indicates:
 .Bl -tag -width Er
+.\" ===========
+.It Bq Er EAGAIN
+The kernel was (perhaps temporarily) unable
+to allocate the requested number of file descriptors.
+.\" ===========
 .It Bq Er EBADF
 One of the descriptor sets specified an invalid descriptor.
+.\" ===========
 .It Bq Er EINTR
 A signal was delivered before the time limit expired and
 before any of the selected events occurred.
+.\" ===========
 .It Bq Er EINVAL
 The specified time limit is invalid.  One of its components is
 negative or too large.
+.\" ===========
+.It Bq Er EINVAL
+.Fa ndfs
+is greater than FD_SETSIZE and _DARWIN_UNLIMITED_SELECT is not defined.
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/select.h>
+.D1 "- or -"
+.Fd #include <sys/types.h>
+.Fd #include <sys/time.h>
+.Fd #include <unistd.h>
+.Pp
+.Fo FD_SET
+.Fa fd
+.Fa &fdset
+.Fc ;
+.Pp
+.Fo FD_CLR
+.Fa fd
+.Fa &fdset
+.Fc ;
+.Pp
+.Fo FD_ISSET
+.Fa fd
+.Fa &fdset
+.Fc ;
+.Pp
+.Fo FD_COPY
+.Fa &fdset_orig
+.Fa &fdset_copy
+.Fc ;
+.Pp
+.Fo FD_ZERO
+.Fa &fdset
+.Fc ;
+.Sh COMPATIBILITY
+.Fn select
+now returns with
+.Va errno
+set to EINVAL when 
+.Fa nfds  
+is greater than FD_SETSIZE.
+Use a smaller value for
+.Fa nfds  
+or compile with -D_DARWIN_UNLIMITED_SELECT.
 .Sh SEE ALSO
 .Xr accept 2 ,
 .Xr connect 2 ,
@@ -167,7 +247,8 @@ negative or too large.
 .Xr read 2 ,
 .Xr recv 2 ,
 .Xr send 2 ,
-.Xr write 2
+.Xr write 2 ,
+.Xr compat 5
 .Sh BUGS
 Although the provision of
 .Xr getdtablesize 2

@@ -1,14 +1,19 @@
 /*
- * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2004 Apple Computer, Inc.  All Rights Reserved.
+ * Copyright (c) 1999-2007 Apple Inc.  All Rights Reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
  * 
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
@@ -18,7 +23,7 @@
  * Please see the License for the specific language governing rights and
  * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #ifndef _BSM_AUDIT_RECORD_H_
@@ -241,15 +246,15 @@ token_t			*au_to_header64(int rec_size, au_event_t e_type,
 token_t			*au_to_me(void);
                                
 token_t			*au_to_arg(char n, char *text, u_int32_t v);
-token_t			*au_to_arg32(char n, char *text, u_int32_t v);
-token_t			*au_to_arg64(char n, char *text, u_int64_t v);
+token_t			*au_to_arg32(char n, const char *text, u_int32_t v);
+token_t			*au_to_arg64(char n, const char *text, u_int64_t v);
 token_t			*au_to_attr(struct vnode_attr *attr);
 token_t			*au_to_attr32(struct vnode_attr *attr);
 token_t			*au_to_attr64(struct vnode_attr *attr);
 token_t			*au_to_data(char unit_print, char unit_type,
-				char unit_count, char *p);
+				char unit_count, unsigned char *p);
 token_t			*au_to_exit(int retval, int err);
-token_t			*au_to_groups(int *groups);
+token_t			*au_to_groups(gid_t *groups);
 token_t			*au_to_newgroups(u_int16_t n, gid_t *groups);
 token_t			*au_to_in_addr(struct in_addr *internet_addr);
 token_t			*au_to_in_addr_ex(struct in6_addr *internet_addr);
@@ -280,7 +285,7 @@ token_t			*au_to_process64_ex(au_id_t auid, uid_t euid,
 token_t			*au_to_return(char status, u_int32_t ret);
 token_t			*au_to_return32(char status, u_int32_t ret);
 token_t			*au_to_return64(char status, u_int64_t ret);
-token_t			*au_to_seq(long audit_count);
+token_t			*au_to_seq(u_int32_t audit_count);
 token_t			*au_to_socket(struct socket *so);
 token_t			*au_to_socket_ex_32(u_int16_t lp, u_int16_t rp, 
 				struct sockaddr *la, struct sockaddr *ta);
@@ -310,7 +315,7 @@ token_t			*au_to_subject64_ex(au_id_t auid, uid_t euid,
 				au_asid_t sid, au_tid_addr_t *tid);
 token_t			*au_to_exec_args(const char **);
 token_t			*au_to_exec_env(const char **);
-token_t			*au_to_text(char *text);
+token_t			*au_to_text(const char *text);
 token_t			*au_to_kevent(struct kevent *kev);
 token_t			*au_to_trailer(int rec_size);
 

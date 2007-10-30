@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #ifndef _HFS_ATTRLIST_H_
 #define _HFS_ATTRLIST_H_
@@ -39,25 +45,45 @@ struct attrblock {
 	void **		  ab_varbufpp;
 	int		  ab_flags;
 	int		  ab_blocksize;
+	vfs_context_t	  ab_context;
 };
 
+/* 
+ * The following define the attributes that HFS supports:
+ */
 
-#define	ATTR_OWNERSHIP_SETMASK	(ATTR_CMN_OWNERID | ATTR_CMN_GRPID | \
-	ATTR_CMN_ACCESSMASK | ATTR_CMN_FLAGS | ATTR_CMN_CRTIME |     \
-	ATTR_CMN_MODTIME | ATTR_CMN_CHGTIME | ATTR_CMN_ACCTIME)
+#define HFS_ATTR_CMN_VALID				\
+	(ATTR_CMN_NAME | ATTR_CMN_DEVID	|		\
+	 ATTR_CMN_FSID | ATTR_CMN_OBJTYPE |		\
+	 ATTR_CMN_OBJTAG | ATTR_CMN_OBJID |		\
+	 ATTR_CMN_OBJPERMANENTID | ATTR_CMN_PAROBJID |	\
+	 ATTR_CMN_SCRIPT | ATTR_CMN_CRTIME |		\
+	 ATTR_CMN_MODTIME | ATTR_CMN_CHGTIME |		\
+	 ATTR_CMN_ACCTIME | ATTR_CMN_BKUPTIME |		\
+	 ATTR_CMN_FNDRINFO |ATTR_CMN_OWNERID |		\
+	 ATTR_CMN_GRPID | ATTR_CMN_ACCESSMASK |		\
+	 ATTR_CMN_FLAGS | ATTR_CMN_USERACCESS |		\
+	 ATTR_CMN_EXTENDED_SECURITY | ATTR_CMN_UUID |	\
+	 ATTR_CMN_GRPUUID | ATTR_CMN_FILEID |		\
+	 ATTR_CMN_PARENTID )
 
-#define ATTR_DATAFORK_MASK	(ATTR_FILE_TOTALSIZE | \
-    ATTR_FILE_DATALENGTH | ATTR_FILE_DATAALLOCSIZE | ATTR_FILE_DATAEXTENTS)
+#define HFS_ATTR_DIR_VALID				\
+	(ATTR_DIR_LINKCOUNT | ATTR_DIR_ENTRYCOUNT | ATTR_DIR_MOUNTSTATUS)
 
-#define ATTR_RSRCFORK_MASK	(ATTR_FILE_TOTALSIZE | \
-    ATTR_FILE_RSRCLENGTH | ATTR_FILE_RSRCALLOCSIZE | ATTR_FILE_RSRCEXTENTS)
+#define HFS_ATTR_FILE_VALID				  \
+	(ATTR_FILE_LINKCOUNT |ATTR_FILE_TOTALSIZE |	  \
+	 ATTR_FILE_ALLOCSIZE | ATTR_FILE_IOBLOCKSIZE |	  \
+	 ATTR_FILE_CLUMPSIZE | ATTR_FILE_DEVTYPE |	  \
+	 ATTR_FILE_FORKCOUNT | ATTR_FILE_FORKLIST |	  \
+	 ATTR_FILE_DATALENGTH | ATTR_FILE_DATAALLOCSIZE | \
+	 ATTR_FILE_RSRCLENGTH | ATTR_FILE_RSRCALLOCSIZE)
 
 
 extern int hfs_attrblksize(struct attrlist *attrlist);
 
 extern unsigned long DerivePermissionSummary(uid_t obj_uid, gid_t obj_gid,
 			mode_t obj_mode, struct mount *mp,
-			struct ucred *cred, struct proc *p);
+			kauth_cred_t cred, struct proc *p);
 
 extern void hfs_packattrblk(struct attrblock *abp, struct hfsmount *hfsmp,
 		struct vnode *vp, struct cat_desc *descp, struct cat_attr *attrp,

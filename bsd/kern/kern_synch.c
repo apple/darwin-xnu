@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* 
  * Mach Operating System
@@ -49,19 +55,19 @@
 #include <mach/time_value.h>
 #include <kern/lock.h>
 
+#include <sys/systm.h>			/* for unix_syscall_return() */
+#include <libkern/OSAtomic.h>
 
-#if KTRACE
-#include <sys/uio.h>
-#include <sys/ktrace.h>
-#endif 
+extern boolean_t thread_should_abort(thread_t);	/* XXX */
+extern void compute_averunnable(void *);	/* XXX */
+
+
 
 static void
-_sleep_continue(
-	void			*parameter,
-	wait_result_t	wresult)
+_sleep_continue( __unused void *parameter, wait_result_t wresult)
 {
-	register struct proc *p = current_proc();
-	register thread_t self  = current_thread();
+	struct proc *p = current_proc();
+	thread_t self  = current_thread();
 	struct uthread * ut;
 	int sig, catch;
 	int error = 0;
@@ -89,7 +95,7 @@ _sleep_continue(
 				if (thread_should_abort(self)) {
 					error = EINTR;
 				} else if (SHOULDissignal(p,ut)) {
-					if (sig = CURSIG(p)) {
+					if ((sig = CURSIG(p)) != 0) {
 						if (p->p_sigacts->ps_sigintr & sigmask(sig))
 							error = EINTR;
 						else
@@ -110,12 +116,11 @@ _sleep_continue(
 	if (error == EINTR || error == ERESTART)
 		act_set_astbsd(self);
 
-#if KTRACE
-	if (KTRPOINT(p, KTR_CSW))
-		ktrcsw(p->p_tracep, 0, 0);
-#endif
 	if (ut->uu_mtx && !dropmutex)
 	        lck_mtx_lock(ut->uu_mtx);
+
+	ut->uu_wchan = NULL;
+	ut->uu_wmesg = NULL;
 
 	unix_syscall_return((*ut->uu_continuation)(error));
 }
@@ -150,8 +155,8 @@ _sleep(
 	int		(*continuation)(int),
         lck_mtx_t	*mtx)
 {
-	register struct proc *p;
-	register thread_t self = current_thread();
+	struct proc *p;
+	thread_t self = current_thread();
 	struct uthread * ut;
 	int sig, catch = pri & PCATCH;
 	int dropmutex  = pri & PDROP;
@@ -161,12 +166,14 @@ _sleep(
 	ut = get_bsdthread_info(self);
 
 	p = current_proc();
-#if KTRACE
-	if (KTRPOINT(p, KTR_CSW))
-		ktrcsw(p->p_tracep, 1, 0);
-#endif	
 	p->p_priority = pri & PRIMASK;
-	p->p_stats->p_ru.ru_nvcsw++;
+	/* It can still block in proc_exit() after the teardown. */
+	if (p->p_stats != NULL)
+		OSIncrementAtomic(&p->p_stats->p_ru.ru_nvcsw);
+
+	/* set wait message & channel */
+	ut->uu_wchan = chan;
+	ut->uu_wmesg = wmsg ? wmsg : "unknown";
 
 	if (mtx != NULL && chan != NULL && (thread_continue_t)continuation == THREAD_CONTINUE_NULL) {
 
@@ -184,27 +191,9 @@ _sleep(
 			lck_mtx_unlock(mtx);
 		if (catch) {
 			if (SHOULDissignal(p,ut)) {
-				if (sig = CURSIG(p)) {
+				if ((sig = CURSIG(p)) != 0) {
 					if (clear_wait(self, THREAD_INTERRUPTED) == KERN_FAILURE)
 						goto block;
-					/* if SIGTTOU or SIGTTIN then block till SIGCONT */
-					if ((pri & PTTYBLOCK) && ((sig == SIGTTOU) || (sig == SIGTTIN))) {
-						p->p_flag |= P_TTYSLEEP;
-						/* reset signal bits */
-						clear_procsiglist(p, sig);
-						assert_wait(&p->p_siglist, THREAD_ABORTSAFE);
-						/* assert wait can block and SIGCONT should be checked */
-						if (p->p_flag & P_TTYSLEEP) {
-							thread_block(THREAD_CONTINUE_NULL);
-							
-							if (mtx && !dropmutex)
-		        					lck_mtx_lock(mtx);
-						}
-
-						/* return with success */
-						error = 0;
-						goto out;
-					}
 					if (p->p_sigacts->ps_sigintr & sigmask(sig))
 						error = EINTR;
 					else
@@ -260,7 +249,7 @@ block:
 				if (thread_should_abort(self)) {
 					error = EINTR;
 				} else if (SHOULDissignal(p, ut)) {
-					if (sig = CURSIG(p)) {
+					if ((sig = CURSIG(p)) != 0) {
 						if (p->p_sigacts->ps_sigintr & sigmask(sig))
 							error = EINTR;
 						else
@@ -277,11 +266,9 @@ block:
 out:
 	if (error == EINTR || error == ERESTART)
 		act_set_astbsd(self);
+	ut->uu_wchan = NULL;
+	ut->uu_wmesg = NULL;
 
-#if KTRACE
-	if (KTRPOINT(p, KTR_CSW))
-		ktrcsw(p->p_tracep, 0, 0);
-#endif
 	return (error);
 }
 
@@ -383,8 +370,7 @@ tsleep1(
  * Wake up all processes sleeping on chan.
  */
 void
-wakeup(chan)
-	register void *chan;
+wakeup(void *chan)
 {
 	thread_wakeup_prim((caddr_t)chan, FALSE, THREAD_AWAKENED);
 }
@@ -396,8 +382,7 @@ wakeup(chan)
  * the right one to wakeup.
  */
 void
-wakeup_one(chan)
-	register caddr_t chan;
+wakeup_one(caddr_t chan)
 {
 	thread_wakeup_prim((caddr_t)chan, TRUE, THREAD_AWAKENED);
 }
@@ -408,8 +393,7 @@ wakeup_one(chan)
  * than that of the current process.
  */
 void
-resetpriority(p)
-	register struct proc *p;
+resetpriority(struct proc *p)
 {
 	(void)task_importance(p->task, -p->p_nice);
 }
@@ -427,12 +411,11 @@ static fixpt_t cexp[3] = {
 };
 
 void
-compute_averunnable(
-	void 			*arg)
+compute_averunnable(void *arg)
 {
 	unsigned int		nrun = *(unsigned int *)arg;
 	struct loadavg		*avg = &averunnable;
-	register int		i;
+	int		i;
 
     for (i = 0; i < 3; i++)
         avg->ldavg[i] = (cexp[i] * avg->ldavg[i] +

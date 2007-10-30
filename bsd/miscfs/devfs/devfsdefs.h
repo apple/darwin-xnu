@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright 1997,1998 Julian Elischer.  All rights reserved.
@@ -46,6 +52,12 @@
  * 
  * devfsdefs.h
  */
+/*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 /*
  * HISTORY
@@ -59,6 +71,8 @@
 #define __DEVFS_DEVFSDEFS_H__
 
 #include  <sys/appleapiopts.h>
+
+#include <security/mac.h>
 
 #ifdef __APPLE_API_PRIVATE
 #define DEVMAXNAMESIZE 	32 		/* XXX */
@@ -125,6 +139,8 @@ struct devnode
     int			dn_update;
     int			dn_access;
   int			dn_lflags;
+    int			(*dn_clone)(dev_t dev, int action); /* get minor # */
+    struct label *	dn_label;	/* security label */
 };
 
 #define	DN_BUSY			0x01
@@ -172,6 +188,7 @@ struct devfsmount
  */
 #include <sys/lock.h>
 #include <miscfs/devfs/devfs_proto.h>
+#include <libkern/OSAtomic.h>		/* required for OSAddAtomic() */
 
 //#define HIDDEN_MOUNTPOINT	1
 
@@ -187,53 +204,55 @@ struct devfsmount
 #define DEVFS_UNLOCK()	lck_mtx_unlock(&devfs_mutex)
 
 
-
+/*
+ * XXX all the (SInt32 *) casts below assume sizeof(int) == sizeof(long)
+ */
 static __inline__ void
-DEVFS_INCR_ENTRIES()
+DEVFS_INCR_ENTRIES(void)
 {
-    OSAddAtomic(1, &devfs_stats.entries);
+    OSAddAtomic(1, (SInt32 *)&devfs_stats.entries);
 }
 
 static __inline__ void
-DEVFS_DECR_ENTRIES()
+DEVFS_DECR_ENTRIES(void)
 {
-    OSAddAtomic(-1, &devfs_stats.entries);
+    OSAddAtomic(-1, (SInt32 *)&devfs_stats.entries);
 }
 
 static __inline__ void
-DEVFS_INCR_NODES()
+DEVFS_INCR_NODES(void)
 {
-    OSAddAtomic(1, &devfs_stats.nodes);
+    OSAddAtomic(1, (SInt32 *)&devfs_stats.nodes);
 }
 
 static __inline__ void
-DEVFS_DECR_NODES()
+DEVFS_DECR_NODES(void)
 {
-    OSAddAtomic(-1, &devfs_stats.nodes);
+    OSAddAtomic(-1, (SInt32 *)&devfs_stats.nodes);
 }
 
 static __inline__ void
-DEVFS_INCR_MOUNTS()
+DEVFS_INCR_MOUNTS(void)
 {
-    OSAddAtomic(1, &devfs_stats.mounts);
+    OSAddAtomic(1, (SInt32 *)&devfs_stats.mounts);
 }
 
 static __inline__ void
-DEVFS_DECR_MOUNTS()
+DEVFS_DECR_MOUNTS(void)
 {
-    OSAddAtomic(-1, &devfs_stats.mounts);
+    OSAddAtomic(-1, (SInt32 *)&devfs_stats.mounts);
 }
 
 static __inline__ void
 DEVFS_INCR_STRINGSPACE(int space)
 {
-    OSAddAtomic(space, &devfs_stats.stringspace);
+    OSAddAtomic(space, (SInt32 *)&devfs_stats.stringspace);
 }
 
 static __inline__ void
 DEVFS_DECR_STRINGSPACE(int space)
 {
-    OSAddAtomic(-space, &devfs_stats.stringspace);
+    OSAddAtomic(-space, (SInt32 *)&devfs_stats.stringspace);
 }
 
 static __inline__ void

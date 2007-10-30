@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *	File:	bsd/kern/kern_shutdown.c
@@ -59,25 +65,60 @@
 
 #include <bsm/audit_kernel.h>
 
+#include <kern/sched_prim.h>		/* for thread_block() */
+#include <kern/host.h>			/* for host_priv_self() */
+#include <net/if_var.h>			/* for if_down_all() */
+#include <sys/buf_internal.h>		/* for count_busy_buffers() */
+#include <sys/mount_internal.h>		/* for vfs_unmountall() */
+#include <mach/task.h>			/* for task_suspend() */
+#include <sys/sysproto.h>		/* abused for sync() */
+#include <kern/clock.h>			/* for delay_for_interval() */
+
+/* XXX should be in a header file somewhere, but isn't */
+extern void md_prepare_for_shutdown(int, int, char *);
+
 int	waittime = -1;
-static void proc_shutdown();
+static int shutting_down = 0;
+
+static void proc_shutdown(void);
+int in_shutdown(void);
+
+extern void IOSystemShutdownNotification(void);
+
+struct sd_filterargs{
+	int delayterm;
+	int shutdownstate;
+};
+
+
+struct sd_iterargs {
+	int signo;	/* the signal to be posted */
+	int setsdstate;  /* shutdown state to be set */
+};
+
+static int sd_filt1(proc_t, void *);
+static int sd_filt2(proc_t, void *);
+static int  sd_callback1(proc_t p, void * arg);
+static int  sd_callback2(proc_t p, void * arg);
+static int  sd_callback3(proc_t p, void * arg);
 
 void
-boot(paniced, howto, command)
-	int paniced, howto;
-	char *command;
+boot(int paniced, int howto, char *command)
 {
-	register int i;
-	int s;
 	struct proc *p = current_proc();	/* XXX */
 	int hostboot_option=0;
 	int funnel_state;
-	struct proc  *launchd_proc;
-
-    extern void md_prepare_for_shutdown(int paniced, int howto, char * command);
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
+       /*
+	* Temporary hack to notify the power management root domain
+	* that the system will shut down.
+	*/
+	IOSystemShutdownNotification();
+
+	shutting_down = 1;
+	    
 	md_prepare_for_shutdown(paniced, howto, command);
 
 	if ((howto&RB_NOSYNC)==0 && waittime < 0) {
@@ -94,19 +135,19 @@ boot(paniced, howto, command)
 		/* handle live procs (deallocate their root and current directories). */		
 		proc_shutdown();
 
-		audit_shutdown();
+#if AUDIT
+ 		audit_shutdown();
+#endif
 
 		sync(p, (void *)NULL, (int *)NULL);
 
 		/*
-		 * Now that all processes have been  termianted and system is sync'ed up, 
-		 * suspend launchd
+		 * Now that all processes have been terminated and system is
+		 * sync'ed up, suspend init
 		 */
 
-		launchd_proc = pfind(1);
-		if (launchd_proc && p != launchd_proc) {
-			task_suspend(launchd_proc->task);
-		}
+		if (initproc && p != initproc)
+			task_suspend(initproc->task);
 
 		/*
 		 * Unmount filesystems
@@ -119,7 +160,7 @@ boot(paniced, howto, command)
 			if (nbusy == 0)
 				break;
 			printf("%d ", nbusy);
-			IOSleep( 1 * nbusy );
+			delay_for_interval( 1 * nbusy, 1000 * 1000);
 		}
 		if (nbusy)
 			printf("giving up\n");
@@ -127,12 +168,14 @@ boot(paniced, howto, command)
 			printf("done\n");
 	}
 
+#if NETWORKING
 	/*
 	 * Can't just use an splnet() here to disable the network
 	 * because that will lock out softints which the disk
 	 * drivers depend on to finish DMAs.
 	 */
 	if_down_all();
+#endif /* NETWORKING */
 
 	if (howto & RB_POWERDOWN)
 		hostboot_option = HOST_REBOOT_HALT;
@@ -145,23 +188,118 @@ boot(paniced, howto, command)
         hostboot_option = HOST_REBOOT_UPSDELAY;
     }
 
-	/*
-	 * if we're going to power down due to a halt,
-	 * give the disks a chance to finish getting
-	 * the track cache flushed to the media... 
-	 * unfortunately, some of our earlier drives
-	 * don't properly hold off on returning 
-	 * from the track flush command (issued by
-	 * the unmounts) until it's actully fully
-	 * committed.
-	 */
-	if (hostboot_option == HOST_REBOOT_HALT)
-	        IOSleep( 1 * 1000 );
-
 	host_reboot(host_priv_self(), hostboot_option);
 
 	thread_funnel_set(kernel_flock, FALSE);
 }
+
+static int
+sd_filt1(proc_t p, void * args)
+{
+	proc_t self = current_proc();
+	struct sd_filterargs * sf = (struct sd_filterargs *)args;
+	int delayterm = sf-> delayterm;
+	int shutdownstate = sf->shutdownstate;
+
+	if (((p->p_flag&P_SYSTEM) != 0) || (p->p_ppid == 0) 
+		||(p == self) || (p->p_stat == SZOMB) 
+		|| (p->p_shutdownstate != shutdownstate) 
+		||((delayterm == 0) && ((p->p_lflag& P_LDELAYTERM) == P_LDELAYTERM))
+		|| ((p->p_sigcatch & sigmask(SIGTERM))== 0)) {
+			return(0);
+		}
+        else 
+                return(1);
+}
+
+
+static int  
+sd_callback1(proc_t p, void * args)
+{
+	struct sd_iterargs * sd = (struct sd_iterargs *)args;
+	int signo = sd->signo;
+	int setsdstate = sd->setsdstate;
+
+	proc_lock(p);
+	p->p_shutdownstate = setsdstate;
+	if (p->p_stat != SZOMB) {
+		proc_unlock(p);
+		psignal(p, signo);
+	} else
+		proc_unlock(p);
+	return(PROC_RETURNED);
+
+}
+
+static int
+sd_filt2(proc_t p, void * args)
+{
+	proc_t self = current_proc();
+	struct sd_filterargs * sf = (struct sd_filterargs *)args;
+	int delayterm = sf-> delayterm;
+	int shutdownstate = sf->shutdownstate;
+
+	if (((p->p_flag&P_SYSTEM) != 0) || (p->p_ppid == 0) 
+		||(p == self) || (p->p_stat == SZOMB) 
+		|| (p->p_shutdownstate == shutdownstate) 
+		||((delayterm == 0) && ((p->p_lflag& P_LDELAYTERM) == P_LDELAYTERM))) {
+			return(0);
+		}
+        else
+                return(1);
+}
+
+static int  
+sd_callback2(proc_t p, void * args)
+{
+	struct sd_iterargs * sd = (struct sd_iterargs *)args;
+	int signo = sd->signo;
+	int setsdstate = sd->setsdstate;
+
+	proc_lock(p);
+	p->p_shutdownstate = setsdstate;
+	if (p->p_stat != SZOMB) {
+		proc_unlock(p);
+		psignal(p, signo);
+	} else
+		proc_unlock(p);
+
+	return(PROC_RETURNED);
+
+}
+
+static int  
+sd_callback3(proc_t p, void * args)
+{
+	struct sd_iterargs * sd = (struct sd_iterargs *)args;
+	int setsdstate = sd->setsdstate;
+
+	proc_lock(p);
+	p->p_shutdownstate = setsdstate;
+	if (p->p_stat != SZOMB) {
+	       /*
+		* NOTE: following code ignores sig_lock and plays
+		* with exit_thread correctly.  This is OK unless we
+		* are a multiprocessor, in which case I do not
+		* understand the sig_lock.  This needs to be fixed.
+		* XXX
+		*/
+		if (p->exit_thread) {	/* someone already doing it */
+			proc_unlock(p);
+			/* give him a chance */
+			thread_block(THREAD_CONTINUE_NULL);
+		} else {
+			p->exit_thread = current_thread();
+			printf(".");
+			proc_unlock(p);
+			exit1(p, 1, (int *)NULL);
+		}
+	} else
+		proc_unlock(p);
+
+	return(PROC_RETURNED);
+}
+
 
 /*
  * proc_shutdown()
@@ -176,12 +314,13 @@ boot(paniced, howto, command)
  */
 
 static void
-proc_shutdown()
+proc_shutdown(void)
 {
 	struct proc	*p, *self;
-	struct vnode	**cdirp, **rdirp, *vp;
-	int		restart, i, TERM_catch;
+	int		i, TERM_catch;
 	int delayterm = 0;
+	struct sd_filterargs sfargs;
+	struct sd_iterargs sdargs;
 
 	/*
 	 *	Kill as many procs as we can.  (Except ourself...)
@@ -192,33 +331,26 @@ proc_shutdown()
 	 * Signal the init with SIGTERM so that he does not launch
 	 * new processes 
 	 */
-	p = pfind(1);
+	p = proc_find(1);
 	if (p && p != self) {
 		psignal(p, SIGTERM);
 	}
+	proc_rele(p);
 
 	printf("Killing all processes ");
 
+sigterm_loop:
 	/*
 	 * send SIGTERM to those procs interested in catching one
 	 */
-sigterm_loop:
-	for (p = allproc.lh_first; p; p = p->p_list.le_next) {
-	        if (((p->p_flag&P_SYSTEM) == 0) && (p->p_pptr->p_pid != 0) && (p != self) && (p->p_stat != SZOMB) && (p->p_shutdownstate == 0)) {
+	sfargs.delayterm = delayterm;
+	sfargs.shutdownstate = 0;
+	sdargs.signo = SIGTERM;
+	sdargs.setsdstate = 1;
 
-			if ((delayterm == 0) && ((p->p_lflag& P_LDELAYTERM) == P_LDELAYTERM)) {
-				continue;
-			}
-		        if (p->p_sigcatch & sigmask(SIGTERM)) {
-					p->p_shutdownstate = 1;
-					if (proc_refinternal(p, 1) == p) {
-			        	psignal(p, SIGTERM);
-						proc_dropinternal(p, 1);
-					}
-				goto sigterm_loop;
-		}
-	}
-	}
+	/* post a SIGTERM to all that catch SIGTERM and not marked for delay */
+	proc_rebootscan(sd_callback1, (void *)&sdargs, sd_filt1, (void *)&sfargs);
+
 	/*
 	 * now wait for up to 30 seconds to allow those procs catching SIGTERM
 	 * to digest it
@@ -230,14 +362,20 @@ sigterm_loop:
 		 * and then check to see if the tasks that were sent a
 		 * SIGTERM have exited
 		 */
-		IOSleep(100);   
+		delay_for_interval(100, 1000 * 1000);
 		TERM_catch = 0;
+
+
+		proc_list_lock();
 
 		for (p = allproc.lh_first; p; p = p->p_list.le_next) {
 			if (p->p_shutdownstate == 1) {
 				TERM_catch++;
 			}
 		}
+
+		proc_list_unlock();
+
 		if (TERM_catch == 0)
 		        break;
 	}
@@ -246,42 +384,50 @@ sigterm_loop:
 		 * log the names of the unresponsive tasks
 		 */
 
+
+		proc_list_lock();
+
 	        for (p = allproc.lh_first; p; p = p->p_list.le_next) {
 			if (p->p_shutdownstate == 1) {
 				  printf("%s[%d]: didn't act on SIGTERM\n", p->p_comm, p->p_pid);
 			}
 		}
-		IOSleep(1000 * 5);
+
+		proc_list_unlock();
+
+		delay_for_interval(1000 * 5, 1000 * 1000);
 	}
 
 	/*
 	 * send a SIGKILL to all the procs still hanging around
 	 */
-sigkill_loop:
-	for (p = allproc.lh_first; p; p = p->p_list.le_next) {
-	        if (((p->p_flag&P_SYSTEM) == 0) && (p->p_pptr->p_pid != 0) && (p != self) && (p->p_stat != SZOMB) && (p->p_shutdownstate != 2)) {
+	sfargs.delayterm = delayterm;
+	sfargs.shutdownstate = 2;
+	sdargs.signo = SIGKILL;
+	sdargs.setsdstate = 2;
 
-			if ((delayterm == 0) && ((p->p_lflag& P_LDELAYTERM) == P_LDELAYTERM)) {
-				continue;
-			}
-			if (proc_refinternal(p, 1) == p) {
-				psignal(p, SIGKILL);
-				proc_dropinternal(p, 1);
-			}
-			p->p_shutdownstate = 2;
-			goto sigkill_loop;
-		}
-	}
+	/* post a SIGTERM to all that catch SIGTERM and not marked for delay */
+	proc_rebootscan(sd_callback2, (void *)&sdargs, sd_filt2, (void *)&sfargs);
+
 	/*
 	 * wait for up to 60 seconds to allow these procs to exit normally
+	 *
+	 * History:	The delay interval was changed from 100 to 200
+	 *		for NFS requests in particular.
 	 */
 	for (i = 0; i < 300; i++) {
-		IOSleep(200);  /* double the time from 100 to 200 for NFS requests in particular */
+		delay_for_interval(200, 1000 * 1000);
+
+
+		proc_list_lock();
 
 	        for (p = allproc.lh_first; p; p = p->p_list.le_next) {
 				if (p->p_shutdownstate == 2)
 			        break;
 		}
+
+		proc_list_unlock();
+
 		if (!p)
 		        break;
 	}
@@ -289,43 +435,30 @@ sigkill_loop:
 	/*
 	 * if we still have procs that haven't exited, then brute force 'em
 	 */
-	p = allproc.lh_first;
-	while (p) {
-	        if ((p->p_shutdownstate == 3) || (p->p_flag&P_SYSTEM) || (!delayterm && ((p->p_lflag& P_LDELAYTERM))) 
-				|| (p->p_pptr->p_pid == 0) || (p == self)) {
-		        p = p->p_list.le_next;
-		}
-		else {
-			p->p_shutdownstate = 3;
-		        /*
-			 * NOTE: following code ignores sig_lock and plays
-			 * with exit_thread correctly.  This is OK unless we
-			 * are a multiprocessor, in which case I do not
-			 * understand the sig_lock.  This needs to be fixed.
-			 * XXX
-			 */
-			if (p->exit_thread) {	/* someone already doing it */
-				/* give him a chance */
-				thread_block(THREAD_CONTINUE_NULL);
-			} else {
-				p->exit_thread = current_thread();
-				printf(".");
-				if (proc_refinternal(p, 1) == p) {
-					exit1(p, 1, (int *)NULL);
-					proc_dropinternal(p, 1);
-				}
-			}
-			p = allproc.lh_first;
-		}
-	}
-	printf("\n");
+	sfargs.delayterm = delayterm;
+	sfargs.shutdownstate = 3;
+	sdargs.signo = 0;
+	sdargs.setsdstate = 3;
 
+	/* post a SIGTERM to all that catch SIGTERM and not marked for delay */
+	proc_rebootscan(sd_callback3, (void *)&sdargs, sd_filt2, (void *)&sfargs);
+	printf("\n");
 
 	/* Now start the termination of processes that are marked for delayed termn */
 	if (delayterm == 0) {
 		delayterm = 1;
 		goto  sigterm_loop;
 	}
+	/* drop the ref on initproc */
+	proc_rele(initproc);
 	printf("continuing\n");
 }
 
+/*
+ * Check whether the system has begun its shutdown sequence. 
+ */
+int
+in_shutdown(void)
+{
+	return shutting_down;
+}

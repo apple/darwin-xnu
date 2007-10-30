@@ -38,6 +38,16 @@
 #	configurations.
 #
 #######################################################################
+#  SYSTEM SIZE CONFIGURATION (select exactly one)
+#
+#	xlarge = extra large scale system configuration
+#	large  = large scale system configuration
+#	medium = medium scale system configuration
+#	small  = small scale system configuration
+#	xsmall = extra small scale system configuration
+#	bsmall = special extra small scale system configuration 
+#
+#######################################################################
 #
 # Basic compilation options.
 #
@@ -75,7 +85,7 @@ options		ADVISORY_PAGEOUT
 #	consistency of various algorithms in the kernel. The performance impact
 #	of this option is significant.
 #
-options		MACH_ASSERT	#		# <debug>
+options		MACH_ASSERT	#		# <mach_assert>
 #
 # MACH_DEBUG enables the mach_debug_server, a message interface used to
 #	retrieve or control various statistics. This interface may expose data
@@ -84,8 +94,8 @@ options		MACH_ASSERT	#		# <debug>
 #	Other options here enable information retrieval for specific subsystems
 #
 options		MACH_DEBUG	#		#
+options		MACH_IPC_DEBUG	#		#
 #
-options		MACH_IPC_DEBUG	#		# <debug>
 options		MACH_VM_DEBUG	#		# <debug>
 #
 # MACH_MP_DEBUG control the possible dead locks that may occur by controlling
@@ -98,6 +108,8 @@ options		MACH_MP_DEBUG	#		# <debug>
 #	operations on each element.
 #
 options		ZONE_DEBUG	#		# <debug>
+#
+options		ZONE_ALIAS_ADDR	#		# <zone_alias_addr>
 # 
 # XPR_DEBUG enables the gathering of data through the XPR macros inserted
 #	into various subsystems. This option is normally only enabled for
@@ -119,7 +131,12 @@ options		MACH_LDEBUG	#		# <debug>
 #
 options		KDEBUG		# kernel tracing	# <kdebug>
 
-#	
+#
+# CONFIG_DTRACE enables code needed to support DTrace. Currently this is
+# only used for delivery of traps/interrupts to DTrace.
+#
+options		CONFIG_DTRACE	#		# <config_dtrace>
+
 # MACH_COUNTERS enables code that handles various counters in the system.
 # 
 options		MACH_COUNTERS	#		# <debug>
@@ -133,11 +150,6 @@ options		UPL_DEBUG	# 		# <debug>
 # statistics gathering, which will slow down the system,
 #
 ##########################################################
-#
-# MACH_PROF enables the profiling server, a message interface used to
-#	retrieve profiling statistics.
-#
-#options	MACH_PROF		#		# <mach_prof>
 #
 # MACH_IPC_STATS controls the collection of statistics in the MACH IPC
 #	subsystem.
@@ -167,3 +179,54 @@ options		UPL_DEBUG	# 		# <debug>
 #
 options		MACH_COUNTERS		#		# <stats>
 
+#
+#  configuration option for including cypto code
+#
+options		CRYPTO                  # <crypto>
+
+# HIBERNATION - include hibernation code
+#
+options		HIBERNATION		#		# <hibernation>
+
+#
+#  configurable kernel related resources (CONFIG_THREAD_MAX needs to stay in 
+#  sync with bsd/conf/MASTER until we fix the config system... todo XXX
+#
+options   CONFIG_THREAD_MAX=2560		# <medium,large,xlarge>
+options   CONFIG_THREAD_MAX=1536		# <small,xsmall>
+options   CONFIG_THREAD_MAX=1024		# <bsmall>
+
+options   CONFIG_TASK_MAX=1024			# <medium,large,xlarge>
+options   CONFIG_TASK_MAX=768			# <small,xsmall>
+options   CONFIG_TASK_MAX=512			# <bsmall>
+
+options   CONFIG_ZONE_MAP_MIN=12582912	# <medium,large,xlarge>
+options   CONFIG_ZONE_MAP_MIN=6291456	# <small,xsmall>
+options   CONFIG_ZONE_MAP_MIN=1048576	# <bsmall>
+
+options   CONFIG_TOKEN_QUEUE_SMALL=1		# <bsmall>
+options   CONFIG_TOKEN_QUEUE_SMALL=0		# <xsmall,small,medium,large,xlarge>
+
+#
+#  configurable kernel - use these options to strip strings from panic
+#  and printf calls.
+#  no_panic_str - saves around 50K of kernel footprint.
+#  no_printf_str - saves around 45K of kernel footprint.
+#
+options   CONFIG_NO_PANIC_STRINGS		# <no_panic_str>
+options   CONFIG_NO_PRINTF_STRINGS		# <no_printf_str>
+options   CONFIG_NO_KPRINTF_STRINGS		# <no_kprintf_str>
+
+# configurable kernel - general switch to say we are building for an
+# embedded device
+#
+options   CONFIG_EMBEDDED                       # <config_embedded>
+
+#  jettison_kernel_linker - jettison kernel linker after kernel init; don't wait for kextd to launch
+options   CONFIG_JETTISON_KERNEL_LINKER		# <jettison_kernel_linker>
+
+# vc_progress_white - make the progress gear white instead of black
+options	  CONFIG_VC_PROGRESS_WHITE		# <vc_progress_white>
+
+# secure_kernel - secure kernel from user programs
+options		SECURE_KERNEL		# <secure_kernel>

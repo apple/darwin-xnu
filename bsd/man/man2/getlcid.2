@@ -1,0 +1,87 @@
+.\" Copyright (c) 2005 SPARTA, Inc.
+.\" All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\" $FreeBSD$
+.\"
+.\" Note: The date here should be updated whenever a non-trivial
+.\" change is made to the manual page.
+.Dd May 5, 2005
+.Dt GETLCID 2
+.Os
+.Sh NAME
+.Nm getlcid
+.Nd "get login context"
+.Sh SYNOPSIS
+.In sys/lctx.h
+.Ft pid_t
+.Fn getlcid "pid_t pid"
+.Sh DESCRIPTION
+The login context of the process identified by
+.Fa pid
+is returned by
+.Fn getlcid .
+If
+.Fa pid
+is zero,
+.Fn getlcid
+returns the login context of the current process.
+.Pp
+Login contexts are used for tracking processes that originated from a users
+login session.  A login context is inherited via
+.Fn fork
+or by explicit creation using the
+.Fn setlcid
+call.
+.Sh RETURN VALUES
+If successful,
+.Fn getlcid
+returns a non-negative integer, the Login Context ID; otherwise the
+value \-1 is returned and the global variable
+.Fa errno
+is set to indicate
+the error.
+.Sh ERRORS
+The
+.Fn getlcid
+function will fail if:
+.Bl -tag -width Er
+.It Bq Er EPERM
+Operation not permitted.
+.It Bq Er ESRCH
+No such process.
+.It Bq Er ENOATTR
+Attribute not found.
+.El
+.Sh SEE ALSO
+.Xr setlcid 2
+.Sh HISTORY
+The
+.Nm
+manual page
+first appeared in
+.Fx 6.0 .
+.Sh AUTHORS
+This
+manual page was written by
+.An Matthew N. Dodd Aq mdodd@FreeBSD.org .

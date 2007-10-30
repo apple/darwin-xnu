@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #ifndef _NET_IF_BOND_VAR_H_
@@ -27,10 +33,16 @@
 
 #include <net/lacp.h>
 
+#pragma pack(4)
+
 #define IF_BOND_OP_ADD_INTERFACE		1
 #define IF_BOND_OP_REMOVE_INTERFACE		2
 #define IF_BOND_OP_GET_STATUS			3
 #define IF_BOND_OP_SET_VERBOSE			4
+#define IF_BOND_OP_SET_MODE			5
+
+#define IF_BOND_MODE_LACP			0
+#define IF_BOND_MODE_STATIC			1
 
 struct if_bond_partner_state {
     lacp_system 		ibps_system;
@@ -62,19 +74,15 @@ struct if_bond_status_req {
     int		ibsr_total;	/* returned number of struct if_bond_status's */
     int		ibsr_count;	/* number that will fit in ibsr_buffer */
     union {			/* buffer to hold if_bond_status's */
-	char *		ibsru_buffer32;
+	void *		ibsru_buffer;
 	u_int64_t	ibsru_buffer64;
     } ibsr_ibsru;
     lacp_key	ibsr_key;	/* returned */
-    u_int16_t	ibsr_reserved0;	/* for future use */
+    u_int8_t	ibsr_mode;	/* returned (IF_BOND_MODE_{LACP, STATIC}) */
+    u_int8_t	ibsr_reserved0;	/* for future use */
     u_int32_t	ibsr_reserved[3];/* for future use */
 };
-
-#if defined(__LP64__)
-#define ibsr_buffer	ibsr_ibsru.ibsru_buffer64
-#else
-#define ibsr_buffer	ibsr_ibsru.ibsru_buffer32
-#endif
+#define ibsr_buffer	ibsr_ibsru.ibsru_buffer
 
 struct if_bond_req {
     u_int32_t	ibr_op;				/* operation */
@@ -85,8 +93,10 @@ struct if_bond_req {
     } ibr_ibru;
 };
 
+#pragma pack()
+
 #ifdef KERNEL_PRIVATE
-int bond_family_init(void);
+int bond_family_init(void) __attribute__((section("__TEXT, initcode")));
 #endif KERNEL_PRIVATE
 
 #endif /* _NET_IF_BOND_VAR_H_ */

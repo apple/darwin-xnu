@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -51,7 +57,6 @@
 /*
  */
 
-
 #include <kern/cpu_number.h>
 #include <kern/kalloc.h>
 #include <kern/cpu_data.h>
@@ -66,7 +71,7 @@
 #include <i386/misc_protos.h>
 #include <i386/mp.h>
 #include <i386/pmap.h>
-#include <i386/cpu_threads.h>
+#include <i386/machine_check.h>
 
 #include <kern/misc_protos.h>
 
@@ -100,10 +105,9 @@ extern void *hi_remap_text;
 #define HI_TEXT(lo_text)	\
 	(((uint32_t)&lo_text - (uint32_t)&hi_remap_text) + HIGH_MEM_BASE)
 
-extern void	hi_sysenter(void);
-extern void	hi64_sysenter(void);
-extern void	hi64_syscall(void);
-
+extern void hi_sysenter(void);
+extern void hi64_sysenter(void);
+extern void hi64_syscall(void);
 
 /*
  * Multiprocessor i386/i486 systems use a separate copy of the
@@ -210,7 +214,6 @@ cpu_desc_init(
 				pmap_index_to_virt(HIGH_FIXED_IDT);
 	    cdi->cdi_ldt = (struct fake_descriptor *)
 				pmap_index_to_virt(HIGH_FIXED_LDT_BEGIN);
-
 	} else {
 
 	    vm_offset_t	cpu_hi_desc;
@@ -241,10 +244,10 @@ cpu_desc_init(
 	     */
 	    cdi->cdi_ldt  = (struct fake_descriptor *)
 				pmap_cpu_high_shared_remap(
-				    cdp->cpu_number,
-				    HIGH_CPU_LDT_BEGIN,
-				    (vm_offset_t) cdp->cpu_ldtp,
-				    HIGH_CPU_LDT_END - HIGH_CPU_LDT_BEGIN + 1);
+				cdp->cpu_number,
+				HIGH_CPU_LDT_BEGIN,
+				(vm_offset_t) cdp->cpu_ldtp,
+				HIGH_CPU_LDT_END - HIGH_CPU_LDT_BEGIN + 1);
 
 	    /*
 	     * Copy the tables
@@ -303,7 +306,8 @@ cpu_desc_init(
 	    cdt->ktss.ss0 = KERNEL_DS;
 	    cdt->ktss.io_bit_map_offset = 0x0FFF;	/* no IO bitmap */
 
-	    cpu_window_init(cdp->cpu_number);
+	    cpu_userwindow_init(cdp->cpu_number);
+	    cpu_physwindow_init(cdp->cpu_number);
 
 	}
 
@@ -319,95 +323,97 @@ cpu_desc_init64(
 	cpu_desc_index_t	*cdi = &cdp->cpu_desc_index;
 
 	if (is_boot_cpu) {
-	    /*
-	     * Master CPU uses the tables built at boot time.
-	     * Just set the index pointers to the low memory space.
-	     * Note that in 64-bit mode these are addressed in the
-	     * double-mapped window (uber-space).
-	     */
-	    cdi->cdi_ktss = (struct i386_tss *) &master_ktss64;
-	    cdi->cdi_sstk = (vm_offset_t) &master_sstk.top;
-	    cdi->cdi_gdt  = master_gdt;
-	    cdi->cdi_idt  = (struct fake_descriptor *) &master_idt64;
-	    cdi->cdi_ldt  = (struct fake_descriptor *) &master_ldt;
+		/*
+		 * Master CPU uses the tables built at boot time.
+		 * Just set the index pointers to the low memory space.
+		 * Note that in 64-bit mode these are addressed in the
+		 * double-mapped window (uber-space).
+		 */
+		cdi->cdi_ktss = (struct i386_tss *) &master_ktss64;
+		cdi->cdi_sstk = (vm_offset_t) &master_sstk.top;
+		cdi->cdi_gdt  = master_gdt;
+		cdi->cdi_idt  = (struct fake_descriptor *) &master_idt64;
+		cdi->cdi_ldt  = (struct fake_descriptor *) &master_ldt;
 
-	    /* Replace the expanded LDT and TSS slots in the GDT: */
-	    *(struct fake_descriptor64 *) &master_gdt[sel_idx(KERNEL_LDT)] =
-		kernel_ldt_desc64;
-	    *(struct fake_descriptor64 *) &master_gdt[sel_idx(KERNEL_TSS)] =
-		kernel_tss_desc64;
+		/* Replace the expanded LDT and TSS slots in the GDT: */
+		*(struct fake_descriptor64 *) &master_gdt[sel_idx(KERNEL_LDT)] =
+			kernel_ldt_desc64;
+		*(struct fake_descriptor64 *) &master_gdt[sel_idx(KERNEL_TSS)] =
+			kernel_tss_desc64;
 
-	    /*
-	     * Fix up the expanded descriptors for 64-bit.
-	     */
-	    fix_desc64((void *) &master_idt64, IDTSZ);
-	    fix_desc64((void *) &master_gdt[sel_idx(KERNEL_LDT)], 1);
-	    fix_desc64((void *) &master_gdt[sel_idx(KERNEL_TSS)], 1);
+		/*
+		 * Fix up the expanded descriptors for 64-bit.
+		 */
+		fix_desc64((void *) &master_idt64, IDTSZ);
+		fix_desc64((void *) &master_gdt[sel_idx(KERNEL_LDT)], 1);
+		fix_desc64((void *) &master_gdt[sel_idx(KERNEL_TSS)], 1);
 
-	    /*
-	     * Set the double-fault stack as IST1 in the 64-bit TSS 
-	     */
-	    master_ktss64.ist1 = UBER64(df_task_stack_end);
+		/*
+		 * Set the double-fault stack as IST1 in the 64-bit TSS
+		 */
+		master_ktss64.ist1 = UBER64(df_task_stack_end);
 
 	} else {
-	    /*
-	     * Per-cpu GDT, IDT, KTSS descriptors are allocated in kernel 
-	     * heap (cpu_desc_table) and double-mapped in uber-space (over 4GB).
-	     * LDT descriptors are mapped into a separate area.
-	     */
-	    cdi->cdi_gdt  = cdt->gdt;
-	    cdi->cdi_idt  = (struct fake_descriptor *) cdt->idt;
-	    cdi->cdi_ktss = (struct i386_tss *) &cdt->ktss;
-	    cdi->cdi_sstk = (vm_offset_t) &cdt->sstk.top;
-	    cdi->cdi_ldt  = cdp->cpu_ldtp;
+		/*
+		 * Per-cpu GDT, IDT, KTSS descriptors are allocated in kernel 
+		 * heap (cpu_desc_table) and double-mapped in uber-space
+		 * (over 4GB).
+		 * LDT descriptors are mapped into a separate area.
+		 */
+		cdi->cdi_gdt  = (struct fake_descriptor *)cdt->gdt;
+		cdi->cdi_idt  = (struct fake_descriptor *)cdt->idt;
+		cdi->cdi_ktss = (struct i386_tss *)&cdt->ktss;
+		cdi->cdi_sstk = (vm_offset_t)&cdt->sstk.top;
+		cdi->cdi_ldt  = cdp->cpu_ldtp;
 
-	    /*
-	     * Copy the tables
-	     */
-	    bcopy((char *)master_idt64,
-		  (char *)cdt->idt,
-		  sizeof(master_idt64));
-	    bcopy((char *)master_gdt,
-		  (char *)cdt->gdt,
-		  sizeof(master_gdt));
-	    bcopy((char *)master_ldt,
-		  (char *)cdp->cpu_ldtp,
-		  sizeof(master_ldt));
-	    bcopy((char *)&master_ktss64,
-		  (char *)&cdt->ktss,
-		  sizeof(struct x86_64_tss));
+		/*
+		 * Copy the tables
+		 */
+		bcopy((char *)master_idt64,
+				(char *)cdt->idt,
+				sizeof(master_idt64));
+		bcopy((char *)master_gdt,
+				(char *)cdt->gdt,
+				sizeof(master_gdt));
+		bcopy((char *)master_ldt,
+				(char *)cdp->cpu_ldtp,
+				sizeof(master_ldt));
+		bcopy((char *)&master_ktss64,
+				(char *)&cdt->ktss,
+				sizeof(struct x86_64_tss));
 
-	    /*
-	     * Fix up the entries in the GDT to point to
-	     * this LDT and this TSS.
-	     */
-	    kernel_ldt_desc64.offset[0] = (vm_offset_t) cdi->cdi_ldt;
-	    *(struct fake_descriptor64 *) &cdt->gdt[sel_idx(KERNEL_LDT)] =
-	    		kernel_ldt_desc64;
-	    fix_desc64(&cdt->gdt[sel_idx(KERNEL_LDT)], 1);
+		/*
+		 * Fix up the entries in the GDT to point to
+		 * this LDT and this TSS.
+		 */
+		kernel_ldt_desc64.offset[0] = (vm_offset_t) cdi->cdi_ldt;
+		*(struct fake_descriptor64 *) &cdt->gdt[sel_idx(KERNEL_LDT)] =
+			kernel_ldt_desc64;
+		fix_desc64(&cdt->gdt[sel_idx(KERNEL_LDT)], 1);
 
-	    kernel_ldt_desc64.offset[0] = (vm_offset_t) cdi->cdi_ldt;
-	    *(struct fake_descriptor64 *) &cdt->gdt[sel_idx(USER_LDT)] =
-	    		kernel_ldt_desc64;
-	    fix_desc64(&cdt->gdt[sel_idx(USER_LDT)], 1);
+		kernel_ldt_desc64.offset[0] = (vm_offset_t) cdi->cdi_ldt;
+		*(struct fake_descriptor64 *) &cdt->gdt[sel_idx(USER_LDT)] =
+			kernel_ldt_desc64;
+		fix_desc64(&cdt->gdt[sel_idx(USER_LDT)], 1);
 
-	    kernel_tss_desc64.offset[0] = (vm_offset_t) cdi->cdi_ktss;
-	    *(struct fake_descriptor64 *) &cdt->gdt[sel_idx(KERNEL_TSS)] =
-	    		kernel_tss_desc64;
-	    fix_desc64(&cdt->gdt[sel_idx(KERNEL_TSS)], 1);
+		kernel_tss_desc64.offset[0] = (vm_offset_t) cdi->cdi_ktss;
+		*(struct fake_descriptor64 *) &cdt->gdt[sel_idx(KERNEL_TSS)] =
+			kernel_tss_desc64;
+		fix_desc64(&cdt->gdt[sel_idx(KERNEL_TSS)], 1);
 
-	    cdt->gdt[sel_idx(CPU_DATA_GS)] = cpudata_desc_pattern;
-	    cdt->gdt[sel_idx(CPU_DATA_GS)].offset = (vm_offset_t) cdp;
-	    fix_desc(&cdt->gdt[sel_idx(CPU_DATA_GS)], 1);
+		cdt->gdt[sel_idx(CPU_DATA_GS)] = cpudata_desc_pattern;
+		cdt->gdt[sel_idx(CPU_DATA_GS)].offset = (vm_offset_t) cdp;
+		fix_desc(&cdt->gdt[sel_idx(CPU_DATA_GS)], 1);
 
-	    /* Set double-fault stack as IST1 */
-	    cdt->ktss.ist1 = UBER64(cdt->dfstk + sizeof(cdt->dfstk));
+		/* Set double-fault stack as IST1 */
+		cdt->ktss.ist1 = UBER64((unsigned long)cdt->dfstk
+					 + sizeof(cdt->dfstk));
 
-	    /*
-	     * Allocate copyio windows.
-	     */
-	    cpu_window_init(cdp->cpu_number);
-
+		/*
+		 * Allocate copyio windows.
+		 */
+		cpu_userwindow_init(cdp->cpu_number);
+		cpu_physwindow_init(cdp->cpu_number);
 	}
 
 	/* Require that the top of the sysenter stack is 16-byte aligned */
@@ -418,7 +424,7 @@ cpu_desc_init64(
 /*
  * Set MSRs for sysenter/sysexit for 64-bit.
  */
-void
+static void
 fast_syscall_init64(void)
 {
 	wrmsr64(MSR_IA32_SYSENTER_CS, SYSENTER_CS); 
@@ -439,17 +445,18 @@ fast_syscall_init64(void)
 	/*
 	 * Emulate eflags cleared by sysenter but note that
 	 * we also clear the trace trap to avoid the complications
-	 * of single-stepping into a syscall. We also clear
-	 * the nested task bit to avoid a spurious "task switch"
-	 * on IRET.
+	 * of single-stepping into a syscall. The nested task bit
+	 * is also cleared to avoid a spurious "task switch"
+	 * should we choose to return via an IRET.
 	 */
 	wrmsr64(MSR_IA32_FMASK, EFL_DF|EFL_IF|EFL_TF|EFL_NT);
 
 	/*
-	 * Set the Kermel GS base MSR to point to per-cpu data in uber-space.
+	 * Set the Kernel GS base MSR to point to per-cpu data in uber-space.
 	 * The uber-space handler (hi64_syscall) uses the swapgs instruction.
 	 */
-	wrmsr64(MSR_IA32_KERNEL_GS_BASE, UBER64(current_cpu_datap()));
+	wrmsr64(MSR_IA32_KERNEL_GS_BASE,
+		UBER64((unsigned long)current_cpu_datap()));
 	kprintf("fast_syscall_init64() KERNEL_GS_BASE=0x%016llx\n",
 		rdmsr64(MSR_IA32_KERNEL_GS_BASE));
 }
@@ -457,7 +464,7 @@ fast_syscall_init64(void)
 /*
  * Set MSRs for sysenter/sysexit
  */
-void
+static void
 fast_syscall_init(void)
 {
 	wrmsr(MSR_IA32_SYSENTER_CS, SYSENTER_CS, 0); 
@@ -543,6 +550,9 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 		goto abort;
 	}
 
+	/* Machine-check shadow register allocation. */
+	mca_cpu_alloc(cdp);
+
 	simple_lock(&cpu_lock);
 	if (real_ncpus >= max_ncpus) {
 		simple_unlock(&cpu_lock);
@@ -553,8 +563,8 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 	real_ncpus++;
 	simple_unlock(&cpu_lock);
 
-	kprintf("cpu_data_alloc(%d) 0x%x desc_table: 0x%x "
-		"ldt: 0x%x "
+	kprintf("cpu_data_alloc(%d) %p desc_table: %p "
+		"ldt: %p "
 		"int_stack: 0x%x-0x%x\n",
 		cdp->cpu_number, cdp, cdp->cpu_desc_tablep, cdp->cpu_ldtp,
 		cdp->cpu_int_stack_top - INTSTACK_SIZE, cdp->cpu_int_stack_top);
@@ -592,29 +602,27 @@ valid_user_segment_selectors(uint16_t cs,
 
 
 static vm_offset_t user_window_base = 0;
-static vm_offset_t phys_window_base = 0;
 
 void
-cpu_window_init(int cpu)
+cpu_userwindow_init(int cpu)
 {
 	cpu_data_t		*cdp = cpu_data_ptr[cpu];
-	cpu_desc_index_t	*cdi;
+	cpu_desc_index_t	*cdi = &cdp->cpu_desc_index;
         vm_offset_t 		user_window;
-        vm_offset_t 		phys_window;
         vm_offset_t 		vaddr;
 	int			num_cpus;
 
 	num_cpus = ml_get_max_cpus();
 
 	if (cpu >= num_cpus)
-	        panic("copy_window_init: cpu > num_cpus");
+	        panic("cpu_userwindow_init: cpu > num_cpus");
 
 	if (user_window_base == 0) {
 
 	        if (vm_allocate(kernel_map, &vaddr,
 				(NBPDE * NCOPY_WINDOWS * num_cpus) + NBPDE,
 				VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
-		        panic("copy_window_init: "
+		        panic("cpu_userwindow_init: "
 				"couldn't allocate user map window");
 
 		/*
@@ -639,19 +647,10 @@ cpu_window_init(int cpu)
 				(vaddr +
 				 ((NBPDE * NCOPY_WINDOWS * num_cpus) + NBPDE)) -
 				 user_window);
-
-	        if (vm_allocate(kernel_map, &phys_window_base,
-				PAGE_SIZE * num_cpus, VM_FLAGS_ANYWHERE)
-					!= KERN_SUCCESS)
-		        panic("copy_window_init: "
-				"couldn't allocate phys map window");
 	}
 
 	user_window = user_window_base + (cpu * NCOPY_WINDOWS * NBPDE);
-	phys_window = phys_window_base + (cpu * PAGE_SIZE);
 
-	cdi = &cdp->cpu_desc_index;
-	  
 	cdp->cpu_copywindow_base = user_window;
 	cdp->cpu_copywindow_pdp  = pmap_pde(kernel_pmap, user_window);
 
@@ -660,15 +659,28 @@ cpu_window_init(int cpu)
 
 	fix_desc(&cdi->cdi_gdt[sel_idx(USER_WINDOW_SEL)], 1);
 
-	cdp->cpu_physwindow_base = phys_window;
+}
 
-	/*
-	 * make sure the page that encompasses the
-	 * pte pointer we're interested in actually
-	 * exists in the page table
-	 */
+void
+cpu_physwindow_init(int cpu)
+{
+	cpu_data_t		*cdp = cpu_data_ptr[cpu];
+	cpu_desc_index_t	*cdi = &cdp->cpu_desc_index;
+        vm_offset_t 		phys_window;
+
+	if (vm_allocate(kernel_map, &phys_window,
+			PAGE_SIZE, VM_FLAGS_ANYWHERE)
+				!= KERN_SUCCESS)
+	        panic("cpu_physwindow_init: couldn't allocate phys map window");
+
+        /*
+         * make sure the page that encompasses the
+         * pte pointer we're interested in actually
+         * exists in the page table
+         */
 	pmap_expand(kernel_pmap, phys_window);
 
+	cdp->cpu_physwindow_base = phys_window;
 	cdp->cpu_physwindow_ptep = vtopte(phys_window);
 
 	cdi->cdi_gdt[sel_idx(PHYS_WINDOW_SEL)] = physwindow_desc_pattern;
@@ -715,3 +727,20 @@ cpu_desc_load64(cpu_data_t *cdp)
 
 	kprintf("64-bit descriptor tables loaded\n");
 }
+
+void
+cpu_mode_init(cpu_data_t *cdp)
+{
+	if (cpu_mode_is64bit()) {
+		cpu_IA32e_enable(cdp);
+		cpu_desc_load64(cdp);
+		fast_syscall_init64();
+	} else {
+		fast_syscall_init();
+	}
+
+	/* Call for per-cpu pmap mode initialization */
+	pmap_cpu_init();
+
+}
+

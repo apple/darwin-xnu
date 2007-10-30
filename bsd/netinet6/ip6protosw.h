@@ -150,7 +150,7 @@ struct ip6protosw {
 					/* flush any excess space possible */
 #ifdef __APPLE__
 	/* for compat. with IPv4 protosw */
-	int	(*pr_sysctl)();		/* sysctl for protocol */
+	int	(*pr_sysctl)(void);		/* sysctl for protocol */
 #endif
 
 	struct	pr_usrreqs *pr_usrreqs;	/* supersedes pr_usrreq() */

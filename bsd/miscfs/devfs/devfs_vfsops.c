@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
  * Copyright 1997,1998 Julian Elischer.  All rights reserved.
@@ -48,6 +54,12 @@
  *
  */
 /*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
+/*
  * HISTORY
  *  Dieter Siegmund (dieter@apple.com) Wed Jul 14 13:37:59 PDT 1999
  *  - modified devfs_statfs() to use devfs_stats to calculate the
@@ -64,14 +76,21 @@
 #include <sys/mount_internal.h>
 #include <sys/malloc.h>
 
+#include <libkern/OSAtomic.h>
+
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
+
 #include "devfs.h"
 #include "devfsdefs.h"
 
-static int devfs_statfs( struct mount *mp, struct vfsstatfs *sbp, vfs_context_t context);
-static int devfs_vfs_getattr(mount_t mp, struct vfs_attr *fsap, vfs_context_t context);
+static int devfs_statfs( struct mount *mp, struct vfsstatfs *sbp, vfs_context_t ctx);
+static int devfs_vfs_getattr(mount_t mp, struct vfs_attr *fsap, vfs_context_t ctx);
 
 static struct vfstable * devfs_vfsp = 0;
 extern int setup_kmem;
+__private_extern__ void devfs_setup_kmem(void);
 
 
 /*-
@@ -130,7 +149,7 @@ devfs_setup_kmem(void)
  */
 /*proto*/
 int
-devfs_mount(struct mount *mp, __unused vnode_t devvp, __unused user_addr_t data, vfs_context_t context)
+devfs_mount(struct mount *mp, __unused vnode_t devvp, __unused user_addr_t data, vfs_context_t ctx)
 {
 	struct devfsmount *devfs_mp_p;	/* devfs specific mount info */
 	int error;
@@ -187,14 +206,14 @@ devfs_mount(struct mount *mp, __unused vnode_t devvp, __unused user_addr_t data,
 	
 	bzero(mp->mnt_vfsstat.f_mntfromname, MAXPATHLEN);
 	bcopy("devfs",mp->mnt_vfsstat.f_mntfromname, 5);
-	(void)devfs_statfs(mp, &mp->mnt_vfsstat, context);
+	(void)devfs_statfs(mp, &mp->mnt_vfsstat, ctx);
 
 	return 0;
 }
 
 
 static int
-devfs_start(__unused struct mount *mp, __unused int flags, __unused vfs_context_t context)
+devfs_start(__unused struct mount *mp, __unused int flags, __unused vfs_context_t ctx)
 {
 	return 0;
 }
@@ -203,7 +222,7 @@ devfs_start(__unused struct mount *mp, __unused int flags, __unused vfs_context_
  *  Unmount the filesystem described by mp.
  */
 static int
-devfs_unmount( struct mount *mp, int mntflags, __unused vfs_context_t context)
+devfs_unmount( struct mount *mp, int mntflags, __unused vfs_context_t ctx)
 {
 	struct devfsmount *devfs_mp_p = (struct devfsmount *)mp->mnt_data;
 	int flags = 0;
@@ -233,20 +252,21 @@ devfs_unmount( struct mount *mp, int mntflags, __unused vfs_context_t context)
 
 /* return the address of the root vnode  in *vpp */
 static int
-devfs_root(struct mount *mp, struct vnode **vpp, vfs_context_t context)
+devfs_root(struct mount *mp, struct vnode **vpp, __unused vfs_context_t ctx)
 {
 	struct devfsmount *devfs_mp_p = (struct devfsmount *)(mp->mnt_data);
 	int error;
 
 	DEVFS_LOCK();
-	error = devfs_dntovn(devfs_mp_p->plane_root->de_dnp, vpp, context->vc_proc);
+	/* last parameter to devfs_dntovn() is ignored */
+	error = devfs_dntovn(devfs_mp_p->plane_root->de_dnp, vpp, NULL);
 	DEVFS_UNLOCK();
 
 	return error;
 }
 
 static int
-devfs_statfs( struct mount *mp, struct vfsstatfs *sbp, __unused vfs_context_t context)
+devfs_statfs( struct mount *mp, struct vfsstatfs *sbp, __unused vfs_context_t ctx)
 {
 	struct devfsmount *devfs_mp_p = (struct devfsmount *)mp->mnt_data;
 
@@ -273,7 +293,7 @@ devfs_statfs( struct mount *mp, struct vfsstatfs *sbp, __unused vfs_context_t co
 }
 
 static int
-devfs_vfs_getattr(mount_t mp, struct vfs_attr *fsap, vfs_context_t context)
+devfs_vfs_getattr(__unused mount_t mp, struct vfs_attr *fsap, __unused vfs_context_t ctx)
 {
 	VFSATTR_RETURN(fsap, f_objcount, devfs_stats.nodes);
 	VFSATTR_RETURN(fsap, f_maxobjcount, devfs_stats.nodes);
@@ -299,14 +319,14 @@ devfs_vfs_getattr(mount_t mp, struct vfs_attr *fsap, vfs_context_t context)
 }
 
 static int
-devfs_sync(__unused struct mount *mp, __unused int waitfor, __unused vfs_context_t context)
+devfs_sync(__unused struct mount *mp, __unused int waitfor, __unused vfs_context_t ctx)
 {
     return (0);
 }
 
 
 static int
-devfs_vget(__unused struct mount *mp, __unused ino64_t ino, __unused struct vnode **vpp, __unused vfs_context_t context)
+devfs_vget(__unused struct mount *mp, __unused ino64_t ino, __unused struct vnode **vpp, __unused vfs_context_t ctx)
 {
 	return ENOTSUP;
 }
@@ -317,14 +337,14 @@ devfs_vget(__unused struct mount *mp, __unused ino64_t ino, __unused struct vnod
  */
 
 static int
-devfs_fhtovp (__unused struct mount *mp, __unused int fhlen, __unused unsigned char *fhp, __unused struct vnode **vpp, __unused vfs_context_t context)
+devfs_fhtovp (__unused struct mount *mp, __unused int fhlen, __unused unsigned char *fhp, __unused struct vnode **vpp, __unused vfs_context_t ctx)
 {
 	return (EINVAL);
 }
 
 
 static int
-devfs_vptofh (__unused struct vnode *vp, __unused int *fhlenp, __unused unsigned char *fhp, __unused vfs_context_t context)
+devfs_vptofh (__unused struct vnode *vp, __unused int *fhlenp, __unused unsigned char *fhp, __unused vfs_context_t ctx)
 {
 	return (EINVAL);
 }
@@ -332,7 +352,7 @@ devfs_vptofh (__unused struct vnode *vp, __unused int *fhlenp, __unused unsigned
 static int
 devfs_sysctl(__unused int *name, __unused u_int namelen, __unused user_addr_t oldp, 
              __unused size_t *oldlenp, __unused user_addr_t newp, 
-             __unused size_t newlen, __unused vfs_context_t context)
+             __unused size_t newlen, __unused vfs_context_t ctx)
 {
     return (ENOTSUP);
 }
@@ -351,20 +371,18 @@ devfs_kernel_mount(char * mntname)
 	int error;
 	struct nameidata nd;
 	struct vnode  * vp;
-	struct vfs_context context;
+	vfs_context_t ctx = vfs_context_kernel();
 
 	if (devfs_vfsp == NULL) {
 	    printf("devfs_kernel_mount: devfs_vfsp is NULL\n");
 	    return (EINVAL);
 	}
-	context.vc_proc = current_proc();
-	context.vc_ucred = kauth_cred_get();
 
 	/*
 	 * Get vnode to be covered
 	 */
 	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE32,
-	    CAST_USER_ADDR_T(mntname), &context);
+	    CAST_USER_ADDR_T(mntname), ctx);
 	if ((error = namei(&nd))) {
 	    printf("devfs_kernel_mount: failed to find directory '%s', %d", 
 		   mntname, error);
@@ -373,7 +391,7 @@ devfs_kernel_mount(char * mntname)
 	nameidone(&nd);
 	vp = nd.ni_vp;
 
-	if ((error = VNOP_FSYNC(vp, MNT_WAIT, &context))) {
+	if ((error = VNOP_FSYNC(vp, MNT_WAIT, ctx))) {
 	    printf("devfs_kernel_mount: vnop_fsync failed: %d\n", error);
 	    vnode_put(vp);
 	    return (error);
@@ -403,6 +421,9 @@ devfs_kernel_mount(char * mntname)
 	/* Initialize the default IO constraints */
 	mp->mnt_maxreadcnt = mp->mnt_maxwritecnt = MAXPHYS;
 	mp->mnt_segreadcnt = mp->mnt_segwritecnt = 32;
+	mp->mnt_ioflags = 0;
+	mp->mnt_realrootvp = NULLVP;
+	mp->mnt_authcache_ttl = CACHED_LOOKUP_RIGHT_TTL;
 
 	mount_lock_init(mp);
 	TAILQ_INIT(&mp->mnt_vnodelist);
@@ -417,13 +438,17 @@ devfs_kernel_mount(char * mntname)
 	devfs_vfsp->vfc_64bitready = TRUE;
 	mp->mnt_flag = 0;
 	mp->mnt_flag |= devfs_vfsp->vfc_flags & MNT_VISFLAGMASK;
-	strncpy(mp->mnt_vfsstat.f_fstypename, devfs_vfsp->vfc_name, MFSTYPENAMELEN);
+	strlcpy(mp->mnt_vfsstat.f_fstypename, devfs_vfsp->vfc_name, MFSTYPENAMELEN);
 	vp->v_mountedhere = mp;
 	mp->mnt_vnodecovered = vp;
 	mp->mnt_vfsstat.f_owner = kauth_cred_getuid(kauth_cred_get());
 	(void) copystr(mntname, mp->mnt_vfsstat.f_mntonname, MAXPATHLEN - 1, 0);
+#if CONFIG_MACF
+	mac_mount_label_init(mp);
+	mac_mount_label_associate(ctx, mp);
+#endif
 
-	error = devfs_mount(mp, NULL, NULL, &context);
+	error = devfs_mount(mp, NULL, USER_ADDR_NULL, ctx);
 
 	if (error) {
 	    printf("devfs_kernel_mount: mount %s failed: %d", mntname, error);
@@ -432,6 +457,9 @@ devfs_kernel_mount(char * mntname)
 	    vfs_unbusy(mp);
 
 	    mount_lock_destroy(mp);
+#if CONFIG_MACF
+	    mac_mount_label_destroy(mp);
+#endif
 	    FREE_ZONE(mp, sizeof (struct mount), M_MOUNT);
 	    vnode_put(vp);
 	    return (error);
@@ -455,5 +483,7 @@ struct vfsops devfs_vfsops = {
 	devfs_fhtovp,
 	devfs_vptofh,
 	devfs_init,
-	devfs_sysctl
+	devfs_sysctl,
+	NULL,
+	{NULL}
 };

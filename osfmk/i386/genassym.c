@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -83,6 +89,11 @@
 #include <i386/mp_desc.h>
 #include <pexpert/i386/boot.h>
 
+#if	CONFIG_DTRACE
+#define NEED_DTRACE_DEFS
+#include <../bsd/sys/lockstat.h>
+#endif
+
 /*
  * genassym.c is used to produce an
  * assembly file which, intermingled with unuseful assembly code,
@@ -118,6 +129,7 @@ main(
 {
 
 	DECLARE("AST_URGENT",		AST_URGENT);
+	DECLARE("AST_BSD",			AST_BSD);
 
 	/* Simple Lock structure */
 	DECLARE("SLOCK_ILK",	offsetof(usimple_lock_t, interlock));
@@ -141,8 +153,30 @@ main(
 	DECLARE("MUTEX_TAG",	MUTEX_TAG);
 #endif	/* MACH_LDEBUG */
 	DECLARE("MUTEX_IND",	LCK_MTX_TAG_INDIRECT);
+	DECLARE("MUTEX_DESTROYED", LCK_MTX_TAG_DESTROYED);
+	DECLARE("MUTEX_LOCKED_AS_SPIN",	MUTEX_LOCKED_AS_SPIN);
 	DECLARE("MUTEX_ITAG",	offsetof(lck_mtx_t *, lck_mtx_tag));
 	DECLARE("MUTEX_PTR",	offsetof(lck_mtx_t *, lck_mtx_ptr));
+	DECLARE("MUTEX_ASSERT_OWNED",	LCK_MTX_ASSERT_OWNED);
+	DECLARE("MUTEX_ASSERT_NOTOWNED",LCK_MTX_ASSERT_NOTOWNED);
+	/* Per-mutex statistic element */
+	DECLARE("MTX_ACQ_TSC",	offsetof(lck_mtx_ext_t *, lck_mtx_stat));
+
+	/* Mutex group statistics elements */
+	DECLARE("MUTEX_GRP",	offsetof(lck_mtx_ext_t *, lck_mtx_grp));
+	
+	DECLARE("GRP_MTX_STAT_UTIL",	offsetof(lck_grp_t *, lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_util_cnt));
+	DECLARE("GRP_MTX_STAT_MISS",	offsetof(lck_grp_t *, lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_miss_cnt));
+	DECLARE("GRP_MTX_STAT_WAIT",	offsetof(lck_grp_t *, lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_wait_cnt));
+	/*
+	 * The use of this field is somewhat at variance with the alias.
+	 */
+	DECLARE("GRP_MTX_STAT_DIRECT_WAIT",	offsetof(lck_grp_t *, lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_held_cnt));
+
+	DECLARE("GRP_MTX_STAT_HELD_MAX",	offsetof(lck_grp_t *, lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_held_max));
+	/* Reader writer lock types */
+	DECLARE("RW_SHARED",    LCK_RW_TYPE_SHARED);
+	DECLARE("RW_EXCL",      LCK_RW_TYPE_EXCLUSIVE);
 
 	DECLARE("TH_RECOVER",		offsetof(thread_t, recover));
 	DECLARE("TH_CONTINUATION",	offsetof(thread_t, continuation));
@@ -153,11 +187,14 @@ main(
 	DECLARE("TASK_SYSCALLS_MACH",	offsetof(struct task *, syscalls_mach));
 	DECLARE("TASK_SYSCALLS_UNIX",	offsetof(struct task *, syscalls_unix));
 
+	DECLARE("TASK_VTIMERS",			offsetof(struct task *, vtimers));
+
 	/* These fields are being added on demand */
 	DECLARE("ACT_MACH_EXC_PORT",
 		offsetof(thread_t, exc_actions[EXC_MACH_SYSCALL].port));
 
 	DECLARE("ACT_TASK",	offsetof(thread_t, task));
+	DECLARE("ACT_AST",	offsetof(thread_t, ast));
 	DECLARE("ACT_PCB",	offsetof(thread_t, machine.pcb));
 	DECLARE("ACT_SPF",	offsetof(thread_t, machine.specFlags));
 	DECLARE("ACT_MAP",	offsetof(thread_t, map));
@@ -374,6 +411,8 @@ main(
 		offsetof(cpu_data_t *,cpu_processor));
         DECLARE("CPU_INT_STATE",
 		offsetof(cpu_data_t *, cpu_int_state));
+        DECLARE("CPU_INT_EVENT_TIME",
+		offsetof(cpu_data_t *, cpu_int_event_time));
 
         DECLARE("CPU_HI_ISS",
 		offsetof(cpu_data_t *, cpu_hi_iss));
@@ -397,6 +436,11 @@ main(
 		offsetof(cpu_data_t *, cpu_uber.cu_isf));
 	DECLARE("CPU_UBER_TMP",
 		offsetof(cpu_data_t *, cpu_uber.cu_tmp));
+	DECLARE("CPU_UBER_ARG_STORE",
+		offsetof(cpu_data_t *, cpu_uber_arg_store));
+	DECLARE("CPU_UBER_ARG_STORE_VALID",
+		offsetof(cpu_data_t *, cpu_uber_arg_store_valid));
+
 	DECLARE("CPU_DR7",
 		offsetof(cpu_data_t *, cpu_dr7));
 
@@ -470,6 +514,8 @@ main(
 		offsetof(rtc_nanotime_t *, scale));
 	DECLARE("RNT_SHIFT",
 		offsetof(rtc_nanotime_t *, shift));
+	DECLARE("RNT_GENERATION",
+		offsetof(rtc_nanotime_t *, generation));
 
 	/* values from kern/timer.h */
 	DECLARE("TIMER_LOW",
@@ -482,13 +528,23 @@ main(
 	DECLARE("TIMER_TSTAMP",
 		offsetof(struct timer *, tstamp));
 
-	DECLARE("CURRENT_TIMER",
-		offsetof(struct processor *, processor_data.current_timer));
+	DECLARE("THREAD_TIMER",
+		offsetof(struct processor *, processor_data.thread_timer));
 #endif
+	DECLARE("KERNEL_TIMER",
+		offsetof(struct processor *, processor_data.kernel_timer));
 	DECLARE("SYSTEM_TIMER",
 		offsetof(struct thread *, system_timer));
 	DECLARE("USER_TIMER",
 		offsetof(struct thread *, user_timer));
+	DECLARE("SYSTEM_STATE",
+			offsetof(struct processor *, processor_data.system_state));
+	DECLARE("USER_STATE",
+			offsetof(struct processor *, processor_data.user_state));
+	DECLARE("IDLE_STATE",
+			offsetof(struct processor *, processor_data.idle_state));
+	DECLARE("CURRENT_STATE",
+			offsetof(struct processor *, processor_data.current_state));
 
 	DECLARE("OnProc", OnProc);
 
@@ -506,6 +562,25 @@ main(
 	DECLARE("TIM1_COMP",	offsetof(hpetReg_t *, TIM1_COMP));
 	DECLARE("TIM2_CONF",	offsetof(hpetReg_t *, TIM2_CONF));
 	DECLARE("TIM2_COMP",	offsetof(hpetReg_t *, TIM2_COMP));
+
+#if	CONFIG_DTRACE
+	DECLARE("LS_LCK_MTX_LOCK_ACQUIRE", LS_LCK_MTX_LOCK_ACQUIRE);
+	DECLARE("LS_LCK_MTX_TRY_SPIN_LOCK_ACQUIRE", LS_LCK_MTX_TRY_SPIN_LOCK_ACQUIRE);
+	DECLARE("LS_LCK_MTX_UNLOCK_RELEASE", LS_LCK_MTX_UNLOCK_RELEASE);
+	DECLARE("LS_LCK_MTX_TRY_LOCK_ACQUIRE", LS_LCK_MTX_TRY_LOCK_ACQUIRE);
+	DECLARE("LS_LCK_RW_LOCK_SHARED_ACQUIRE", LS_LCK_RW_LOCK_SHARED_ACQUIRE);
+	DECLARE("LS_LCK_RW_DONE_RELEASE", LS_LCK_RW_DONE_RELEASE);
+	DECLARE("LS_LCK_MTX_EXT_LOCK_ACQUIRE", LS_LCK_MTX_EXT_LOCK_ACQUIRE);
+	DECLARE("LS_LCK_MTX_TRY_EXT_LOCK_ACQUIRE", LS_LCK_MTX_TRY_EXT_LOCK_ACQUIRE);
+	DECLARE("LS_LCK_MTX_EXT_UNLOCK_RELEASE", LS_LCK_MTX_EXT_UNLOCK_RELEASE);
+
+	DECLARE("LS_MUTEX_LOCK_ACQUIRE", LS_MUTEX_LOCK_ACQUIRE);
+	DECLARE("LS_MUTEX_TRY_SPIN_ACQUIRE", LS_MUTEX_TRY_SPIN_ACQUIRE);
+	DECLARE("LS_MUTEX_TRY_LOCK_ACQUIRE", LS_MUTEX_TRY_LOCK_ACQUIRE);
+	DECLARE("LS_MUTEX_UNLOCK_RELEASE", LS_MUTEX_UNLOCK_RELEASE);
+	DECLARE("LS_MUTEX_LOCK_SPIN_ACQUIRE", LS_MUTEX_LOCK_SPIN_ACQUIRE);
+	DECLARE("LS_MUTEX_CONVERT_SPIN_ACQUIRE", LS_MUTEX_CONVERT_SPIN_ACQUIRE);
+#endif
 
 	return (0);
 }

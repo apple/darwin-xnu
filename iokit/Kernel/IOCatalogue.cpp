@@ -1,29 +1,41 @@
 /*
- * Copyright (c) 1998-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1998 Apple Computer, Inc.  All rights reserved. 
  *
  * HISTORY
  *
+ */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
  */
 
 #include <IOKit/IODeviceTreeSupport.h>
@@ -36,6 +48,7 @@ extern "C" {
 #include <mach/kmod.h>
 #include <mach-o/mach_header.h>
 #include <kern/host.h>
+#include <security/mac_data.h>
 };
 
 #include <IOKit/IOLib.h>
@@ -114,6 +127,410 @@ kmod_start_or_stop(
 
 extern "C" kern_return_t kmod_retain(kmod_t id);
 extern "C" kern_return_t kmod_release(kmod_t id);
+
+#if CONFIG_MACF_KEXT
+/* MAC Framework support */
+
+/* 
+ * define IOC_DEBUG to display run-time debugging information
+ * #define IOC_DEBUG 1
+ */
+
+#ifdef IOC_DEBUG
+#define DPRINTF(x)	printf x
+#else
+#define IOC_DEBUG
+#define DPRINTF(x)
+#endif
+
+static bool
+primitive_type(OSObject *obj)
+{
+    const OSMetaClass *typeID;
+
+    typeID = OSTypeIDInst(obj);
+    if (typeID == OSTypeID(OSString) || typeID == OSTypeID(OSNumber) ||
+        typeID == OSTypeID(OSBoolean) || typeID == OSTypeID(OSData))
+	return(true);
+    else
+	return(false);
+}
+
+static int
+primitive_type_length(OSObject *obj)
+{
+    const OSMetaClass *typeID;
+    int len;
+
+    typeID = OSTypeIDInst(obj);
+    if (typeID == OSTypeID(OSString)) {
+        OSString * stringObj = OSDynamicCast(OSString, obj);
+        len = stringObj->getLength() + 1;
+    }
+    else if (typeID == OSTypeID(OSNumber)) {
+        len = sizeof("4294967295");	/* UINT32_MAX */
+    }
+    else if (typeID == OSTypeID(OSBoolean)) {
+        OSBoolean * boolObj = OSDynamicCast(OSBoolean, obj);
+        len = boolObj->isTrue() ? sizeof("true") : sizeof("false");
+    }
+    else if (typeID == OSTypeID(OSData)) {
+        OSData * dataObj = OSDynamicCast(OSData, obj);
+        len = dataObj->getLength();
+    }
+    else {
+	len = 0;
+    }
+    return(len);
+}
+
+static void
+primitive_type_collect(struct mac_module_data_element *element, OSObject *value)
+{
+    const OSMetaClass *typeID;
+
+    typeID = OSTypeIDInst(value);
+    if (typeID == OSTypeID(OSString)) {
+        OSString *stringObj = OSDynamicCast(OSString, value);
+        element->value_type = MAC_DATA_TYPE_PRIMITIVE;
+        element->value_size = stringObj->getLength() + 1;
+	DPRINTF(("osdict: string %s size %d\n", 
+	    stringObj->getCStringNoCopy(), element->value_size));
+        memcpy(element->value, stringObj->getCStringNoCopy(),
+            element->value_size);
+    } else if (typeID == OSTypeID(OSNumber)) {
+        OSNumber *numberObj = OSDynamicCast(OSNumber, value);
+        element->value_type = MAC_DATA_TYPE_PRIMITIVE;
+        element->value_size = sprintf(element->value, "%u",
+	    numberObj->unsigned32BitValue()) + 1;
+    } else if (typeID == OSTypeID(OSBoolean)) {
+        OSBoolean *boolObj = OSDynamicCast(OSBoolean, value);
+        element->value_type = MAC_DATA_TYPE_PRIMITIVE;
+        if (boolObj->isTrue()) {
+            strcpy(element->value, "true");
+            element->value_size = 5;
+        } else {
+            strcpy(element->value, "false");
+            element->value_size = 6;
+        }
+    } else if (typeID == OSTypeID(OSData)) {
+        OSData *dataObj = OSDynamicCast(OSData, value);
+        element->value_type = MAC_DATA_TYPE_PRIMITIVE;
+        element->value_size = dataObj->getLength();
+ 	DPRINTF(("osdict: data size %d\n", dataObj->getLength()));
+        memcpy(element->value, dataObj->getBytesNoCopy(),
+            element->value_size);
+    }
+}
+
+/*********************************************************************
+* This function takes an OSDictionary and returns a struct mac_module_data
+* list.
+*********************************************************************/
+struct mac_module_data *
+osdict_encode(OSDictionary *dict)
+{
+    const OSMetaClass * typeID;	            // don't release
+    OSString * key = NULL;                  // don't release
+    OSCollectionIterator * keyIterator = 0; // must release
+    struct mac_module_data * module_data = 0;
+    struct mac_module_data_element * element;
+    unsigned int strtabsize = 0;
+    unsigned int listtabsize = 0;
+    unsigned int dicttabsize = 0;
+    unsigned int nkeys = 0;
+    unsigned int datalen;
+    char *strtab = NULL;
+    char *listtab = NULL;
+    char *dicttab = NULL;
+    vm_offset_t data_addr;
+
+    keyIterator = OSCollectionIterator::withCollection(dict);
+    if (!keyIterator)
+        goto finish;
+
+    /* Iterate over OSModuleData to figure out total size */
+    while ( (key = OSDynamicCast(OSString, keyIterator->getNextObject())) ) {
+
+	// Get the key's value and determine its type
+        OSObject * value = dict->getObject(key);
+        if (!value)
+            continue;
+
+	typeID = OSTypeIDInst(value);
+	if (primitive_type(value)) {
+	    strtabsize += primitive_type_length(value);
+	}
+	else if (typeID == OSTypeID(OSArray)) {
+	    unsigned int k, cnt, nents;
+	    OSArray *arrayObj = OSDynamicCast(OSArray, value);
+
+	    nents = 0;
+	    cnt = arrayObj->getCount();
+	    for (k = 0; k < cnt; k++) {
+		value = arrayObj->getObject(k);
+		typeID = OSTypeIDInst(value);
+		if (primitive_type(value)) {
+		    listtabsize += primitive_type_length(value);
+		    nents++;
+		}
+		else if (typeID == OSTypeID(OSDictionary)) {
+		    unsigned int dents;
+		    OSDictionary *dictObj;
+		    OSString *dictkey;
+		    OSCollectionIterator *dictIterator;
+
+		    dents = 0;
+		    dictObj = OSDynamicCast(OSDictionary, value);
+		    dictIterator = OSCollectionIterator::withCollection(dictObj);
+		    if (!dictIterator)
+			goto finish;
+		    while ((dictkey = OSDynamicCast(OSString,
+			    		      dictIterator->getNextObject()))) {
+			OSObject *dictvalue;
+
+			dictvalue = dictObj->getObject(dictkey);
+			if (!dictvalue)
+			    continue;
+			if (primitive_type(dictvalue)) {
+			    strtabsize += primitive_type_length(dictvalue);
+			}
+			else {
+			    continue;	/* Only handle primitive types here.  */
+			}
+			/*
+			 * Allow for the "arraynnn/" prefix in the key length.
+			 */
+			strtabsize += dictkey->getLength() + 1;
+			dents++;
+		    }
+		    dictIterator->release();
+		    if (dents-- > 0) {
+			dicttabsize += sizeof(struct mac_module_data_list) +
+			    dents * sizeof(struct mac_module_data_element);
+			nents++;
+		    }
+		}
+		else {
+		    continue;		/* Skip everything else.              */
+		}
+	    }
+	    if (nents == 0)
+		continue;
+	    listtabsize += sizeof(struct mac_module_data_list) +
+		(nents - 1) * sizeof(struct mac_module_data_element);
+	}
+	else {
+	    continue;		/* skip anything else */
+	}
+	strtabsize += key->getLength() + 1;
+	nkeys++;
+    }
+    if (nkeys == 0)
+    	goto finish;
+
+    /*
+     * Allocate and fill in the module data structures.
+     */
+    datalen = sizeof(struct mac_module_data) +
+	sizeof(mac_module_data_element) * (nkeys - 1) +
+        strtabsize + listtabsize + dicttabsize;
+    DPRINTF(("osdict: datalen %d strtabsize %d listtabsize %d dicttabsize %d\n", 
+	    datalen, strtabsize, listtabsize, dicttabsize));
+    if (kmem_alloc(kernel_map, &data_addr, datalen) != KERN_SUCCESS)
+	goto finish;
+    module_data = (mac_module_data *)data_addr;
+    module_data->base_addr = data_addr;
+    module_data->size = datalen;
+    module_data->count = nkeys;
+    strtab = (char *)&module_data->data[nkeys];
+    listtab = strtab + strtabsize;
+    dicttab = listtab + listtabsize;
+    DPRINTF(("osdict: data_addr %p strtab %p listtab %p dicttab %p end %p\n", 
+	    data_addr, strtab, listtab, dicttab, data_addr + datalen));
+
+    keyIterator->reset();
+    nkeys = 0;
+    element = &module_data->data[0];
+    DPRINTF(("osdict: element %p\n", element));
+    while ( (key = OSDynamicCast(OSString, keyIterator->getNextObject())) ) {
+
+	// Get the key's value and determine its type
+        OSObject * value = dict->getObject(key);
+        if (!value)
+            continue;
+
+	/* Store key */
+	DPRINTF(("osdict: element @%p\n", element));
+	element->key = strtab;
+	element->key_size = key->getLength() + 1;
+	DPRINTF(("osdict: key %s size %d @%p\n", key->getCStringNoCopy(), element->key_size, strtab));
+	memcpy(element->key, key->getCStringNoCopy(), element->key_size);
+
+	typeID = OSTypeIDInst(value);
+	if (primitive_type(value)) {
+	    /* Store value */
+	    element->value = element->key + element->key_size;
+	    DPRINTF(("osdict: primitive element value %p\n", element->value));
+	    primitive_type_collect(element, value);
+	    strtab += element->key_size + element->value_size;
+	    DPRINTF(("osdict: new strtab %p\n", strtab));
+	}
+	else if (typeID == OSTypeID(OSArray)) {
+	    unsigned int k, cnt, nents;
+	    char *astrtab;
+	    struct mac_module_data_list *arrayhd;
+	    struct mac_module_data_element *ele;
+	    OSArray *arrayObj = OSDynamicCast(OSArray, value);
+
+	    element->value = listtab;
+	    DPRINTF(("osdict: array element value %p\n", element->value));
+	    element->value_type = MAC_DATA_TYPE_ARRAY;
+	    arrayhd = (struct mac_module_data_list *)element->value;
+	    arrayhd->type = 0;
+	    DPRINTF(("osdict: arrayhd %p\n", arrayhd));
+	    nents = 0;
+	    astrtab = strtab + element->key_size;
+	    ele = &(arrayhd->list[0]);
+	    cnt = arrayObj->getCount();
+	    for (k = 0; k < cnt; k++) {
+		value = arrayObj->getObject(k);
+		DPRINTF(("osdict: array ele %d @%p\n", nents, ele));
+		ele->key = NULL;
+		ele->key_size = 0;
+		typeID = OSTypeIDInst(value);
+		if (primitive_type(value)) {
+		    if (arrayhd->type != 0 &&
+			arrayhd->type != MAC_DATA_TYPE_PRIMITIVE)
+			continue;
+		    arrayhd->type = MAC_DATA_TYPE_PRIMITIVE;
+		    ele->value = astrtab;
+		    primitive_type_collect(ele, value);
+		    astrtab += ele->value_size;
+		    DPRINTF(("osdict: array new astrtab %p\n", astrtab));
+		}
+		else if (typeID == OSTypeID(OSDictionary)) {
+		    unsigned int dents;
+		    char *dstrtab;
+		    OSDictionary *dictObj;
+		    OSString *dictkey;
+		    OSCollectionIterator *dictIterator;
+		    struct mac_module_data_list *dicthd;
+		    struct mac_module_data_element *dele;
+
+		    if (arrayhd->type != 0 &&
+			arrayhd->type != MAC_DATA_TYPE_DICT)
+			continue;
+		    dictObj = OSDynamicCast(OSDictionary, value);
+		    dictIterator = OSCollectionIterator::withCollection(dictObj);
+		    if (!dictIterator)
+			goto finish;
+		    DPRINTF(("osdict: dict\n"));
+		    ele->value = dicttab;
+		    ele->value_type = MAC_DATA_TYPE_DICT;
+		    dicthd = (struct mac_module_data_list *)ele->value;
+		    DPRINTF(("osdict: dicthd %p\n", dicthd));
+		    dstrtab = astrtab;
+		    dents = 0;
+		    while ((dictkey = OSDynamicCast(OSString,
+			    		      dictIterator->getNextObject()))) {
+			OSObject *dictvalue;
+
+			dictvalue = dictObj->getObject(dictkey);
+			if (!dictvalue)
+			    continue;
+			dele = &(dicthd->list[dents]);
+			DPRINTF(("osdict: dict ele %d @%p\n", dents, dele));
+			if (primitive_type(dictvalue)) {
+			    dele->key = dstrtab;
+			    dele->key_size = dictkey->getLength() + 1;
+			    DPRINTF(("osdict: dictkey %s size %d @%p\n",
+				dictkey->getCStringNoCopy(), dictkey->getLength(), dstrtab));
+			    memcpy(dele->key, dictkey->getCStringNoCopy(),
+				dele->key_size);
+			    dele->value = dele->key + dele->key_size;
+			    primitive_type_collect(dele, dictvalue);
+			    dstrtab += dele->key_size + dele->value_size;
+			    DPRINTF(("osdict: dict new dstrtab %p\n", dstrtab));
+			}
+			else {
+			    continue;	/* Only handle primitive types here.  */
+			}
+			dents++;
+		    }
+		    dictIterator->release();
+		    if (dents == 0)
+			continue;
+		    arrayhd->type = MAC_DATA_TYPE_DICT;
+		    ele->value_size = sizeof(struct mac_module_data_list) +
+			(dents - 1) * sizeof(struct mac_module_data_element);
+		    DPRINTF(("osdict: dict ele size %d ents %d\n", ele->value_size, dents));
+		    dicttab += ele->value_size;
+		    DPRINTF(("osdict: new dicttab %p\n", dicttab));
+		    dicthd->count = dents;
+		    astrtab = dstrtab;
+		}
+		else {
+		    continue;		/* Skip everything else.              */
+		}
+		nents++;
+		ele++;
+	    }
+	    if (nents == 0)
+		continue;
+	    element->value_size = sizeof(struct mac_module_data_list) +
+		(nents - 1) * sizeof(struct mac_module_data_element);
+	    listtab += element->value_size;
+	    DPRINTF(("osdict: new listtab %p\n", listtab));
+	    arrayhd->count = nents;
+	    strtab = astrtab;
+	    DPRINTF(("osdict: new strtab %p\n", strtab));
+	}
+	else {
+	    continue;		/* skip anything else */
+	}
+	element++;
+    }
+    DPRINTF(("module_data list @%p, key %p value %p\n",
+	module_data, module_data->data[0].key, module_data->data[0].value));
+finish:
+    if (keyIterator)
+	keyIterator->release();
+    return(module_data);
+}
+
+/*********************************************************************
+* This function takes a plist and looks for an OSModuleData dictionary.
+* If it is found, an encoded copy is returned.
+*********************************************************************/
+kmod_args_t
+get_module_data(OSDictionary * kextPlist, mach_msg_type_number_t * datalen)
+{
+
+    OSDictionary * kextModuleData = 0;      // don't release
+    struct mac_module_data * module_data = 0;
+    vm_map_copy_t copy = 0;
+
+    kextModuleData = OSDynamicCast(OSDictionary,
+	kextPlist->getObject("OSModuleData"));
+    if (!kextModuleData)
+        goto finish;
+
+    module_data = osdict_encode(kextModuleData);
+    if (!module_data)
+        goto finish;
+    *datalen = module_data->size;
+    /*
+     * Make a CoW copy of data and free the original.  The copy is
+     * consumed by a call to vm_map_copyout() in kmod_start_or_stop().
+     */
+    vm_map_copyin(kernel_map, (vm_offset_t)module_data, *datalen, FALSE, &copy);
+    kmem_free(kernel_map, (vm_offset_t)module_data, *datalen);
+    DPRINTF(("get_module_data: copy @ %p\n", copy));
+finish:
+    return (kmod_args_t)copy;
+}
+#endif /* MAC */
 
 static 
 kern_return_t start_prelink_module(UInt32 moduleIndex)
@@ -1056,7 +1473,7 @@ bool IOCatalogue::serializeData(IOOptionBits kind, OSSerialize * s) const
     switch ( kind )
     {
         case kIOCatalogGetContents:
-            if (!serialize(s))
+            if (!array->serialize(s))
                 kr = kIOReturnNoMemory;
             break;
 
@@ -1173,7 +1590,7 @@ kern_return_t IOCatalogue::removeKernelLinker(void) {
     kern_return_t result = KERN_SUCCESS;
     struct segment_command * segmentLE, *segmentKLD;
     boolean_t	keepsyms = FALSE;
-#if __ppc__
+#if __ppc__ || __arm__
     char * dt_segment_name;
     void * segment_paddress;
     int    segment_size;
@@ -1215,22 +1632,13 @@ kern_return_t IOCatalogue::removeKernelLinker(void) {
     */
     segmentKLD = getsegbyname("__KLD");
     if (!segmentKLD) {
-        IOLog("error removing kernel linker: can't find %s segment\n",
-            "__KLD");
+        IOLog("error removing kernel linker: can't find __KLD segment\n");
         result = KERN_FAILURE;
         goto finish;
     }
     OSRuntimeUnloadCPPForSegment(segmentKLD);
 
-    segmentLE = getsegbyname("__LINKEDIT");
-    if (!segmentLE) {
-        IOLog("error removing kernel linker: can't find %s segment\n",
-            "__LINKEDIT");
-        result = KERN_FAILURE;
-        goto finish;
-    }
-    OSRuntimeUnloadCPPForSegment(segmentLE);
-#if __ppc__
+#if __ppc__ || __arm__
    /* Free the memory that was set up by bootx.
     */
     dt_segment_name = "Kernel-__KLD";
@@ -1240,37 +1648,20 @@ kern_return_t IOCatalogue::removeKernelLinker(void) {
     }
 #elif __i386__
     /* On x86, use the mapping data from the segment load command to
-     * unload KLD and LINKEDIT directly, unless the keepsyms boot-arg
-     * was enabled. This may invalidate any assumptions about 
-     * "avail_start" defining the lower bound for valid physical addresses.
+     * unload KLD directly, unless the keepsyms boot-arg was enabled.
+     * This may invalidate any assumptions about  "avail_start"
+     * defining the lower bound for valid physical addresses.
      */
     if (!keepsyms && segmentKLD->vmaddr && segmentKLD->vmsize)
 	    ml_static_mfree(segmentKLD->vmaddr, segmentKLD->vmsize);
 #else
 #error arch
 #endif
-#if __ppc__
-    dt_segment_name = "Kernel-__LINKEDIT";
-    if (0 == IODTGetLoaderInfo(dt_segment_name, &segment_paddress, &segment_size)) {
-        IODTFreeLoaderInfo(dt_segment_name, (void *)segment_paddress,
-            (int)segment_size);
-    }
-#elif __i386__
-    if (!keepsyms && segmentLE->vmaddr && segmentLE->vmsize)
-	    ml_static_mfree(segmentLE->vmaddr, segmentLE->vmsize);
-#else
-#error arch
-#endif
 
     struct section * sect;
     sect = getsectbyname("__PRELINK", "__symtab");
-    if (sect && sect->addr)
-    {
-	vm_offset_t
-	virt = ml_static_ptovirt(sect->addr);
-	if( virt) {
-	    ml_static_mfree(virt, sect->size);
-	}
+    if (sect && sect->addr) {
+	ml_static_mfree(sect->addr, sect->size);
     }
 
 finish:
@@ -1298,3 +1689,9 @@ void IOCatalogue::disableExternalLinker(void) {
     IOLockUnlock(gIOKLDLock);
 }
 
+extern "C"
+void jettison_kernel_linker(void)
+{
+    if (gIOCatalogue != NULL)
+	gIOCatalogue->removeKernelLinker();
+}

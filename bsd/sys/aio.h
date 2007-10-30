@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2003-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* 
  *	File:	sys/aio.h
@@ -32,29 +38,49 @@
 #define	_SYS_AIO_H_
 
 #include <sys/signal.h>
+#include <sys/_types.h>
 #include <sys/cdefs.h>
 
+/*
+ * [XSI] Inclusion of the <aio.h> header may make visible symbols defined
+ * in the headers <fcntl.h>, <signal.h>, <sys/types.h>, and <time.h>.
+ * 
+ * In our case, this is limited to struct timespec, off_t and ssize_t.
+ */
+#define __need_struct_timespec
+#include <sys/_structs.h>
+
+#ifndef _OFF_T
+typedef __darwin_off_t	off_t;
+#define _OFF_T
+#endif
+
+#ifndef	_SSIZE_T
+#define	_SSIZE_T
+typedef	__darwin_ssize_t	ssize_t;
+#endif
+
+
 struct aiocb {
-	int					aio_fildes;		/* File descriptor */
-	off_t				aio_offset;		/* File offset */
-	volatile void		*aio_buf;		/* Location of buffer */
-	size_t				aio_nbytes;		/* Length of transfer */
-	int					aio_reqprio;	/* Request priority offset */
-	struct sigevent		aio_sigevent;	/* Signal number and value */
-	int					aio_lio_opcode;	/* Operation to be performed */
+	int		aio_fildes;		/* File descriptor */
+	off_t		aio_offset;		/* File offset */
+	volatile void	*aio_buf;		/* Location of buffer */
+	size_t		aio_nbytes;		/* Length of transfer */
+	int		aio_reqprio;		/* Request priority offset */
+	struct sigevent	aio_sigevent;		/* Signal number and value */
+	int		aio_lio_opcode;		/* Operation to be performed */
 };
 
-// LP64todo - should this move?
 #ifdef KERNEL
 
 struct user_aiocb {
-	int					aio_fildes;		/* File descriptor */
-	off_t				aio_offset;		/* File offset */
-	user_addr_t			aio_buf __attribute((aligned(8)));		/* Location of buffer */
-	user_size_t			aio_nbytes;		/* Length of transfer */
-	int					aio_reqprio;	/* Request priority offset */
+	int		aio_fildes;		/* File descriptor */
+	off_t		aio_offset;		/* File offset */
+	user_addr_t	aio_buf __attribute((aligned(8)));		/* Location of buffer */
+	user_size_t	aio_nbytes;		/* Length of transfer */
+	int		aio_reqprio;	/* Request priority offset */
 	struct user_sigevent aio_sigevent __attribute((aligned(8)));	/* Signal number and value */
-	int					aio_lio_opcode;	/* Operation to be performed */
+	int		aio_lio_opcode;		/* Operation to be performed */
 };
 
 #endif // KERNEL
@@ -215,7 +241,7 @@ ssize_t	aio_return( struct aiocb * aiocbp );
  */
 int		aio_suspend( const struct aiocb *const aiocblist[], 
 					 int nent,
-	 				 const struct timespec * timeoutp );
+	 				 const struct timespec * timeoutp ) __DARWIN_ALIAS_C(aio_suspend);
 	 				 
 /*
  * Write aiocbp->aio_nbytes to the file associated with aiocbp->aio_fildes from 

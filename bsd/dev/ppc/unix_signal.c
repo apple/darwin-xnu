@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* 
  * Copyright (c) 1999 Apple Computer, Inc. All rights reserved.
@@ -42,12 +48,13 @@
 #include <mach/ppc/thread_status.h>
 #include <ppc/proc_reg.h>
 
+#include <sys/sdt.h>
+
 // #include <machine/thread.h> XXX include path messed up for some reason...
 
 /* XXX functions not in a Mach headers */
 extern kern_return_t thread_getstatus(register thread_t act, int flavor,
 			thread_state_t tstate, mach_msg_type_number_t *count);
-extern int is_64signalregset(void);
 extern unsigned int get_msr_exportmask(void);
 extern kern_return_t thread_setstatus(thread_t thread, int flavor,
 			thread_state_t tstate, mach_msg_type_number_t count);
@@ -95,6 +102,8 @@ extern int thread_enable_fpe(thread_t act, int onoff);
 #define UC_FLAVOR64_VEC		45
 #define UC_DUAL			50
 #define UC_DUAL_VEC		55
+#define	UC_SET_ALT_STACK	0x40000000
+#define UC_RESET_ALT_STACK	0x80000000
 
  /* The following are valid mcontext sizes */
 #define UC_FLAVOR_SIZE ((PPC_THREAD_STATE_COUNT + PPC_EXCEPTION_STATE_COUNT + PPC_FLOAT_STATE_COUNT) * sizeof(int))
@@ -163,7 +172,7 @@ siginfo_64to32(user_siginfo_t *in, siginfo_t *out)
 	/* following cast works for sival_int because of padding */
 	out->si_value.sival_ptr	= CAST_DOWN(void *,in->si_value.sival_ptr);
 	out->si_band	= in->si_band;			/* range reduction */
-	out->pad[0]	= in->pad[0];			/* mcontext.ss.r1 */
+	out->__pad[0]	= in->pad[0];			/* mcontext.ss.r1 */
 }
 
 
@@ -196,38 +205,81 @@ sendsig(struct proc *p, user_addr_t catcher, int sig, int mask, __unused u_long 
 	int stack_size = 0;
 	void * tstate;
 	int flavor;
-	int ctx32 = 1;
-	int uthsigaltstack = 0;
-	int altstack = 0;
-	
-	
+        int ctx32 = 1;
+
 	th_act = current_thread();
 	ut = get_bsdthread_info(th_act);
 
-	
+	/*
+	 * XXX We conditionalize type passed here based on SA_SIGINFO, but
+	 * XXX we always send up all the information, regardless; perhaps
+	 * XXX this should not be conditionalized?  Defer making this change
+	 * XXX now, due to possible tools impact.
+	 */
 	if (p->p_sigacts->ps_siginfo & sigmask(sig)) {
-		infostyle = UC_FLAVOR;
-        }
-	if(is_64signalregset() && (infostyle == UC_FLAVOR)) {
-		dualcontext = 1;
-		infostyle = UC_DUAL;	
+		/*
+		 * If SA_SIGINFO is set, then we must provide the user
+		 * process both a siginfo_t and a context argument.  We call
+		 * this "FLAVORED", as opposed to "TRADITIONAL", which doesn't
+		 * expect a context.  "DUAL" is a type of "FLAVORED".
+		 */
+		if (is_64signalregset()) {
+			/*
+			 * If this is a 64 bit CPU, we must include a 64 bit
+			 * context in the data we pass to user space; we may
+			 * or may not also include a 32 bit context at the
+			 * same time, for non-leaf functions.
+			 *
+			 * The user may also explicitly choose to not receive
+			 * a 32 bit context, at their option; we only allow
+			 * this to happen on 64 bit processors, for obvious
+			 * reasons.
+			 */
+			if (IS_64BIT_PROCESS(p) ||
+			    (p->p_sigacts->ps_64regset & sigmask(sig))) {
+				 /*
+				  * For a 64 bit process, there is no 32 bit
+				  * context.
+				  */
+				ctx32 = 0;
+				infostyle = UC_FLAVOR64;
+			} else {
+				/*
+				 * For a 32 bit process on a 64 bit CPU, we
+				 * may have 64 bit leaf functions, so we need
+				 * both contexts.
+				 */
+				dualcontext = 1;
+				infostyle = UC_DUAL;
+			}
+		} else {
+			/*
+			 * If this is a 32 bit CPU, then we only have a 32 bit
+			 * context to contend with.
+			 */
+			infostyle = UC_FLAVOR;
+		}
+        } else {
+		/*
+		 * If SA_SIGINFO is not set, then we have a traditional style
+		 * call which does not need additional context passed.  The
+		 * default is 32 bit traditional.
+		 *
+		 * XXX The second check is redundant on PPC32; keep it anyway.
+		 */
+		if (is_64signalregset() || IS_64BIT_PROCESS(p)) {
+			/*
+			 * However, if this is a 64 bit CPU, we need to change
+			 * this to 64 bit traditional, and drop the 32 bit
+			 * context.
+			 */
+			ctx32 = 0;
+			infostyle = UC_TRAD64;
+		}
 	}
-	if (p->p_sigacts->ps_64regset & sigmask(sig)) {
-		dualcontext = 0;
-                ctx32 = 0;
-		infostyle = UC_FLAVOR64;
-	}
-	/* treat 64 bit processes as having used 64 bit registers */
-        if ((IS_64BIT_PROCESS(p) || is_64signalregset()) &&
-	    (infostyle == UC_TRAD)) {
-                ctx32=0;
- 		infostyle = UC_TRAD64;
-	}
-	if (IS_64BIT_PROCESS(p)) {
-		ctx32=0;
-		dualcontext = 0;
-	}
-	
+
+	proc_unlock(p);
+
 	/* I need this for SIGINFO anyway */
 	flavor = PPC_THREAD_STATE;
 	tstate = (void *)&mctx.ss;
@@ -303,31 +355,15 @@ sendsig(struct proc *p, user_addr_t catcher, int sig, int mask, __unused u_long 
 	}  
 
 	trampact = ps->ps_trampact[sig];
-	uthsigaltstack = p->p_lflag & P_LTHSIGSTACK;
-	
-	if (uthsigaltstack != 0 )  {
-		oonstack = ut->uu_sigstk.ss_flags & SA_ONSTACK;
-		altstack = ut->uu_flag & UT_ALTSTACK;
-	} else {
-		oonstack = ps->ps_sigstk.ss_flags & SA_ONSTACK;
-		altstack = ps->ps_flags & SAS_ALTSTACK;
-	}
-	
+	oonstack = ut->uu_sigstk.ss_flags & SA_ONSTACK;
 
 	/* figure out where our new stack lives */
-	if (altstack && !oonstack &&
+	if ((ut->uu_flag & UT_ALTSTACK) && !oonstack &&
 		(ps->ps_sigonstack & sigmask(sig))) {
-		if (uthsigaltstack != 0) {
-			sp = ut->uu_sigstk.ss_sp;
-			sp += ut->uu_sigstk.ss_size;
-			stack_size = ut->uu_sigstk.ss_size;
-			ut->uu_sigstk.ss_flags |= SA_ONSTACK;
-		} else {
-			sp = ps->ps_sigstk.ss_sp;
-			sp += ps->ps_sigstk.ss_size;
-			stack_size = ps->ps_sigstk.ss_size;
-			ps->ps_sigstk.ss_flags |= SA_ONSTACK;
-		}
+		sp = ut->uu_sigstk.ss_sp;
+		sp += ut->uu_sigstk.ss_size;
+		stack_size = ut->uu_sigstk.ss_size;
+		ut->uu_sigstk.ss_flags |= SA_ONSTACK;
 	}
 	else {
 		if (ctx32 == 0)
@@ -417,26 +453,6 @@ sendsig(struct proc *p, user_addr_t catcher, int sig, int mask, __unused u_long 
 	}
 
 	switch (sig) {
-		case SIGCHLD:
-			sinfo.si_pid = p->si_pid;
-			p->si_pid =0;
-			sinfo.si_status = p->si_status;
-			p->si_status = 0;
-			sinfo.si_uid = p->si_uid;
-			p->si_uid =0;
-			sinfo.si_code = p->si_code;
-			p->si_code = 0;
-			if (sinfo.si_code == CLD_EXITED) {
-				if (WIFEXITED(sinfo.si_status)) 
-					sinfo.si_code = CLD_EXITED;
-				else if (WIFSIGNALED(sinfo.si_status)) {
-					if (WCOREDUMP(sinfo.si_status))
-						sinfo.si_code = CLD_DUMPED;
-					else	
-						sinfo.si_code = CLD_KILLED;
-				}
-			}
-			break;
 		case SIGILL:
 			/*
 			 * If it's 64 bit and not a dual context, mctx will
@@ -540,12 +556,60 @@ sendsig(struct proc *p, user_addr_t catcher, int sig, int mask, __unused u_long 
 			}
 			break;
 		default:
+		{
+			int status_and_exitcode;
+
+			/*
+			 * All other signals need to fill out a minimum set of
+			 * information for the siginfo structure passed into
+			 * the signal handler, if SA_SIGINFO was specified.
+			 *
+			 * p->si_status actually contains both the status and
+			 * the exit code; we save it off in its own variable
+			 * for later breakdown.
+			 */
+			proc_lock(p);
+			sinfo.si_pid = p->si_pid;
+			p->si_pid = 0;
+			status_and_exitcode = p->si_status;
+			p->si_status = 0;
+			sinfo.si_uid = p->si_uid;
+			p->si_uid = 0;
+			sinfo.si_code = p->si_code;
+			p->si_code = 0;
+			proc_unlock(p);
+			if (sinfo.si_code == CLD_EXITED) {
+				if (WIFEXITED(status_and_exitcode)) 
+					sinfo.si_code = CLD_EXITED;
+				else if (WIFSIGNALED(status_and_exitcode)) {
+					if (WCOREDUMP(status_and_exitcode)) {
+						sinfo.si_code = CLD_DUMPED;
+						status_and_exitcode = W_EXITCODE(status_and_exitcode,status_and_exitcode);
+					} else {
+						sinfo.si_code = CLD_KILLED;
+						status_and_exitcode = W_EXITCODE(status_and_exitcode,status_and_exitcode);
+					}
+				}
+			}
+			/*
+			 * The recorded status contains the exit code and the
+			 * signal information, but the information to be passed
+			 * in the siginfo to the handler is supposed to only
+			 * contain the status, so we have to shift it out.
+			 */
+			sinfo.si_status = WEXITSTATUS(status_and_exitcode);
 			break;
+		}
 	}
 
 
 	/* copy info out to user space */
 	if (IS_64BIT_PROCESS(p)) {
+
+		/* XXX truncates catcher address to uintptr_t */
+		DTRACE_PROC3(signal__handle, int, sig, siginfo_t *, &sinfo,
+			void (*)(void), CAST_DOWN(sig_t, catcher));
+
 		if (copyout(&uctx, p_uctx, sizeof(struct user_ucontext64)))
 			goto bad;
 		if (copyout(&sinfo, p_sinfo, sizeof(user_siginfo_t)))
@@ -555,10 +619,14 @@ sendsig(struct proc *p, user_addr_t catcher, int sig, int mask, __unused u_long 
 		siginfo_t sinfo32;
 
 		ucontext_64to32(&uctx, &uctx32);
+		siginfo_64to32(&sinfo,&sinfo32);
+
+		DTRACE_PROC3(signal__handle, int, sig, siginfo_t *, &sinfo32,
+			void (*)(void), CAST_DOWN(sig_t, catcher));
+
 		if (copyout(&uctx32, p_uctx, sizeof(struct ucontext64)))
 			goto bad;
 
-		siginfo_64to32(&sinfo,&sinfo32);
 		if (copyout(&sinfo32, p_sinfo, sizeof(siginfo_t)))
 			goto bad;
 	}
@@ -608,16 +676,21 @@ sendsig(struct proc *p, user_addr_t catcher, int sig, int mask, __unused u_long 
 			panic("sendsig: thread_setstatus failed, ret = %08X\n", kretn);
 		}	
 	}
+
+	proc_lock(p);
 	return;
 
 bad:
+	proc_lock(p);
 	SIGACTION(p, SIGILL) = SIG_DFL;
 	sig = sigmask(SIGILL);
 	p->p_sigignore &= ~sig;
 	p->p_sigcatch &= ~sig;
 	ut->uu_sigmask &= ~sig;
 	/* sendsig is called with signal lock held */
-	psignal_lock(p, SIGILL, 0);
+	proc_unlock(p);
+	psignal_locked(p, SIGILL);
+	proc_lock(p);
 	return;
 }
 
@@ -651,12 +724,24 @@ sigreturn(struct proc *p, struct sigreturn_args *uap, __unused int *retval)
 	struct uthread * ut;
 	int vec_used = 0;
 	void *tsptr, *fptr, *vptr;
-	int infostyle = uap->infostyle;
-	int uthsigaltstack = 0;
-	
+        int infostyle = uap->infostyle;
+
 	th_act = current_thread();
 
 	ut = (struct uthread *)get_bsdthread_info(th_act);
+
+	/*
+	 * If we are being asked to change the altstack flag on the thread, we
+	 * just rest it and return (the uap->uctx is not used).
+	 */
+	if (infostyle == UC_SET_ALT_STACK) {
+		ut->uu_sigstk.ss_flags |= SA_ONSTACK;
+		return (0);
+	} else if ((unsigned int)infostyle == UC_RESET_ALT_STACK) {
+		ut->uu_sigstk.ss_flags &= ~SA_ONSTACK;
+		return (0);
+	}
+
 	if (IS_64BIT_PROCESS(p)) {
 		error = copyin(uap->uctx, &uctx, sizeof(struct user_ucontext64));
 		if (error)
@@ -695,21 +780,11 @@ sigreturn(struct proc *p, struct sigreturn_args *uap, __unused int *retval)
 	error = copyin(uctx.uc_mcontext64, mactx, uctx.uc_mcsize);
 	if (error)
 		return(error);
-
-	uthsigaltstack = p->p_lflag & P_LTHSIGSTACK;
-
-
-	if (uctx.uc_onstack & 01) {
-		if (uthsigaltstack != 0)
+	
+	if ((uctx.uc_onstack & 01))
 			ut->uu_sigstk.ss_flags |= SA_ONSTACK;
-		else
-			p->p_sigacts->ps_sigstk.ss_flags |= SA_ONSTACK;
-	} else {
-		if (uthsigaltstack != 0)
+	else
 			ut->uu_sigstk.ss_flags &= ~SA_ONSTACK;
-		else
-			p->p_sigacts->ps_sigstk.ss_flags &= ~SA_ONSTACK;
-	}
 
 	ut->uu_sigmask = uctx.uc_sigmask & ~sigcantmask;
 	if (ut->uu_siglist & ~ut->uu_sigmask)
@@ -782,12 +857,11 @@ sigreturn(struct proc *p, struct sigreturn_args *uap, __unused int *retval)
 
 boolean_t
 machine_exception(
-    int		exception,
-    int		code,
-    __unused int subcode,
-    int		*unix_signal,
-    int		*unix_code
-)
+		int				exception,
+		mach_exception_code_t		code,
+		__unused mach_exception_subcode_t subcode,
+		int				*unix_signal,
+		mach_exception_code_t		*unix_code)
 {
     switch(exception) {
 

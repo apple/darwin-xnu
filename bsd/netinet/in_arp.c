@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1989, 1993
@@ -79,7 +85,7 @@
 static const size_t MAX_HW_LEN = 10;
 
 SYSCTL_DECL(_net_link_ether);
-SYSCTL_NODE(_net_link_ether, PF_INET, inet, CTLFLAG_RW, 0, "");
+SYSCTL_NODE(_net_link_ether, PF_INET, inet, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "");
 
 /* timer values */
 static int arpt_prune = (5*60*1); /* walk list every 5 minutes */
@@ -115,6 +121,7 @@ static int	arp_inuse, arp_allocated;
 static int	arp_maxtries = 5;
 static int	useloopback = 1; /* use loopback interface for local traffic */
 static int	arp_proxyall = 0;
+static int	arp_sendllconflict = 0;
 
 SYSCTL_INT(_net_link_ether_inet, OID_AUTO, maxtries, CTLFLAG_RW,
 	   &arp_maxtries, 0, "");
@@ -122,12 +129,24 @@ SYSCTL_INT(_net_link_ether_inet, OID_AUTO, useloopback, CTLFLAG_RW,
 	   &useloopback, 0, "");
 SYSCTL_INT(_net_link_ether_inet, OID_AUTO, proxyall, CTLFLAG_RW,
 	   &arp_proxyall, 0, "");
+SYSCTL_INT(_net_link_ether_inet, OID_AUTO, sendllconflict, CTLFLAG_RW,
+	   &arp_sendllconflict, 0, "");
 
 static int log_arp_warnings = 0;
 
 SYSCTL_INT(_net_link_ether_inet, OID_AUTO, log_arp_warnings, CTLFLAG_RW,
 	&log_arp_warnings, 0,
 	"log arp warning messages");
+
+static int keep_announcements = 1;
+SYSCTL_INT(_net_link_ether_inet, OID_AUTO, keep_announcements, CTLFLAG_RW,
+	&keep_announcements, 0,
+	"keep arp announcements");
+
+static int send_conflicting_probes = 1;
+SYSCTL_INT(_net_link_ether_inet, OID_AUTO, send_conflicting_probes, CTLFLAG_RW,
+	&send_conflicting_probes, 0,
+	"send conflicting link-local arp probes");
 
 extern u_int32_t	ipv4_ll_arp_aware;
 
@@ -159,9 +178,9 @@ arptfree(
  */
 /* ARGSUSED */
 static void
-arptimer(
-	__unused void *ignored_arg)
+arptimer(void *ignored_arg)
 {
+#pragma unused (ignored_arg)
 	struct llinfo_arp *la, *ola;
 	struct timeval timenow;
 
@@ -296,7 +315,7 @@ arp_rtrequest(
 			rt->rt_expire = 0;
 			ifnet_lladdr_copy_bytes(rt->rt_ifp, LLADDR(SDL(gate)), SDL(gate)->sdl_alen = 6);
 			if (useloopback)
-				rt->rt_ifp = loif;
+				rt->rt_ifp = lo_ifp;
 
 		}
 		break;
@@ -306,7 +325,7 @@ arp_rtrequest(
 			break;
 		arp_inuse--;
 		LIST_REMOVE(la, la_le);
-		rt->rt_llinfo = 0;
+		rt->rt_llinfo = NULL;
 		rt->rt_flags &= ~RTF_LLINFO;
 		if (la->la_hold) {
 			m_freem(la->la_hold);
@@ -324,7 +343,7 @@ sdl_addr_to_hex(const struct sockaddr_dl *sdl, char * orig_buf, int buflen)
 {
 	char *		buf = orig_buf;
 	int 		i;
-	const u_char *	lladdr = sdl->sdl_data;
+	const u_char *	lladdr = (u_char *)sdl->sdl_data;
 	int			maxbytes = buflen / 3;
 	
 	if (maxbytes > sdl->sdl_alen) {
@@ -354,7 +373,7 @@ arp_lookup_route(
 	route_t *route)
 {
 	struct sockaddr_inarp sin = {sizeof(sin), AF_INET, 0, {0}, {0}, 0, 0};
-	const char *why = 0;
+	const char *why = NULL;
 	errno_t	error = 0;
 	
 	// Caller is responsible for taking the routing lock
@@ -363,7 +382,7 @@ arp_lookup_route(
 	sin.sin_addr.s_addr = addr->s_addr;
 	sin.sin_other = proxy ? SIN_PROXY : 0;
 	
-	*route = rtalloc1_locked((const struct sockaddr*)&sin, create, 0);
+	*route = rtalloc1_locked((struct sockaddr*)&sin, create, 0);
 	if (*route == NULL)
 		return ENETUNREACH;
 	
@@ -422,9 +441,9 @@ arp_route_to_gateway_route(
 	route_t	hint,
 	route_t *out_route)
 {
+	struct timeval timenow;
 	route_t route = hint;
 	*out_route = NULL;
-	struct timeval timenow;
 	
 	/* If we got a hint from the higher layers, check it out */
 	if (route) {
@@ -592,7 +611,7 @@ arp_lookup_ip(
 				route->rt_flags |= RTF_REJECT;
 				route->rt_rmx.rmx_expire += arpt_down;
 				llinfo->la_asked = 0;
-				llinfo->la_hold = 0;
+				llinfo->la_hold = NULL;
 				lck_mtx_unlock(rt_mtx);
 				return EHOSTUNREACH;
 			}
@@ -618,8 +637,8 @@ arp_ip_handle_input(
 	route_t	route = NULL;
 	char buf[3 * MAX_HW_LEN]; // enough for MAX_HW_LEN byte hw address
 	struct llinfo_arp *llinfo;
-	struct timeval timenow;
 	errno_t	error;
+	int created_announcement = 0;
 	
 	/* Do not respond to requests for 0.0.0.0 */
 	if (target_ip->sin_addr.s_addr == 0 && arpop == ARPOP_REQUEST) {
@@ -689,10 +708,15 @@ arp_ip_handle_input(
 	 */
 	error = arp_lookup_route(&sender_ip->sin_addr, (target_ip->sin_addr.s_addr ==
 				best_ia->ia_addr.sin_addr.s_addr), 0, &route);
-	
 	if (error || route == 0 || route->rt_gateway == 0) {
-		if (ipv4_ll_arp_aware != 0 && IN_LINKLOCAL(target_ip->sin_addr.s_addr)
-			&& arpop == ARPOP_REQUEST && sender_ip->sin_addr.s_addr == 0) {
+		if (arpop != ARPOP_REQUEST) {
+			goto respond;
+		}
+		if (arp_sendllconflict
+		    && send_conflicting_probes != 0
+		    && (ifp->if_eflags & IFEF_ARPLL) != 0 
+		    && IN_LINKLOCAL(ntohl(target_ip->sin_addr.s_addr))
+		    && sender_ip->sin_addr.s_addr == 0) {
 			/*
 			 * Verify this ARP probe doesn't conflict with an IPv4LL we know of
 			 * on another interface.
@@ -700,28 +724,29 @@ arp_ip_handle_input(
 			error = arp_lookup_route(&target_ip->sin_addr, 0, 0, &route);
 			if (error == 0 && route && route->rt_gateway) {
 				gateway = SDL(route->rt_gateway);
-				if (route->rt_ifp != ifp &&
-					(gateway->sdl_alen != sender_hw->sdl_alen ||
-			 		 bcmp(CONST_LLADDR(gateway), CONST_LLADDR(sender_hw),
-			 		 gateway->sdl_alen) != 0)) {
+				if (route->rt_ifp != ifp && gateway->sdl_alen != 0 
+				    && (gateway->sdl_alen != sender_hw->sdl_alen 
+					|| bcmp(CONST_LLADDR(gateway), CONST_LLADDR(sender_hw),
+						gateway->sdl_alen) != 0)) {
 					/*
 					 * A node is probing for an IPv4LL we know exists on a
 					 * different interface. We respond with a conflicting probe
 					 * to force the new device to pick a different IPv4LL
 					 * address.
 					 */
-					log(LOG_INFO,
+					if (log_arp_warnings) {
+					    log(LOG_INFO,
 						"arp: %s on %s%d sent probe for %s, already on %s%d\n",
 						sdl_addr_to_hex(sender_hw, buf, sizeof(buf)),
 						ifp->if_name, ifp->if_unit,
 						inet_ntop(AF_INET, &target_ip->sin_addr, ipv4str,
 								  sizeof(ipv4str)),
 						route->rt_ifp->if_name, route->rt_ifp->if_unit);
-					log(LOG_INFO,
+					    log(LOG_INFO,
 						"arp: sending conflicting probe to %s on %s%d\n",
 						sdl_addr_to_hex(sender_hw, buf, sizeof(buf)),
 						ifp->if_name, ifp->if_unit);
-					
+					}
 					/*
 					 * Send a conservative unicast "ARP probe".
 					 * This should force the other device to pick a new number.
@@ -735,14 +760,28 @@ arp_ip_handle_input(
 						(const struct sockaddr*)target_ip);
 			 	}
 			}
+			goto respond;
+		} else if (keep_announcements != 0
+			   && target_ip->sin_addr.s_addr == sender_ip->sin_addr.s_addr) {
+			/* don't create entry if link-local address and link-local is disabled */
+			if (!IN_LINKLOCAL(ntohl(sender_ip->sin_addr.s_addr)) 
+			    || (ifp->if_eflags & IFEF_ARPLL) != 0) {
+				error = arp_lookup_route(&sender_ip->sin_addr, 1, 0, &route);
+				if (error == 0 && route != NULL && route->rt_gateway != NULL) {
+					created_announcement = 1;
+				}
+			}
+			if (created_announcement == 0) {
+				goto respond;
+			}
+		} else {
+			goto respond;
 		}
-		
-		goto respond;
 	}
 	
 	gateway = SDL(route->rt_gateway);
 	if (route->rt_ifp != ifp) {
-		if (!IN_LINKLOCAL(sender_ip->sin_addr.s_addr) || (ifp->if_eflags & IFEF_ARPLL) == 0) {
+		if (!IN_LINKLOCAL(ntohl(sender_ip->sin_addr.s_addr)) || (ifp->if_eflags & IFEF_ARPLL) == 0) {
 			if (log_arp_warnings)
 				log(LOG_ERR, "arp: %s is on %s%d but got reply from %s on %s%d\n",
 					inet_ntop(AF_INET, &sender_ip->sin_addr, ipv4str,
@@ -776,22 +815,25 @@ arp_ip_handle_input(
 	}
 	
 	if (gateway->sdl_alen && bcmp(LLADDR(gateway), CONST_LLADDR(sender_hw), gateway->sdl_alen)) {
-		if (route->rt_rmx.rmx_expire) {
+		if (route->rt_rmx.rmx_expire && log_arp_warnings) {
 			char buf2[3 * MAX_HW_LEN];
 			log(LOG_INFO, "arp: %s moved from %s to %s on %s%d\n",
-				inet_ntop(AF_INET, &sender_ip->sin_addr, ipv4str,
-						  sizeof(ipv4str)),
-				sdl_addr_to_hex(gateway, buf, sizeof(buf)),
-				sdl_addr_to_hex(sender_hw, buf2, sizeof(buf2)), ifp->if_name,
-				ifp->if_unit);
+			    inet_ntop(AF_INET, &sender_ip->sin_addr, ipv4str,
+			    sizeof(ipv4str)),
+			    sdl_addr_to_hex(gateway, buf, sizeof(buf)),
+			    sdl_addr_to_hex(sender_hw, buf2, sizeof(buf2)),
+			    ifp->if_name, ifp->if_unit);
 		}
-		else {
-			log(LOG_ERR,
-				"arp: %s attempts to modify permanent entry for %s on %s%d\n",
-				sdl_addr_to_hex(sender_hw, buf, sizeof(buf)),
-				inet_ntop(AF_INET, &sender_ip->sin_addr, ipv4str,
-						  sizeof(ipv4str)),
-				ifp->if_name, ifp->if_unit);
+		else if (route->rt_rmx.rmx_expire == 0) {
+			if (log_arp_warnings) {
+				log(LOG_ERR, "arp: %s attempts to modify "
+				    "permanent entry for %s on %s%d\n",
+				    sdl_addr_to_hex(sender_hw, buf,
+				    sizeof(buf)),
+				    inet_ntop(AF_INET, &sender_ip->sin_addr,
+				    ipv4str, sizeof(ipv4str)),
+				    ifp->if_name, ifp->if_unit);
+			}
 			goto respond;
 		}
 	}
@@ -801,9 +843,12 @@ arp_ip_handle_input(
 	bcopy(CONST_LLADDR(sender_hw), LLADDR(gateway), gateway->sdl_alen);
 	
 	/* Update the expire time for the route and clear the reject flag */
-	getmicrotime(&timenow);
-	if (route->rt_rmx.rmx_expire)
+	if (route->rt_rmx.rmx_expire) {
+		struct timeval timenow;
+
+		getmicrotime(&timenow);
 		route->rt_rmx.rmx_expire = timenow.tv_sec + arpt_keep;
+	}
 	route->rt_flags &= ~RTF_REJECT;
 	
 	/* update the llinfo, send a queued packet if there is one */

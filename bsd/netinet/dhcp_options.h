@@ -3,25 +3,31 @@
 #define _NETINET_DHCP_OPTIONS_H
 #include <sys/appleapiopts.h>
 /*
- * Copyright (c) 1999-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 /*
@@ -59,7 +65,7 @@
 #define RFC_OPTIONS_MAGIC		{ 99, 130, 83, 99 }
 #define RFC_MAGIC_SIZE			4 /* bytes */
 
-typedef enum {
+enum {
     /* rfc 1497 vendor extensions: 0..18, 255 */
     dhcptag_pad_e                      	= 0,
     dhcptag_end_e                      	= 255,
@@ -157,7 +163,8 @@ typedef enum {
 
     /* ad-hoc network disable option */
     dhcptag_auto_configure_e           	= 116,
-} dhcptag_t;
+};
+typedef uint8_t dhcptag_t; 
 
 /*
  * Module: dhcpol (dhcp options list)
@@ -167,9 +174,9 @@ typedef enum {
  */
 
 typedef struct {
-    void * *	array;	/* malloc'd array of pointers */
-    int		size;	/* number of elements in array */
-    int		count;	/* number of occupied elements */
+    const void * *	array;	/* malloc'd array of pointers */
+    int			size;	/* number of elements in array */
+    int			count;	/* number of occupied elements */
 } ptrlist_t;
 
 typedef ptrlist_t dhcpol_t;
@@ -179,20 +186,93 @@ typedef ptrlist_t dhcpol_t;
 void			dhcpol_init(dhcpol_t * list);
 void			dhcpol_free(dhcpol_t * list);
 int			dhcpol_count(dhcpol_t * list);
-boolean_t		dhcpol_add(dhcpol_t * list, void * element);
-void *			dhcpol_element(dhcpol_t * list, int i);
+boolean_t		dhcpol_add(dhcpol_t * list, const void * element);
+const void *		dhcpol_element(dhcpol_t * list, int i);
 boolean_t		dhcpol_concat(dhcpol_t * list, dhcpol_t * extra);
-boolean_t		dhcpol_parse_buffer(dhcpol_t * list, void * buffer, 
-					    int length, unsigned char * err);
-void *			dhcpol_find(dhcpol_t * list, int tag, int * len_p, 
+boolean_t		dhcpol_parse_buffer(dhcpol_t * list,
+					    const void * buffer, 
+					    int length);
+const void *		dhcpol_find(dhcpol_t * list, int tag, int * len_p, 
 				    int * start);
+#if 0
 void *			dhcpol_get(dhcpol_t * list, int tag, int * len_p);
+#endif 0
 boolean_t		dhcpol_parse_packet(dhcpol_t * options, 
-					    struct dhcp * pkt, int len,
-					    unsigned char * err);
-boolean_t		dhcpol_parse_vendor(dhcpol_t * vendor, 
-					    dhcpol_t * options,
-					    unsigned char * err);
+					    const struct dhcp * pkt, int len);
 void			dhcpol_print(dhcpol_t * list);
+/*
+ * Module: dhcpoa (dhcp options area)
+ *
+ * Purpose:
+ *   Types and functions to create new dhcp option areas.
+ */
+
+/*
+ * Struct: dhcpoa_s
+ * Purpose:
+ *   To record information about a dhcp option data area.
+ */
+struct dhcpoa_s {
+    uint8_t *	oa_buffer;	/* data area to hold options */
+    int		oa_size;	/* size of buffer */
+    int		oa_offset;	/* offset of next option to write */
+    int		oa_end_tag;	/* to mark when options are terminated */
+    int		oa_option_count;/* number of options present */
+    int		oa_reserve; 	/* space to reserve, either 0 or 1 */
+};
+
+/*
+ * Type: dhcpoa_t
+ *
+ * Purpose:
+ *   To record information about a dhcp option data area.
+ */
+typedef struct dhcpoa_s dhcpoa_t;
+
+/* 
+ * Type:dhcpoa_ret_t
+ *
+ * Purpose:
+ *  outine return codes 
+ */
+typedef enum {
+    dhcpoa_success_e = 0,
+    dhcpoa_failed_e,
+    dhcpoa_full_e,
+} dhcpoa_ret_t;
+
+void
+dhcpoa_init(dhcpoa_t * opt, void * buffer, int size);
+
+void
+dhcpoa_init_no_end(dhcpoa_t * opt, void * buffer, int size);
+
+dhcpoa_ret_t
+dhcpoa_add(dhcpoa_t * oa_p, dhcptag_t tag, int len, const void * data);
+
+dhcpoa_ret_t
+dhcpoa_add_dhcpmsg(dhcpoa_t * oa_p, dhcp_msgtype_t msgtype);
+
+#if 0
+dhcpoa_ret_t
+dhcpoa_vendor_add(dhcpoa_t * oa_p, dhcpoa_t * vendor_oa_p,
+		  dhcptag_t tag, int len, void * option);
+#endif 0
+
+int
+dhcpoa_used(dhcpoa_t * oa_p);
+
+int
+dhcpoa_count(dhcpoa_t * oa_p);
+
+void *
+dhcpoa_buffer(dhcpoa_t * oa_p);
+
+int
+dhcpoa_freespace(dhcpoa_t * oa_p);
+
+int
+dhcpoa_size(dhcpoa_t * oa_p);
+
 #endif KERNEL_PRIVATE
 #endif /* _NETINET_DHCP_OPTIONS_H */

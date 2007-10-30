@@ -40,12 +40,15 @@
 .Nm getrusage
 .Nd get information about resource utilization
 .Sh SYNOPSIS
-.Fd #include <sys/time.h>
 .Fd #include <sys/resource.h>
+.Pp
 .Fd #define	RUSAGE_SELF	 0
 .Fd #define	RUSAGE_CHILDREN	-1
 .Ft int
-.Fn getrusage "int who" "struct rusage *rusage"
+.Fo getrusage
+.Fa "int who"
+.Fa "struct rusage *r_usage"
+.Fc
 .Sh DESCRIPTION
 .Fn Getrusage
 returns information describing the resources utilized by the current
@@ -57,7 +60,7 @@ parameter is either
 or
 .Dv RUSAGE_CHILDREN .
 The buffer to which
-.Fa rusage
+.Fa r_usage
 points will be filled in with
 the following structure:
 .Bd -literal
@@ -139,23 +142,33 @@ and
 account only for real
 I/O; data supplied by the caching mechanism is charged only
 to the first process to read or write the data.
+.Sh RETURN VALUES
+.Rv -std getrusage
 .Sh ERRORS
-.Fn Getrusage
-returns -1 on error.
-The possible errors are:
+The
+.Fn getrusage
+system call will fail if:
 .Bl -tag -width Er
+.It Bq Er EFAULT
+The address specified by the
+.Fa r_usage
+parameter is not in a valid part of the process address space.
 .It Bq Er EINVAL
 The
 .Fa who
 parameter is not a valid value.
-.It Bq Er EFAULT
-The address specified by the
-.Fa rusage
-parameter is not in a valid part of the process address space.
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/time.h>
+.Fd #include <sys/resource.h>
+.Pp
+The include file
+.In sys/time.h
+is necessary.
 .Sh SEE ALSO
 .Xr gettimeofday 2 ,
-.Xr wait 2
+.Xr wait 2 ,
+.Xr compat 5
 .Sh BUGS
 There is no way to obtain information about a child process
 that has not yet terminated.

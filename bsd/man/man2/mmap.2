@@ -40,10 +40,16 @@
 .Nm mmap
 .Nd map files or devices into memory
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
 .Fd #include <sys/mman.h>
 .Ft void *
-.Fn mmap "void *addr" "size_t len" "int prot" "int flags" "int fd" "off_t offset"
+.Fo mmap
+.Fa "void *addr"
+.Fa "size_t len"
+.Fa "int prot"
+.Fa "int flags"
+.Fa "int fildes"
+.Fa "off_t offset"
+.Fc
 .Sh DESCRIPTION
 The
 .Nm mmap
@@ -52,7 +58,7 @@ function causes the pages starting at
 and continuing for at most
 .Fa len
 bytes to be mapped from the object described by
-.Fa fd ,
+.Fa fildes ,
 starting at byte offset
 .Fa offset .
 If
@@ -92,23 +98,35 @@ Pages may be written.
 .Pp
 The
 .Fa flags
-parameter specifies the type of the mapped object, mapping options and
-whether modifications made to the mapped copy of the page are private
-to the process or are to be shared with other references.
-Sharing, mapping type and options are specified in the
+parameter specifies the type of the mapped object, mapping options,
+and whether modifications made to the mapped copy of the page
+are private to the process (copy-on-write)
+or are to be shared with other references.
+Sharing, mapping type, and options are specified in the
 .Fa flags
 argument by
 .Em or Ns 'ing
 the following values:
 .Pp
-.Bl -tag -width MAP_FIXEDX
+.Bl -tag -width MAP_HASSEMAPHOREX
 .It Dv MAP_ANON
 Map anonymous memory not associated with any specific file.
-The file descriptor used for creating
+Mac OS X specific: the file descriptor used for creating
 .Dv MAP_ANON
-regions is used only for
-naming, and may be specified as \-1 if no name is associated with the
-region.
+regions can be used to pass some Mach VM flags, and can 
+be specified as \-1 if no such flags are associated with 
+the region.  Mach VM flags are defined in 
+<mach/vm_statistics.h> and the ones that currently apply 
+to 
+.Nm mmap
+are:
+.Pp
+VM_FLAGS_PURGABLE	to create Mach purgable (i.e. volatile) memory
+VM_MAKE_TAG(tag)	to associate an 8-bit tag with the region
+.Pp
+<mach/vm_statistics.h> defines some preset tags (with a VM_MEMORY_ prefix).
+Users are encouraged to use tags between 240 and 255.
+Tags are used by tools such as vmmap(1) to help identify specific memory regions.
 .It Dv MAP_FILE
 Mapped from a regular file or character-special device memory.  (This is
 the default mapping type, and need not be specified.)
@@ -126,10 +144,19 @@ Use of this option is discouraged.
 Notify the kernel that the region may contain semaphores and that special
 handling may be necessary.
 .It Dv MAP_PRIVATE
-Modifications are private.
+Modifications are private (copy-on-write).
 .It Dv MAP_SHARED
 Modifications are shared.
+.It Dv MAP_NOCACHE
+Pages in this mapping are not retained in the kernel's memory cache.
+If the system runs low on memory, pages in MAP_NOCACHE mappings will be among
+the first to be reclaimed.
+This flag is intended for mappings that have little locality and 
+provides a hint to the kernel that pages in this mapping are unlikely to be needed
+again in the near future.
 .El
+.Pp
+Conforming applications must specify either MAP_PRIVATE or MAP_SHARED.
 .Pp
 The 
 .Xr close 2
@@ -155,49 +182,117 @@ is set to indicate the error.
 .Fn Mmap
 will fail if:
 .Bl -tag -width Er
+.\" ===========
 .It Bq Er EACCES
-The flag
-.Dv PROT_READ
-was specified as part of the
-.Fa prot
-parameter and
-.Fa fd
-was not open for reading.
+.Fa Fildes
+is not open for reading.
+.\" ===========
+.It Bq Er EACCES
 The flags
 .Dv PROT_WRITE
 and
 .Dv MAP_SHARED
-were specified as part
-of the
+are specified as part of the
 .Fa flags
 and
 .Fa prot
 parameters and
-.Fa fd
-was not open for writing.
+.Fa fildes
+is not open for writing.
+.\" ===========
 .It Bq Er EBADF
-.Fa fd
-is not a valid open file descriptor.
+.Fa fildes
+is not a valid file descriptor for an open file.
 .It Bq Er EINVAL
 .Dv MAP_FIXED
-was specified and the
+is specified and the
 .I addr
-parameter was not page aligned.
-.Fa fd
-did not reference a regular or character special file.
+parameter is not page aligned.
+.\" ===========
+.It Bq Er EINVAL
+.Fa fildes
+does not reference a regular or character special file.
+.\" ===========
+.It Bq Er EINVAL
+.Fa flags
+does not include either MAP_PRIVATE or MAP_SHARED.
+.\" ===========
+.It Bq Er EINVAL
+.Fa len
+is not greater than zero.
+.\" ===========
+.It Bq Er EINVAL
+.Fa offset
+is not a multiple of the page size,
+as returned by
+.Xr sysconf 3 .
+.\" ===========
+.It Bq Er EMFILE
+The limit on mapped regions (per process or system) is exceeded.
+.\" ===========
+.It Bq Er ENODEV
+The file type for
+.Fa fildes
+is not supported for mapping.
+.\" ===========
 .It Bq Er ENOMEM
 .Dv MAP_FIXED
-was specified and the
+is specified and the address range specified
+exceeds the address space limit for the process.
+.\" ===========
+.It Bq Er ENOMEM
+.Dv MAP_FIXED
+is specified and the address specified by the
 .Fa addr
-parameter wasn't available.
+parameter isn't available.
+.\" ===========
+.It Bq Er ENOMEM
 .Dv MAP_ANON
-was specified and insufficient memory was available.
+is specified and insufficient memory is available.
+.\" ===========
+.It Bq Er ENXIO
+Addresses in the specified range are invalid for fildes.
+.\" ===========
+.It Bq Er EOVERFLOW
+Addresses in the specified range exceed the maximum offset
+set for fildes.
+.El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/mman.h>
+.Pp
+The include file
+.In sys/types.h
+is necessary.
+.Sh COMPATIBILITY
+.Fn mmap
+now returns with
+.Va errno
+set to EINVAL in places that historically succeeded.
+The rules have changed as follows:
+.Bl -bullet
+.It
+The
+.Fa flags
+parameter must specify either MAP_PRIVATE or MAP_SHARED.
+.It
+The
+.Fa size
+parameter must not be 0.
+.It
+The
+.Fa off
+parameter must be a multiple of pagesize,
+as returned by
+.Fn sysconf .
 .El
 .Sh "SEE ALSO"
 .Xr getpagesize 2 ,
-.Xr msync 2 ,
-.Xr munmap 2 ,
-.Xr mprotect 2 ,
 .Xr madvise 2 ,
 .Xr mincore 2 ,
-.Xr mlock 2
+.Xr mlock 2 ,
+.Xr mprotect 2 ,
+.Xr msync 2 ,
+.Xr munmap 2 ,
+.Xr sysconf 3 ,
+.Xr compat 5

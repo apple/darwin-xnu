@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -107,10 +113,6 @@ extern vm_fault_return_t vm_fault_page(
 		vm_object_offset_t first_offset,/* Offset into object */
 		vm_prot_t	fault_type,	/* What access is requested */
 		boolean_t	must_be_resident,/* Must page be resident? */
-		int		interruptible,/* how may fault be interrupted */
-		vm_map_offset_t lo_offset,	/* Map entry start */
-		vm_map_offset_t hi_offset,	/* Map entry end */
-		vm_behavior_t	behavior,	/* Expected paging behavior */
 		/* Modifies in place: */
 		vm_prot_t	*protection,	/* Protection for mapping */
 		/* Returns: */
@@ -123,8 +125,7 @@ extern vm_fault_return_t vm_fault_page(
 		kern_return_t	*error_code,	/* code if page is in error */
 		boolean_t	no_zero_fill,	/* don't fill absent pages */
 		boolean_t	data_supply,	/* treat as data_supply */
-		vm_map_t	map,
-		vm_map_offset_t	vaddr);
+	        vm_object_fault_info_t fault_info);
 
 extern void vm_fault_cleanup(
 		vm_object_t	object,
@@ -152,6 +153,16 @@ extern kern_return_t	vm_fault_copy(
 		vm_map_t		dst_map,
 		vm_map_version_t	 *dst_version,
 		int			interruptible);
+
+extern kern_return_t vm_fault_enter(
+	vm_page_t m,
+	pmap_t pmap,
+	vm_map_offset_t vaddr,
+	vm_prot_t prot,
+	boolean_t wired,
+	boolean_t change_wiring,
+	boolean_t no_cache,
+	int *type_of_fault);
 
 #endif	/* MACH_KERNEL_PRIVATE */
 

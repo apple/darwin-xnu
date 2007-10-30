@@ -13,6 +13,7 @@ EXPORT_ONLY_FILES = 	\
 		    cpu_number.h \
 		    cpu_capabilities.h	\
 		    cpu_data.h \
+		    cpu_topology.h \
 		    cpuid.h \
 		    eflags.h \
 		    hpet.h \
@@ -32,12 +33,12 @@ EXPORT_ONLY_FILES = 	\
 		    seg.h \
 		    simple_lock.h \
 		    tsc.h \
-		    tss.h
+		    tss.h \
+		    vmx.h
 
 INSTALL_MD_DIR = i386
 
-INSTALL_MD_LIST = eflags.h \
-		  user_ldt.h
+INSTALL_MD_LIST = eflags.h user_ldt.h
 
 INSTALL_MD_LCL_LIST = cpu_capabilities.h
 

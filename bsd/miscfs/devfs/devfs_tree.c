@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 /*
@@ -46,6 +52,12 @@
  * SUCH DAMAGE.
  * 
  * devfs_tree.c
+ */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
  */
 
 /*
@@ -84,16 +96,21 @@
 #include <sys/malloc.h>
 #include <sys/mount_internal.h>
 #include <sys/proc.h>
-#include <sys/vnode.h>
+#include <sys/vnode_internal.h>
 #include <stdarg.h>
-
+#include <libkern/OSAtomic.h>
+#define BSD_KERNEL_PRIVATE	1	/* devfs_make_link() prototype */
 #include "devfs.h"
 #include "devfsdefs.h"
+
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
 
 static void	devfs_release_busy(devnode_t *);
 static void	dev_free_hier(devdirent_t *);
 static int	devfs_propogate(devdirent_t *, devdirent_t *);
-static int	dev_finddir(char *, devnode_t *, int, devnode_t **);
+static int	dev_finddir(const char *, devnode_t *, int, devnode_t **);
 static int	dev_dup_entry(devnode_t *, devdirent_t *, devdirent_t **, struct devfsmount *);
 
 
@@ -111,8 +128,8 @@ static struct mount *devfs_hidden_mount;
 
 static int devfs_ready = 0;
 
-#define NOCREATE	FALSE
-#define CREATE		TRUE
+#define DEVFS_NOCREATE	FALSE
+#define DEVFS_CREATE	TRUE
 
 /*
  * Set up the root directory node in the backing plane
@@ -152,15 +169,26 @@ devfs_sinit(void)
 	TAILQ_INIT(&devfs_hidden_mount->mnt_vnodelist);
 	TAILQ_INIT(&devfs_hidden_mount->mnt_workerqueue);
 	TAILQ_INIT(&devfs_hidden_mount->mnt_newvnodes);
+#if CONFIG_MACF
+	mac_mount_label_init(devfs_hidden_mount);
+	mac_mount_label_associate(vfs_context_kernel(), devfs_hidden_mount);
+#endif
 
 	/* Initialize the default IO constraints */
 	mp->mnt_maxreadcnt = mp->mnt_maxwritecnt = MAXPHYS;
 	mp->mnt_segreadcnt = mp->mnt_segwritecnt = 32;
+	mp->mnt_ioflags = 0;
+	mp->mnt_realrootvp = NULLVP;
+	mp->mnt_authcache_ttl = CACHED_LOOKUP_RIGHT_TTL;
 
 	devfs_mount(devfs_hidden_mount,"dummy",NULL,NULL,NULL);
 	dev_root->de_dnp->dn_dvm 
 	    = (struct devfsmount *)devfs_hidden_mount->mnt_data;
 #endif /* HIDDEN_MOUNTPOINT */
+#if CONFIG_MACF
+	mac_devfs_label_associate_directory("/", strlen("/"),
+	    dev_root->de_dnp, "/");
+#endif
 	devfs_ready = 1;
 	return (0);
 }
@@ -180,7 +208,7 @@ devfs_sinit(void)
  * called with DEVFS_LOCK held
  ***************************************************************/
 devdirent_t *
-dev_findname(devnode_t * dir, char *name)
+dev_findname(devnode_t * dir, const char *name)
 {
 	devdirent_t * newfp;
 	if (dir->dn_type != DEV_DIR) return 0;/*XXX*/ /* printf?*/
@@ -201,7 +229,7 @@ dev_findname(devnode_t * dir, char *name)
 
 	while(newfp)
 	{
-		if(!(strcmp(name,newfp->de_name)))
+		if(!(strncmp(name, newfp->de_name, sizeof(newfp->de_name))))
 			return newfp;
 		newfp = newfp->de_next;
 	}
@@ -210,7 +238,7 @@ dev_findname(devnode_t * dir, char *name)
 
 /***********************************************************************
  * Given a starting node (0 for root) and a pathname, return the node	
- * for the end item on the path. It MUST BE A DIRECTORY. If the 'CREATE'
+ * for the end item on the path. It MUST BE A DIRECTORY. If the 'DEVFS_CREATE'
  * option is true, then create any missing nodes in the path and create
  * and return the final node as well.					
  * This is used to set up a directory, before making nodes in it..
@@ -218,14 +246,17 @@ dev_findname(devnode_t * dir, char *name)
  * called with DEVFS_LOCK held
  ***********************************************************************/
 static int
-dev_finddir(char * path, 
+dev_finddir(const char * path, 
 	    devnode_t * dirnode,
 	    int create, 
 	    devnode_t * * dn_pp)
 {
 	devnode_t *	dnp = NULL;
 	int		error = 0;
-	char *		scan;
+	const char *		scan;
+#if CONFIG_MACF
+	char            fullpath[DEVMAXPATHSIZE];
+#endif
 
 
 	if (!dirnode) /* dirnode == NULL means start at root */
@@ -237,6 +268,9 @@ dev_finddir(char * path,
 	if (strlen(path) > (DEVMAXPATHSIZE - 1)) 
 	    return ENAMETOOLONG;
 
+#if CONFIG_MACF
+	strlcpy (fullpath, path, DEVMAXPATHSIZE);
+#endif
 	scan = path;
 
 	while (*scan == '/') 
@@ -247,7 +281,7 @@ dev_finddir(char * path,
 	while (1) {
 	    char		component[DEVMAXPATHSIZE];
 	    devdirent_t *	dirent_p;
-	    char * 		start;
+	    const char * 	start;
 
 	    if (*scan == 0) { 
 		/* we hit the end of the string, we're done */
@@ -258,8 +292,7 @@ dev_finddir(char * path,
 	    while (*scan != '/' && *scan)
 		scan++;
 
-	    strncpy(component, start, scan - start);
-		component[ scan - start ] = '\0';
+	    strlcpy(component, start, scan - start);
 	    if (*scan == '/')
 		scan++;
 
@@ -281,6 +314,12 @@ dev_finddir(char * path,
 		if (error)
 		    break;
 		dnp = dirent_p->de_dnp;
+#if CONFIG_MACF
+		mac_devfs_label_associate_directory(
+		    dirnode->dn_typeinfo.Dir.myname->de_name, 
+		    strlen(dirnode->dn_typeinfo.Dir.myname->de_name),
+		    dnp, fullpath);
+#endif
 		devfs_propogate(dirnode->dn_typeinfo.Dir.myname, dirent_p);
 	    }
 	    dirnode = dnp; /* continue relative to this directory */
@@ -299,7 +338,7 @@ dev_finddir(char * path,
  * called with DEVFS_LOCK held
  ***********************************************************************/
 int
-dev_add_name(char * name, devnode_t * dirnode, __unused devdirent_t * back, 
+dev_add_name(const char * name, devnode_t * dirnode, __unused devdirent_t * back, 
     devnode_t * dnp, devdirent_t * *dirent_pp)
 {
 	devdirent_t * 	dirent_p = NULL;
@@ -384,7 +423,7 @@ dev_add_name(char * name, devnode_t * dirnode, __unused devdirent_t * back,
 	/*
 	 * put the name into the directory entry.
 	 */
-	strcpy(dirent_p->de_name, name);
+	strlcpy(dirent_p->de_name, name, DEVMAXNAMESIZE);
 
 
 	/*
@@ -418,7 +457,7 @@ dev_add_name(char * name, devnode_t * dirnode, __unused devdirent_t * back,
  * reused. (Is a DIR, or we select SPLIT_DEVS at compile time)
  * typeinfo gives us info to make our node if we don't have a prototype.
  * If typeinfo is null and proto exists, then the typeinfo field of
- * the proto is used intead in the CREATE case.
+ * the proto is used intead in the DEVFS_CREATE case.
  * note the 'links' count is 0 (except if a dir)
  * but it is only cleared on a transition
  * so this is ok till we link it to something
@@ -480,6 +519,10 @@ dev_add_node(int entrytype, devnode_type_t * typeinfo, devnode_t * proto,
 		*(dnp->dn_prevsiblingp) = dnp;
 		dnp->dn_nextsibling = proto;
 		proto->dn_prevsiblingp = &(dnp->dn_nextsibling);
+#if CONFIG_MACF
+		mac_devfs_label_init(dnp);
+		mac_devfs_label_copy(proto->dn_label, dnp->dn_label);
+#endif
 	} else {
 	        struct timeval tv;
 
@@ -494,6 +537,9 @@ dev_add_node(int entrytype, devnode_type_t * typeinfo, devnode_t * proto,
 		dnp->dn_atime.tv_sec = tv.tv_sec;
 		dnp->dn_mtime.tv_sec = tv.tv_sec;
 		dnp->dn_ctime.tv_sec = tv.tv_sec;
+#if CONFIG_MACF
+		mac_devfs_label_init(dnp);
+#endif
 	}
 	dnp->dn_dvm = dvm;
 
@@ -536,9 +582,8 @@ dev_add_node(int entrytype, devnode_type_t * typeinfo, devnode_t * proto,
 		    	FREE(dnp,M_DEVFSNODE);
 			return ENOMEM;
 		}
-		strncpy(dnp->dn_typeinfo.Slnk.name, typeinfo->Slnk.name,
-			typeinfo->Slnk.namelen);
-		dnp->dn_typeinfo.Slnk.name[typeinfo->Slnk.namelen] = '\0';
+		strlcpy(dnp->dn_typeinfo.Slnk.name, typeinfo->Slnk.name,
+			typeinfo->Slnk.namelen + 1);
 		dnp->dn_typeinfo.Slnk.namelen = typeinfo->Slnk.namelen;
 		DEVFS_INCR_STRINGSPACE(dnp->dn_typeinfo.Slnk.namelen + 1);
 		dnp->dn_ops = &devfs_vnodeop_p;
@@ -573,6 +618,9 @@ devnode_free(devnode_t * dnp)
             dnp->dn_lflags |= DN_DELETE;
 	    return;
     }
+#if CONFIG_MACF
+	mac_devfs_label_destroy(dnp);
+#endif
     if (dnp->dn_type == DEV_SLNK) {
         DEVFS_DECR_STRINGSPACE(dnp->dn_typeinfo.Slnk.namelen + 1);
 	FREE(dnp->dn_typeinfo.Slnk.name, M_DEVFSNODE);
@@ -927,10 +975,12 @@ int
 devfs_dntovn(devnode_t * dnp, struct vnode **vn_pp, __unused struct proc * p)
 {
 	struct vnode *vn_p;
+	struct vnode ** vnptr;
 	int error = 0;
 	struct vnode_fsparam vfsp;
 	enum vtype vtype = 0;
 	int markroot = 0;
+	int n_minor = DEVFS_CLONE_ALLOC; /* new minor number for clone device */
 
 retry:
 	*vn_pp = NULL;
@@ -1008,10 +1058,28 @@ retry:
 	vfsp.vnfs_cnp = 0;
 	vfsp.vnfs_vops = *(dnp->dn_ops);
 		
-	if (vtype == VBLK || vtype == VCHR)
+	if (vtype == VBLK || vtype == VCHR) {
+		/*
+		 * Ask the clone minor number function for a new minor number
+		 * to use for the next device instance.  If an administative
+		 * limit has been reached, this function will return -1.
+		 */
+		if (dnp->dn_clone != NULL) {
+			int	n_major = major(dnp->dn_typeinfo.dev);
+
+			n_minor = (*dnp->dn_clone)(dnp->dn_typeinfo.dev, DEVFS_CLONE_ALLOC);
+			if (n_minor == -1) {
+				devfs_release_busy(dnp);
+				return ENOMEM;
+			}
+
+			vfsp.vnfs_rdev = makedev(n_major, n_minor);;
+		} else {
 		vfsp.vnfs_rdev = dnp->dn_typeinfo.dev;
-	else
+		}
+	} else {
 		vfsp.vnfs_rdev = 0;
+	}
 	vfsp.vnfs_filesize = 0;
 	vfsp.vnfs_flags = VNFS_NOCACHE | VNFS_CANTCACHE;
 	/* Tag system files */
@@ -1020,22 +1088,42 @@ retry:
 
 	DEVFS_UNLOCK();
 
-	error = vnode_create(VNCREATE_FLAVOR, VCREATESIZE, &vfsp, &vn_p);
+	if (dnp->dn_clone == NULL)
+		vnptr = &dnp->dn_vn;
+	else
+		vnptr = &vn_p;	
+	error = vnode_create(VNCREATE_FLAVOR, VCREATESIZE, &vfsp, vnptr);
 
 	DEVFS_LOCK();
 
 	if (error == 0) {
-		if ((dnp->dn_vn)) {
-			panic("devnode already has a vnode?");
-		} else {
-			dnp->dn_vn = vn_p;
-			*vn_pp = vn_p;
-			vnode_settag(vn_p, VT_DEVFS);
-		}
+			if ((dnp->dn_clone != NULL) && (dnp->dn_vn != NULLVP) )
+				panic("devnode already has a vnode?");
+			/*
+			 * Don't cache the vnode for the next open, if the
+			 * device is a cloning device (each open gets it's
+			 * own per-device instance vnode).
+			 */
+			if (dnp->dn_clone == NULL) {
+				*vn_pp = dnp->dn_vn;
+			 } else {
+				*vn_pp = vn_p;
+			}
+
+	} else if (n_minor != DEVFS_CLONE_ALLOC) {
+		/*
+		 * If we failed the create, we need to release the cloned minor
+		 * back to the free list.  In general, this is only useful if
+		 * the clone function results in a state change in the cloned
+		 * device for which the minor number was obtained.  If we get
+		 * past this point withouth falling into this case, it's
+		 * assumed that any state to be released will be released when
+		 * the vnode is dropped, instead.
+		 */
+		 (void)(*dnp->dn_clone)(dnp->dn_typeinfo.dev, DEVFS_CLONE_FREE);
 	}
 
 	dnp->dn_lflags &= ~DN_CREATE;
-
 	if (dnp->dn_lflags & DN_CREATEWAIT) {
 		dnp->dn_lflags &= ~DN_CREATEWAIT;
 		wakeup(&dnp->dn_lflags);
@@ -1066,7 +1154,7 @@ devfs_release_busy(devnode_t *dnp) {
  * called with DEVFS_LOCK held
  ***********************************************************************/
 int
-dev_add_entry(char *name, devnode_t * parent, int type, devnode_type_t * typeinfo,
+dev_add_entry(const char *name, devnode_t * parent, int type, devnode_type_t * typeinfo,
 	      devnode_t * proto, struct devfsmount *dvm, devdirent_t * *nm_pp)
 {
 	devnode_t *	dnp;
@@ -1101,19 +1189,22 @@ dev_add_entry(char *name, devnode_t * parent, int type, devnode_type_t * typeinf
  *   chrblk	- block or character device (DEVFS_CHAR or DEVFS_BLOCK)
  *   uid, gid	- ownership
  *   perms	- permissions
+ *   clone	- minor number cloning function
  *   fmt, ...	- path format string with printf args to format the path name
  * Returns:
  *   A handle to a device node if successful, NULL otherwise.
  */
 void *
-devfs_make_node(dev_t dev, int chrblk, uid_t uid,
-		gid_t gid, int perms, const char *fmt, ...)
+devfs_make_node_clone(dev_t dev, int chrblk, uid_t uid,
+		gid_t gid, int perms, int (*clone)(dev_t dev, int action),
+		const char *fmt, ...)
 {
 	devdirent_t *	new_dev = NULL;
 	devnode_t *	dnp;	/* devnode for parent directory */
 	devnode_type_t	typeinfo;
 
-	char *name, *path, buf[256]; /* XXX */
+	char *name, buf[256]; /* XXX */
+	const char *path;
 	int i;
 	va_list ap;
 
@@ -1152,7 +1243,7 @@ devfs_make_node(dev_t dev, int chrblk, uid_t uid,
 	DEVFS_LOCK();
 
 	/* find/create directory path ie. mkdir -p */
-	if (dev_finddir(path, NULL, CREATE, &dnp) == 0) {
+	if (dev_finddir(path, NULL, DEVFS_CREATE, &dnp) == 0) {
 	    typeinfo.dev = dev;
 	    if (dev_add_entry(name, dnp, 
 			      (chrblk == DEVFS_CHAR) ? DEV_CDEV : DEV_BDEV, 
@@ -1160,6 +1251,100 @@ devfs_make_node(dev_t dev, int chrblk, uid_t uid,
 		new_dev->de_dnp->dn_gid = gid;
 		new_dev->de_dnp->dn_uid = uid;
 		new_dev->de_dnp->dn_mode |= perms;
+		new_dev->de_dnp->dn_clone = clone;
+		devfs_propogate(dnp->dn_typeinfo.Dir.myname, new_dev);
+	    }
+	}
+out:
+	DEVFS_UNLOCK();
+
+	return new_dev;
+}
+
+
+/*
+ * Function: devfs_make_node
+ *
+ * Purpose
+ *   Create a device node with the given pathname in the devfs namespace.
+ *
+ * Parameters:
+ *   dev 	- the dev_t value to associate
+ *   chrblk	- block or character device (DEVFS_CHAR or DEVFS_BLOCK)
+ *   uid, gid	- ownership
+ *   perms	- permissions
+ *   fmt, ...	- path format string with printf args to format the path name
+ * Returns:
+ *   A handle to a device node if successful, NULL otherwise.
+ */
+void *
+devfs_make_node(dev_t dev, int chrblk, uid_t uid,
+		gid_t gid, int perms, const char *fmt, ...)
+{
+	devdirent_t *	new_dev = NULL;
+	devnode_t *	dnp;	/* devnode for parent directory */
+	devnode_type_t	typeinfo;
+
+	char *name, buf[256]; /* XXX */
+	const char *path;
+#if CONFIG_MACF
+	char buff[sizeof(buf)];
+#endif
+	int i;
+	va_list ap;
+
+
+	DEVFS_LOCK();
+
+	if (!devfs_ready) {
+		printf("devfs_make_node: not ready for devices!\n");
+		goto out;
+	}
+	if (chrblk != DEVFS_CHAR && chrblk != DEVFS_BLOCK)
+		goto out;
+
+	DEVFS_UNLOCK();
+
+	va_start(ap, fmt);
+	vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+
+#if CONFIG_MACF
+	bcopy(buf, buff, sizeof(buff));
+	buff[sizeof(buff)-1] = 0;
+#endif
+	name = NULL;
+
+	for(i=strlen(buf); i>0; i--)
+		if(buf[i] == '/') {
+			name=&buf[i];
+			buf[i]=0;
+			break;
+		}
+
+	if (name) {
+		*name++ = '\0';
+		path = buf;
+	} else {
+		name = buf;
+		path = "/";
+	}
+	DEVFS_LOCK();
+
+	/* find/create directory path ie. mkdir -p */
+	if (dev_finddir(path, NULL, DEVFS_CREATE, &dnp) == 0) {
+	    typeinfo.dev = dev;
+	    if (dev_add_entry(name, dnp, 
+			      (chrblk == DEVFS_CHAR) ? DEV_CDEV : DEV_BDEV, 
+			      &typeinfo, NULL, NULL, &new_dev) == 0) {
+		new_dev->de_dnp->dn_gid = gid;
+		new_dev->de_dnp->dn_uid = uid;
+		new_dev->de_dnp->dn_mode |= perms;
+		new_dev->de_dnp->dn_clone = NULL;
+
+#if CONFIG_MACF
+		mac_devfs_label_associate_device(dev, new_dev->de_dnp, buff);
+#endif
 		devfs_propogate(dnp->dn_typeinfo.Dir.myname, new_dev);
 	    }
 	}
@@ -1215,11 +1400,11 @@ devfs_make_link(void *original, char *fmt, ...)
 	if (p) {
 	        *p++ = '\0';
 
-		if (dev_finddir(buf, NULL, CREATE, &dirnode)
+		if (dev_finddir(buf, NULL, DEVFS_CREATE, &dirnode)
 		    || dev_add_name(p, dirnode, NULL, orig->de_dnp, &new_dev))
 		        goto fail;
 	} else {
-	        if (dev_finddir("", NULL, CREATE, &dirnode)
+	        if (dev_finddir("", NULL, DEVFS_CREATE, &dirnode)
 		    || dev_add_name(buf, dirnode, NULL, orig->de_dnp, &new_dev))
 		        goto fail;
 	}
@@ -1230,4 +1415,3 @@ out:
 
 	return ((new_dev != NULL) ? 0 : -1);
 }
-

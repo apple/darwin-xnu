@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -234,9 +240,7 @@ int	db_hist_ignore_dups = 0;	/* don't duplicate commands in hist */
 
 /* Prototypes for functions local to this file.  XXX -- should be static!
  */
-void db_putstring(
-	char	*s,
-	int	count);
+void db_putstring(const char *s, int count);
 
 void db_putnchars(
 	int	c,
@@ -257,9 +261,7 @@ boolean_t db_inputchar(int c);
 extern jmp_buf_t	*db_recover;
 
 void
-db_putstring(
-	char	*s,
-	int	count)
+db_putstring(const char *s, int count)
 {
 	while (--count >= 0)
 	    cnputc(*s++);
@@ -367,18 +369,18 @@ db_inputchar(int c)
 	char *start;
 	char *restart;
 	jmp_buf_t db_jmpbuf;
-	jmp_buf_t *db_prev;
+	jmp_buf_t *local_prev;
 	char *p;
 	int len;
 
 	switch(db_completion) {
 	case -1:
 	    db_putchar('\n');
-	    db_prev = db_recover;
+	    local_prev = db_recover;
 	    if (_setjmp(db_recover = &db_jmpbuf) == 0 &&
 		(c == 'y' || c == ' ' || c == '\t'))
 		    db_print_completion(db_tok_string);
-	    db_recover = db_prev;
+	    db_recover = local_prev;
 	    db_completion = 0;
 	    db_reset_more();
 	    db_output_prompt();
@@ -449,7 +451,7 @@ db_inputchar(int c)
 		len = strlen(db_tok_string) - (start - restart);
 		if (db_completion == 1 &&
 		    (db_le == db_lc ||
-		     (db_le > db_lc) && *db_lc != ' '))
+		     ((db_le > db_lc) && *db_lc != ' ')))
 		    len++;
 		for (p = db_le - 1; p >= db_lc; p--)
 		    *(p + len) = *p;
@@ -464,7 +466,7 @@ db_inputchar(int c)
 			cnputc(*sym);
 		    if (db_completion == 1) {
 			if (db_le == db_lc ||
-			    (db_le > db_lc) && *db_lc != ' ') {
+			    ((db_le > db_lc) && *db_lc != ' ')) {
 			    cnputc(' ');
 			    *db_lc++ = ' ';
 			}
@@ -558,7 +560,6 @@ db_inputchar(int c)
 #if DB_HISTORY_SIZE != 0
 		db_history_curr = db_history_last;
 		if (c == CTRL('g') && db_hist_search) {
-			char *p;
 			for (p = db_hist_search_string, db_le = db_lbuf_start;
 			     *p; ) {
 				*db_le++ = *p++;
@@ -619,7 +620,6 @@ db_inputchar(int c)
 			cnputc('\007');
 			db_history_curr = old_history_curr;
 		} else {
-			register char *p;
 			INC_DB_CURR();
 			db_delete_line();
 			for (p = db_history_curr, db_le = db_lbuf_start;
@@ -671,7 +671,6 @@ db_inputchar(int c)
 		if (db_history_curr != db_history_last) {
 			INC_DB_CURR();
 			if (db_history_curr != db_history_last) {
-				register char *p;
 				db_delete_line();
 				for (p = db_history_curr,
 				     db_le = db_lbuf_start; *p;) {
@@ -709,7 +708,7 @@ db_inputchar(int c)
 #if DB_HISTORY_SIZE != 0
 		/* Check if it same than previous line */
 		if (db_history_prev) {
-			register char *pp, *pc;
+			char *pc;
 
 			/* Is it unmodified */
 			for (p = db_history_prev, pc = db_lbuf_start;

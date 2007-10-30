@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1988, 1993
@@ -53,6 +59,12 @@
  *
  *	@(#)raw_ip.c	8.7 (Berkeley) 5/15/95
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -65,10 +77,10 @@
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/sysctl.h>
+#include <libkern/OSAtomic.h>
+#include <kern/zalloc.h>
 
-#if __FreeBSD__
-#include <vm/vm_zone.h>
-#endif
+#include <pexpert/pexpert.h>
 
 #include <net/if.h>
 #include <net/route.h>
@@ -92,9 +104,20 @@
 #include <netinet/ip_dummynet.h>
 #endif
 
+#if CONFIG_MACF_NET
+#include <security/mac_framework.h>
+#endif /* MAC_NET */
+
+int load_ipfw(void);
+int rip_detach(struct socket *);
+int rip_abort(struct socket *);
+int rip_disconnect(struct socket *);
+int rip_bind(struct socket *, struct sockaddr *, struct proc *);
+int rip_connect(struct socket *, struct sockaddr *, struct proc *);
+int rip_shutdown(struct socket *);
+ 
 #if IPSEC
 extern int ipsec_bypass;
-extern lck_mtx_t *sadb_mutex;
 #endif
 
 extern u_long  route_generation;
@@ -157,7 +180,7 @@ rip_init()
 
 }
 
-static struct	sockaddr_in ripsrc = { sizeof(ripsrc), AF_INET };
+static struct	sockaddr_in ripsrc = { sizeof(ripsrc), AF_INET , 0, {0}, {0,0,0,0,0,0,0,0,} };
 /*
  * Setup generic address and protocol structures
  * for raw_input routine, then pass them along with
@@ -196,16 +219,21 @@ rip_input(m, iphlen)
 			/* check AH/ESP integrity. */
 			skipit = 0;
 			if (ipsec_bypass == 0 && n) {
-				lck_mtx_lock(sadb_mutex);
 				if (ipsec4_in_reject_so(n, last->inp_socket)) {
 					m_freem(n);
-					ipsecstat.in_polvio++;
+					IPSEC_STAT_INCREMENT(ipsecstat.in_polvio);
 					/* do not inject data to pcb */
 					skipit = 1;
 				}
-				lck_mtx_unlock(sadb_mutex);
 			} 
 #endif /*IPSEC*/
+#if CONFIG_MACF_NET
+			if (n && skipit == 0) {
+				if (mac_inpcb_check_deliver(last, n, AF_INET,
+				    SOCK_RAW) != 0)
+					skipit = 1;
+			}
+#endif
 			if (n && skipit == 0) {
 				int error = 0;
 				if (last->inp_flags & INP_CONTROLOPTS ||
@@ -238,17 +266,21 @@ rip_input(m, iphlen)
 	/* check AH/ESP integrity. */
 	skipit = 0;
 	if (ipsec_bypass == 0 && last) {
-		lck_mtx_lock(sadb_mutex);
 		if (ipsec4_in_reject_so(m, last->inp_socket)) {
 			m_freem(m);
-			ipsecstat.in_polvio++;
-			ipstat.ips_delivered--;
+			IPSEC_STAT_INCREMENT(ipsecstat.in_polvio);
+			OSAddAtomic(1, (SInt32*)&ipstat.ips_delivered);
 			/* do not inject data to pcb */
 			skipit = 1;
 		}
-		lck_mtx_unlock(sadb_mutex);
 	} 
 #endif /*IPSEC*/
+#if CONFIG_MACF_NET
+	if (last && skipit == 0) {
+		if (mac_inpcb_check_deliver(last, m, AF_INET, SOCK_RAW) != 0)
+			skipit = 1;
+	}
+#endif
 	if (skipit == 0) {
 		if (last) {
 			if (last->inp_flags & INP_CONTROLOPTS ||
@@ -267,8 +299,8 @@ rip_input(m, iphlen)
 			}
 		} else {
 			m_freem(m);
-			ipstat.ips_noproto++;
-			ipstat.ips_delivered--;
+			OSAddAtomic(1, (SInt32*)&ipstat.ips_noproto);
+			OSAddAtomic(-1, (SInt32*)&ipstat.ips_delivered);
 		}
 	}
 }
@@ -328,7 +360,7 @@ rip_output(m, so, dst)
 #endif
 		/* XXX prevent ip_output from overwriting header fields */
 		flags |= IP_RAWOUTPUT;
-		ipstat.ips_rawout++;
+		OSAddAtomic(1, (SInt32*)&ipstat.ips_rawout);
 	}
 
 #if IPSEC
@@ -343,12 +375,22 @@ rip_output(m, so, dst)
 		inp->inp_route.ro_rt = (struct rtentry *)0;
 	}
 
+#if CONFIG_MACF_NET
+	mac_mbuf_label_associate_inpcb(inp, m);
+#endif
+
+#if CONFIG_FORCE_OUT_IFP
 	return (ip_output_list(m, 0, inp->inp_options, &inp->inp_route, flags,
-			  inp->inp_moptions));
+			  inp->inp_moptions, inp->pdp_ifp));
+#else
+	return (ip_output_list(m, 0, inp->inp_options, &inp->inp_route, flags,
+			  inp->inp_moptions, NULL));
+#endif
 }
 
-extern int
-load_ipfw()
+#if IPFIREWALL
+int
+load_ipfw(void)
 {
 	kern_return_t	err;
 	
@@ -362,6 +404,7 @@ load_ipfw()
 	
 	return err == 0 && ip_fw_ctl_ptr == NULL ? -1 : err;
 }
+#endif /* IPFIREWALL */
 
 /*
  * Raw IP socket option processing.
@@ -392,6 +435,7 @@ rip_ctloutput(so, sopt)
             error = sooptcopyout(sopt, &optval, sizeof optval);
             break;
 
+#if IPFIREWALL
 		case IP_FW_ADD:
 		case IP_FW_GET:
 		case IP_OLD_FW_ADD:
@@ -403,6 +447,7 @@ rip_ctloutput(so, sopt)
 			else
 				error = ENOPROTOOPT;
 			break;
+#endif IPFIREWALL
 
 #if DUMMYNET
 		case IP_DUMMYNET_GET:
@@ -413,6 +458,7 @@ rip_ctloutput(so, sopt)
 			break ;
 #endif /* DUMMYNET */
 
+#if MROUTING
 		case MRT_INIT:
 		case MRT_DONE:
 		case MRT_ADD_VIF:
@@ -423,6 +469,7 @@ rip_ctloutput(so, sopt)
 		case MRT_ASSERT:
 			error = ip_mrouter_get(so, sopt);
 			break;
+#endif /* MROUTING */
 
 		default:
 			error = ip_ctloutput(so, sopt);
@@ -455,6 +502,7 @@ rip_ctloutput(so, sopt)
             break;
 
 
+#if IPFIREWALL
 		case IP_FW_ADD:
 		case IP_FW_DEL:
 		case IP_FW_FLUSH:
@@ -472,6 +520,7 @@ rip_ctloutput(so, sopt)
 			else
 				error = ENOPROTOOPT;
 			break;
+#endif /* IPFIREWALL */
 
 #if DUMMYNET
 		case IP_DUMMYNET_CONFIGURE:
@@ -484,6 +533,7 @@ rip_ctloutput(so, sopt)
 			break ;
 #endif
 
+#if MROUTING
 		case IP_RSVP_ON:
 			error = ip_rsvp_init(so);
 			break;
@@ -500,7 +550,7 @@ rip_ctloutput(so, sopt)
 		case IP_RSVP_VIF_OFF:
 			error = ip_rsvp_vif_done(so, sopt);
 			break;
-
+		
 		case MRT_INIT:
 		case MRT_DONE:
 		case MRT_ADD_VIF:
@@ -511,6 +561,7 @@ rip_ctloutput(so, sopt)
 		case MRT_ASSERT:
 			error = ip_mrouter_set(so, sopt);
 			break;
+#endif /* MROUTING */
 
 		default:
 			error = ip_ctloutput(so, sopt);
@@ -530,10 +581,10 @@ rip_ctloutput(so, sopt)
  * interface routes.
  */
 void
-rip_ctlinput(cmd, sa, vip)
-	int cmd;
-	struct sockaddr *sa;
-	void *vip;
+rip_ctlinput(
+	int cmd,
+	struct sockaddr *sa,
+	__unused void *vip)
 {
 	struct in_ifaddr *ia;
 	struct ifnet *ifp;
@@ -602,25 +653,18 @@ static int
 rip_attach(struct socket *so, int proto, struct proc *p)
 {
 	struct inpcb *inp;
-	int error, s;
+	int error;
 
 	inp = sotoinpcb(so);
 	if (inp)
 		panic("rip_attach");
-#if __APPLE__
 	if ((so->so_state & SS_PRIV) == 0)
 		return (EPERM);
-#else
-	if (p && (error = suser(p)) != 0)
-		return error;
-#endif
 
 	error = soreserve(so, rip_sendspace, rip_recvspace);
 	if (error)
 		return error;
-	s = splnet();
 	error = in_pcballoc(so, &ripcbinfo, p);
-	splx(s);
 	if (error)
 		return error;
 	inp = (struct inpcb *)so->so_pcb;
@@ -638,11 +682,13 @@ rip_detach(struct socket *so)
 	inp = sotoinpcb(so);
 	if (inp == 0)
 		panic("rip_detach");
+#if MROUTING
 	if (so == ip_mrouter)
 		ip_mrouter_done();
 	ip_rsvp_force_done(so);
 	if (so == ip_rsvpd)
 		ip_rsvp_done();
+#endif /* MROUTING */
 	in_pcbdetach(inp);
 	return 0;
 }
@@ -663,7 +709,7 @@ rip_disconnect(struct socket *so)
 }
 
 __private_extern__ int
-rip_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
+rip_bind(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 {
 	struct inpcb *inp = sotoinpcb(so);
 	struct sockaddr_in *addr = (struct sockaddr_in *)nam;
@@ -687,7 +733,7 @@ rip_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 }
 
 __private_extern__ int
-rip_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
+rip_connect(struct socket *so, struct sockaddr *nam, __unused  struct proc *p)
 {
 	struct inpcb *inp = sotoinpcb(so);
 	struct sockaddr_in *addr = (struct sockaddr_in *)nam;
@@ -712,8 +758,8 @@ rip_shutdown(struct socket *so)
 }
 
 __private_extern__ int
-rip_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
-	 struct mbuf *control, struct proc *p)
+rip_send(struct socket *so, __unused int flags, struct mbuf *m, struct sockaddr *nam,
+	 __unused struct mbuf *control, __unused struct proc *p)
 {
 	struct inpcb *inp = sotoinpcb(so);
 	register u_long dst;
@@ -749,7 +795,7 @@ rip_unlock(struct socket *so, int refcount, int debug)
 
 	if (refcount) {
 		if (so->so_usecount <= 0)
-			panic("rip_unlock: bad refoucnt so=%x val=%x\n", so, so->so_usecount);
+			panic("rip_unlock: bad refoucnt so=%p val=%x\n", so, so->so_usecount);
 		so->so_usecount--;
 		if (so->so_usecount == 0 && (inp->inp_wantcnt == WNT_STOPUSING)) {
 			/* cleanup after last reference */
@@ -760,7 +806,7 @@ rip_unlock(struct socket *so, int refcount, int debug)
 			return(0);
 		}
 	}
-	so->unlock_lr[so->next_unlock_lr] = (u_int *)lr_saved;
+	so->unlock_lr[so->next_unlock_lr] = (u_int32_t)lr_saved;
 	so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
 	lck_mtx_unlock(so->so_proto->pr_domain->dom_mtx);
 	return(0);
@@ -769,7 +815,8 @@ rip_unlock(struct socket *so, int refcount, int debug)
 static int
 rip_pcblist SYSCTL_HANDLER_ARGS
 {
-	int error, i, n, s;
+#pragma unused(oidp, arg1, arg2)
+	int error, i, n;
 	struct inpcb *inp, **inp_list;
 	inp_gen_t gencnt;
 	struct xinpgen xig;
@@ -874,3 +921,4 @@ struct pr_usrreqs rip_usrreqs = {
 	pru_rcvoob_notsupp, rip_send, pru_sense_null, rip_shutdown,
 	in_setsockaddr, sosend, soreceive, pru_sopoll_notsupp
 };
+/* DSEP Review Done pl-20051213-v02 @3253 */

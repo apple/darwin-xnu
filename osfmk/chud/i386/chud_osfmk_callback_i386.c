@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
- *
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- *
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- *
- * @APPLE_LICENSE_HEADER_END@
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <stdint.h>
@@ -37,6 +43,7 @@
 
 #include <chud/chud_xnu.h>
 #include <chud/chud_xnu_private.h>
+#include <chud/chud_thread.h>
 
 #include <i386/misc_protos.h>
 #include <i386/mp.h>
@@ -59,11 +66,9 @@ void chudxnu_cancel_all_callbacks(void)
     chudxnu_interrupt_callback_cancel();
     chudxnu_perfmon_ast_callback_cancel();
     chudxnu_kdebug_callback_cancel();
-    chudxnu_thread_timer_callback_cancel();
     chudxnu_trap_callback_cancel();
-#if XXX
 	chudxnu_syscall_callback_cancel();
-#endif
+	chudxnu_dtrace_callback_cancel();
 }
 
 static chudcpu_data_t chudcpu_boot_cpu;
@@ -71,7 +76,6 @@ void *
 chudxnu_cpu_alloc(boolean_t boot_processor)
 {
 	chudcpu_data_t	*chud_proc_info;
-
 
 	if (boot_processor) {
 		chud_proc_info = &chudcpu_boot_cpu;
@@ -217,7 +221,7 @@ static chudxnu_trap_callback_func_t trap_callback_fn = NULL;
 
 static kern_return_t
 chudxnu_private_trap_callback(
-	int			trapno,
+	int trapno,
 	void			*regs,
 	int			unused1,
 	int			unused2)
@@ -225,34 +229,50 @@ chudxnu_private_trap_callback(
 #pragma unused (regs)
 #pragma unused (unused1)
 #pragma unused (unused2)
-    kern_return_t retval = KERN_FAILURE;
+	kern_return_t retval = KERN_FAILURE;
 	chudxnu_trap_callback_func_t fn = trap_callback_fn;
 
-        if(fn) {
-		boolean_t			oldlevel;
-		x86_thread_state_t	state;	// once we have an 64bit- independent way to determine if a thread is
-									// running kernel code, we'll switch to x86_thread_state_t.
-		mach_msg_type_number_t		count;	
-
+	if(fn) {
+		boolean_t oldlevel;
+		x86_thread_state_t state;
+		mach_msg_type_number_t count;
+		thread_t thread = current_thread();
+		
 		oldlevel = ml_set_interrupts_enabled(FALSE);
+		
+		/* prevent reentry into CHUD when dtracing */
+		if(thread->t_chud & T_IN_CHUD) {
+			/* restore interrupts */
+			ml_set_interrupts_enabled(oldlevel);
+
+			return KERN_FAILURE;	// not handled - pass off to dtrace
+		}
+
+		/* update the chud state bits */
+		thread->t_chud |= T_IN_CHUD;
 
 		count = x86_THREAD_STATE_COUNT;
-		if(chudxnu_thread_get_state(current_thread(),
+		
+		if(chudxnu_thread_get_state(thread,
 				x86_THREAD_STATE,
 				(thread_state_t)&state,
 				&count,
 				FALSE) == KERN_SUCCESS) {
-	  
-		  retval = (fn)(
-				  trapno,
-				  x86_THREAD_STATE,
-				  (thread_state_t)&state,
-				  count);
+		  
+					retval = (fn)(
+						trapno,
+						x86_THREAD_STATE,
+						(thread_state_t)&state,
+						count);
 		}
-    ml_set_interrupts_enabled(oldlevel);
+
+		/* no longer in CHUD */
+		thread->t_chud &= ~(T_IN_CHUD);
+
+		ml_set_interrupts_enabled(oldlevel);
 	}
 
-    return retval;
+	return retval;
 }
 
 __private_extern__ kern_return_t
@@ -305,7 +325,7 @@ chudxnu_private_chud_ast_callback(
 		x86_thread_state_t state;
 		mach_msg_type_number_t count;
 		count = x86_THREAD_STATE_COUNT;
-		
+
 		if (chudxnu_thread_get_state(
 			current_thread(),
 			x86_THREAD_STATE,
@@ -542,49 +562,3 @@ chudxnu_cpusig_send(int otherCPU, uint32_t request_code)
 	return retval;
 }
 
-#ifdef XXX
-#pragma mark **** CHUD syscall (PPC) ****
-
-typedef int (*PPCcallEnt)(struct savearea *save);
-extern PPCcallEnt      PPCcalls[];
-
-static chudxnu_syscall_callback_func_t syscall_callback_fn = NULL;
-
-static int
-chudxnu_private_syscall_callback(struct savearea *ssp)
-{
-	if(ssp) {
-		if(syscall_callback_fn) {
-			struct ppc_thread_state64 state;
-			kern_return_t retval;
-			mach_msg_type_number_t count = PPC_THREAD_STATE64_COUNT;
-			chudxnu_copy_savearea_to_threadstate(PPC_THREAD_STATE64, (thread_state_t)&state, &count, ssp);
-			ssp->save_r3 = (syscall_callback_fn)(PPC_THREAD_STATE64, (thread_state_t)&state, count);
-		} else {
-			ssp->save_r3 = KERN_FAILURE;
-		}
-	}
-	
-    return 1; // check for ASTs (always)
-}
-
-__private_extern__ kern_return_t
-chudxnu_syscall_callback_enter(chudxnu_syscall_callback_func_t func)
-{
-	syscall_callback_fn = func;
-	PPCcalls[9] = chudxnu_private_syscall_callback;
-    __asm__ volatile("eieio");	/* force order */
-    __asm__ volatile("sync");	/* force to memory */
-    return KERN_SUCCESS;
-}
-
-__private_extern__ kern_return_t
-chudxnu_syscall_callback_cancel(void)
-{
-	syscall_callback_fn = NULL;
-	PPCcalls[9] = NULL;
-    __asm__ volatile("eieio");	/* force order */
-    __asm__ volatile("sync");	/* force to memory */
-    return KERN_SUCCESS;
-}
-#endif

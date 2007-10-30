@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *	Copyright (c) 1990, 1996-1998 Apple Computer, Inc.
@@ -33,6 +39,12 @@
  * 2-Sep-1999	A.Ramesh
  *	Created for MacOSX
  *
+ */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
  */
 
 #include <sys/cdefs.h>
@@ -54,6 +66,11 @@
 #include <sys/sysproto.h>
 #include <sys/proc_info.h>
 
+#if CONFIG_MACF
+#include <sys/vnode_internal.h>
+#include <security/mac_framework.h>
+#endif
+
 #include <bsm/audit_kernel.h>
 
 #include <mach/mach_types.h>
@@ -66,9 +83,6 @@
 #include <kern/clock.h>
 #include <mach/kern_return.h>
 
-#if KTRACE
-#include <sys/ktrace.h>
-#endif
 
 #define f_flag f_fglob->fg_flag
 #define f_type f_fglob->fg_type
@@ -87,7 +101,8 @@ struct pseminfo {
 	gid_t		psem_gid;
 	char		psem_name[PSEMNAMLEN + 1];	/* segment name */
 	semaphore_t	psem_semobject;
-	struct proc *	sem_proc;
+	proc_t		sem_proc;
+	struct label *	psem_label;
 };
 #define PSEMINFO_NULL (struct pseminfo *)0
 
@@ -140,8 +155,8 @@ u_long	psemhash;				/* size of hash table - 1 */
 long	psemnument;			/* number of cache entries allocated */
 long	posix_sem_max = 10000;		/* tunable for max POSIX semaphores */
 					/* 10000 limits to ~1M of memory */
-SYSCTL_NODE(_kern, KERN_POSIX, posix, CTLFLAG_RW,  0, "Posix");
-SYSCTL_NODE(_kern_posix, OID_AUTO, sem, CTLFLAG_RW, 0, "Semaphores");
+SYSCTL_NODE(_kern, KERN_POSIX, posix, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "Posix");
+SYSCTL_NODE(_kern_posix, OID_AUTO, sem, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "Semaphores");
 SYSCTL_INT (_kern_posix_sem, OID_AUTO, max, CTLFLAG_RW, &posix_sem_max, 0, "max");
 
 struct psemstats psemstats;		/* cache effectiveness statistics */
@@ -152,18 +167,18 @@ static int psem_cache_search(struct pseminfo **,
 static int psem_delete(struct pseminfo * pinfo);
 
 static int psem_read (struct fileproc *fp, struct uio *uio,
-			    kauth_cred_t cred, int flags, struct proc *p);
+			    int flags, vfs_context_t ctx);
 static int psem_write (struct fileproc *fp, struct uio *uio,
-			    kauth_cred_t cred, int flags, struct proc *p);
+			    int flags, vfs_context_t ctx);
 static int psem_ioctl (struct fileproc *fp, u_long com,
-			    caddr_t data, struct proc *p);
-static int psem_select (struct fileproc *fp, int which, void *wql, struct proc *p);
-static int psem_closefile (struct fileglob *fp, struct proc *p);
+			    caddr_t data, vfs_context_t ctx);
+static int psem_select (struct fileproc *fp, int which, void *wql, vfs_context_t ctx);
+static int psem_closefile (struct fileglob *fp, vfs_context_t ctx);
 
-static int psem_kqfilter (struct fileproc *fp, struct knote *kn, struct proc *p);
+static int psem_kqfilter (struct fileproc *fp, struct knote *kn, vfs_context_t ctx);
 
 struct 	fileops psemops =
-	{ psem_read, psem_write, psem_ioctl, psem_select, psem_closefile, psem_kqfilter, 0 };
+	{ psem_read, psem_write, psem_ioctl, psem_select, psem_closefile, psem_kqfilter, NULL };
 
 
 static lck_grp_t       *psx_sem_subsys_lck_grp;
@@ -200,10 +215,8 @@ psem_lock_init( void )
  */
 
 static int
-psem_cache_search(psemp, pnp, pcache)
-	struct pseminfo **psemp;
-	struct psemname *pnp;
-	struct psemcache **pcache;
+psem_cache_search(struct pseminfo **psemp, struct psemname *pnp,
+		  struct psemcache **pcache)
 {
 	struct psemcache *pcp, *nnp;
 	struct psemhashhead *pcpp;
@@ -254,7 +267,7 @@ psem_cache_add(struct pseminfo *psemp, struct psemname *pnp, struct psemcache *p
 	struct psemcache *dpcp;
 
 #if DIAGNOSTIC
-	if (pnp->psem_namelen > NCHNAMLEN)
+	if (pnp->psem_namelen > PSEMNAMLEN)
 		panic("cache_enter: name too long");
 #endif
 
@@ -295,7 +308,7 @@ psem_cache_add(struct pseminfo *psemp, struct psemname *pnp, struct psemcache *p
 void
 psem_cache_init(void)
 {
-	psemhashtbl = hashinit(desiredvnodes, M_SHM, &psemhash);
+	psemhashtbl = hashinit(posix_sem_max / 2, M_SHM, &psemhash);
 }
 
 static void
@@ -308,7 +321,7 @@ psem_cache_delete(struct psemcache *pcp)
 		panic("namecache purge le_next");
 #endif /* DIAGNOSTIC */
 	LIST_REMOVE(pcp, psem_hash);
-	pcp->psem_hash.le_prev = 0;	
+	pcp->psem_hash.le_prev = NULL;	
 	psemnument--;
 }
 
@@ -335,7 +348,7 @@ psem_cache_purge(void)
 #endif	/* NOT_USED */
 
 int
-sem_open(struct proc *p, struct sem_open_args *uap, user_addr_t *retval)
+sem_open(proc_t p, struct sem_open_args *uap, user_addr_t *retval)
 {
 	struct fileproc *fp;
 	size_t i;
@@ -343,7 +356,7 @@ sem_open(struct proc *p, struct sem_open_args *uap, user_addr_t *retval)
 	int indx, error;
 	struct psemname nd;
 	struct pseminfo *pinfo;
-	struct psemcache *pcp;
+	struct psemcache *pcp = NULL;	/* protected by !incache */
 	char * pnbuf;
 	char * nameptr;
 	char * cp;
@@ -396,17 +409,12 @@ sem_open(struct proc *p, struct sem_open_args *uap, user_addr_t *retval)
 	nameptr = pnbuf;
 	nd.psem_nameptr = nameptr;
 	nd.psem_namelen = plen;
-	nd. psem_hash =0;
+	nd.psem_hash = 0;
 
         for (cp = nameptr, i=1; *cp != 0 && i <= plen; i++, cp++) {
                nd.psem_hash += (unsigned char)*cp * i;
 	}
 
-#if KTRACE
-	if (KTRPOINT(p, KTR_NAMEI))
-		ktrnamei(p->p_tracep, nameptr);
-#endif
-	
 	PSEM_SUBSYS_LOCK();
 	error = psem_cache_search(&pinfo, &nd, &pcache);
 
@@ -423,7 +431,7 @@ sem_open(struct proc *p, struct sem_open_args *uap, user_addr_t *retval)
 	fmode = FFLAGS(uap->oflag);
 
 	PSEM_SUBSYS_UNLOCK();
-	error = falloc(p, &nfp, &indx);
+	error = falloc(p, &nfp, &indx, vfs_context_current());
 	if (error)
 		goto bad;
 
@@ -449,7 +457,7 @@ sem_open(struct proc *p, struct sem_open_args *uap, user_addr_t *retval)
 	}
 
 	if ( (fmode & O_CREAT) ) {
-		if((value < 0) && (value > SEM_VALUE_MAX)) {
+		if((value < 0) || (value > SEM_VALUE_MAX)) {
 			PSEM_SUBSYS_UNLOCK();
 			error = EINVAL;
 			goto bad1;
@@ -460,6 +468,9 @@ sem_open(struct proc *p, struct sem_open_args *uap, user_addr_t *retval)
 			error = ENOSPC;
 			goto bad1;
 		}
+#if CONFIG_MACF
+		mac_posixsem_label_init(pinfo);
+#endif
 		PSEM_SUBSYS_LOCK();
 
 		pinfo_alloc = 1;
@@ -479,6 +490,14 @@ sem_open(struct proc *p, struct sem_open_args *uap, user_addr_t *retval)
 		pinfo->psem_flags &= ~PSEM_DEFINED;
 		pinfo->psem_flags |= PSEM_ALLOCATED;
 		pinfo->sem_proc = p;
+#if CONFIG_MACF
+		error = mac_posixsem_check_create(kauth_cred_get(), nameptr);
+		if (error) {
+			PSEM_SUBSYS_UNLOCK();
+			goto bad2;
+		}
+		mac_posixsem_label_associate(kauth_cred_get(), pinfo, nameptr);
+#endif
 	} else {
 		/* semaphore should exist as it is without  O_CREAT */
 		if (!incache) {
@@ -493,6 +512,13 @@ sem_open(struct proc *p, struct sem_open_args *uap, user_addr_t *retval)
 		}	
 		AUDIT_ARG(posix_ipc_perm, pinfo->psem_uid,
 			pinfo->psem_gid, pinfo->psem_mode);
+#if CONFIG_MACF
+		error = mac_posixsem_check_open(kauth_cred_get(), pinfo);
+		if (error) {
+			PSEM_SUBSYS_UNLOCK();
+			goto bad1;
+		}
+#endif
 		if ( (error = psem_access(pinfo, fmode, kauth_cred_get())) ) {
 			PSEM_SUBSYS_UNLOCK();
 			goto bad1;
@@ -547,8 +573,10 @@ bad3:
 	switch (kret) {
 	case KERN_RESOURCE_SHORTAGE:
 		error = ENOMEM;
+		break;
 	case KERN_PROTECTION_FAILURE:
 		error = EACCES;
+		break;
 	default:
 		error = EINVAL;
 	}
@@ -556,8 +584,12 @@ bad3:
 bad2:
 	FREE(pnode, M_SHM);
 bad1:
-	if (pinfo_alloc)
+	if (pinfo_alloc) {
+#if CONFIG_MACF
+		mac_posixsem_label_destroy(pinfo);
+#endif
 		FREE(pinfo, M_SHM);
+	}
 	fp_free(p, indx, nfp);
 bad:
 	FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
@@ -606,7 +638,7 @@ psem_access(struct pseminfo *pinfo, int mode, kauth_cred_t cred)
 }
 
 int
-sem_unlink(__unused struct proc *p, struct sem_unlink_args *uap, __unused register_t *retval)
+sem_unlink(__unused proc_t p, struct sem_unlink_args *uap, __unused register_t *retval)
 {
 	size_t i;
 	int error=0;
@@ -676,6 +708,13 @@ sem_unlink(__unused struct proc *p, struct sem_unlink_args *uap, __unused regist
 		goto bad;
 	} else
 		incache = 1;
+#if CONFIG_MACF
+	error = mac_posixsem_check_unlink(kauth_cred_get(), pinfo, nameptr);
+	if (error) {
+		PSEM_SUBSYS_UNLOCK();
+		goto bad;
+	}
+#endif
 	if ( (error = psem_access(pinfo, pinfo->psem_mode, kauth_cred_get())) ) {
 		PSEM_SUBSYS_UNLOCK();
 		goto bad;
@@ -683,7 +722,8 @@ sem_unlink(__unused struct proc *p, struct sem_unlink_args *uap, __unused regist
 
 	if ((pinfo->psem_flags & (PSEM_DEFINED | PSEM_ALLOCATED))==0) {
 		PSEM_SUBSYS_UNLOCK();
-		return (EINVAL);
+		error = EINVAL;
+		goto bad;
 	}
 
 	if ( (pinfo->psem_flags & PSEM_INDELETE) ) {
@@ -714,7 +754,7 @@ bad:
 }
 
 int
-sem_close(struct proc *p, struct sem_close_args *uap, __unused register_t *retval)
+sem_close(proc_t p, struct sem_close_args *uap, __unused register_t *retval)
 {
 	int fd = CAST_DOWN(int,uap->sem);
 	struct fileproc *fp;
@@ -728,6 +768,7 @@ sem_close(struct proc *p, struct sem_close_args *uap, __unused register_t *retva
 		proc_fdunlock(p);
 		return(error);
 	}
+	fileproc_drain(p, fp);
 	fdrelse(p, fd);
 	error = closef_locked(fp, fp->f_fglob, p);
 	FREE_ZONE(fp, sizeof *fp, M_FILEPROC);
@@ -736,7 +777,14 @@ sem_close(struct proc *p, struct sem_close_args *uap, __unused register_t *retva
 }
 
 int
-sem_wait(struct proc *p, struct sem_wait_args *uap, __unused register_t *retval)
+sem_wait(proc_t p, struct sem_wait_args *uap, register_t *retval)
+{
+	__pthread_testcancel(1);
+	return(sem_wait_nocancel(p, (struct sem_wait_nocancel_args *)uap, retval));
+}
+
+int
+sem_wait_nocancel(proc_t p, struct sem_wait_nocancel_args *uap, __unused register_t *retval)
 {
 	int fd = CAST_DOWN(int,uap->sem);
 	struct fileproc *fp;
@@ -764,7 +812,13 @@ sem_wait(struct proc *p, struct sem_wait_args *uap, __unused register_t *retval)
 		error = EINVAL;
 		goto out;
 	}
-
+#if CONFIG_MACF
+	error = mac_posixsem_check_wait(kauth_cred_get(), pinfo);
+	if (error) {
+		PSEM_SUBSYS_UNLOCK();
+		goto out;
+	}
+#endif
 	PSEM_SUBSYS_UNLOCK();
 	kret = semaphore_wait(pinfo->psem_semobject);
 	switch (kret) {
@@ -790,7 +844,7 @@ out:
 }
 
 int
-sem_trywait(struct proc *p, struct sem_trywait_args *uap, __unused register_t *retval)
+sem_trywait(proc_t p, struct sem_trywait_args *uap, __unused register_t *retval)
 {
 	int fd = CAST_DOWN(int,uap->sem);
 	struct fileproc *fp;
@@ -819,7 +873,13 @@ sem_trywait(struct proc *p, struct sem_trywait_args *uap, __unused register_t *r
 		error = EINVAL;
 		goto out;
 	}
-
+#if CONFIG_MACF
+	error = mac_posixsem_check_wait(kauth_cred_get(), pinfo);
+	if (error) {
+		PSEM_SUBSYS_UNLOCK();
+		goto out;
+	}
+#endif
 	PSEM_SUBSYS_UNLOCK();
 	wait_time.tv_sec = 0;
 	wait_time.tv_nsec = 0;
@@ -849,7 +909,7 @@ out:
 }
 
 int
-sem_post(struct proc *p, struct sem_post_args *uap, __unused register_t *retval)
+sem_post(proc_t p, struct sem_post_args *uap, __unused register_t *retval)
 {
 	int fd = CAST_DOWN(int,uap->sem);
 	struct fileproc *fp;
@@ -877,7 +937,13 @@ sem_post(struct proc *p, struct sem_post_args *uap, __unused register_t *retval)
 		error = EINVAL;
 		goto out;
 	}
-
+#if CONFIG_MACF
+	error = mac_posixsem_check_post(kauth_cred_get(), pinfo);
+	if (error) {
+		PSEM_SUBSYS_UNLOCK();
+		goto out;
+	}
+#endif
 	PSEM_SUBSYS_UNLOCK();
 	kret = semaphore_signal(pinfo->psem_semobject);
 	switch (kret) {
@@ -902,29 +968,28 @@ out:
 }
 
 int
-sem_init(__unused struct proc *p, __unused struct sem_init_args *uap, __unused register_t *retval)
+sem_init(__unused proc_t p, __unused struct sem_init_args *uap, __unused register_t *retval)
 {
 	return(ENOSYS);
 }
 
 int
-sem_destroy(__unused struct proc *p, __unused struct sem_destroy_args *uap, __unused register_t *retval)
+sem_destroy(__unused proc_t p, __unused struct sem_destroy_args *uap, __unused register_t *retval)
 {
 	return(ENOSYS);
 }
 
 int
-sem_getvalue(__unused struct proc *p, __unused struct sem_getvalue_args *uap, __unused register_t *retval)
+sem_getvalue(__unused proc_t p, __unused struct sem_getvalue_args *uap, __unused register_t *retval)
 {
 	return(ENOSYS);
 }
 
 static int
-psem_close(struct psemnode *pnode, __unused int flags, 
-		__unused kauth_cred_t cred, __unused struct proc *p)
+psem_close(struct psemnode *pnode, __unused int flags)
 {
 	int error=0;
-	register struct pseminfo *pinfo;
+	struct pseminfo *pinfo;
 
 	PSEM_SUBSYS_LOCK();
 	if ((pinfo = pnode->pinfo) == PSEMINFO_NULL){
@@ -957,15 +1022,15 @@ psem_close(struct psemnode *pnode, __unused int flags,
 }
 
 static int
-psem_closefile(fg, p)
-	struct fileglob *fg;
-	struct proc *p;
+psem_closefile(struct fileglob *fg, __unused vfs_context_t ctx)
 {
 	int error;
 
-	/* Not locked as psem_close is called only from here and is locked properly */
-	error =  psem_close(((struct psemnode *)fg->fg_data), fg->fg_flag,
-		fg->fg_cred, p);
+	/*
+	 * Not locked as psem_close is called only from here and is locked
+	 * properly
+	 */
+	error =  psem_close(((struct psemnode *)fg->fg_data), fg->fg_flag);
 
 	return(error);
 }
@@ -976,6 +1041,9 @@ psem_delete(struct pseminfo * pinfo)
 	kern_return_t kret;
 
 	kret = semaphore_destroy(kernel_task, pinfo->psem_semobject);
+#if CONFIG_MACF
+	mac_posixsem_label_destroy(pinfo);
+#endif
 
 	switch (kret) {
 	case KERN_INVALID_ADDRESS:
@@ -993,37 +1061,35 @@ psem_delete(struct pseminfo * pinfo)
 
 static int
 psem_read(__unused struct fileproc *fp, __unused struct uio *uio, 
-		  __unused kauth_cred_t cred, __unused int flags, 
-		  __unused struct proc *p)
+		  __unused int flags, __unused vfs_context_t ctx)
 {
 	return(ENOTSUP);
 }
 
 static int
 psem_write(__unused struct fileproc *fp, __unused struct uio *uio, 
-		   __unused kauth_cred_t cred, __unused int flags, 
-		   __unused struct proc *p)
+		   __unused int flags, __unused vfs_context_t ctx)
 {
 	return(ENOTSUP);
 }
 
 static int
 psem_ioctl(__unused struct fileproc *fp, __unused u_long com, 
-			__unused caddr_t data, __unused struct proc *p)
+			__unused caddr_t data, __unused vfs_context_t ctx)
 {
 	return(ENOTSUP);
 }
 
 static int
 psem_select(__unused struct fileproc *fp, __unused int which, 
-			__unused void *wql, __unused struct proc *p)
+			__unused void *wql, __unused vfs_context_t ctx)
 {
 	return(ENOTSUP);
 }
 
 static int
 psem_kqfilter(__unused struct fileproc *fp, __unused struct knote *kn, 
-				__unused struct proc *p)
+				__unused vfs_context_t ctx)
 {
 	return (ENOTSUP);
 }
@@ -1031,8 +1097,8 @@ psem_kqfilter(__unused struct fileproc *fp, __unused struct knote *kn,
 int
 fill_pseminfo(struct psemnode *pnode, struct psem_info * info)
 {
-	register struct pseminfo *pinfo;
-	struct stat *sb;
+	struct pseminfo *pinfo;
+	struct vinfo_stat  *sb;
 
 	PSEM_SUBSYS_LOCK();
 	if ((pinfo = pnode->pinfo) == PSEMINFO_NULL){
@@ -1048,15 +1114,35 @@ fill_pseminfo(struct psemnode *pnode, struct psem_info * info)
 #endif
 
 	sb = &info->psem_stat;
-	bzero(sb, sizeof(struct stat));
+	bzero(sb, sizeof(struct vinfo_stat));
 
-    	sb->st_mode = pinfo->psem_mode;
-    	sb->st_uid = pinfo->psem_uid;
-    	sb->st_gid = pinfo->psem_gid;
-    	sb->st_size = pinfo->psem_usecount;
+    	sb->vst_mode = pinfo->psem_mode;
+    	sb->vst_uid = pinfo->psem_uid;
+    	sb->vst_gid = pinfo->psem_gid;
+    	sb->vst_size = pinfo->psem_usecount;
 	bcopy(&pinfo->psem_name[0], &info->psem_name[0], PSEMNAMLEN+1);
 
 	PSEM_SUBSYS_UNLOCK();
 	return(0);
 }
 
+#if CONFIG_MACF
+void
+psem_label_associate(struct fileproc *fp, struct vnode *vp, vfs_context_t ctx)
+{
+	struct psemnode *pnode;
+	struct pseminfo *psem;
+
+	PSEM_SUBSYS_LOCK();
+	pnode = (struct psemnode *)fp->f_fglob->fg_data;
+	if (pnode != NULL) {
+		psem = pnode->pinfo;
+		if (psem != NULL)
+			mac_posixsem_vnode_label_associate(
+				vfs_context_ucred(ctx), psem, psem->psem_label,
+				vp, vp->v_label);
+	}
+	PSEM_SUBSYS_UNLOCK();
+}
+#endif
+      

@@ -42,17 +42,19 @@
 .Sh SYNOPSIS
 .Fd #include <unistd.h>
 .Ft void
-.Fn _exit "int status"
+.Fo _exit
+.Fa "int status"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn _exit
 function
-terminates a process with the following consequences:
+terminates a process, with the following consequences:
 .Bl -bullet
 .It
-All of the descriptors open in the calling process are closed.
-This may entail delays, for example, waiting for output to drain;
-a process in this state may not be killed, as it is already dying.
+All of the descriptors that were open in the calling process are closed.
+This may entail delays; for example, waiting for output to drain.
+A process in this state may not be killed, as it is already dying.
 .It
 If the parent process of the calling process has an outstanding
 .Xr wait
@@ -60,7 +62,7 @@ call
 or catches the
 .Dv SIGCHLD
 signal,
-it is notified of the calling process's termination and
+it is notified of the calling process's termination;
 the
 .Em status
 is set as defined by
@@ -89,8 +91,8 @@ If the process is a controlling process (see
 .Xr intro 2 ) ,
 the
 .Dv SIGHUP
-signal is sent to the foreground process group of the controlling terminal,
-and all current access to the controlling terminal is revoked.
+signal is sent to the foreground process group of the controlling terminal.
+All current access to the controlling terminal is revoked.
 .El
 .Pp
 Most C programs call the library routine

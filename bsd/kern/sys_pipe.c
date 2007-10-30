@@ -17,25 +17,37 @@
  *    are met.
  */
 /*
- * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
  */
 
 /*
@@ -151,18 +163,21 @@
  * interfaces to the outside world
  */
 static int pipe_read(struct fileproc *fp, struct uio *uio,
-                kauth_cred_t cred, int flags, struct proc *p);
+                int flags, vfs_context_t ctx);
 
 static int pipe_write(struct fileproc *fp, struct uio *uio,
-                kauth_cred_t cred, int flags, struct proc *p);
+                int flags, vfs_context_t ctx);
 
-static int pipe_close(struct fileglob *fg, struct proc *p);
+static int pipe_close(struct fileglob *fg, vfs_context_t ctx);
 
-static int pipe_select(struct fileproc *fp, int which, void * wql, struct proc *p);
+static int pipe_select(struct fileproc *fp, int which, void * wql,
+		vfs_context_t ctx);
 
-static int pipe_kqfilter(struct fileproc *fp, struct knote *kn, struct proc *p);
+static int pipe_kqfilter(struct fileproc *fp, struct knote *kn,
+		vfs_context_t ctx);
 
-static int pipe_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, struct proc *p);
+static int pipe_ioctl(struct fileproc *fp, u_long cmd, caddr_t data,
+		vfs_context_t ctx);
 
 
 struct  fileops pipeops =
@@ -172,7 +187,7 @@ struct  fileops pipeops =
     pipe_select,
     pipe_close,
     pipe_kqfilter,
-    0 };
+    NULL };
 
 
 static void	filt_pipedetach(struct knote *kn);
@@ -223,7 +238,6 @@ SYSCTL_INT(_kern_ipc, OID_AUTO, pipekvawired, CTLFLAG_RD,
 	   &amountpipekvawired, 0, "Pipe wired KVA usage");
 #endif
 
-void pipeinit(void *dummy __unused);
 static void pipeclose(struct pipe *cpipe);
 static void pipe_free_kmem(struct pipe *cpipe);
 static int pipe_create(struct pipe **cpipep);
@@ -253,7 +267,7 @@ static zone_t pipe_zone;
 SYSINIT(vfs, SI_SUB_VFS, SI_ORDER_ANY, pipeinit, NULL);
 
 void
-pipeinit(void *dummy __unused)
+pipeinit(void)
 {
         pipe_zone = (zone_t)zinit(sizeof(struct pipe), 8192 * sizeof(struct pipe), 4096, "pipe zone");
 
@@ -269,6 +283,34 @@ pipeinit(void *dummy __unused)
 	pipe_mtx_attr = lck_attr_alloc_init();
 }
 
+/* Bitmap for things to touch in pipe_touch() */
+#define	PIPE_ATIME	0x00000001	/* time of last access */
+#define	PIPE_MTIME	0x00000002	/* time of last modification */
+#define	PIPE_CTIME	0x00000004	/* time of last status change */
+
+static void
+pipe_touch(struct pipe *tpipe, int touch)
+{
+	struct timeval now;
+
+	microtime(&now);
+
+	if (touch & PIPE_ATIME) {
+		tpipe->st_atimespec.tv_sec  = now.tv_sec;
+		tpipe->st_atimespec.tv_nsec = now.tv_usec * 1000;
+	}
+
+	if (touch & PIPE_MTIME) {
+		tpipe->st_mtimespec.tv_sec  = now.tv_sec;
+		tpipe->st_mtimespec.tv_nsec = now.tv_usec * 1000;
+	}
+
+	if (touch & PIPE_CTIME) {
+		tpipe->st_ctimespec.tv_sec  = now.tv_sec;
+		tpipe->st_ctimespec.tv_nsec = now.tv_usec * 1000;
+	}
+}
+
 
 
 /*
@@ -277,7 +319,7 @@ pipeinit(void *dummy __unused)
 
 /* ARGSUSED */
 int
-pipe(struct proc *p, __unused struct pipe_args *uap, register_t *retval)
+pipe(proc_t p, __unused struct pipe_args *uap, register_t *retval)
 {
 	struct fileproc *rf, *wf;
 	struct pipe *rpipe, *wpipe;
@@ -314,7 +356,7 @@ pipe(struct proc *p, __unused struct pipe_args *uap, register_t *retval)
 	TAILQ_INIT(&rpipe->pipe_evlist);
 	TAILQ_INIT(&wpipe->pipe_evlist);
 
-	error = falloc(p, &rf, &fd);
+	error = falloc(p, &rf, &fd, vfs_context_current());
 	if (error) {
 	        goto freepipes;
 	}
@@ -330,7 +372,7 @@ pipe(struct proc *p, __unused struct pipe_args *uap, register_t *retval)
 	rf->f_data = (caddr_t)rpipe;
 	rf->f_ops = &pipeops;
 
-	error = falloc(p, &wf, &fd);
+	error = falloc(p, &wf, &fd, vfs_context_current());
 	if (error) {
 		fp_free(p, retval[0], rf);
 	        goto freepipes;
@@ -342,22 +384,23 @@ pipe(struct proc *p, __unused struct pipe_args *uap, register_t *retval)
 
 	rpipe->pipe_peer = wpipe;
 	wpipe->pipe_peer = rpipe;
-
 	rpipe->pipe_mtxp = wpipe->pipe_mtxp = pmtx;
+
 	retval[1] = fd;
-#ifdef MAC
+#if CONFIG_MACF
 	/*
 	 * XXXXXXXX SHOULD NOT HOLD FILE_LOCK() XXXXXXXXXXXX
 	 *
 	 * struct pipe represents a pipe endpoint.  The MAC label is shared
-	 * between the connected endpoints.  As a result mac_init_pipe() and
-	 * mac_create_pipe() should only be called on one of the endpoints
+	 * between the connected endpoints.  As a result mac_pipe_label_init() and
+	 * mac_pipe_label_associate() should only be called on one of the endpoints
 	 * after they have been connected.
 	 */
-	mac_init_pipe(rpipe);
-	mac_create_pipe(td->td_ucred, rpipe);
+	mac_pipe_label_init(rpipe);
+	mac_pipe_label_associate(kauth_cred_get(), rpipe);
+	wpipe->pipe_label = rpipe->pipe_label;
 #endif
-	proc_fdlock(p);
+	proc_fdlock_spin(p);
 	procfdtbl_releasefd(p, retval[0], NULL);
 	procfdtbl_releasefd(p, retval[1], NULL);
 	fp_drop(p, retval[0], rf, 1);
@@ -375,56 +418,116 @@ freepipes:
 	return (error);
 }
 
-
 int
-pipe_stat(struct pipe *cpipe, struct stat *ub)
+pipe_stat(struct pipe *cpipe, void *ub, int isstat64)
 {
-#ifdef MAC
+#if CONFIG_MACF
         int error;
 #endif
-	struct timeval now;
+	int	pipe_size = 0;
+	int	pipe_count;
+	struct stat *sb = (struct stat *)0;	/* warning avoidance ; protected by isstat64 */
+	struct stat64 * sb64 = (struct stat64 *)0;  /* warning avoidance ; protected by isstat64 */
 
 	if (cpipe == NULL)
 	        return (EBADF);
-#ifdef MAC
 	PIPE_LOCK(cpipe);
-	error = mac_check_pipe_stat(active_cred, cpipe);
-	PIPE_UNLOCK(cpipe);
-	if (error)
+
+#if CONFIG_MACF
+	error = mac_pipe_check_stat(kauth_cred_get(), cpipe);
+	if (error) {
+		PIPE_UNLOCK(cpipe);
 	        return (error);
+	}
 #endif
 	if (cpipe->pipe_buffer.buffer == 0) {
 	        /*
 		 * must be stat'ing the write fd
 		 */
-	        cpipe = cpipe->pipe_peer;
-
-		if (cpipe == NULL)
-		        return (EBADF);
+	        if (cpipe->pipe_peer) {
+		        /*
+			 * the peer still exists, use it's info
+			 */
+		        pipe_size  = cpipe->pipe_peer->pipe_buffer.size;
+			pipe_count = cpipe->pipe_peer->pipe_buffer.cnt;
+		} else {
+			pipe_count = 0;
+		}
+	} else {
+	        pipe_size  = cpipe->pipe_buffer.size;
+		pipe_count = cpipe->pipe_buffer.cnt;
 	}
-	bzero(ub, sizeof(*ub));
-	ub->st_mode = S_IFIFO | S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP;
-	ub->st_blksize = cpipe->pipe_buffer.size;
-	ub->st_size = cpipe->pipe_buffer.cnt;
-	ub->st_blocks = (ub->st_size + ub->st_blksize - 1) / ub->st_blksize;
-	ub->st_nlink = 1;
+	/*
+	 * since peer's buffer is setup ouside of lock
+	 * we might catch it in transient state
+	 */
+	if (pipe_size == 0)
+		pipe_size  = PIPE_SIZE;
 
-	ub->st_uid = kauth_getuid();
-	ub->st_gid = kauth_getgid();
+	if (isstat64 != 0) {
+		sb64 = (struct stat64 *)ub;	
 
-	microtime(&now);
-	ub->st_atimespec.tv_sec  = now.tv_sec;
-	ub->st_atimespec.tv_nsec = now.tv_usec * 1000;
+		bzero(sb64, sizeof(*sb64));
+		sb64->st_mode = S_IFIFO | S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP;
+		sb64->st_blksize = pipe_size;
+		sb64->st_size = pipe_count;
+		sb64->st_blocks = (sb64->st_size + sb64->st_blksize - 1) / sb64->st_blksize;
+	
+		sb64->st_uid = kauth_getuid();
+		sb64->st_gid = kauth_getgid();
+	
+		sb64->st_atimespec.tv_sec  = cpipe->st_atimespec.tv_sec;
+		sb64->st_atimespec.tv_nsec = cpipe->st_atimespec.tv_nsec;
+	
+		sb64->st_mtimespec.tv_sec  = cpipe->st_mtimespec.tv_sec;
+		sb64->st_mtimespec.tv_nsec = cpipe->st_mtimespec.tv_nsec;
 
-	ub->st_mtimespec.tv_sec  = now.tv_sec;
-	ub->st_mtimespec.tv_nsec = now.tv_usec * 1000;
+		sb64->st_ctimespec.tv_sec  = cpipe->st_ctimespec.tv_sec;
+		sb64->st_ctimespec.tv_nsec = cpipe->st_ctimespec.tv_nsec;
 
-	ub->st_ctimespec.tv_sec  = now.tv_sec;
-	ub->st_ctimespec.tv_nsec = now.tv_usec * 1000;
+		/*
+	 	* Return a relatively unique inode number based on the current
+	 	* address of this pipe's struct pipe.  This number may be recycled
+	 	* relatively quickly.
+	 	*/
+		sb64->st_ino = (ino64_t)((uint32_t)cpipe);
+	} else {
+		sb = (struct stat *)ub;	
+
+		bzero(sb, sizeof(*sb));
+		sb->st_mode = S_IFIFO | S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP;
+		sb->st_blksize = pipe_size;
+		sb->st_size = pipe_count;
+		sb->st_blocks = (sb->st_size + sb->st_blksize - 1) / sb->st_blksize;
+	
+		sb->st_uid = kauth_getuid();
+		sb->st_gid = kauth_getgid();
+	
+		sb->st_atimespec.tv_sec  = cpipe->st_atimespec.tv_sec;
+		sb->st_atimespec.tv_nsec = cpipe->st_atimespec.tv_nsec;
+	
+		sb->st_mtimespec.tv_sec  = cpipe->st_mtimespec.tv_sec;
+		sb->st_mtimespec.tv_nsec = cpipe->st_mtimespec.tv_nsec;
+
+		sb->st_ctimespec.tv_sec  = cpipe->st_ctimespec.tv_sec;
+		sb->st_ctimespec.tv_nsec = cpipe->st_ctimespec.tv_nsec;
+
+		/*
+	 	* Return a relatively unique inode number based on the current
+	 	* address of this pipe's struct pipe.  This number may be recycled
+	 	* relatively quickly.
+	 	*/
+		sb->st_ino = (ino_t)cpipe;
+	}
+	PIPE_UNLOCK(cpipe);
 
 	/*
-	 * Left as 0: st_dev, st_ino, st_nlink, st_rdev, st_flags, st_gen, st_uid, st_gid.
-	 * XXX (st_dev, st_ino) should be unique.
+	 * POSIX: Left as 0: st_dev, st_nlink, st_rdev, st_flags, st_gen,
+	 * st_uid, st_gid.
+	 *
+	 * XXX (st_dev) should be unique, but there is no device driver that
+	 * XXX is associated with pipes, since they are implemented via a
+	 * XXX struct fileops indirection rather than as FS objects.
 	 */
 	return (0);
 }
@@ -479,6 +582,9 @@ pipe_create(struct pipe **cpipep)
 	 */
 	bzero(cpipe, sizeof *cpipe);
 
+	/* Initial times are all the time of creation of the pipe */
+	pipe_touch(cpipe, PIPE_ATIME | PIPE_MTIME | PIPE_CTIME);
+
 	return (0);
 }
 
@@ -486,10 +592,8 @@ pipe_create(struct pipe **cpipep)
 /*
  * lock a pipe for I/O, blocking other access
  */
-static __inline int
-pipelock(cpipe, catch)
-	struct pipe *cpipe;
-	int catch;
+static inline int
+pipelock(struct pipe *cpipe, int catch)
 {
 	int error;
 
@@ -509,11 +613,9 @@ pipelock(cpipe, catch)
 /*
  * unlock a pipe I/O lock
  */
-static __inline void
-pipeunlock(cpipe)
-	struct pipe *cpipe;
+static inline void
+pipeunlock(struct pipe *cpipe)
 {
-
 	cpipe->pipe_state &= ~PIPE_LOCKFL;
 
 	if (cpipe->pipe_state & PIPE_LWANT) {
@@ -523,11 +625,8 @@ pipeunlock(cpipe)
 }
 
 static void
-pipeselwakeup(cpipe, spipe)
-	struct pipe *cpipe;
-	struct pipe *spipe;
+pipeselwakeup(struct pipe *cpipe, struct pipe *spipe)
 {
-
 	if (cpipe->pipe_state & PIPE_SEL) {
 		cpipe->pipe_state &= ~PIPE_SEL;
 		selwakeup(&cpipe->pipe_sel);
@@ -538,18 +637,17 @@ pipeselwakeup(cpipe, spipe)
 	postpipeevent(cpipe, EV_RWBYTES);
 
 	if (spipe && (spipe->pipe_state & PIPE_ASYNC) && spipe->pipe_pgid) {
-	        struct proc *p;
-
 	        if (spipe->pipe_pgid < 0)
 		        gsignal(-spipe->pipe_pgid, SIGIO);
-		else if ((p = pfind(spipe->pipe_pgid)) != (struct proc *)0)
-		        psignal(p, SIGIO);
+		else 
+		        proc_signal(spipe->pipe_pgid, SIGIO);
         }
 }
 
 /* ARGSUSED */
 static int
-pipe_read(struct fileproc *fp, struct uio *uio, __unused kauth_cred_t active_cred, __unused int flags, __unused struct proc *p)
+pipe_read(struct fileproc *fp, struct uio *uio, __unused int flags,
+	__unused vfs_context_t ctx)
 {
 	struct pipe *rpipe = (struct pipe *)fp->f_data;
 	int error;
@@ -563,8 +661,8 @@ pipe_read(struct fileproc *fp, struct uio *uio, __unused kauth_cred_t active_cre
 	if (error)
 		goto unlocked_error;
 
-#ifdef MAC
-	error = mac_check_pipe_read(active_cred, rpipe);
+#if CONFIG_MACF
+	error = mac_pipe_check_read(kauth_cred_get(), rpipe);
 	if (error)
 		goto locked_error;
 #endif
@@ -678,7 +776,7 @@ pipe_read(struct fileproc *fp, struct uio *uio, __unused kauth_cred_t active_cre
 				goto unlocked_error;
 		}
 	}
-#ifdef MAC
+#if CONFIG_MACF
 locked_error:
 #endif
 	pipeunlock(rpipe);
@@ -704,6 +802,9 @@ unlocked_error:
 
 	if ((rpipe->pipe_buffer.size - rpipe->pipe_buffer.cnt) >= PIPE_BUF)
 		pipeselwakeup(rpipe, rpipe->pipe_peer);
+
+	/* update last read time */
+	pipe_touch(rpipe, PIPE_ATIME);
 
 	PIPE_UNLOCK(rpipe);
 
@@ -955,7 +1056,8 @@ error1:
 
 
 static int
-pipe_write(struct fileproc *fp, struct uio *uio, __unused kauth_cred_t active_cred, __unused int flags, __unused struct proc *p)
+pipe_write(struct fileproc *fp, struct uio *uio, __unused int flags,
+	__unused vfs_context_t ctx)
 {
 	int error = 0;
 	int orig_resid;
@@ -974,8 +1076,8 @@ pipe_write(struct fileproc *fp, struct uio *uio, __unused kauth_cred_t active_cr
 		PIPE_UNLOCK(rpipe);
 		return (EPIPE);
 	}
-#ifdef MAC
-	error = mac_check_pipe_write(active_cred, wpipe);
+#if CONFIG_MACF
+	error = mac_pipe_check_write(kauth_cred_get(), wpipe);
 	if (error) {
 		PIPE_UNLOCK(rpipe);
 		return (error);
@@ -1264,6 +1366,10 @@ pipe_write(struct fileproc *fp, struct uio *uio, __unused kauth_cred_t active_cr
 		 */
 		pipeselwakeup(wpipe, wpipe);
 	}
+
+	/* Update modification, status change (# of bytes in pipe) times */
+	pipe_touch(rpipe, PIPE_MTIME | PIPE_CTIME);
+	pipe_touch(wpipe, PIPE_MTIME | PIPE_CTIME);
 	PIPE_UNLOCK(rpipe);
 
 	return (error);
@@ -1274,17 +1380,18 @@ pipe_write(struct fileproc *fp, struct uio *uio, __unused kauth_cred_t active_cr
  */
 /* ARGSUSED 3 */
 static int
-pipe_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, __unused struct proc *p)
+pipe_ioctl(struct fileproc *fp, u_long cmd, caddr_t data,
+	__unused vfs_context_t ctx)
 {
 	struct pipe *mpipe = (struct pipe *)fp->f_data;
-#ifdef MAC
+#if CONFIG_MACF
 	int error;
 #endif
 
 	PIPE_LOCK(mpipe);
 
-#ifdef MAC
-	error = mac_check_pipe_ioctl(active_cred, mpipe, cmd, data);
+#if CONFIG_MACF
+	error = mac_pipe_check_ioctl(kauth_cred_get(), mpipe, cmd);
 	if (error) {
 		PIPE_UNLOCK(mpipe);
 
@@ -1336,7 +1443,7 @@ pipe_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, __unused struct proc *
 
 
 static int
-pipe_select(struct fileproc *fp, int which, void *wql, struct proc *p)
+pipe_select(struct fileproc *fp, int which, void *wql, vfs_context_t ctx)
 {
 	struct pipe *rpipe = (struct pipe *)fp->f_data;
 	struct pipe *wpipe;
@@ -1349,6 +1456,17 @@ pipe_select(struct fileproc *fp, int which, void *wql, struct proc *p)
 
 	wpipe = rpipe->pipe_peer;
 
+#if CONFIG_MACF
+	/*
+	 * XXX We should use a per thread credential here; minimally, the
+	 * XXX process credential should have a persistent reference on it
+	 * XXX before being passed in here.
+	 */
+	if (mac_pipe_check_select(vfs_context_ucred(ctx), rpipe, which)) {
+		PIPE_UNLOCK(rpipe);
+		return (0);
+	}
+#endif
         switch (which) {
 
         case FREAD:
@@ -1359,7 +1477,7 @@ pipe_select(struct fileproc *fp, int which, void *wql, struct proc *p)
 		        retnum = 1;
 		} else {
 		        rpipe->pipe_state |= PIPE_SEL;
-		        selrecord(p, &rpipe->pipe_sel, wql);
+		        selrecord(vfs_context_proc(ctx), &rpipe->pipe_sel, wql);
 		}
 		break;
 
@@ -1371,12 +1489,12 @@ pipe_select(struct fileproc *fp, int which, void *wql, struct proc *p)
 		        retnum = 1;
 		} else {
 		        wpipe->pipe_state |= PIPE_SEL;
-			selrecord(p, &wpipe->pipe_sel, wql);
+			selrecord(vfs_context_proc(ctx), &wpipe->pipe_sel, wql);
 		}
 		break;
         case 0:
 	        rpipe->pipe_state |= PIPE_SEL;
-		selrecord(p, &rpipe->pipe_sel, wql);
+		selrecord(vfs_context_proc(ctx), &rpipe->pipe_sel, wql);
 		break;
         }
 	PIPE_UNLOCK(rpipe);
@@ -1387,14 +1505,14 @@ pipe_select(struct fileproc *fp, int which, void *wql, struct proc *p)
 
 /* ARGSUSED 1 */
 static int
-pipe_close(struct fileglob *fg, __unused struct proc *p)
+pipe_close(struct fileglob *fg, __unused vfs_context_t ctx)
 {
         struct pipe *cpipe;
 
-	proc_fdlock(p);
+	proc_fdlock_spin(vfs_context_proc(ctx));
 	cpipe = (struct pipe *)fg->fg_data;
 	fg->fg_data = NULL;
-	proc_fdunlock(p);
+	proc_fdunlock(vfs_context_proc(ctx));
 
 	if (cpipe)
 	        pipeclose(cpipe);
@@ -1446,23 +1564,27 @@ pipeclose(struct pipe *cpipe)
 	if (PIPE_MTX(cpipe) != NULL)
 		PIPE_LOCK(cpipe);
 		
-	pipeselwakeup(cpipe, cpipe);
 
 	/*
 	 * If the other side is blocked, wake it up saying that
 	 * we want to close it down.
 	 */
+	cpipe->pipe_state |= PIPE_EOF;
+	pipeselwakeup(cpipe, cpipe);
+	
 	while (cpipe->pipe_busy) {
-		cpipe->pipe_state |= PIPE_WANT | PIPE_EOF;
+		cpipe->pipe_state |= PIPE_WANT;
 
 		wakeup(cpipe);
-
  		msleep(cpipe, PIPE_MTX(cpipe), PRIBIO, "pipecl", 0);
 	}
 
-#ifdef MAC
+#if CONFIG_MACF
+	/*
+	 * Free the shared pipe label only after the two ends are disconnected.
+	 */
 	if (cpipe->pipe_label != NULL && cpipe->pipe_peer == NULL)
-		mac_destroy_pipe(cpipe);
+		mac_pipe_label_destroy(cpipe);
 #endif
 
 	/*
@@ -1507,20 +1629,31 @@ pipeclose(struct pipe *cpipe)
 	zfree(pipe_zone, cpipe);
 }
 
-
 /*ARGSUSED*/
 static int
-pipe_kqfilter(__unused struct fileproc *fp, struct knote *kn, __unused struct proc *p)
+pipe_kqfilter(__unused struct fileproc *fp, struct knote *kn, __unused vfs_context_t ctx)
 {
 	struct pipe *cpipe;
 
 	cpipe = (struct pipe *)kn->kn_fp->f_data;
 
 	PIPE_LOCK(cpipe);
+#if CONFIG_MACF
+	/*
+	 * XXX We should use a per thread credential here; minimally, the
+	 * XXX process credential should have a persistent reference on it
+	 * XXX before being passed in here.
+	 */
+	if (mac_pipe_check_kqfilter(vfs_context_ucred(ctx), kn, cpipe) != 0) {
+		PIPE_UNLOCK(cpipe);
+		return (1);
+	}
+#endif
 
 	switch (kn->kn_filter) {
 	case EVFILT_READ:
 		kn->kn_fop = &pipe_rfiltops;
+
 		break;
 	case EVFILT_WRITE:
 		kn->kn_fop = &pipe_wfiltops;
@@ -1532,6 +1665,7 @@ pipe_kqfilter(__unused struct fileproc *fp, struct knote *kn, __unused struct pr
 		        PIPE_UNLOCK(cpipe);
 			return (EPIPE);
 		}
+		if (cpipe->pipe_peer)
 		cpipe = cpipe->pipe_peer;
 		break;
 	default:
@@ -1595,9 +1729,10 @@ filt_piperead(struct knote *kn, long hint)
 	    (wpipe == NULL) || (wpipe->pipe_state & PIPE_EOF)) {
 		kn->kn_flags |= EV_EOF;
 		retval = 1;
-	} else
+	} else {
 		retval = (kn->kn_sfflags & NOTE_LOWAT) ?
 		         (kn->kn_data >= kn->kn_sdata) : (kn->kn_data > 0);
+	}
 
 	if (hint == 0)
 	        PIPE_UNLOCK(rpipe);
@@ -1632,6 +1767,8 @@ filt_pipewrite(struct knote *kn, long hint)
 		return (1);
 	}
 	kn->kn_data = wpipe->pipe_buffer.size - wpipe->pipe_buffer.cnt;
+	if (!kn->kn_data && wpipe->pipe_buffer.size == 0)
+		kn->kn_data = 1; /* unwritten pipe is ready for write */
 
 #ifndef PIPE_NODIRECT
 	if (wpipe->pipe_state & PIPE_DIRECTW)
@@ -1647,53 +1784,71 @@ filt_pipewrite(struct knote *kn, long hint)
 int
 fill_pipeinfo(struct pipe * cpipe, struct pipe_info * pinfo)
 {
-#ifdef MAC
+#if CONFIG_MACF
         int error;
 #endif
 	struct timeval now;
-	struct stat * ub;
+	struct vinfo_stat * ub;
+	int pipe_size = 0;
+	int pipe_count;
 
 	if (cpipe == NULL)
 	        return (EBADF);
-#ifdef MAC
 	PIPE_LOCK(cpipe);
-	error = mac_check_pipe_stat(active_cred, cpipe);
-	PIPE_UNLOCK(cpipe);
-	if (error)
+
+#if CONFIG_MACF
+	error = mac_pipe_check_stat(kauth_cred_get(), cpipe);
+	if (error) {
+		PIPE_UNLOCK(cpipe);
 	        return (error);
+	}
 #endif
 	if (cpipe->pipe_buffer.buffer == 0) {
 	        /*
 		 * must be stat'ing the write fd
 		 */
-	        cpipe = cpipe->pipe_peer;
-
-		if (cpipe == NULL)
-		        return (EBADF);
+	        if (cpipe->pipe_peer) {
+		        /*
+			 * the peer still exists, use it's info
+			 */
+		        pipe_size  = cpipe->pipe_peer->pipe_buffer.size;
+			pipe_count = cpipe->pipe_peer->pipe_buffer.cnt;
+		} else {
+			pipe_count = 0;
+		}
+	} else {
+	        pipe_size  = cpipe->pipe_buffer.size;
+		pipe_count = cpipe->pipe_buffer.cnt;
 	}
+	/*
+	 * since peer's buffer is setup ouside of lock
+	 * we might catch it in transient state
+	 */
+	if (pipe_size == 0)
+		pipe_size  = PIPE_SIZE;
 
 	ub = &pinfo->pipe_stat;
 
 	bzero(ub, sizeof(*ub));
-	ub->st_mode = S_IFIFO | S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP;
-	ub->st_blksize = cpipe->pipe_buffer.size;
-	ub->st_size = cpipe->pipe_buffer.cnt;
-	if (ub->st_blksize != 0);
-		ub->st_blocks = (ub->st_size + ub->st_blksize - 1) / ub->st_blksize;
-	ub->st_nlink = 1;
+	ub->vst_mode = S_IFIFO | S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP;
+	ub->vst_blksize = pipe_size;
+	ub->vst_size = pipe_count;
+	if (ub->vst_blksize != 0)
+		ub->vst_blocks = (ub->vst_size + ub->vst_blksize - 1) / ub->vst_blksize;
+	ub->vst_nlink = 1;
 
-	ub->st_uid = kauth_getuid();
-	ub->st_gid = kauth_getgid();
+	ub->vst_uid = kauth_getuid();
+	ub->vst_gid = kauth_getgid();
 
 	microtime(&now);
-	ub->st_atimespec.tv_sec  = now.tv_sec;
-	ub->st_atimespec.tv_nsec = now.tv_usec * 1000;
+	ub->vst_atime  = now.tv_sec;
+	ub->vst_atimensec = now.tv_usec * 1000;
 
-	ub->st_mtimespec.tv_sec  = now.tv_sec;
-	ub->st_mtimespec.tv_nsec = now.tv_usec * 1000;
+	ub->vst_mtime  = now.tv_sec;
+	ub->vst_mtimensec = now.tv_usec * 1000;
 
-	ub->st_ctimespec.tv_sec  = now.tv_sec;
-	ub->st_ctimespec.tv_nsec = now.tv_usec * 1000;
+	ub->vst_ctime  = now.tv_sec;
+	ub->vst_ctimensec = now.tv_usec * 1000;
 
 	/*
 	 * Left as 0: st_dev, st_ino, st_nlink, st_rdev, st_flags, st_gen, st_uid, st_gid.
@@ -1703,6 +1858,8 @@ fill_pipeinfo(struct pipe * cpipe, struct pipe_info * pinfo)
 	pinfo->pipe_handle = (uint64_t)((uintptr_t)cpipe);
 	pinfo->pipe_peerhandle = (uint64_t)((uintptr_t)(cpipe->pipe_peer));
 	pinfo->pipe_status = cpipe->pipe_state;
+
+	PIPE_UNLOCK(cpipe);
+
 	return (0);
 }
-

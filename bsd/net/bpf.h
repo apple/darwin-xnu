@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1990, 1991, 1993
@@ -61,6 +67,12 @@
  *
  * $FreeBSD: src/sys/net/bpf.h,v 1.21.2.3 2001/08/01 00:23:13 fenner Exp $
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2006 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 #ifndef _NET_BPF_H_
 #define _NET_BPF_H_
@@ -83,7 +95,7 @@ typedef	u_int32_t bpf_u_int32;
  * Alignment macros.  BPF_WORDALIGN rounds up to the next
  * even multiple of BPF_ALIGNMENT.
  */
-#define BPF_ALIGNMENT sizeof(long)
+#define BPF_ALIGNMENT sizeof(int32_t)
 #define BPF_WORDALIGN(x) (((x)+(BPF_ALIGNMENT-1))&~(BPF_ALIGNMENT-1))
 
 #define BPF_MAXINSNS 512
@@ -98,17 +110,17 @@ struct bpf_program {
 	struct bpf_insn *bf_insns;
 };
 
-#ifdef KERNEL
+#ifdef KERNEL_PRIVATE
 /* LP64 version of bpf_program.  all pointers 
  * grow when we're dealing with a 64-bit process.
  * WARNING - keep in sync with bpf_program
  */
-struct user_bpf_program {
+struct bpf_program64 {
 	u_int		bf_len;
 	user_addr_t	bf_insns __attribute__((aligned(8)));
 };
 
-#endif // KERNEL
+#endif // KERNEL_PRIVATE
 
 /*
  * Struct returned by BIOCGSTATS.
@@ -133,6 +145,13 @@ struct bpf_version {
 	u_short bv_major;
 	u_short bv_minor;
 };
+#if defined(__LP64__)
+#define __need_struct_timeval32
+#include <sys/_structs.h>
+#define BPF_TIMEVAL timeval32
+#else
+#define BPF_TIMEVAL timeval
+#endif
 /* Current version number of filter architecture. */
 #define BPF_MAJOR_VERSION 1
 #define BPF_MINOR_VERSION 1
@@ -140,13 +159,16 @@ struct bpf_version {
 #define	BIOCGBLEN	_IOR('B',102, u_int)
 #define	BIOCSBLEN	_IOWR('B',102, u_int)
 #define	BIOCSETF	_IOW('B',103, struct bpf_program)
+#ifdef KERNEL_PRIVATE
+#define	BIOCSETF64	_IOW('B',103, struct bpf_program64)
+#endif // KERNEL_PRIVATE
 #define	BIOCFLUSH	_IO('B',104)
 #define BIOCPROMISC	_IO('B',105)
 #define	BIOCGDLT	_IOR('B',106, u_int)
 #define BIOCGETIF	_IOR('B',107, struct ifreq)
 #define BIOCSETIF	_IOW('B',108, struct ifreq)
-#define BIOCSRTIMEOUT	_IOW('B',109, struct timeval)
-#define BIOCGRTIMEOUT	_IOR('B',110, struct timeval)
+#define BIOCSRTIMEOUT	_IOW('B',109, struct BPF_TIMEVAL)
+#define BIOCGRTIMEOUT	_IOR('B',110, struct BPF_TIMEVAL)
 #define BIOCGSTATS	_IOR('B',111, struct bpf_stat)
 #define BIOCIMMEDIATE	_IOW('B',112, u_int)
 #define BIOCVERSION	_IOR('B',113, struct bpf_version)
@@ -156,12 +178,14 @@ struct bpf_version {
 #define BIOCSHDRCMPLT	_IOW('B',117, u_int)
 #define BIOCGSEESENT	_IOR('B',118, u_int)
 #define BIOCSSEESENT	_IOW('B',119, u_int)
+#define BIOCSDLT        _IOW('B',120, u_int)
+#define BIOCGDLTLIST    _IOWR('B',121, struct bpf_dltlist)
 
 /*
  * Structure prepended to each packet.
  */
 struct bpf_hdr {
-	struct timeval	bh_tstamp;	/* time stamp */
+	struct BPF_TIMEVAL bh_tstamp;	/* time stamp */
 	bpf_u_int32	bh_caplen;	/* length of captured portion */
 	bpf_u_int32	bh_datalen;	/* original length of packet */
 	u_short		bh_hdrlen;	/* length of bpf header (this struct
@@ -349,28 +373,90 @@ struct bpf_insn {
 #define BPF_STMT(code, k) { (u_short)(code), 0, 0, k }
 #define BPF_JUMP(code, k, jt, jf) { (u_short)(code), jt, jf, k }
 
+#pragma pack(4)
+
+/*
+ * Structure to retrieve available DLTs for the interface.
+ */
+struct bpf_dltlist {
+	u_int32_t	bfl_len;        /* number of bfd_list array */
+	union {
+		u_int32_t   *bflu_list;      /* array of DLTs */
+		u_int64_t	bflu_pad;
+	} bfl_u;
+};
+#define bfl_list bfl_u.bflu_list
+
+#pragma pack()
+
 #ifdef KERNEL_PRIVATE
 /* Forward declerations */
 struct ifnet;
 struct mbuf;
 
-int	 bpf_validate(const struct bpf_insn *, int);
-void	 bpf_tap(struct ifnet *, u_char *, u_int);
-void	 bpf_mtap(struct ifnet *, struct mbuf *);
-
-void	 bpfdetach(struct ifnet *);
-
-void	 bpfilterattach(int);
-u_int	 bpf_filter(const struct bpf_insn *, u_char *, u_int, u_int);
-
-#ifdef __APPLE__
-#define BPF_TAP(x, y, z) bpf_tap(x,y,z) 
-#define BPF_MTAP(x, y) bpf_mtap(x, y)
-#endif /* __APPLE__ */
+int		bpf_validate(const struct bpf_insn *, int);
+void	bpfdetach(struct ifnet *);
+void	bpfilterattach(int);
+u_int	bpf_filter(const struct bpf_insn *, u_char *, u_int, u_int);
 
 #endif /* KERNEL_PRIVATE */
 
 #ifdef KERNEL
+#ifndef BPF_TAP_MODE_T
+#define BPF_TAP_MODE_T
+/*!
+	@enum BPF tap mode
+	@abstract Constants defining interface families.
+	@constant BPF_MODE_DISABLED Disable bpf.
+	@constant BPF_MODE_INPUT Enable input only.
+	@constant BPF_MODE_OUTPUT Enable output only.
+	@constant BPF_MODE_INPUT_OUTPUT Enable input and output.
+*/
+
+enum {
+		BPF_MODE_DISABLED		= 0,
+		BPF_MODE_INPUT			= 1,
+		BPF_MODE_OUTPUT			= 2,
+		BPF_MODE_INPUT_OUTPUT	= 3
+};
+/*!
+	@typedef bpf_tap_mode
+	@abstract Mode for tapping. BPF_MODE_DISABLED/BPF_MODE_INPUT_OUTPUT etc.
+*/
+typedef u_int32_t bpf_tap_mode;
+#endif /* !BPF_TAP_MODE_T */
+
+/*!
+	@typedef bpf_send_func
+	@discussion bpf_send_func is called when a bpf file descriptor is
+		used to send a raw packet on the interface. The mbuf and data
+		link type are specified. The callback is responsible for
+		releasing the mbuf whether or not it returns an error.
+	@param interface The interface the packet is being sent on.
+	@param dlt The data link type the bpf device is attached to.
+	@param packet The packet to be sent.
+ */
+typedef errno_t (*bpf_send_func)(ifnet_t interface, u_int32_t data_link_type,
+								 mbuf_t packet);
+
+/*!
+	@typedef bpf_tap_func
+	@discussion bpf_tap_func is called when the tap state of the
+		interface changes. This happens when a bpf device attaches to an
+		interface or detaches from an interface. The tap mode will join
+		together (bit or) the modes of all bpf devices using that
+		interface for that dlt. If you return an error from this
+		function, the bpf device attach attempt that triggered the tap
+		will fail. If this function was called bacuse the tap state was
+		decreasing (tap in or out is stopping), the error will be
+		ignored.
+	@param interface The interface being tapped.
+	@param dlt The data link type being tapped.
+	@param direction The direction of the tap.
+ */
+typedef errno_t (*bpf_tap_func)(ifnet_t interface, u_int32_t data_link_type,
+								bpf_tap_mode direction);
+
 /*!
 	@function bpfattach
 	@discussion Registers an interface with BPF. This allows bpf devices
@@ -383,6 +469,55 @@ u_int	 bpf_filter(const struct bpf_insn *, u_char *, u_int, u_int);
 	@param header_length The length, in bytes, of the data link header.
  */
 void	 bpfattach(ifnet_t interface, u_int data_link_type, u_int header_length);
+
+/*!
+	@function bpf_attach
+	@discussion Registers an interface with BPF. This allows bpf devices
+		to attach to your interface to capture and transmit packets.
+		Your interface will be unregistered automatically when your
+		interface is detached. You may register multiple times with
+		different data link types. An 802.11 interface would use this to
+		allow clients to pick whether they want just an ethernet style
+		frame or the 802.11 wireless headers as well. The first dlt you
+		register will be considered the default. Any bpf device attaches
+		that do not specify a data link type will use the default.
+	@param interface The interface to register with BPF.
+	@param data_link_type The data link type of the interface. See the
+		DLT_* defines in bpf.h.
+	@param header_length The length, in bytes, of the data link header.
+ */
+errno_t	 bpf_attach(ifnet_t interface, u_int32_t data_link_type,
+					u_int32_t header_length, bpf_send_func send,
+					bpf_tap_func tap);
+
+/*!
+	@function bpf_tap_in
+	@discussion Call this function when your interface receives a
+		packet. This function will check if any bpf devices need a
+		a copy of the packet.
+	@param interface The interface the packet was received on.
+	@param dlt The data link type of the packet.
+	@param packet The packet received.
+	@param header An optional pointer to a header that will be prepended.
+	@param headerlen If the header was specified, the length of the header.
+ */
+void	bpf_tap_in(ifnet_t interface, u_int32_t dlt, mbuf_t packet,
+				   void* header, size_t header_len);
+
+/*!
+	@function bpf_tap_out
+	@discussion Call this function when your interface trasmits a
+		packet. This function will check if any bpf devices need a
+		a copy of the packet.
+	@param interface The interface the packet was or will be transmitted on.
+	@param dlt The data link type of the packet.
+	@param packet The packet received.
+	@param header An optional pointer to a header that will be prepended.
+	@param headerlen If the header was specified, the length of the header.
+ */
+void	bpf_tap_out(ifnet_t interface, u_int32_t dlt, mbuf_t packet,
+					void* header, size_t header_len);
+
 #endif /* KERNEL */
 
 /*

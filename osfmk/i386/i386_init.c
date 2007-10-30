@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2003-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -86,6 +92,7 @@
 #include <i386/pmCPU.h>
 #include <i386/tsc.h>
 #include <i386/hpet.h>
+#include <i386/locks.h> /* LcksOpts */
 #if	MACH_KDB
 #include <ddb/db_aout.h>
 #endif /* MACH_KDB */
@@ -93,15 +100,14 @@
 
 static boot_args *kernelBootArgs;
 
+int debug_task;
+
 extern int disableConsoleOutput;
 extern const char version[];
 extern const char version_variant[];
 extern int nx_enabled;
 
 extern int noVMX;	/* if set, rosetta should not emulate altivec */
-
-void cpu_stack_set(void);
-
 
 /*
  *	Cpu initialization.  Running virtual, but without MACH VM
@@ -137,9 +143,6 @@ i386_init(vm_offset_t boot_args_start)
 	cpu_init();
 	postcode(CPU_INIT_D);
 
-	/* init processor performance control */
-	pmsInit();
-	
 	PE_init_platform(FALSE, kernelBootArgs);
 	postcode(PE_INIT_PLATFORM_D);
 
@@ -167,11 +170,7 @@ i386_init(vm_offset_t boot_args_start)
 
 	kprintf("version_variant = %s\n", version_variant);
 	kprintf("version         = %s\n", version);
-
-	/*   
-	 * VM initialization, after this we're using page tables...
-	 * The maximum number of cpus must be set beforehand.
-	 */
+	
 	if (!PE_parse_boot_arg("maxmem", &maxmem))
 		maxmemtouse=0;
 	else
@@ -188,6 +187,9 @@ i386_init(vm_offset_t boot_args_start)
 	if (!PE_parse_boot_arg("himemory_mode", &vm_himemory_mode))
 	        vm_himemory_mode = 0;
 
+	if (!PE_parse_boot_arg("immediate_NMI", &force_immediate_debugger_NMI))
+		force_immediate_debugger_NMI = FALSE;
+
 	/*
 	 * At this point we check whether we are a 64-bit processor
 	 * and that we're not restricted to legacy mode, 32-bit operation.
@@ -196,15 +198,24 @@ i386_init(vm_offset_t boot_args_start)
 	if (cpuid_extfeatures() & CPUID_EXTFEATURE_EM64T) {
 		kprintf("EM64T supported");
 		if (PE_parse_boot_arg("-legacy", &legacy_mode)) {
-		 	kprintf(" but legacy mode forced\n");
+			kprintf(" but legacy mode forced\n");
 		} else {
 			IA32e = TRUE;
 			kprintf(" and will be enabled\n");
 		}
 	}
+
 	if (!(cpuid_extfeatures() & CPUID_EXTFEATURE_XD))
 		nx_enabled = 0;
 
+	/* Obtain "lcks" options:this currently controls lock statistics */
+	if (!PE_parse_boot_arg("lcks", &LcksOpts))
+		LcksOpts = 0;
+
+	/*   
+	 * VM initialization, after this we're using page tables...
+	 * The maximum number of cpus must be set beforehand.
+	 */
 	i386_vm_init(maxmemtouse, IA32e, kernelBootArgs);
 
 	if ( ! PE_parse_boot_arg("novmx", &noVMX))
@@ -223,5 +234,4 @@ i386_init(vm_offset_t boot_args_start)
 	thread_bootstrap();
 
 	machine_startup();
-
 }

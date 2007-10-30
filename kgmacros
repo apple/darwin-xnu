@@ -1,4 +1,3 @@
-#
 # Kernel gdb macros
 #
 #  These gdb macros should be useful during kernel development in
@@ -20,8 +19,8 @@ document kgm
 | These are the kernel gdb macros.  These gdb macros are intended to be
 | used when debugging a remote kernel via the kdp protocol.  Typically, you
 | would connect to your remote target like so:
-|     (gdb) target remote-kdp
-|     (gdb) attach <name-of-remote-host>
+| 		 (gdb) target remote-kdp
+| 		 (gdb) attach <name-of-remote-host>
 |
 | The following macros are available in this package:
 |     showversion    Displays a string describing the remote kernel version
@@ -63,6 +62,14 @@ document kgm
 |
 |     showpid        Display info about the process identified by pid
 |     showproc       Display info about the process identified by proc struct
+|     showprocinfo   Display detailed info about the process identified by proc struct
+|     showprocfiles  Given a proc_t pointer, display the list of open file descriptors
+|     showproclocks  Given a proc_t pointer, display the list of advisory file locks
+|     zombproc       Print out all procs in the zombie list
+|     allproc        Print out all process in the system not in the zombie list
+|     zombstacks     Print out all stacks of tasks that are exiting
+|
+|     showinitchild  Print out all processes in the system which are children of init process
 |
 |     showkmod	     Display info about a kernel module
 |     showkmodaddr   Given an address, display the kernel module and offset
@@ -96,8 +103,62 @@ document kgm
 |     readphys       Reads the specified untranslated address
 |     readphys64     Reads the specified untranslated 64-bit address
 |
-|     kdp-reboot     Restart remote target
-|	
+|     rtentry_showdbg Print the debug information of a route entry
+|     rtentry_trash  Walk the list of trash route entries
+|
+|     mbuf_walkpkt   Walk the mbuf packet chain (m_nextpkt)
+|     mbuf_walk      Walk the mbuf chain (m_next)
+|     mbuf_buf2slab  Find the slab structure of the corresponding buffer
+|     mbuf_buf2mca   Find the mcache audit structure of the corresponding mbuf
+|     mbuf_showmca   Print the contents of an mbuf mcache audit structure
+|     mbuf_showactive   Print all active/in-use mbuf objects
+|     mbuf_showinactive Print all freed/in-cache mbuf objects 
+|     mbuf_showall   Print all mbuf objects
+|     mbuf_slabs     Print all slabs in the group
+|     mbuf_slabstbl  Print slabs table
+|     mbuf_stat      Print extended mbuf allocator statistics
+|
+|     mcache_walkobj     Walk the mcache object chain (obj_next)
+|     mcache_stat        Print all mcaches in the system
+|     mcache_showcache   Display the number of objects in the cache
+|
+|     showbootermemorymap Dump phys memory map from EFI
+|
+|     systemlog      Display the kernel's printf ring buffer
+|
+|     showvnodepath      Print the path for a vnode
+|     showvnodelocks     Display list of advisory locks held/blocked on a vnode
+|     showallvols        Display a summary of mounted volumes
+|     showvnode          Display info about one vnode
+|     showvolvnodes      Display info about all vnodes of a given volume
+|     showvolbusyvnodes  Display info about busy (iocount!=0) vnodes of a given volume
+|     showallbusyvnodes  Display info about all busy (iocount!=0) vnodes
+|     showallvnodes      Display info about all vnodes
+|     print_vnode        Print out the fields of a vnode struct
+|     showprocvnodes     Print out all the open fds which are vnodes in a process
+|     showallprocvnodes  Print out all the open fds which are vnodes in any process
+|     showmountvnodes    Print the vnode list
+|     showmountallvnodes Print the vnode inactive list
+|     showworkqvnodes    Print the vnode worker list
+|     shownewvnodes      Print the new vnode list
+|
+|     ifconfig       display ifconfig-like output
+|     showifaddrs    show the list of addresses for the given ifp
+|     showifmultiaddrs show the list of multicast addresses for the given ifp
+|
+|     showallpmworkqueues   Display info about all IOPMWorkQueue objects
+|     showregistrypmstate   Display power management state for all IOPower registry entries
+|     showioservicepm       Display the IOServicePM object
+|     showstacksaftertask   showallstacks starting after a given task
+|     showstacksafterthread showallstacks starting after a given thread
+|
+|     showMCAstate	Print machine-check register state after MC exception.
+|
+|     showallgdbstacks	Cause GDB to trace all thread stacks
+|     showallgdbcorestacks Corefile equivalent of "showallgdbstacks"
+|     kdp-reenter	Schedule reentry into the debugger and continue.
+|     kdp-reboot	Restart remote target
+|
 | Type "help <macro>" for more specific help on a particular macro.
 | Type "show user <macro>" to see what the macro is really doing.
 end
@@ -119,9 +180,18 @@ Syntax: showversion
 | correctly.
 end
 
+set $kgm_mtype = ((struct mach_header)_mh_execute_header).cputype
+
+# This option tells gdb to relax its stack tracing heuristics
+# Useful for debugging across stack switches
+# (to the interrupt stack, for instance). Requires gdb-675 or greater.
+# Don't do this for arm as a workaround to 5486905
+if ($kgm_mtype != 12)
+	set backtrace sanity-checks off
+end
+
 set $kgm_dummy = &proc0
 set $kgm_dummy = &kmod
-set $kgm_mtype = ((struct mach_header)_mh_execute_header).cputype
 
 set $kgm_reg_depth = 0
 set $kgm_reg_plane = (void **) gIOServicePlane
@@ -131,6 +201,8 @@ set $kgm_childkey = (OSSymbol *) 0
 set $kgm_show_object_addrs = 0
 set $kgm_show_object_retain = 0
 set $kgm_show_props = 0
+
+set $kgm_show_kmod_syms = 0
 
 define showkmodheader
     printf "kmod        address     size        "
@@ -192,13 +264,11 @@ end
 
 define showkmodaddr
     showkmodaddrint $arg0
-    printf "\n"
 end
 
 document showkmodaddr
+Syntax: (gdb) showkmodaddr <addr>
 | Given an address, print the offset and name for the kmod containing it
-| The following is the syntax:
-|     (gdb) showkmodaddr <addr>
 end
 
 define showkmod
@@ -206,9 +276,8 @@ define showkmod
     showkmodint $arg0
 end
 document showkmod
+Syntax: (gdb) showkmod <kmod>
 | Routine to print info about a kernel module
-| The following is the syntax:
-|     (gdb) showkmod <kmod>
 end
 
 define showallkmods
@@ -220,21 +289,20 @@ define showallkmods
     end
 end
 document showallkmods
+Syntax: (gdb) showallkmods
 | Routine to print a summary listing of all the kernel modules
-| The following is the syntax:
-|     (gdb) showallkmods
 end
 
 define showactheader
-    printf "            activation  "
-    printf "thread      pri  state  wait_queue  wait_event\n"
+    printf "            thread      "
+    printf "processor   pri  state  wait_queue  wait_event\n"
 end
 
 
 define showactint
 	printf "            0x%08x  ", $arg0
 	set $kgm_thread = *(struct thread *)$arg0
-	printf "0x%08x  ", $arg0
+	printf "0x%08x  ", $kgm_thread.last_processor
 	printf "%3d  ", $kgm_thread.sched_pri
 	set $kgm_state = $kgm_thread.state
 	if $kgm_state & 0x80
@@ -262,10 +330,16 @@ define showactint
 	    printf "W\t" 
 	    printf "0x%08x  ", $kgm_thread.wait_queue
 	    	if (((unsigned)$kgm_thread.wait_event > (unsigned)sectPRELINKB) \
-		    && ($arg1 != 2))
+		    && ($arg1 != 2) && ($kgm_show_kmod_syms == 0))
 			showkmodaddr $kgm_thread.wait_event
 	        else
 			output /a (unsigned) $kgm_thread.wait_event
+		end
+		if ($kgm_thread.uthread != 0)
+		    set $kgm_uthread = (struct uthread *)$kgm_thread.uthread
+		    if ($kgm_uthread->uu_wmesg != 0)
+			printf " \"%s\"", $kgm_uthread->uu_wmesg
+		    end
 		end
 	end
 	if $arg1 != 0
@@ -276,11 +350,20 @@ define showactint
 		printf "\n\t\tkernel_stack=0x%08x", $kgm_thread.kernel_stack
 		if ($kgm_mtype == 18)
 			set $mysp = $kgm_thread.machine.pcb->save_r1
-		else
+		end
+		if ($kgm_mtype == 7)
 			set $kgm_statep = (struct x86_kernel_state32 *) \
 				($kgm_thread->kernel_stack + 0x4000 \
 				 - sizeof(struct x86_kernel_state32))
 			set $mysp = $kgm_statep->k_ebp
+		end
+		if ($kgm_mtype == 12)
+			if ($arg0 == $r9)
+				set $mysp = $r7
+			else
+				set $kgm_statep = (struct arm_saved_state *)$kgm_thread.machine.kstackptr
+				set $mysp = $kgm_statep->r[7]
+			end
 		end
 		set $prevsp = $mysp - 16
 		printf "\n\t\tstacktop=0x%08x", $mysp
@@ -295,25 +378,24 @@ define showactint
 		      && ((((unsigned) $mysp ^ (unsigned) $prevsp) < 0x2000) \
 		      || (((unsigned)$mysp < ((unsigned) ($kgm_thread->kernel_stack+0x4000))) \
 		      && ((unsigned)$mysp > (unsigned) ($kgm_thread->kernel_stack))))
-
-			if ((unsigned) $kgm_return > (unsigned) sectPRELINKB)
-			    showkmodaddr $kgm_return
-			else
-				if ((unsigned) $kgm_return > 0)
-				    output /a (unsigned) $kgm_return
-				end
-			end
 			printf "\n\t\t0x%08x  ", $mysp
 			if ($kgm_mtype == 18)
 				set $kgm_return = *($mysp + 8)
-			else
+			end
+			if ($kgm_mtype == 7)
 				set $kgm_return = *($mysp + 4)
+			end
+			if ($kgm_mtype == 12)
+				set $kgm_return = *($mysp + 4)
+			end
+			if (((unsigned) $kgm_return > (unsigned) sectPRELINKB) \
+			    && ($kgm_show_kmod_syms == 0))
+				showkmodaddr $kgm_return
+			else
+				output /a (unsigned) $kgm_return
 			end
 			set $prevsp = $mysp
 			set $mysp = * $mysp
-		end
-		if ((unsigned) $kgm_return > 0)
-		   output/a $kgm_return
 		end
 		set $kgm_return = 0
 		printf "\n\t\tstackbottom=0x%08x", $prevsp
@@ -332,9 +414,8 @@ define showact
     showactint $arg0 0
 end
 document showact
+Syntax: (gdb) showact <activation> 
 | Routine to print out the state of a specific thread.
-| The following is the syntax:
-|     (gdb) showact <activation> 
 end
 
 
@@ -343,14 +424,13 @@ define showactstack
     showactint $arg0 1
 end
 document showactstack
+Syntax: (gdb) showactstack <activation> 
 | Routine to print out the stack of a specific thread.
-| The following is the syntax:
-|     (gdb) showactstack <activation> 
 end
 
 
 define showallthreads
-    set $kgm_head_taskp = &default_pset.tasks
+    set $kgm_head_taskp = &tasks
     set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
     while $kgm_taskp != $kgm_head_taskp
         showtaskheader
@@ -363,17 +443,16 @@ define showallthreads
   	    set $kgm_actp = (struct thread *)($kgm_actp->task_threads.next)
         end
 	printf "\n"
-    	set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
+    	set $kgm_taskp = (struct task *)($kgm_taskp->tasks.next)
     end
 end
 document showallthreads
+Syntax: (gdb) showallthreads
 | Routine to print out info about all threads in the system.
-| The following is the syntax:
-|     (gdb) showallthreads
 end
 
 define showcurrentthreads
-set $kgm_prp = processor_list
+set $kgm_prp = (struct processor *)processor_list
     while $kgm_prp != 0
 	if ($kgm_prp)->active_thread != 0
 	    set $kgm_actp = ($kgm_prp)->active_thread
@@ -387,14 +466,13 @@ set $kgm_prp = processor_list
     end
 end
 document showcurrentthreads
+Syntax: (gdb) showcurrentthreads
 | Routine to print out info about the thread running on each cpu.
-| The following is the syntax:
-|     (gdb) showcurrentthreads
 end
 
 set $decode_wait_events = 0
 define showallstacks
-    set $kgm_head_taskp = &default_pset.tasks
+    set $kgm_head_taskp = &tasks
     set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
     while $kgm_taskp != $kgm_head_taskp
         showtaskheader
@@ -411,14 +489,13 @@ define showallstacks
   	    set $kgm_actp = (struct thread *)($kgm_actp->task_threads.next)
         end
 	printf "\n"
-    	set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
+    	set $kgm_taskp = (struct task *)($kgm_taskp->tasks.next)
     end
 end
 
 document showallstacks
+Syntax: (gdb) showallstacks
 | Routine to print out the stack for each thread in the system.
-| The following is the syntax:
-|     (gdb) showallstacks
 | If the variable $decode_wait_events is non-zero, the routine attempts to
 | interpret thread wait_events as kernel module offsets, which can add to
 | processing time.
@@ -440,9 +517,8 @@ set $kgm_prp = processor_list
 end
 
 document showcurrentstacks
+Syntax: (gdb) showcurrentstacks
 | Routine to print out the thread running on each cpu (incl. its stack)
-| The following is the syntax:
-|     (gdb) showcurrentstacks
 end
 
 define showwaiterheader
@@ -671,9 +747,8 @@ define showmapvme
 	showvmint $arg0 1
 end
 document showmapvme
+Syntax: (gdb) showmapvme <vm_map>
 | Routine to print out a summary listing of all the entries in a vm_map
-| The following is the syntax:
-|     (gdb) showmapvme <vm_map>
 end
 
 
@@ -682,44 +757,41 @@ define showmap
 	showvmint $arg0 0
 end
 document showmap
+Syntax: (gdb) showmap <vm_map>
 | Routine to print out info about the specified vm_map
-| The following is the syntax:
-|     (gdb) showmap <vm_map>
 end
 
 define showallvm
-    set $kgm_head_taskp = &default_pset.tasks
+    set $kgm_head_taskp = &tasks
     set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
     while $kgm_taskp != $kgm_head_taskp
         showtaskheader
 	showmapheader
 	showtaskint $kgm_taskp
 	showvmint $kgm_taskp->map 0
-    	set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
+    	set $kgm_taskp = (struct task *)($kgm_taskp->tasks.next)
     end
 end
 document showallvm
+Syntax: (gdb) showallvm
 | Routine to print a summary listing of all the vm maps
-| The following is the syntax:
-|     (gdb) showallvm
 end
 
 
 define showallvme
-    set $kgm_head_taskp = &default_pset.tasks
+    set $kgm_head_taskp = &tasks
     set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
     while $kgm_taskp != $kgm_head_taskp
         showtaskheader
 	showmapheader
 	showtaskint $kgm_taskp
 	showvmint $kgm_taskp->map 1
-    	set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
+    	set $kgm_taskp = (struct task *)($kgm_taskp->tasks.next)
     end
 end
 document showallvme
+Syntax: (gdb) showallvme
 | Routine to print a summary listing of all the vm map entries
-| The following is the syntax:
-|     (gdb) showallvme
 end
 
 
@@ -827,9 +899,8 @@ define showipc
 	showipcint $kgm_isp 0
 end
 document showipc
+Syntax: (gdb) showipc <ipc_space>
 | Routine to print the status of the specified ipc space
-| The following is the syntax:
-|     (gdb) showipc <ipc_space>
 end
 
 define showrights
@@ -838,9 +909,8 @@ define showrights
 	showipcint $kgm_isp 1
 end
 document showrights
+Syntax: (gdb) showrights <ipc_space>
 | Routine to print a summary list of all the rights in a specified ipc space
-| The following is the syntax:
-|     (gdb) showrights <ipc_space>
 end
 
 
@@ -852,9 +922,8 @@ define showtaskipc
 	showipcint $kgm_taskp->itk_space 0
 end
 document showtaskipc
+Syntax: (gdb) showtaskipc <task>
 | Routine to print info about the ipc space for a task
-| The following is the syntax:
-|     (gdb) showtaskipc <task>
 end
 
 
@@ -866,44 +935,41 @@ define showtaskrights
 	showipcint $kgm_taskp->itk_space 1
 end
 document showtaskrights
+Syntax: (gdb) showtaskrights <task>
 | Routine to print info about the ipc rights for a task
-| The following is the syntax:
-|     (gdb) showtaskrights <task>
 end
 
 define showallipc
-    set $kgm_head_taskp = &default_pset.tasks
+    set $kgm_head_taskp = &tasks
     set $kgm_cur_taskp = (struct task *)($kgm_head_taskp->next)
     while $kgm_cur_taskp != $kgm_head_taskp
         showtaskheader
         showipcheader
 	showtaskint $kgm_cur_taskp
 	showipcint $kgm_cur_taskp->itk_space 0
-    	set $kgm_cur_taskp = (struct task *)($kgm_cur_taskp->pset_tasks.next)
+    	set $kgm_cur_taskp = (struct task *)($kgm_cur_taskp->tasks.next)
     end
 end
 document showallipc
+Syntax: (gdb) showallipc
 | Routine to print a summary listing of all the ipc spaces
-| The following is the syntax:
-|     (gdb) showallipc
 end
 
 
 define showallrights
-    set $kgm_head_taskp = &default_pset.tasks
+    set $kgm_head_taskp = &tasks
     set $kgm_cur_taskp = (struct task *)($kgm_head_taskp->next)
     while $kgm_cur_taskp != $kgm_head_taskp
         showtaskheader
         showipcheader
 	showtaskint $kgm_cur_taskp
 	showipcint $kgm_cur_taskp->itk_space 1
-    	set $kgm_cur_taskp = (struct task *)($kgm_cur_taskp->pset_tasks.next)
+    	set $kgm_cur_taskp = (struct task *)($kgm_cur_taskp->tasks.next)
     end
 end
 document showallrights
+Syntax: (gdb) showallrights
 | Routine to print a summary listing of all the ipc rights
-| The following is the syntax:
-|     (gdb) showallrights
 end
 
 
@@ -915,9 +981,8 @@ define showtaskvm
 	showvmint $kgm_taskp->map 0
 end
 document showtaskvm
+Syntax: (gdb) showtaskvm <task>
 | Routine to print out info about a task's vm_map
-| The following is the syntax:
-|     (gdb) showtaskvm <task>
 end
 
 define showtaskvme
@@ -928,9 +993,8 @@ define showtaskvme
 	showvmint $kgm_taskp->map 1
 end
 document showtaskvme
+Syntax: (gdb) showtaskvme <task>
 | Routine to print out info about a task's vm_map_entries
-| The following is the syntax:
-|     (gdb) showtaskvme <task>
 end
 
 
@@ -954,9 +1018,8 @@ define showtask
     showtaskint $arg0
 end
 document showtask
+Syntax (gdb) showtask <task>
 | Routine to print out info about a task.
-| The following is the syntax:
-|     (gdb) showtask <task>
 end
 
 
@@ -973,9 +1036,8 @@ define showtaskthreads
     end
 end
 document showtaskthreads
+Syntax: (gdb) showtaskthreads <task>
 | Routine to print info about the threads in a task.
-| The following is the syntax:
-|     (gdb) showtaskthreads <task>
 end
 
 
@@ -992,25 +1054,23 @@ define showtaskstacks
     end
 end
 document showtaskstacks
+Syntax: (gdb) showtaskstacks <task>
 | Routine to print out the stack for each thread in a task.
-| The following is the syntax:
-|     (gdb) showtaskstacks <task>
 end
 
 
 define showalltasks
     showtaskheader
-    set $kgm_head_taskp = &default_pset.tasks
+    set $kgm_head_taskp = &tasks
     set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
     while $kgm_taskp != $kgm_head_taskp
 	showtaskint $kgm_taskp
-    	set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
+    	set $kgm_taskp = (struct task *)($kgm_taskp->tasks.next)
     end
 end
 document showalltasks
+Syntax: (gdb) showalltasks
 | Routine to print a summary listing of all the tasks
-| The following is the syntax:
-|     (gdb) showalltasks
 end
 
 
@@ -1031,7 +1091,7 @@ end
 
 define showpid
     showtaskheader
-    set $kgm_head_taskp = &default_pset.tasks
+    set $kgm_head_taskp = &tasks
     set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
     while $kgm_taskp != $kgm_head_taskp
 	set $kgm_procp = (struct proc *)$kgm_taskp->bsd_info
@@ -1039,14 +1099,13 @@ define showpid
 	    showtaskint $kgm_taskp
 	    set $kgm_taskp = $kgm_head_taskp
 	else
-    	    set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
+    	    set $kgm_taskp = (struct task *)($kgm_taskp->tasks.next)
 	end
     end
 end
 document showpid
+Syntax: (gdb) showpid <pid>
 | Routine to print a single process by pid
-| The following is the syntax:
-|     (gdb) showpid <pid>
 end
 
 define showproc
@@ -1220,14 +1279,14 @@ define showportdestproc
 #   check against the previous cached value - this is slow
     if ($kgm_spacep != $kgm_destspacep)
 	set $kgm_destprocp = (struct proc *)0
-        set $kgm_head_taskp = &default_pset.tasks
+        set $kgm_head_taskp = &tasks
         set $kgm_desttaskp = (struct task *)($kgm_head_taskp->next)
         while (($kgm_destprocp == 0) && ($kgm_desttaskp != $kgm_head_taskp))
 	    set $kgm_destspacep = $kgm_desttaskp->itk_space
 	    if ($kgm_destspacep == $kgm_spacep)
 	       set $kgm_destprocp = (struct proc *)$kgm_desttaskp->bsd_info
 	    else
-    	       set $kgm_desttaskp = (struct task *)($kgm_desttaskp->pset_tasks.next)
+    	       set $kgm_desttaskp = (struct task *)($kgm_desttaskp->tasks.next)
             end
         end
     end
@@ -1400,13 +1459,12 @@ end
 printf "\n"
 end
 document zprint
+Syntax: (gdb) zprint
 | Routine to print a summary listing of all the kernel zones
-| The following is the syntax:
-|     (gdb) zprint
 end
 
 define showmtxgrp
-set $kgm_mtxgrp = (lck_grp_t *)$arg0
+set $kgm_mtxgrp = (struct _lck_grp_ *)$arg0
 
 if ($kgm_mtxgrp->lck_grp_mtxcnt)
 printf "0x%08x ", $kgm_mtxgrp
@@ -1422,22 +1480,21 @@ end
 
 define showallmtx
 printf "LCK GROUP       CNT         UTIL     MISS     WAIT NAME\n"
-set $kgm_mtxgrp_ptr = (lck_grp_t *)&lck_grp_queue
-set $kgm_mtxgrp_ptr = (lck_grp_t *)$kgm_mtxgrp_ptr->lck_grp_link.next
-while ($kgm_mtxgrp_ptr != (lck_grp_t *)&lck_grp_queue)
+set $kgm_mtxgrp_ptr = (struct _lck_grp_ *)&lck_grp_queue
+set $kgm_mtxgrp_ptr = (struct _lck_grp_ *)$kgm_mtxgrp_ptr->lck_grp_link.next
+while ($kgm_mtxgrp_ptr != (struct _lck_grp_ *)&lck_grp_queue)
 	showmtxgrp $kgm_mtxgrp_ptr
-	set $kgm_mtxgrp_ptr = (lck_grp_t *)$kgm_mtxgrp_ptr->lck_grp_link.next
+	set $kgm_mtxgrp_ptr = (struct _lck_grp_ *)$kgm_mtxgrp_ptr->lck_grp_link.next
 end
 printf "\n"
 end
 document showallmtx
+Syntax: (gdb) showallmtx
 | Routine to print a summary listing of all mutexes
-| The following is the syntax:
-|     (gdb) showallmtx
 end
 
 define showrwlckgrp
-set $kgm_rwlckgrp = (lck_grp_t *)$arg0
+set $kgm_rwlckgrp = (struct _lck_grp_ *)$arg0
 
 if ($kgm_rwlckgrp->lck_grp_rwcnt)
 printf "0x%08x ", $kgm_rwlckgrp
@@ -1453,24 +1510,47 @@ end
 
 define showallrwlck
 printf "LCK GROUP       CNT         UTIL     MISS     WAIT NAME\n"
-set $kgm_rwlckgrp_ptr = (lck_grp_t *)&lck_grp_queue
-set $kgm_rwlckgrp_ptr = (lck_grp_t *)$kgm_rwlckgrp_ptr->lck_grp_link.next
-while ($kgm_rwlckgrp_ptr != (lck_grp_t *)&lck_grp_queue)
+set $kgm_rwlckgrp_ptr = (struct _lck_grp_ *)&lck_grp_queue
+set $kgm_rwlckgrp_ptr = (struct _lck_grp_ *)$kgm_rwlckgrp_ptr->lck_grp_link.next
+while ($kgm_rwlckgrp_ptr != (struct _lck_grp_ *)&lck_grp_queue)
 	showrwlckgrp $kgm_rwlckgrp_ptr
-	set $kgm_rwlckgrp_ptr = (lck_grp_t *)$kgm_rwlckgrp_ptr->lck_grp_link.next
+	set $kgm_rwlckgrp_ptr = (struct _lck_grp_ *)$kgm_rwlckgrp_ptr->lck_grp_link.next
 end
 printf "\n"
 end
 document showallrwlck
+Syntax: (gdb) showallrwlck
 | Routine to print a summary listing of all read/writer locks
-| The following is the syntax:
-|     (gdb) showallrwlck
 end
 
 set $kdp_act_counter = 0
 
+set $r0_save	= 0
+set $r1_save	= 0
+set $r2_save	= 0
+set $r3_save	= 0
+set $r4_save	= 0
+set $r5_save	= 0
+set $r6_save	= 0
+set $r7_save	= 0
+set $r8_save	= 0
+set $r9_save	= 0
+set $r10_save	= 0
+set $r11_save	= 0
+set $r12_save	= 0
+set $sp_save	= 0
+set $lr_save	= 0
+set $pc_save	= 0
+
+define showcontext_int
+	echo Context switched, current instruction pointer: 
+	output/a $pc
+	echo \n
+end
+
 define switchtoact
 	set $newact = (struct thread *) $arg0
+	select 0
 	if ($newact->kernel_stack == 0)
 		echo This activation does not have a stack.\n
 		echo continuation:
@@ -1482,13 +1562,13 @@ define switchtoact
 			set $kdpstate = (struct savearea *) kdp.saved_state
 		end
 		set $kdp_act_counter = $kdp_act_counter + 1
-		set $newact = (struct thread *) $arg0
 		set (struct savearea *) kdp.saved_state=$newact->machine->pcb
 		flushregs
 		flushstack
 		set $pc=$newact->machine->pcb.save_srr0
 		update
-	else
+	end
+	if ($kgm_mtype == 7)
 		set $kdpstatep = (struct x86_saved_state32 *) kdp.saved_state
 		if ($kdp_act_counter == 0)
 			set $kdpstate = *($kdpstatep)
@@ -1508,7 +1588,46 @@ define switchtoact
 		set $pc = $kgm_statep->k_eip
 		update
 	end
+	if ($kgm_mtype == 12)
+		set $r0_save   = $r0
+		set $r1_save   = $r1
+		set $r2_save   = $r2
+		set $r3_save   = $r3
+		set $r4_save   = $r4
+		set $r5_save   = $r5
+		set $r6_save   = $r6
+		set $r7_save   = $r7
+		set $r8_save   = $r8
+		set $r9_save   = $r9
+		set $r10_save  = $r10
+		set $r11_save  = $r11
+		set $r12_save  = $r12
+		set $sp_save   = $sp
+		set $lr_save   = $lr
+		set $pc_save   = $pc
+		set $pc_ctx = load_reg+8
+		set $kgm_statep = (struct arm_saved_state *)((struct thread*)$arg0)->machine.kstackptr
+		set $r0 =  $kgm_statep->r[0]
+		set $r1 =  $kgm_statep->r[1]
+		set $r2 =  $kgm_statep->r[2]
+		set $r3 =  $kgm_statep->r[3]
+		set $r4 =  $kgm_statep->r[4]
+		set $r5 =  $kgm_statep->r[5]
+		set $r6 =  $kgm_statep->r[6]
+		set $r8 =  $kgm_statep->r[8]
+		set $r9 =  $kgm_statep->r[9]
+		set $r10 = $kgm_statep->r[10]
+		set $r11 = $kgm_statep->r[11]
+		set $r12 = $kgm_statep->r[12]
+		set $sp = $kgm_statep->sp
+		set $lr = $kgm_statep->lr
+		set $pc = $pc_ctx
+		set $r7 =  $kgm_statep->r[7]
+		flushregs
+		flushstack
+		end
 	end
+	showcontext_int
 end
 
 document switchtoact  
@@ -1521,6 +1640,7 @@ Syntax: switchtoact <address of activation>
 end     
 
 define switchtoctx
+	select 0
 	if ($kgm_mtype == 18)
 		if ($kdp_act_counter == 0)
 		set $kdpstate = (struct savearea *) kdp.saved_state
@@ -1530,6 +1650,44 @@ define switchtoctx
 		flushregs
 		flushstack
 		set $pc=((struct savearea *) $arg0)->save_srr0
+		update
+	else
+	if ($kgm_mtype == 12)
+		set $r0_save   = $r0
+		set $r1_save   = $r1
+		set $r2_save   = $r2
+		set $r3_save   = $r3
+		set $r4_save   = $r4
+		set $r5_save   = $r5
+		set $r6_save   = $r6
+		set $r7_save   = $r7
+		set $r8_save   = $r8
+		set $r9_save   = $r9
+		set $r10_save  = $r10
+		set $r11_save  = $r11
+		set $r12_save  = $r12
+		set $sp_save   = $sp
+		set $lr_save   = $lr
+		set $pc_save   = $pc
+		set $kgm_statep = (struct arm_saved_state *)$arg0
+		set $r0 =  $kgm_statep->r[0]
+		set $r1 =  $kgm_statep->r[1]
+		set $r2 =  $kgm_statep->r[2]
+		set $r3 =  $kgm_statep->r[3]
+		set $r4 =  $kgm_statep->r[4]
+		set $r5 =  $kgm_statep->r[5]
+		set $r6 =  $kgm_statep->r[6]
+		set $r8 =  $kgm_statep->r[8]
+		set $r9 =  $kgm_statep->r[9]
+		set $r10 = $kgm_statep->r[10]
+		set $r11 = $kgm_statep->r[11]
+		set $r12 = $kgm_statep->r[12]
+		set $sp = $kgm_statep->sp
+		set $lr = $kgm_statep->lr
+		set $r7 =  $kgm_statep->r[7]
+		set $pc = $kgm_statep->pc
+		flushregs
+		flushstack
 		update
 	else
 		echo switchtoctx not implemented for this architecture.\n
@@ -1545,6 +1703,8 @@ Syntax: switchtoctx <address of pcb>
 end     
 
 define resetctx
+	select 0
+	if ($kdp_act_counter != 0)
 	if ($kgm_mtype == 18)
 		set (struct savearea *)kdp.saved_state=$kdpstate
 		flushregs
@@ -1552,7 +1712,8 @@ define resetctx
 		set $pc=((struct savearea *) kdp.saved_state)->save_srr0
 		update
 		set $kdp_act_counter = 0
-	else
+	end
+	if ($kgm_mtype == 7)
 		set $kdpstatep = (struct x86_saved_state32 *) kdp.saved_state
 		set *($kdpstatep)=$kdpstate
 		flushregs
@@ -1560,6 +1721,42 @@ define resetctx
 		set $pc=$kdpstatep->eip
 		update
 		set $kdp_act_counter = 0
+	end
+	if ($kgm_mtype == 12)
+		set $r0  = $r0_save
+		flushregs
+		set $r1  = $r1_save
+		flushregs
+		set $r2  = $r2_save
+		flushregs
+		set $r3  = $r3_save
+		flushregs
+		set $r4  = $r4_save
+		flushregs
+		set $r5  = $r5_save
+		flushregs
+		set $r6  = $r6_save
+		flushregs
+		set $r8  = $r8_save
+		flushregs
+		set $r9  = $r9_save
+		flushregs
+		set $r10 = $r10_save
+		flushregs
+		set $r11 = $r11_save
+		flushregs
+		set $r12 = $r12_save
+		flushregs
+		set $sp  = $sp_save
+		flushregs
+		set $lr  = $lr_save
+		flushregs
+		set $pc  = $pc_save
+		flushregs
+		set $r7  = $r7_save
+		flushregs
+	end
+	showcontext_int
 	end
 end     
         
@@ -1569,6 +1766,18 @@ document resetctx
 | issued if you wish to resume execution after using the "switchtoact"
 | or "switchtoctx" commands.
 end     
+
+# This is a pre-hook for the continue command, to prevent inadvertent attempts 
+# to resume from the context switched to for examination.
+define hook-continue
+       resetctx
+end
+
+# This is a pre-hook for the detach command, to prevent inadvertent attempts 
+# to resume from the context switched to for examination.
+define hook-detach
+       resetctx
+end
 
 define resume_on
 	set noresume_on_disconnect = 0
@@ -1706,21 +1915,21 @@ define showx86backtrace
 	x/i $kgm_cur_eip
 	set $kgm_prev_ebp = *((uint32_t *) $kgm_cur_ebp)
 	set $kgm_prev_eip = *((uint32_t *) ($kgm_cur_ebp + 4))
+	set $kgm_cur_ebp = 0
+	set $kgm_cur_eip = 0
 	set $kgm_frameno = 1
 	while $kgm_prev_ebp != 0
 		printf "%d: saved EBP: 0x%08x saved EIP: 0x%08x\n", $kgm_frameno, $kgm_prev_ebp, $kgm_prev_eip
 		x/i $kgm_prev_eip
-		set $kgm_cur_ebp = $kgm_prev_ebp
-		set $kgm_prev_ebp = *((uint32_t *) $kgm_cur_ebp)
-		set $kgm_prev_eip = *((uint32_t *) ($kgm_cur_ebp + 4))
+		set $kgm_prev_eip = *((uint32_t *) ($kgm_prev_ebp + 4))
+		set $kgm_prev_ebp = *((uint32_t *) $kgm_prev_ebp)
 		set $kgm_frameno = $kgm_frameno + 1
 	end
-	set $kgm_cur_ebp = 0
-	set $kgm_cur_eip = 0
 	set kdp_pmap = 0
 end
 
 define showuserstack
+		select 0
   		if ($kgm_mtype == 18)	
 		   if ($kdp_act_counter == 0)
 		      set $kdpstate = (struct savearea *) kdp.saved_state
@@ -1752,7 +1961,8 @@ define showuserstack
 		   end
 		else
 			set $newact = (struct thread *) $arg0
-			set $newiss = (x86_saved_state32_t *) ($newact->machine.pcb->iss)
+#This needs to identify 64-bit processes as well
+			set $newiss = (x86_saved_state32_t) ($newact->machine.pcb->iss.uss.ss_32)
 			set $checkpc = $newiss.eip
 			if ($checkpc == 0)
 			    echo This activation does not appear to have
@@ -1781,6 +1991,7 @@ end
 
 #Stopgap until gdb can generate the HOSTREBOOT packet
 define kdp-reboot
+#Alternatively, set *(*(unsigned **) 0x2498) = 1 (or 0x5498 on PPC)
        set flag_kdp_trigger_reboot = 1
        continue
 end
@@ -1796,7 +2007,7 @@ define sendcore
        set kdp_flag |= 0x40
        set panicd_ip_str = "$arg0"
        set panicd_specified = 1
-       set disableDebugOuput = 0
+       set disable_debug_output = 0
        set disableConsoleOutput = 0
        set logPanicDataToScreen = 1
        set reattach_wait = 1
@@ -1828,27 +2039,27 @@ Syntax: disablecore
 |configured to transmit coredumps through boot-args as well.
 end
 
-#Use of this macro requires the gdb submission from 3401283
 define switchtocorethread
-	if ($kgm_mtype == 18)
-		if ($kdp_act_counter == 0)
-		set $kdpstate = (struct savearea *) kdp.saved_state
-		end
-		set $kdp_act_counter = $kdp_act_counter + 1
-		set $newact = (struct thread *) $arg0
-		if ($newact->kernel_stack == 0)
-		   echo This thread does not have a stack.\n
-		   echo continuation:
-		   output/a (unsigned) $newact.continuation
-		   echo \n
-		else
-		   loadcontext $newact->machine->pcb
-# flushstack will be introduced in a gdb version > gdb-357
-		   flushstack
-		   set $pc = $newact->machine->pcb.save_srr0
-		end
+	set $newact = (struct thread *) $arg0
+	select 0
+	if ($newact->kernel_stack == 0)
+	   echo This thread does not have a stack.\n
+	   echo continuation:
+	   output/a (unsigned) $newact.continuation
+	   echo \n
 	else
-		echo switchtocorethread not implemented for this architecture.\n
+	if ($kgm_mtype == 18)
+	   loadcontext $newact->machine->pcb
+	   flushstack
+	   set $pc = $newact->machine->pcb.save_srr0
+	else
+		set $kgm_cstatep = (struct x86_kernel_state32 *) \
+					($newact->kernel_stack + 0x4000 \
+					 - sizeof(struct x86_kernel_state32))
+		loadcontext $kgm_cstatep
+		flushstack
+ 	end
+	showcontext_int
 	end
 end
 
@@ -1864,51 +2075,80 @@ Syntax: switchtocorethread <address of activation>
 end
 
 define loadcontext
-       set $pc = $arg0.save_srr0
-       set $r1 = $arg0.save_r1
-       set $lr = $arg0.save_lr
-       
-       set $r2 = $arg0.save_r2
-       set $r3 = $arg0.save_r3
-       set $r4 = $arg0.save_r4
-       set $r5 = $arg0.save_r5
-       set $r6 = $arg0.save_r6
-       set $r7 = $arg0.save_r7
-       set $r8 = $arg0.save_r8
-       set $r9 = $arg0.save_r9
-       set $r10 = $arg0.save_r10
-       set $r11 = $arg0.save_r11
-       set $r12 = $arg0.save_r12
-       set $r13 = $arg0.save_r13
-       set $r14 = $arg0.save_r14
-       set $r15 = $arg0.save_r15
-       set $r16 = $arg0.save_r16
-       set $r17 = $arg0.save_r17
-       set $r18 = $arg0.save_r18
-       set $r19 = $arg0.save_r19
-       set $r20 = $arg0.save_r20
-       set $r21 = $arg0.save_r21
-       set $r22 = $arg0.save_r22
-       set $r23 = $arg0.save_r23
-       set $r24 = $arg0.save_r24
-       set $r25 = $arg0.save_r25
-       set $r26 = $arg0.save_r26
-       set $r27 = $arg0.save_r27
-       set $r28 = $arg0.save_r28
-       set $r29 = $arg0.save_r29
-       set $r30 = $arg0.save_r30
-       set $r31 = $arg0.save_r31
-       
-       set $cr = $arg0.save_cr
-       set $ctr = $arg0.save_ctr
+	select 0
+	if ($kgm_mtype == 18)
+	set $kgm_contextp = (struct savearea *) $arg0
+	set $pc = $kgm_contextp.save_srr0
+	set $r1 = $kgm_contextp.save_r1
+	set $lr = $kgm_contextp.save_lr
+
+	set $r2 = $kgm_contextp.save_r2
+	set $r3 = $kgm_contextp.save_r3
+	set $r4 = $kgm_contextp.save_r4
+	set $r5 = $kgm_contextp.save_r5
+	set $r6 = $kgm_contextp.save_r6
+	set $r7 = $kgm_contextp.save_r7
+	set $r8 = $kgm_contextp.save_r8
+	set $r9 = $kgm_contextp.save_r9
+	set $r10 = $kgm_contextp.save_r10
+	set $r11 = $kgm_contextp.save_r11
+	set $r12 = $kgm_contextp.save_r12
+	set $r13 = $kgm_contextp.save_r13
+	set $r14 = $kgm_contextp.save_r14
+	set $r15 = $kgm_contextp.save_r15
+	set $r16 = $kgm_contextp.save_r16
+	set $r17 = $kgm_contextp.save_r17
+	set $r18 = $kgm_contextp.save_r18
+	set $r19 = $kgm_contextp.save_r19
+	set $r20 = $kgm_contextp.save_r20
+	set $r21 = $kgm_contextp.save_r21
+	set $r22 = $kgm_contextp.save_r22
+	set $r23 = $kgm_contextp.save_r23
+	set $r24 = $kgm_contextp.save_r24
+	set $r25 = $kgm_contextp.save_r25
+	set $r26 = $kgm_contextp.save_r26
+	set $r27 = $kgm_contextp.save_r27
+	set $r28 = $kgm_contextp.save_r28
+	set $r29 = $kgm_contextp.save_r29
+	set $r30 = $kgm_contextp.save_r30
+	set $r31 = $kgm_contextp.save_r31
+
+	set $cr = $kgm_contextp.save_cr
+	set $ctr = $kgm_contextp.save_ctr
+       else
+		set $kgm_contextp = (struct x86_kernel_state32 *) $arg0
+		set $ebx = $kgm_contextp->k_ebx 
+		set $ebp = $kgm_contextp->k_ebp 
+		set $edi = $kgm_contextp->k_edi 
+		set $esi = $kgm_contextp->k_esi 
+		set $eip = $kgm_contextp->k_eip 
+		set $pc =  $kgm_contextp->k_eip
+	end
 end
 
 define resetcorectx
-       set $kgm_corecontext = (struct savearea *) kdp.saved_state
-       loadcontext $kgm_corecontext
-# Maintaining this act counter wouldn't be necessary if we just initialized
-# $kdpstate at the beginning of the macro..
-       set $kdp_act_counter = 0 
+	select 0
+	if ($kgm_mtype == 18)
+		set $kgm_corecontext = (struct savearea *) kdp.saved_state
+		loadcontext $kgm_corecontext
+	else
+	if ($kgm_mtype == 7)
+		set $kdpstatep = (struct x86_saved_state32 *) kdp.saved_state
+		set $ebx = $kdpstatep->ebx
+		set $ebp = $kdpstatep->ebp
+		set $edi = $kdpstatep->edi
+		set $esi = $kdpstatep->esi
+		set $eip = $kdpstatep->eip
+		set $eax = $kdpstatep->eax
+		set $ecx = $kdpstatep->ecx
+		set $edx = $kdpstatep->edx
+		flushregs
+		flushstack
+		set $pc = $kdpstatep->eip
+		update
+	end
+	end
+	showcontext_int
 end
 
 document resetcorectx
@@ -1952,6 +2192,12 @@ define showgdbthread
 	    printf "W\t" 
 	    printf "0x%08x  ", $kgm_thread.wait_queue
             output /a (unsigned) $kgm_thread.wait_event
+		if ($kgm_thread.uthread != 0)
+			set $kgm_uthread = (struct uthread *)$kgm_thread.uthread
+			if ($kgm_uthread->uu_wmesg != 0)
+				printf " \"%s\"", $kgm_uthread->uu_wmesg
+			end
+	    end
 	end
 	if $arg1 != 0
 	    if ($kgm_thread.kernel_stack != 0)
@@ -1961,15 +2207,28 @@ define showgdbthread
 		printf "\n\t\tkernel_stack=0x%08x", $kgm_thread.kernel_stack
 		if ($kgm_mtype == 18)
 			set $mysp = $kgm_thread.machine.pcb->save_r1
-		else
+		end
+		if ($kgm_mtype == 7)
 			set $kgm_statep = (struct x86_kernel_state32 *) \
 				($kgm_thread->kernel_stack + 0x4000 \
 				 - sizeof(struct x86_kernel_state32))
 			set $mysp = $kgm_statep->k_ebp
 		end
+		if ($kgm_mtype == 12)
+			if ($arg0 == $r9)
+				set $mysp = $r7
+			else
+                        	set $kgm_statep = (struct arm_saved_state *)$kgm_thread.machine.kstackptr
+                        	set $mysp = $kgm_statep->r[7]
+			end
+		end
 		set $prevsp = 0
 		printf "\n\t\tstacktop=0x%08x", $mysp
-		switchtoact $arg0
+		if ($arg2 == 0)
+			switchtoact $arg0
+		else
+			switchtocorethread $arg0
+		end
 	    	bt
 	    else
 		printf "\n\t\t\tcontinuation="
@@ -1988,7 +2247,7 @@ end
 #encountering such an error.
 
 define showallgdbstacks
-    set $kgm_head_taskp = &default_pset.tasks
+    set $kgm_head_taskp = &tasks
     set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
     while $kgm_taskp != $kgm_head_taskp
         showtaskheader
@@ -1997,11 +2256,11 @@ define showallgdbstacks
         set $kgm_actp = (struct thread *)($kgm_taskp->threads.next)
 	while $kgm_actp != $kgm_head_actp
 	    showactheader
-	    showgdbthread $kgm_actp 1
+	    showgdbthread $kgm_actp 1 0
   	    set $kgm_actp = (struct thread *)($kgm_actp->task_threads.next)
         end
 	printf "\n"
-    	set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
+    	set $kgm_taskp = (struct task *)($kgm_taskp->tasks.next)
     end
     resetctx
 end
@@ -2019,7 +2278,35 @@ Syntax: showallgdbstacks
 | errors.
 end
 
+define showallgdbcorestacks
+	select 0
+	set $kgm_head_taskp = &tasks
+	set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
+        while $kgm_taskp != $kgm_head_taskp
+		showtaskheader
+		showtaskint $kgm_taskp
+		set $kgm_head_actp = &($kgm_taskp->threads)
+		set $kgm_actp = (struct thread *)($kgm_taskp->threads.next)
+		while $kgm_actp != $kgm_head_actp
+		showactheader
+		showgdbthread $kgm_actp 1 1
+		set $kgm_actp = (struct thread *)($kgm_actp->task_threads.next)
+		end
+		printf "\n"
+		set $kgm_taskp = (struct task *)($kgm_taskp->tasks.next)
+	end
+	resetcorectx
+end
+
+
+document showallgdbcorestacks
+Syntax: showallgdbcorestacks
+|Corefile version of "showallgdbstacks"
+end
+
+
 define switchtouserthread
+		select 0
   		if ($kgm_mtype == 18)	
 		   if ($kdp_act_counter == 0)
 		      set $kdpstate = (struct savearea *) kdp.saved_state
@@ -2296,10 +2583,9 @@ define showobject
     printf "\n"
 end
 document showobject
+Syntax: (gdb) showobject <object address>
 | Show info about an OSObject - its vtable ptr and retain count.
 | If the object is a simple container class, more info will be shown.
-| The following is the syntax:
-|     (gdb) showobject <object address>
 end
 
 define dictget 
@@ -2355,8 +2641,8 @@ define showregistryentryrecurse
     if ($kgm_result != 0)
 	printf "%s", ((OSString *)$kgm_result)->string
     else
- 	if (((IOService*)$kgm_re)->pm_vars &&  ((IOService*)$kgm_re)->pm_vars->ourName)
- 	    printf "%s", ((IOService*)$kgm_re)->pm_vars->ourName
+ 	if (((IOService*)$kgm_re)->pwrMgt &&  ((IOService*)$kgm_re)->pwrMgt->Name)
+ 	    printf "%s", ((IOService*)$kgm_re)->pwrMgt->Name
 	else
 #	    printf ", guessclass "
 #	    guessclass $kgm_re
@@ -2425,9 +2711,8 @@ define showregistry
     showregistryentryint gRegistryRoot
 end
 document showregistry
+Syntax: (gdb) showregistry 
 | Show info about all registry entries in the current plane.
-| The following is the syntax:
-|     (gdb) showregistry 
 end
 
 define showregistryprops
@@ -2436,11 +2721,10 @@ define showregistryprops
     showregistryentryint gRegistryRoot
 end
 document showregistryprops
+Syntax: (gdb) showregistryprops 
 | Show info about all registry entries in the current plane, and their properties.
 | set $kgm_show_object_addrs = 1 and/or set $kgm_show_object_retain = 1 will display
 | more verbose information
-| The following is the syntax:
-|     (gdb) showregistryprops 
 end
 
 define showregistryentry
@@ -2449,9 +2733,8 @@ define showregistryentry
     showregistryentryint $arg0
 end
 document showregistryentry
+Syntax: (gdb) showregistryentry <object address>
 | Show info about a registry entry; its properties and descendants in the current plane.
-| The following is the syntax:
-|     (gdb) showregistryentry <object address>
 end
 
 define setregistryplane
@@ -2463,10 +2746,9 @@ define setregistryplane
     end
 end
 document setregistryplane
+Syntax: (gdb) setregistryplane <plane object address>
 | Set the plane to be used for the iokit registry macros. An argument of zero will 
 | display known planes.
-| The following is the syntax:
-|     (gdb) setregistryplane <plane object address>
 end
 
 define guessclass
@@ -2498,9 +2780,8 @@ define showallclasses
 end
 
 document showallclasses
+Syntax: (gdb) showallclasses
 | Show the instance counts and ivar size of all OSObject subclasses. See ioclasscount man page for details.
-| The following is the syntax:
-|     (gdb) showallclasses
 end
 
 define showioalloc
@@ -2511,9 +2792,38 @@ define showioalloc
 end
 
 document showioalloc
+Syntax: (gdb) showioalloc
 | Show some accounting of memory allocated by IOKit allocators. See ioalloccount man page for details.
-| The following is the syntax:
-|     (gdb) showioalloc
+end
+
+define showosobjecttracking
+    set $kgm_next = (OSObjectTracking *) gOSObjectTrackList.next
+    while $kgm_next != &gOSObjectTrackList
+	set $obj = (OSObject *) ($kgm_next+1)
+	showobject $obj
+	set $kgm_idx = 0
+	while $kgm_idx < (sizeof($kgm_next->bt) / sizeof($kgm_next->bt[0]))
+	    if ((unsigned) $kgm_next->bt[$kgm_idx] > (unsigned) sectPRELINKB)
+		showkmodaddr $kgm_next->bt[$kgm_idx]
+		printf "\n"
+	    else
+		if ((unsigned) $kgm_next->bt[$kgm_idx] > 0)
+		    output /a (unsigned) $kgm_next->bt[$kgm_idx]
+		    printf "\n"
+		end
+	    end
+	    set $kgm_idx = $kgm_idx + 1
+	end
+	printf "\n"
+	set $kgm_next = (OSObjectTracking *) $kgm_next->link.next
+    end
+end
+
+document showosobjecttracking
+Syntax: (gdb) showosobjecttracking
+| Show the list of tracked OSObject allocations with backtraces.
+| Boot with the kOSTraceObjectAlloc (0x00400000) io debug flag set. 
+| Set gOSObjectTrackThread to 1 or a thread_t to capture new OSObjects allocated by a thread or all threads.
 end
 
 define readphys
@@ -2542,4 +2852,2534 @@ document readphys64
 | The argument is interpreted as a 64-bit physical address, and the word
 | addressed is displayed. While this fails if no physical page exists at the
 | given address, it must be used with caution.
+end
+
+define addkextsyms
+        shell ls $arg0/* | xargs -n 1 echo add-symbol-file > /tmp/gdb-syms
+        source /tmp/gdb-syms
+	set $kgm_show_kmod_syms = 1
+end
+
+document addkextsyms
+| Takes a directory of symbols for kexts generated with kextcache -y and loads them
+| into gdb.
+| (gdb) addkextsyms /path/to/symboldir
+end
+
+define showprocfiles
+    if ($argc == 1)
+	_showprocheader
+	_showprocfiles $arg0
+    else
+    	printf "| Usage:\n|\n"
+	help showprocfiles
+    end
+end
+document showprocfiles
+Syntax: (gdb) showprocfiles <proc_t>
+| Given a proc_t pointer, display the list of open file descriptors for the
+| referenced process.
+end
+
+define _showprocheader
+    printf "fd     fileglob    fg flags    fg type   fg data     info\n"
+    printf "-----  ----------  ----------  --------  ----------  -------------------\n"
+end
+
+define _showprocfiles
+    set $kgm_spf_filedesc = ((proc_t)$arg0)->p_fd
+    set $kgm_spf_last = $kgm_spf_filedesc->fd_lastfile
+    set $kgm_spf_ofiles = $kgm_spf_filedesc->fd_ofiles
+    set $kgm_spf_count = 0
+    while ($kgm_spf_count <= $kgm_spf_last)
+	if ($kgm_spf_ofiles[$kgm_spf_count] == 0)
+	    # DEBUG: For files that were open, but are now closed
+	    # printf "%-5d  FILEPROC_NULL\n", $kgm_spf_count
+	else
+	    # display fd #, fileglob address, fileglob flags
+	    set $kgm_spf_flags = $kgm_spf_ofiles[$kgm_spf_count].f_flags
+	    set $kgm_spf_fg = $kgm_spf_ofiles[$kgm_spf_count].f_fglob
+	    printf "%-5d  0x%08x  0x%08x  ", $kgm_spf_count, $kgm_spf_fg, $kgm_spf_flags
+	    # decode fileglob type
+	    set $kgm_spf_fgt = $kgm_spf_fg->fg_type
+	    if ($kgm_spf_fgt == 1)
+	    	printf "VNODE   "
+	    end
+	    if ($kgm_spf_fgt == 2)
+	    	printf "SOCKET  "
+	    end
+	    if ($kgm_spf_fgt == 3)
+	    	printf "PSXSHM  "
+	    end
+	    if ($kgm_spf_fgt == 4)
+	    	printf "PSXSEM  "
+	    end
+	    if ($kgm_spf_fgt == 5)
+	    	printf "KQUEUE  "
+	    end
+	    if ($kgm_spf_fgt == 6)
+	    	printf "PIPE    "
+	    end
+	    if ($kgm_spf_fgt == 7)
+	    	printf "FSEVENTS"
+	    end
+	    if ($kgm_spf_fgt < 1 || $kgm_spf_fgt > 7)
+	        printf "?: %-5d", $kgm_spf_fgt
+	    end
+
+	    # display fileglob data address and decode interesting fact(s)
+	    # about data, if we know any
+	    set $kgm_spf_fgd = $kgm_spf_fg->fg_data
+	    printf "  0x%08x  ", $kgm_spf_fgd
+	    if ($kgm_spf_fgt == 1)
+	    	set $kgm_spf_name = ((struct vnode *)$kgm_spf_fgd)->v_name
+		if ($kgm_spf_name == 0)
+		    printf "(null)"
+		else
+		    printf "%s", $kgm_spf_name
+		end
+	    end
+	    printf "\n"
+	end
+    	set $kgm_spf_count = $kgm_spf_count + 1
+    end
+end
+
+#
+# Show all the advisory file locks held by a process for each of the vnode
+# type files that it has open; do this by walking the per process open file
+# table and looking at any vnode type fileglob that has a non-NULL lock list
+# associated with it.
+#
+define showproclocks
+    if ($argc == 1)
+	_showproclocks $arg0
+    else
+    	printf "| Usage:\n|\n"
+	help showproclocks
+    end
+end
+document showproclocks
+Syntax: (gdb) showproclocks <proc_t>
+| Given a proc_t pointer, display the list of advisory file locks held by the
+| referenced process.
+end
+
+define _showproclocks
+    set $kgm_spl_filedesc = ((proc_t)$arg0)->p_fd
+    set $kgm_spl_last = $kgm_spl_filedesc->fd_lastfile
+    set $kgm_spl_ofiles = $kgm_spl_filedesc->fd_ofiles
+    set $kgm_spl_count = 0
+    set $kgm_spl_seen = 0
+    while ($kgm_spl_count <= $kgm_spl_last)
+	if ($kgm_spl_ofiles[$kgm_spl_count] == 0)
+	    # DEBUG: For files that were open, but are now closed
+	    # printf "%-5d  FILEPROC_NULL\n", $kgm_spl_count
+	else
+	    set $kgm_spl_fg = $kgm_spl_ofiles[$kgm_spl_count].f_fglob
+	    # decode fileglob type
+	    set $kgm_spl_fgt = $kgm_spl_fg->fg_type
+	    if ($kgm_spl_fgt == 1)
+		set $kgm_spl_fgd = $kgm_spl_fg->fg_data
+	    	set $kgm_spl_name = ((struct vnode *)$kgm_spl_fgd)->v_name
+		set $kgm_spl_vnode = ((vnode_t)$kgm_spl_fgd)
+		set $kgm_spl_lockiter = $kgm_spl_vnode->v_lockf
+		if ($kgm_spl_lockiter != 0)
+		    if ($kgm_spl_seen == 0)
+			_showvnodelockheader
+		    end
+		    set $kgm_spl_seen = $kgm_spl_seen + 1
+		    printf "( fd %d, name ", $kgm_spl_count
+		    if ($kgm_spl_name == 0)
+			printf "(null) )"
+		    else
+			printf "%s )\n", $kgm_spl_name
+		    end
+		    _showvnodelocks $kgm_spl_fgd
+		end
+	    end
+	end
+    	set $kgm_spl_count = $kgm_spf_count + 1
+    end
+    printf "%d total locks for 0x%08x\n", $kgm_spl_seen, $arg0
+end
+
+define showprocinfo
+    set $kgm_spi_proc = (proc_t)$arg0
+    printf "Process 0x%08x\n", $kgm_spi_proc
+    printf "   name %s\n", $kgm_spi_proc->p_comm
+	printf "   pid:%.8d", $kgm_spi_proc->p_pid
+	printf "   task:0x%.8x", $kgm_spi_proc->task
+	printf "   p_stat:%.1d", $kgm_spi_proc->p_stat
+	printf "   parent pid:%.8d", $kgm_spi_proc->p_ppid
+    # decode part of credential
+    set $kgm_spi_cred = $kgm_spi_proc->p_ucred
+    if ($kgm_spi_cred != 0)
+	printf "Cred: euid %d ruid %d svuid %d\n", $kgm_spi_cred->cr_uid, $kgm_spi_cred->cr_ruid, $kgm_spi_cred->cr_svuid
+    else
+    	printf "Cred: (null)\n"
+    end
+    # decode flags
+    set $kgm_spi_flag = $kgm_spi_proc->p_flag
+    printf "Flags: 0x%08x\n", $kgm_spi_flag
+    if ($kgm_spi_flag & 0x00000001)
+	printf "    0x00000001 - may hold advisory locks\n"
+    end
+    if ($kgm_spi_flag & 0x00000002)
+	printf "    0x00000002 - has a controlling tty\n"
+    end
+    if ($kgm_spi_flag & 0x00000004)
+	printf "    0x00000004 - process is 64 bit\n"
+    else
+	printf "   !0x00000004 - process is 32 bit\n"
+    end
+    if ($kgm_spi_flag & 0x00000008)
+	printf "    0x00000008 - no SIGCHLD on child stop\n"
+    end
+    if ($kgm_spi_flag & 0x00000010)
+	printf "    0x00000010 - waiting for child exec/exit\n"
+    end
+    if ($kgm_spi_flag & 0x00000020)
+	printf "    0x00000020 - has started profiling\n"
+    end
+    if ($kgm_spi_flag & 0x00000040)
+	printf "    0x00000040 - in select; wakeup/waiting danger\n"
+    end
+    if ($kgm_spi_flag & 0x00000080)
+	printf "    0x00000080 - was stopped and continued\n"
+    end
+    if ($kgm_spi_flag & 0x00000100)
+	printf "    0x00000100 - has set privileges since exec\n"
+    end
+    if ($kgm_spi_flag & 0x00000200)
+	printf "    0x00000200 - system process: no signals, stats, or swap\n"
+    end
+    if ($kgm_spi_flag & 0x00000400)
+	printf "    0x00000400 - timing out during a sleep\n"
+    end
+    if ($kgm_spi_flag & 0x00000800)
+	printf "    0x00000800 - debugged process being traced\n"
+    end
+    if ($kgm_spi_flag & 0x00001000)
+	printf "    0x00001000 - debugging process has waited for child\n"
+    end
+    if ($kgm_spi_flag & 0x00002000)
+	printf "    0x00002000 - exit in progress\n"
+    end
+    if ($kgm_spi_flag & 0x00004000)
+	printf "    0x00004000 - process has called exec\n"
+    end
+    if ($kgm_spi_flag & 0x00008000)
+	printf "    0x00008000 - owe process an addupc() XXX\n"
+    end
+    if ($kgm_spi_flag & 0x00010000)
+	printf "    0x00010000 - affinity for Rosetta children\n"
+    end
+    if ($kgm_spi_flag & 0x00020000)
+	printf "    0x00020000 - wants to run Rosetta\n"
+    end
+    if ($kgm_spi_flag & 0x00040000)
+	printf "    0x00040000 - has wait() in progress\n"
+    end
+    if ($kgm_spi_flag & 0x00080000)
+	printf "    0x00080000 - kdebug tracing on for this process\n"
+    end
+    if ($kgm_spi_flag & 0x00100000)
+	printf "    0x00100000 - blocked due to SIGTTOU or SIGTTIN\n"
+    end
+    if ($kgm_spi_flag & 0x00200000)
+	printf "    0x00200000 - has called reboot()\n"
+    end
+    if ($kgm_spi_flag & 0x00400000)
+	printf "    0x00400000 - is TBE state\n"
+    end
+    if ($kgm_spi_flag & 0x00800000)
+	printf "    0x00800000 - signal exceptions\n"
+    end
+    if ($kgm_spi_flag & 0x01000000)
+	printf "    0x01000000 - being branch traced\n"
+    end
+    if ($kgm_spi_flag & 0x02000000)
+	printf "    0x02000000 - has vfork() children\n"
+    end
+    if ($kgm_spi_flag & 0x04000000)
+	printf "    0x04000000 - not allowed to attach\n"
+    end
+    if ($kgm_spi_flag & 0x08000000)
+	printf "    0x08000000 - vfork() in progress\n"
+    end
+    if ($kgm_spi_flag & 0x10000000)
+	printf "    0x10000000 - no shared libraries\n"
+    end
+    if ($kgm_spi_flag & 0x20000000)
+	printf "    0x20000000 - force quota for root\n"
+    end
+    if ($kgm_spi_flag & 0x40000000)
+	printf "    0x40000000 - no zombies when children exit\n"
+    end
+    if ($kgm_spi_flag & 0x80000000)
+	printf "    0x80000000 - don't hang on remote FS ops\n"
+    end
+    # decode state
+    set $kgm_spi_state = $kgm_spi_proc->p_stat
+    printf "State: "
+    if ($kgm_spi_state == 1)
+    	printf "Idle\n"
+    end
+    if ($kgm_spi_state == 2)
+    	printf "Run\n"
+    end
+    if ($kgm_spi_state == 3)
+    	printf "Sleep\n"
+    end
+    if ($kgm_spi_state == 4)
+    	printf "Stop\n"
+    end
+    if ($kgm_spi_state == 5)
+    	printf "Zombie\n"
+    end
+    if ($kgm_spi_state == 6)
+    	printf "Reaping\n"
+    end
+    if ($kgm_spi_state < 1 || $kgm_spi_state > 6)
+    	printf "(Unknown)\n"
+    end
+end
+
+document showprocinfo
+Syntax: (gdb) showprocinfo <proc_t>
+| Displays name, pid, parent and task for a proc_t. Decodes cred, flag and p_stat fields.
+end
+
+#
+# dump the zombprocs 
+#
+define zombproc
+  set $basep = (struct proc  *)zombproc->lh_first
+  set $pp = $basep
+  while $pp
+	showprocinfo $pp
+      set $pp = $pp->p_list.le_next
+  end
+end
+
+document zombproc
+Syntax: (gdb) zombproc 
+| Routine to print out all procs in the zombie list
+end
+
+#
+# dump the zombstacks 
+#
+define zombstacks
+  set $basep = (struct proc  *)zombproc->lh_first
+  set $pp = $basep
+  while $pp
+	if $pp->p_stat != 5
+		showtaskstacks $pp->task
+	end
+     set $pp = $pp->p_list.le_next
+  end
+end
+
+document zombstacks
+Syntax: (gdb) zombstacks 
+| Routine to print out all stacks of tasks that are exiting
+end
+
+
+#
+# dump the allprocs
+#
+define allproc
+  set $basep = (struct proc  *)allproc->lh_first
+  set $pp = $basep
+  while $pp
+	showprocinfo $pp
+      set $pp = $pp->p_list.le_next
+  end
+end
+
+document allproc
+Syntax: (gdb) allproc 
+| Routine to print out all process in the system 
+| which are not in the zombie list
+end
+
+
+
+define print_vnode
+   set $vp = (struct vnode *)$arg0
+   printf "   "
+   printf " vp 0x%.8x", $vp
+   printf " use %d", $vp->v_usecount
+   printf " io %d", $vp->v_iocount
+   printf " kuse %d", $vp->v_kusecount
+   printf " type %d", $vp->v_type
+   printf " flg 0x%.8x", $vp->v_flag
+   printf " lflg 0x%.8x", $vp->v_lflag
+   printf " par 0x%.8x", $vp->v_parent
+   set $_name = (char *)$vp->v_name
+   if ($_name != 0)
+      printf " %s", $_name
+   end
+  if ($vp->v_type == VREG) && ($vp->v_un.vu_ubcinfo != 0)
+       printf " mapped %d", ($vp->v_un.vu_ubcinfo.ui_flags & 0x08) ? 1 : 0
+   end
+   printf "\n"
+end
+
+document print_vnode
+Syntax: (gdb) print_vnode <vnode>
+| Prints out the fields of a vnode struct
+end
+
+define showprocvnodes
+	set $pp = (struct proc *)$arg0
+	set $fdp = (struct filedesc *)$pp->p_fd
+	set $cvp = $fdp->fd_cdir
+	set $rvp = $fdp->fd_rdir
+	if $cvp
+		printf "Current Working Directory \n"
+		print_vnode $cvp
+		printf "\n"
+	end
+	if $rvp
+		printf "Current Root Directory \n"
+		print_vnode $rvp
+		printf "\n"
+	end
+	set $count = 0
+	set $fpp =  (struct fileproc **)($fdp->fd_ofiles)
+	set $fpo =  (char)($fdp->fd_ofileflags[0])
+	while $count < $fdp->fd_nfiles
+		#printf"fpp %x ", *$fpp
+		if *$fpp
+			set $fg =(struct fileglob *)((**$fpp)->f_fglob)
+			if  $fg && (($fg)->fg_type == 1) 
+				if $fdp->fd_ofileflags[$count] & 4
+					printf "U: "
+				else
+					printf " "
+				end
+				printf "fd = %d ", $count
+				print_vnode $fg->fg_data
+			end
+		end
+		set $fpp = $fpp + 1
+	 	set $count = $count + 1		
+	end
+end
+
+document showprocvnodes
+Syntax: (gdb) showprocvnodes <proc_address>
+| Routine to print out all the open fds
+| which are vnodes in a process
+end
+
+define showallprocvnodes
+  set $basep = (struct proc  *)allproc->lh_first
+  set $pp = $basep
+  while $pp
+	printf "============================================ \n"
+	showprocinfo $pp
+	showprocvnodes $pp
+  	set $pp = $pp->p_list.le_next
+  end
+end
+
+document showallprocvnodes
+Syntax: (gdb) showallprocvnodes
+| Routine to print out all the open fds
+| which are vnodes 
+end
+
+
+#   
+# dump the childrent of a proc 
+#
+define showinitchild
+  set $basep = (struct proc  *)initproc->p_children.lh_first
+  set $pp = $basep
+  while $pp
+	showprocinfo $pp
+      set $pp = $pp->p_sibling.le_next
+  end
+end
+
+document showinitchild
+Syntax: (gdb) showinitchild 
+| Routine to print out all processes in the system 
+| which are children of init process
+end
+
+
+define showmountallvnodes
+  set $mp = (struct mount *)$arg0
+  set $basevp = (struct vnode *)$mp->mnt_vnodelist.tqh_first
+  set $vp = $basevp
+  printf "____________________ Vnode list Queue ---------------\n"
+  while $vp
+      print_vnode $vp
+      set $vp = $vp->v_mntvnodes->tqe_next
+  end
+  set $basevp = (struct vnode *)$mp->mnt_workerqueue.tqh_first
+  set $vp = $basevp
+  printf "____________________ Worker Queue ---------------\n"
+  while $vp
+      print_vnode $vp
+      set $vp = $vp->v_mntvnodes->tqe_next
+  end
+  set $basevp = (struct vnode *)$mp->mnt_newvnodes.tqh_first
+  set $vp = $basevp
+  printf "____________________ New vnodes  Queue ---------------\n"
+  while $vp
+      print_vnode $vp
+      set $vp = $vp->v_mntvnodes->tqe_next
+  end
+end
+document showmountallvnodes
+Syntax: showmountallvnodes <struct mount *>
+| Print the vnode inactive list
+end
+
+
+define showmountvnodes
+  set $mp = (struct mount *)$arg0
+  set $basevp = (struct vnode *)$mp->mnt_vnodelist.tqh_first
+  set $vp = $basevp
+  printf "____________________ Vnode list Queue ---------------\n"
+  while $vp
+      print_vnode $vp
+      set $vp = $vp->v_mntvnodes->tqe_next
+  end
+end
+document showmountvnodes
+Syntax: showmountvnodes <struct mount *>
+| Print the vnode list
+end
+
+
+
+define showworkqvnodes
+  set $mp = (struct mount *)$arg0
+  set $basevp = (struct vnode *)$mp->mnt_workerqueue.tqh_first
+  set $vp = $basevp
+  printf "____________________ Worker Queue ---------------\n"
+  while $vp
+      print_vnode $vp
+      set $vp = $vp->v_mntvnodes->tqe_next
+  end
+end
+document showworkqvnodes
+Syntax: showworkqvnodes <struct mount *>
+| Print the vnode worker list
+end
+
+
+define shownewvnodes
+  set $mp = (struct mount *)$arg0
+  set $basevp = (struct vnode *)$mp->mnt_newvnodes.tqh_first
+  set $vp = $basevp
+  printf "____________________ New vnodes  Queue ---------------\n"
+  while $vp
+      print_vnode $vp
+      set $vp = $vp->v_mntvnodes->tqe_next
+  end
+end
+
+document shownewvnodes
+Syntax: shownewvnodes <struct mount *>
+| Print the new vnode list
+end
+
+
+#
+# print mount point info
+define print_mount 
+   set $mp = (struct mount *)$arg0
+   printf "   "
+   printf " mp 0x%.8x", $mp
+   printf " flag %x", $mp->mnt_flag
+   printf " kern_flag %x", $mp->mnt_kern_flag
+   printf " lflag %x", $mp->mnt_lflag
+   printf " type:  %s", $mp->mnt_vfsstat.f_fstypename
+   printf " mnton:  %s", $mp->mnt_vfsstat.f_mntonname
+   printf " mntfrom:  %s", $mp->mnt_vfsstat.f_mntfromname
+   printf "\n"
+end
+
+define showallmounts
+	set $mp=(struct mount *)mountlist.tqh_first
+	while $mp
+	 	print_mount $mp
+		set $mp = $mp->mnt_list.tqe_next
+	end
+end
+	
+document showallmounts
+Syntax: showallmounts
+| Print all mount points
+end
+
+define pcprint
+	set $pc = $arg0
+	if ((unsigned int)$pc <= (unsigned int) $kgm_fkmodmax) && \
+	    ((unsigned int)$pc >= (unsigned int)$kgm_fkmodmin)
+		showkmodaddr $pc
+	else
+		output/a $pc
+	end
+end
+
+define mbuf_walkpkt
+	set $mp = (struct mbuf *)$arg0
+	set $cnt = 1
+	set $tot = 0
+	while $mp
+		printf "%4d: 0x%08x [len %4d, type %2d, ", $cnt, $mp, \
+		    $mp->m_hdr.mh_len, $mp->m_hdr.mh_type
+		if mclaudit != 0
+			mbuf_buf2mca $mp
+			printf ", "
+		end
+		set $tot = $tot + $mp->m_hdr.mh_len
+		printf "total %d]\n", $tot
+		set $mp = $mp->m_hdr.mh_nextpkt
+		set $cnt = $cnt + 1
+	end
+end
+
+document mbuf_walkpkt
+Syntax: (gdb) mbuf_walkpkt <addr>
+| Given an mbuf address, walk its m_nextpkt pointer
+end
+
+define mbuf_walk
+	set $mp = (struct mbuf *)$arg0
+	set $cnt = 1
+	set $tot = 0
+	while $mp
+		printf "%4d: 0x%08x [len %4d, type %2d, ", $cnt, $mp, \
+		    $mp->m_hdr.mh_len, $mp->m_hdr.mh_type
+		if mclaudit != 0
+			mbuf_buf2mca $mp
+			printf ", "
+		end
+		set $tot = $tot + $mp->m_hdr.mh_len
+		printf "total %d]\n", $tot
+		set $mp = $mp->m_hdr.mh_next
+		set $cnt = $cnt + 1
+	end
+end
+
+document mbuf_walk
+Syntax: (gdb) mbuf_walk <addr>
+| Given an mbuf address, walk its m_next pointer
+end
+
+define mbuf_buf2slab
+	set $addr = $arg0
+	set $gix = ((char *)$addr - (char *)mbutl) >> 20
+	set $ix = ((char *)$addr - (char *)mbutl) >> 11
+	set $slab = &slabstbl[$gix].slg_slab[$ix]
+	printf "0x%08x", $slab
+end
+
+document mbuf_buf2slab
+| Given an mbuf object, find its corresponding slab address.
+end
+
+define mbuf_buf2mca
+	set $addr = $arg0
+	set $ix = ((char *)$addr - (char *)mbutl) >> 11
+	set $clbase = ((union mcluster *)(mbutl + $ix))
+	set $mclidx = (((char *)$addr - (char *)$clbase) >> 8)
+	set $mca = mclaudit[$ix].cl_audit[$mclidx]
+	printf "mca: 0x%08x", $mca
+end
+
+document mbuf_buf2mca
+Syntax: (gdb) mbuf_buf2mca <addr>
+| Given an mbuf object, find its buffer audit structure address.
+| This requires mbuf buffer auditing to be turned on, by setting
+| the appropriate flags to the "mbuf_debug" boot-args parameter.
+end
+
+define mbuf_showmca
+	set language c
+	set $mca = (mcache_audit_t *)$arg0
+	set $cp = (mcache_t *)$mca->mca_cache
+	printf "object type:\t\t"
+	mbuf_mca_ctype $mca 1
+	printf "\ncontrolling mcache:\t%p (%s)\n", $mca->mca_cache, $cp->mc_name
+	if $mca->mca_uflags & $MB_SCVALID
+		set $ix = ((char *)$mca->mca_addr - (char *)mbutl) >> 11
+		set $clbase = ((union mcluster *)(mbutl + $ix))
+		set $mclidx = (((char *)$mca->mca_addr - (char *)$clbase) >> 8)
+		printf "mbuf obj:\t\t%p\n", $mca->mca_addr
+		printf "mbuf index:\t\t%d (out of 8) in cluster base %p\n", \
+		    $mclidx + 1, $clbase
+		if $mca->mca_uptr != 0
+			set $peer_mca = (mcache_audit_t *)$mca->mca_uptr
+			printf "paired cluster obj:\t%p (mca %p)\n", \
+			    $peer_mca->mca_addr, $peer_mca
+		end
+		printf "saved contents:\t\t%p (%d bytes)\n", \
+		    $mca->mca_contents, $mca->mca_contents_size
+	else
+		printf "cluster obj:\t\t%p\n", $mca->mca_addr
+		if $mca->mca_uptr != 0
+			set $peer_mca = (mcache_audit_t *)$mca->mca_uptr
+			printf "paired mbuf obj:\t%p (mca %p)\n", \
+			    $peer_mca->mca_addr, $peer_mca
+		end
+	end
+	printf "recent transaction for this buffer (thread %p):\n", \
+	    $mca->mca_thread
+	set $cnt = 0
+	while $cnt < $mca->mca_depth
+		set $pc = $mca->mca_stack[$cnt]
+		printf "%4d: ", $cnt + 1
+		pcprint $pc
+		printf "\n"
+		set $cnt = $cnt + 1
+	end
+	if $mca->mca_pdepth > 0
+		printf "previous transaction for this buffer (thread %p):\n", \
+		    $mca->mca_pthread
+	end
+	set $cnt = 0
+	while $cnt < $mca->mca_pdepth
+		set $pc = $mca->mca_pstack[$cnt]
+		printf "%4d: ", $cnt + 1
+		pcprint $pc
+		printf "\n"
+		set $cnt = $cnt + 1
+	end
+	set language auto
+end
+
+document mbuf_showmca
+Syntax: (gdb) mbuf_showmca <addr>
+| Given an mbuf/cluster buffer audit structure address, print the audit
+| records including the stack trace of the last buffer transaction.
+end
+
+set $MCF_NOCPUCACHE = 0x10
+
+define mcache_stat
+	set $head = (mcache_t *)mcache_head
+	set $mc = $head
+	printf "cache                        cache      cache    buf   buf    backing             (# of retries)     bufs\n"
+	printf "name                         state       addr   size align       zone     wait   nowait   failed  incache\n"
+	printf "------------------------- -------- ---------- ------ ----- ---------- -------------------------- --------\n"
+	while $mc != 0
+		set $bktsize = $mc->mc_cpu.cc_bktsize
+		printf "%-25s ", $mc->mc_name
+		if ($mc->mc_flags & $MCF_NOCPUCACHE)
+			printf "disabled"
+		else
+			if $mc->mc_purge_cnt > 0
+				printf " purging"
+			else
+				if $bktsize == 0
+					printf " offline"
+				else
+					printf "  online"
+				end
+			end
+		end
+		printf " 0x%08x %6d %5d ",$mc, \
+		    $mc->mc_bufsize, $mc->mc_align
+		if $mc->mc_slab_zone != 0
+			printf "0x%08x", $mc->mc_slab_zone
+		else
+			printf "    custom"
+		end
+		set $tot = 0
+		set $tot += $mc->mc_full.bl_total * $bktsize
+		set $ccp = (mcache_cpu_t *)$mc->mc_cpu
+		set $n = 0
+		while $n < ncpu
+			if $ccp->cc_objs > 0
+				set $tot += $ccp->cc_objs
+			end
+			if $ccp->cc_pobjs > 0
+				set $tot += $ccp->cc_pobjs
+			end
+			set $n += 1
+			set $ccp += 1
+		end
+		printf " %8d %8d %8d %8d", $mc->mc_wretry_cnt, \
+		    $mc->mc_nwretry_cnt, $mc->mc_nwfail_cnt, $tot
+		printf "\n"
+		set $mc = (mcache_t *)$mc->mc_list.le_next
+	end
+end
+
+document mcache_stat
+Syntax: (gdb) mcache_stat
+| Print all mcaches in the system.
+end
+
+define mcache_showzone
+	set $mc = (mcache_t *)$arg0
+	if $mc->mc_slab_zone != 0
+		printf "%p", $mc->mc_slab_zone
+	else
+		printf "   custom"
+end
+
+document mcache_showzone
+Syntax: (gdb) mcache_showzone <mcache_addr>
+| Print the type of backend (custom or zone) of a mcache.
+end
+
+define mcache_walkobj
+	set $p = (mcache_obj_t *)$arg0
+	set $cnt = 1
+	set $tot = 0
+	while $p
+		printf "%4d: 0x%08x\n", $cnt, $p,
+		set $p = $p->obj_next
+		set $cnt = $cnt + 1
+	end
+end
+
+document mcache_walkobj
+Syntax: (gdb) mcache_walkobj <addr>
+| Given a mcache object address, walk its obj_next pointer
+end
+
+define mcache_showcache
+	set $cp = (mcache_t *)$arg0
+	set $ccp = (mcache_cpu_t *)$cp->mc_cpu
+	set $bktsize = $cp->mc_cpu.cc_bktsize
+	set $cnt = 0
+	set $tot = 0
+	printf "Showing cache '%s':\n\n", $cp->mc_name
+	printf " CPU  cc_objs cc_pobjs    total\n"
+	printf "---- -------- -------- --------\n"
+	while $cnt < ncpu
+		set $objs = $ccp->cc_objs
+		if $objs <= 0
+			set $objs = 0
+		end
+		set $pobjs = $ccp->cc_pobjs
+		if $pobjs <= 0
+			set $pobjs = 0
+		end
+		set $tot_cpu = $objs + $pobjs
+		set $tot += $tot_cpu
+		printf "%4d %8d %8d %8d\n", $cnt, $objs, $pobjs, $tot_cpu
+		set $ccp += 1
+		set $cnt += 1
+	end
+	printf "                       ========\n"
+	printf "                       %8d\n", $tot
+	printf "\n"
+	set $tot += $cp->mc_full.bl_total * $bktsize
+	printf "Total # of full buckets (%d objs/bkt):\t%-8d\n", \
+	    $bktsize, $cp->mc_full.bl_total
+	printf "Total # of objects cached:\t\t%-8d\n", $tot
+end
+
+document mcache_showcache
+| Display the number of objects in the cache
+end
+
+set $NSLABSPMB = sizeof(mcl_slabg_t)/sizeof(mcl_slab_t)
+
+define mbuf_slabstbl
+	set $x = 0
+
+	printf "slot addr       slabs range\n"
+	printf "---- ---------- -----------------------\n"
+	while $x < maxslabgrp
+		set $slg = slabstbl[$x]
+		printf "%3d: ", $x
+		if $slg == 0
+			printf "-\n"
+		else
+			printf "%p [%p-%p]\n", $slg, &$slg->slg_slab[0], \
+			    &$slg->slg_slab[$NSLABSPMB-1]
+		end
+		set $x += 1
+	end
+end
+
+document mbuf_slabstbl
+| Display the mbuf slabs table
+end
+
+set $SLF_MAPPED=0x0001
+set $SLF_PARTIAL=0x0002
+set $SLF_DETACHED=0x0004
+
+define mbuf_slabs
+	set $slg = (mcl_slabg_t *)$arg0
+	set $x = 0
+
+	printf "slot addr       next       base        C  R  N   size flags\n"
+	printf "---- ---------- ---------- ---------- -- -- -- ------ -----\n"
+	while $x < $NSLABSPMB
+		set $sl = &$slg->slg_slab[$x]
+		printf "%3d: 0x%08x 0x%08x 0x%08x %2d %2d %2d %6d 0x%04x ", \
+		    $x + 1, $sl, $sl->sl_next, $sl->sl_base, $sl->sl_class, \
+		    $sl->sl_refcnt, $sl->sl_chunks, $sl->sl_len, \
+		    $sl->sl_flags
+		if $sl->sl_flags != 0
+			printf "<"
+			if $sl->sl_flags & $SLF_MAPPED
+				printf "mapped"
+			end
+			if $sl->sl_flags & $SLF_PARTIAL
+				printf ",partial"
+			end
+			if $sl->sl_flags & $SLF_DETACHED
+				printf ",detached"
+			end
+			printf ">"
+		end
+		printf "\n"
+		set $x += 1
+	end
+end
+
+document mbuf_slabs
+| Display all mbuf slabs in the group
+end
+
+define mbuf_stat
+	set $x = 0
+
+	printf "class               total   cached     uncached           inuse           failed   waiter notified    purge\n"
+	printf "name                 objs     objs     objs / slabs        objs      alloc count    count    count    count\n"
+	printf "---------------- -------- -------- ------------------- -------- ---------------- -------- -------- --------\n"
+	while $x < (sizeof(mbuf_table) / sizeof(mbuf_table[0]))
+		set $mbt = mbuf_table[$x]
+		set $mcs = (mb_class_stat_t *)mbuf_table[$x].mtbl_stats
+		set $tot = 0
+		set $mc = $mbt->mtbl_cache
+		set $bktsize = $mc->mc_cpu.cc_bktsize
+		set $tot += $mc->mc_full.bl_total * $bktsize
+		set $ccp = (mcache_cpu_t *)$mc->mc_cpu
+		set $n = 0
+		while $n < ncpu
+			if $ccp->cc_objs > 0
+				set $tot += $ccp->cc_objs
+			end
+			if $ccp->cc_pobjs > 0
+				set $tot += $ccp->cc_pobjs
+			end
+			set $n += 1
+			set $ccp += 1
+		end
+
+		printf "%-16s %8d %8d %8d / %-8d %8d %16llu %8d %8llu %8llu", \
+		    $mcs->mbcl_cname, $mcs->mbcl_total, $tot, \
+		    $mcs->mbcl_infree, $mcs->mbcl_slab_cnt, \
+		    ($mcs->mbcl_total - $tot - $mcs->mbcl_infree), \
+		    $mcs->mbcl_fail_cnt, $mc->mc_waiter_cnt, \
+		    $mcs->mbcl_notified, $mcs->mbcl_purge_cnt
+		printf "\n"
+		set $x += 1
+	end
+end
+
+document mbuf_stat
+| Print extended mbuf allocator statistics.
+end
+
+set $MB_INUSE = 0x1
+set $MB_COMP_INUSE = 0x2
+set $MB_SCVALID = 0x4
+
+set $MCLBYTES = 2048
+set $MSIZE = 256
+set $NBPG = 4096
+set $M16KCLBYTES = 16384
+
+define mbuf_mca_ctype
+	set $mca = (mcache_audit_t *)$arg0
+	set $vopt = $arg1
+	set $cp = $mca->mca_cache
+	set $class = (unsigned int)$cp->mc_private
+	set $csize = mbuf_table[$class].mtbl_stats->mbcl_size
+	set $done = 0
+	if $csize == $MSIZE
+		if $vopt
+			printf "M (mbuf) "
+		else
+			printf "M     "
+		end
+		set $done = 1
+	end
+	if !$done && $csize == $MCLBYTES
+		if $vopt
+			printf "CL (2K cluster) "
+		else
+			printf "CL    "
+		end
+		set $done = 1
+	end
+	if !$done && $csize == $NBPG
+		if $vopt
+			printf "BCL (4K cluster) "
+		else
+			printf "BCL   "
+		end
+		set $done = 1
+	end
+	if !$done && $csize == $M16KCLBYTES
+		if $vopt
+			printf "JCL (16K cluster) "
+		else
+			printf "JCL   "
+		end
+		set $done = 1
+	end
+	if !$done && $csize == ($MSIZE+$MCLBYTES)
+		if $mca->mca_uflags & $MB_SCVALID
+			if $mca->mca_uptr
+				printf "M+CL  "
+				if $vopt
+					printf "(paired mbuf, 2K cluster)"
+				end
+			else
+				printf "M-CL  "
+				if $vopt
+					printf "(unpaired mbuf, 2K cluster) "
+				end
+			end
+		else
+			if $mca->mca_uptr
+				printf "CL+M  "
+				if $vopt
+					printf "(paired 2K cluster, mbuf) "
+				end
+			else
+				printf "CL-M  "
+				if $vopt
+					printf "(paired 2K cluster, mbuf) "
+				end
+			end
+		end
+		set $done = 1
+	end
+	if !$done && $csize == ($MSIZE+$NBPG)
+		if $mca->mca_uflags & $MB_SCVALID
+			if $mca->mca_uptr
+				printf "M+BCL "
+				if $vopt
+					printf "(paired mbuf, 4K cluster) "
+				end
+			else
+				printf "M-BCL "
+				if $vopt
+					printf "(unpaired mbuf, 4K cluster) "
+				end
+			end
+		else
+			if $mca->mca_uptr
+				printf "BCL+M "
+				if $vopt
+					printf "(paired 4K cluster, mbuf) "
+				end
+			else
+				printf "BCL-M "
+				if $vopt
+					printf "(unpaired 4K cluster, mbuf) "
+				end
+			end
+		end
+		set $done = 1
+	end
+	if !$done && $csize == ($MSIZE+$M16KCLBYTES)
+		if $mca->mca_uflags & $MB_SCVALID
+			if $mca->mca_uptr
+				printf "M+JCL "
+				if $vopt
+					printf "(paired mbuf, 16K cluster) "
+				end
+			else
+				printf "M-JCL "
+				if $vopt
+					printf "(unpaired mbuf, 16K cluster) "
+				end
+			end
+		else
+			if $mca->mca_uptr
+				printf "JCL+M "
+				if $vopt
+					printf "(paired 16K cluster, mbuf) "
+				end
+			else
+				printf "JCL-M "
+				if $vopt
+					printf "(unpaired 16K cluster, mbuf) "
+				end
+			end
+		end
+		set $done = 1
+	end
+	if !$done
+		printf "unknown: %s ", $cp->mc_name
+	end
+end
+
+document mbuf_mca_ctype
+| This is a helper macro for mbuf_show{active,inactive,all} that prints
+| out the mbuf object type represented by a given mcache audit structure.
+end
+
+define mbuf_showactive
+	mbuf_walkallslabs 1 0
+end
+
+document mbuf_showactive
+Syntax: (gdb) mbuf_showactive
+| Walk the mbuf objects pool and print only the active ones; this
+| requires mbuf debugging to be turned on, by setting the appropriate flags
+| to the "mbuf_debug" boot-args parameter.  Active objects are those that
+| are outstanding (have not returned to the mbuf slab layer) and in use
+| by the client (have not been freed).
+end
+
+define mbuf_showinactive
+	mbuf_walkallslabs 0 1
+end
+
+document mbuf_showinactive
+Syntax: (gdb) mbuf_showinactive
+| Walk the mbuf objects pool and print only the inactive ones; this
+| requires mbuf debugging to be turned on, by setting the appropriate flags
+| to the "mbuf_debug" boot-args parameter.  Inactive objects are those that
+| are outstanding (have not returned to the mbuf slab layer) but have been
+| freed by the client, i.e. they still reside in the mcache layer ready to
+| be used for subsequent allocation requests.
+end
+
+define mbuf_showall
+	mbuf_walkallslabs 1 1
+end
+
+document mbuf_showall
+Syntax: (gdb) mbuf_showall
+| Walk the mbuf objects pool and print them all; this requires
+| mbuf debugging to be turned on, by setting the appropriate flags to the
+| "mbuf_debug" boot-args parameter.
+end
+
+define mbuf_mcaobjs
+end
+
+define mbuf_walkallslabs
+	set $show_a = $arg0
+	set $show_f = $arg1
+	set $x = 0
+	set $total = 0
+	set $total_a = 0
+	set $total_f = 0
+
+	printf "("
+	if $show_a && !$show_f
+		printf "Searching only for active "
+	end
+	if !$show_a && $show_f
+		printf "Searching only for inactive "
+	end
+	if $show_a && $show_f
+		printf "Displaying all "
+	end
+	printf "objects; this may take a while ...)\n\n"
+
+	printf "                slab        mca        obj        allocation\n"
+	printf "slot idx     address    address    address type        state\n"
+	printf "---- ---- ---------- ---------- ---------- ----- -----------\n"
+
+	while $x < slabgrp
+		set $slg = slabstbl[$x]
+		set $y = 0
+		set $stop = 0
+		while $y < $NSLABSPMB && $stop == 0
+			set $sl = &$slg->slg_slab[$y]
+			set $base = (char *)$sl->sl_base
+			set $ix = ($base - (char *)mbutl) >> 11
+			set $clbase = ((union mcluster *)(mbutl + $ix))
+			set $mclidx = ($base - (char *)$clbase) >> 8
+			set $mca = mclaudit[$ix].cl_audit[$mclidx]
+			set $first = 1
+
+			while $mca != 0 && $mca->mca_addr != 0
+				set $printmca = 0
+				if $mca->mca_uflags & ($MB_INUSE|$MB_COMP_INUSE)
+					set $total_a = $total_a + 1
+					set $printmca = $show_a
+				else
+					set $total_f = $total_f + 1
+					set $printmca = $show_f
+				end
+
+				if $printmca != 0
+					if $first == 1
+						printf "%4d %4d 0x%08x ", $x, $y, $sl
+					else
+						printf "                     "
+					end
+
+					printf "0x%08x 0x%08x ", $mca, $mca->mca_addr
+					mbuf_mca_ctype $mca 0
+					if $mca->mca_uflags & ($MB_INUSE|$MB_COMP_INUSE)
+						printf "active      "
+					else
+						printf "      freed "
+					end
+					if $first == 1
+						set $first = 0
+					end
+					printf "\n"
+					set $total = $total + 1
+				end
+				set $mca = $mca->mca_next
+			end
+			set $y += 1
+			if $slg->slg_slab[$y].sl_base == 0
+				set $stop = 1
+			end
+		end
+		set $x += 1
+	end
+	if $total && $show_a && $show_f
+		printf "\ntotal objects:\t%d\n", $total
+		printf "active/unfreed:\t%d\n", $total_a
+		printf "freed/in_cache:\t%d\n", $total_f
+	end
+end
+
+document mbuf_walkallslabs
+| Walk the mbuf objects pool; this requires mbuf debugging to be
+| turned on, by setting the appropriate flags to the "mbuf_debug" boot-args
+| parameter.  This is a backend routine for mbuf_show{active,inactive,all}.
+end
+
+define rtentry_trash
+	set $rtd = (struct rtentry_dbg *)rttrash_head.tqh_first
+	set $cnt = 0
+	while $rtd != 0
+		if $cnt == 0
+			printf "      rtentry_dbg  ref flags\n"
+			printf "      ------------ --- ----------\n"
+		end
+		printf "%4d: %p    %3d 0x%08x\n", $cnt + 1, $rtd, \
+		    $rtd->rtd_refhold_cnt - $rtd->rtd_refrele_cnt, \
+		    $rtd->rtd_entry.rt_flags
+		set $rtd = $rtd->rtd_trash_link.tqe_next
+		set $cnt = $cnt + 1
+	end
+end
+
+document rtentry_trash
+Syntax: (gdb) rtentry_trash
+| Walk the list of trash route entries; this requires route entry
+| debugging to be turned on, by setting the appropriate flags to the
+| "rte_debug" boot-args parameter.
+end
+
+set $RTD_TRSTACK_SIZE = 8
+set $RTD_REFHIST_SIZE = 4
+
+define rtentry_showdbg
+	set $rtd = (struct rtentry_dbg *)$arg0
+	set $cnt = 0
+
+	printf "Total holds: %d\n", $rtd->rtd_refhold_cnt
+	printf "Next hold slot: %d\n", $rtd->rtd_refhold_next
+	printf "Total releases: %d\n", $rtd->rtd_refrele_cnt
+	printf "Next release slot: %d\n", $rtd->rtd_refrele_next
+
+	set $ix = 0
+	while $ix < $RTD_TRSTACK_SIZE
+		set $pc = $rtd->rtd_alloc_stk_pc[$ix]
+		if $pc != 0
+			if $ix == 0
+				printf "\nAlloc (thread %p):\n", \
+				    $rtd->rtd_alloc_thread
+			end
+			printf "%4d: ", $ix + 1
+			pcprint $pc
+			printf "\n"
+		end
+		set $ix = $ix + 1
+	end
+	set $ix = 0
+	while $ix < $RTD_TRSTACK_SIZE
+		set $pc = $rtd->rtd_free_stk_pc[$ix]
+		if $pc != 0
+			if $ix == 0
+				printf "\nFree: (thread %p)\n", \
+				    $rtd->rtd_free_thread
+			end
+			printf "%4d: ", $ix + 1
+			pcprint $pc
+			printf "\n"
+		end
+		set $ix = $ix + 1
+	end
+	while $cnt < $RTD_REFHIST_SIZE
+		set $ix = 0
+		while $ix < $RTD_TRSTACK_SIZE
+			set $pc = $rtd->rtd_refhold[$cnt].pc[$ix]
+			if $pc != 0
+				if $ix == 0
+					printf "\nHold [%d] (thread %p):\n", \
+					    $cnt, $rtd->rtd_refhold[$cnt].th
+				end
+				printf "%4d: ", $ix + 1
+				pcprint $pc
+				printf "\n"
+			end
+			set $ix = $ix + 1
+		end
+		set $cnt = $cnt + 1
+	end
+	set $cnt = 0
+	while $cnt < $RTD_REFHIST_SIZE
+		set $ix = 0
+		while $ix < $RTD_TRSTACK_SIZE
+			set $pc = $rtd->rtd_refrele[$cnt].pc[$ix]
+			if $pc != 0
+				if $ix == 0
+					printf "\nRelease [%d] (thread %p):\n",\
+					    $cnt, $rtd->rtd_refrele[$cnt].th
+				end
+				printf "%4d: ", $ix + 1
+				pcprint $pc
+				printf "\n"
+			end
+			set $ix = $ix + 1
+		end
+		set $cnt = $cnt + 1
+	end
+end
+
+document rtentry_showdbg
+Syntax: (gdb) rtentry_showdbg <addr>
+| Given a route entry structure address, print the debug information
+| related to it.  This requires route entry debugging to be turned
+| on, by setting the appropriate flags to the "rte_debug" boot-args
+| parameter.
+end
+
+#
+# print all OSMalloc stats 
+
+define ostag_print
+set $kgm_tagp = (OSMallocTag)$arg0
+printf "0x%08x: ", $kgm_tagp
+printf "%8d ",$kgm_tagp->OSMT_refcnt
+printf "%8x ",$kgm_tagp->OSMT_state
+printf "%8x ",$kgm_tagp->OSMT_attr
+printf "%s ",$kgm_tagp->OSMT_name
+printf "\n"
+end
+
+
+define showosmalloc 
+printf "TAG          COUNT     STATE     ATTR     NAME\n"
+set $kgm_tagheadp = (OSMallocTag)&OSMalloc_tag_list
+    set $kgm_tagptr = (OSMallocTag )($kgm_tagheadp->OSMT_link.next)
+    while $kgm_tagptr != $kgm_tagheadp
+	ostag_print $kgm_tagptr
+	set $kgm_tagptr = (OSMallocTag)$kgm_tagptr->OSMT_link.next
+    end
+	printf "\n"
+end
+document showosmalloc
+Syntax: (gdb) showosmalloc
+| Print the outstanding allocation count by OSMallocTags.
+end
+
+
+define systemlog
+    if msgbufp->msg_bufc[msgbufp->msg_bufx] == 0
+        # The buffer hasn't wrapped, so take the easy (and fast!) path
+        printf "%s", msgbufp->msg_bufc
+    else
+        set $kgm_msgbuf = *msgbufp
+        set $kgm_syslog_bufsize = $kgm_msgbuf.msg_size
+        set $kgm_syslog_bufend = $kgm_msgbuf.msg_bufx
+        if $kgm_syslog_bufend >= $kgm_syslog_bufsize
+            set $kgm_syslog_bufend = 0
+        end
+    
+        # print older messages from msg_bufx to end of buffer
+        set $kgm_i = $kgm_syslog_bufend
+        while $kgm_i < $kgm_syslog_bufsize
+            set $kgm_syslog_char = $kgm_msgbuf.msg_bufc[$kgm_i]
+            if $kgm_syslog_char == 0
+                # break out of loop
+                set $kgm_i = $kgm_syslog_bufsize
+            else
+                printf "%c", $kgm_syslog_char
+            end
+            set $kgm_i = $kgm_i + 1
+        end
+        
+        # print newer messages from start of buffer to msg_bufx
+        set $kgm_i = 0
+        while $kgm_i < $kgm_syslog_bufend
+            set $kgm_syslog_char = $kgm_msgbuf.msg_bufc[$kgm_i]
+            printf "%c", $kgm_syslog_char
+            set $kgm_i = $kgm_i + 1
+        end
+    end
+    printf "\n"
+end
+document systemlog
+| Syntax: systemlog
+| Display the kernel's printf ring buffer
+end
+
+define printvnodepathint_recur
+	if $arg0 != 0
+		if ($arg0->v_flag & 0x000001) && ($arg0->v_mount != 0)
+			if $arg0->v_mount->mnt_vnodecovered != 0
+				printvnodepathint_recur  $arg0->v_mount->mnt_vnodecovered $arg0->v_mount->mnt_vnodecovered->v_name
+			end
+		else
+			printvnodepathint_recur $arg0->v_parent $arg0->v_parent->v_name
+			printf "/%s", $arg1
+		end
+	end
+end
+
+#
+# Show the locks held on a vnode by range, type, and holder.
+#
+define showvnodelocks
+    if ($argc == 1)
+    	_showvnodelockheader
+	_showvnodelocks $arg0
+    else
+    	printf "| Usage:\n|\n"
+	help showvnodelocks
+    end
+end
+document showvnodelocks
+| Given a vnodet pointer, display the list of advisory record locks for the
+| referenced pvnode.
+| The following is the syntax:
+|     (gdb) showvnodelocks <vnode_t>
+end
+
+define _showvnodelockheader
+    printf "*  type   W  held by        lock type  start               end\n"
+    printf "-  -----  -  -------------  ---------  ------------------  ------------------\n"
+end
+
+#
+# Macro to display a single lock; used to display both held locks and
+# blocked locks
+#
+define _showvnodelock
+    set $kgm_svl_lock = ((struct lockf *)$arg0)
+
+    # decode flags
+    set $kgm_svl_flags = $kgm_svl_lock->lf_flags
+    set $kgm_svl_type = $kgm_svl_lock->lf_type
+    if ($kgm_svl_flags & 0x20)
+	printf "flock"
+    end
+    if ($kgm_svl_flags & 0x40)
+	printf "posix"
+    end
+    if ($kgm_svl_flags & 0x80)
+	printf "prov "
+    end
+    if ($kgm_svl_flags & 0x10)
+	printf "  W  "
+    else
+	printf "  .  "
+    end
+
+    # POSIX file vs. advisory range locks
+    if ($kgm_svl_flags & 0x40)
+	set $kgm_svl_proc = (proc_t)$kgm_svl_lock->lf_id
+	printf "PID %8d   ", $kgm_svl_proc->p_pid
+    else
+	printf "ID 0x%08x  ", $kgm_svl_lock->lf_id
+    end
+
+    # lock type
+    if ($kgm_svl_type == 1)
+		printf "shared     "
+    else
+	if ($kgm_svl_type == 3)
+		printf "exclusive  "
+	else
+	    if ($kgm_svl_type == 2)
+		printf "unlock     "
+	    else
+		printf "unknown    "
+	    end
+	end
+    end
+
+    # start and stop
+    printf "0x%016x..", $kgm_svl_lock->lf_start
+    printf "0x%016x  ", $kgm_svl_lock->lf_end
+    printf "\n"
+end
+
+# Body of showvnodelocks, not including header
+define _showvnodelocks
+    set $kgm_svl_vnode = ((vnode_t)$arg0)
+    set $kgm_svl_lockiter = $kgm_svl_vnode->v_lockf
+    while ($kgm_svl_lockiter != 0)
+	# locks that are held
+    	printf "H  "
+    	_showvnodelock $kgm_svl_lockiter
+
+	# and any locks blocked by them
+	set $kgm_svl_blocker = $kgm_svl_lockiter->lf_blkhd.tqh_first
+	while ($kgm_svl_blocker != 0)
+	    printf ">  "
+	    _showvnodelock $kgm_svl_blocker
+	    set $kgm_svl_blocker = $kgm_svl_blocker->lf_block.tqe_next
+	end
+
+	# and on to the next one...
+    	set $kgm_svl_lockiter = $kgm_svl_lockiter->lf_next
+    end
+end
+
+define showvnodepath
+	set $vp = (struct vnode *)$arg0
+	if $vp != 0
+		if ($vp->v_flag & 0x000001) && ($vp->v_mount != 0) && ($vp->v_mount->mnt_flag & 0x00004000)
+			printf "/"
+		else
+			printvnodepathint_recur $vp $vp->v_name
+		end
+	end
+	printf "\n"
+end
+
+document showvnodepath
+Syntax: (gdb) showvnodepath <vnode>
+| Prints the path for a vnode
+end
+
+define printcolonhex
+    if ($argc == 2) 
+	set $addr = $arg0
+	set $count = $arg1
+	set $li = 0
+	while ($li < $count)
+	    if ($li == 0)
+		printf "%02x", (u_char)$addr[$li]
+	    end
+	    if ($li != 0)
+		printf ":%02x", (u_char)$addr[$li]
+	    end
+	    set $li = $li + 1
+	end
+    end
+end
+
+define showsockaddr_dl
+    set $sdl = (struct sockaddr_dl *)$arg0
+    printf "LINK "
+    if ($sdl == 0)
+	printf "(null)"
+    else
+	set $addr = $sdl->sdl_data + $sdl->sdl_nlen
+	set $count = $sdl->sdl_alen
+	printcolonhex $addr $count
+    end
+end
+
+define showsockaddr_unspec
+    set $sockaddr = (struct sockaddr *)$arg0
+    set $addr = $sockaddr->sa_data
+    set $count = $sockaddr->sa_len - 2
+    printf "UNSP "
+    printcolonhex $addr $count
+end
+
+define showsockaddr_at
+    set $sockaddr = (struct sockaddr *)$arg0
+    set $addr = $sockaddr->sa_data
+    set $count = $sockaddr->sa_len - 2
+    printf "ATLK "
+    printcolonhex $addr $count
+end
+
+define showsockaddr_in
+    set $sin = (struct sockaddr_in *)$arg0
+    set $sa_bytes = (unsigned char *)&($sin->sin_addr)
+    printf "IPV4 %d.%d.%d.%d", $sa_bytes[0], $sa_bytes[1], $sa_bytes[2], $sa_bytes[3]
+end
+
+define showsockaddr_in6
+    set $sin6 = (struct sockaddr_in6 *)$arg0
+    set $sa_bytes = $sin6->sin6_addr.__u6_addr.__u6_addr8
+    printf "IPV6 %02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x", $sa_bytes[0], $sa_bytes[1], $sa_bytes[2], $sa_bytes[3], $sa_bytes[4], $sa_bytes[5], $sa_bytes[6], $sa_bytes[7], $sa_bytes[8], $sa_bytes[9], $sa_bytes[10], $sa_bytes[11], $sa_bytes[12], $sa_bytes[13], $sa_bytes[14], $sa_bytes[15]
+end
+
+define showifmultiaddrs
+   set $ifp = (struct ifnet *)$arg0
+   set $if_multi = (struct ifmultiaddr *)$ifp->if_multiaddrs->lh_first
+   set $mymulti = $if_multi
+   set $myi = 0
+   while ($mymulti != 0)
+	printf "%2d. ", $myi
+	set $sa_family = $mymulti->ifma_addr.sa_family
+	if ($sa_family == 2)
+	    if ($mymulti->ifma_ll != 0)
+	    	showsockaddr_dl $mymulti->ifma_ll->ifma_addr
+	        printf " "
+	    end
+	    showsockaddr_in $mymulti->ifma_addr
+	end
+	if ($sa_family == 30)
+	    if ($mymulti->ifma_ll != 0)
+	    	showsockaddr_dl $mymulti->ifma_ll->ifma_addr
+	        printf " "
+	    end
+	    showsockaddr_in6 $mymulti->ifma_addr
+	end
+ 	if ($sa_family == 18)
+	    showsockaddr_dl $mymulti->ifma_addr
+	end
+	if ($sa_family == 0)
+	    showsockaddr_unspec $mymulti->ifma_addr 6
+	end
+	printf " [%d]", $mymulti->ifma_refcount
+	printf "\n"
+	set $mymulti = $mymulti->ifma_link.le_next
+	set $myi = $myi + 1
+   end
+end
+
+document showifmultiaddrs
+Syntax showifmultiaddrs <ifp>
+| show the (struct ifnet).if_multiaddrs list of multicast addresses for the given ifp
+end
+
+define showsockaddr
+    set $mysock = (struct sockaddr *)$arg0
+    set $showsockaddr_handled = 0
+    if ($mysock == 0)
+	printf "(null)"
+    else
+	if ($mysock->sa_family == 0)
+	    showsockaddr_unspec $mysock
+	    set $showsockaddr_handled = 1
+	end
+	if ($mysock->sa_family == 2)
+	    showsockaddr_in $mysock
+	    set $showsockaddr_handled = 1
+	end
+	if ($mysock->sa_family == 30)
+	    showsockaddr_in6 $mysock
+	    set $showsockaddr_handled = 1
+	end
+	if ($mysock->sa_family == 18)
+	    showsockaddr_dl $mysock
+	    set $showsockaddr_handled = 1
+	end
+	if ($mysock->sa_family == 16)
+	    showsockaddr_at $mysock
+	    set $showsockaddr_handled = 1
+	end
+	if ($showsockaddr_handled == 0)
+	    printf "%d ", $mysock->sa_family
+	    set $addr = $mysock->sa_data
+	    set $count = $mysock->sa_len
+	    printcolonhex $addr $count
+	end
+    end
+end
+
+define showifflags
+	set $flags = (u_short)$arg0
+	set $first = 1
+	printf "<"
+	if ($flags & 0x1)
+	    printf "UP"
+	    set $first = 0
+	end
+	if ($flags & 0x2)
+	    if ($first == 1)
+		set $first = 0
+	    else
+	    	printf ","
+	    end
+	    printf "BROADCAST"
+	end
+	if ($flags & 0x4)
+	    printf "DEBUG"
+	end
+	if ($flags & 0x8)
+	    if ($first == 1)
+		set $first = 0
+	    else
+	    	printf ","
+	    end
+	    printf "LOOPBACK"
+	end
+	if ($flags & 0x10)
+	    if ($first == 1)
+		set $first = 0
+	    else
+	    	printf ","
+	    end
+	    printf "POINTTOPOINT"
+	end
+#	if ($flags & 0x20)
+#	    if ($first == 1)
+#		set $first = 0
+#	    else
+#	    	printf ","
+#	    end
+#	    printf "NOTRAILERS"
+#	end
+	if ($flags & 0x40)
+	    if ($first == 1)
+		set $first = 0
+	    else
+	    	printf ","
+	    end
+	    printf "RUNNING"
+	end
+	if ($flags & 0x80)
+	    if ($first == 1)
+		set $first = 0
+	    else
+	    	printf ","
+	    end
+	    printf "NOARP"
+	end
+	if ($flags & 0x100)
+	    if ($first == 1)
+		set $first = 0
+	    else
+	    	printf ","
+	    end
+	    printf "PROMISC"
+	end
+	if ($flags & 0x200)
+	    if ($first == 1)
+		set $first = 0
+	    else
+	    	printf ","
+	    end
+	    printf "ALLMULTI"
+	end
+	if ($flags & 0x400)
+	    if ($first == 1)
+		set $first = 0
+	    else
+	    	printf ","
+	    end
+	    printf "OACTIVE"
+	end
+	if ($flags & 0x800)
+	    if ($first == 1)
+		set $first = 0
+	    else
+	    	printf ","
+	    end
+	    printf "SIMPLEX"
+	end
+	if ($flags & 0x1000)
+	    if ($first == 1)
+		set $first = 0
+	    else
+	    	printf ","
+	    end
+	    printf "LINK0"
+	end
+	if ($flags & 0x2000)
+	    if ($first == 1)
+		set $first = 0
+	    else
+	    	printf ","
+	    end
+	    printf "LINK1"
+	end
+	if ($flags & 0x4000)
+	    if ($first == 1)
+		set $first = 0
+	    else
+	    	printf ","
+	    end
+	    printf "LINK2-ALTPHYS"
+	end
+	if ($flags & 0x8000)
+	    if ($first == 1)
+		set $first = 0
+	    else
+	    	printf ","
+	    end
+	    printf "MULTICAST"
+	end
+	printf ">"
+end
+
+define showifaddrs
+   set $ifp = (struct ifnet *)$arg0
+   set $myifaddr = (struct ifaddr *)$ifp->if_addrhead->tqh_first
+   set $myi = 0
+   while ($myifaddr != 0)
+	printf "\t%d. ", $myi
+	showsockaddr $myifaddr->ifa_addr
+	printf " [%d]\n", $myifaddr->ifa_refcnt
+	set $myifaddr = $myifaddr->ifa_link->tqe_next
+	set $myi = $myi + 1
+   end
+end
+
+document showifaddrs
+Syntax: showifaddrs <ifp>
+| show the (struct ifnet).if_addrhead list of addresses for the given ifp
+end
+
+define ifconfig
+   set $ifconfig_all = 0
+   if ($argc == 1)
+	set $ifconfig_all = 1
+   end
+   set $ifp = (struct ifnet *)(ifnet->tqh_first)
+   while ($ifp != 0)
+	printf "%s%d: flags=%x", $ifp->if_name, $ifp->if_unit, (u_short)$ifp->if_flags
+	showifflags $ifp->if_flags
+	printf " mtu %d\n", $ifp->if_data.ifi_mtu
+	printf "\t(struct ifnet *)0x%x\n", $ifp
+	if ($ifconfig_all == 1) 
+	   showifaddrs $ifp
+        end
+	set $ifp = $ifp->if_link->tqe_next
+   end
+end
+document ifconfig
+Syntax: (gdb) ifconfig
+| display ifconfig-like output, and print the (struct ifnet *) pointers for further inspection
+end
+
+define showbpfdtab
+    set $myi = 0
+    while ($myi < bpf_dtab_size)
+	if (bpf_dtab[$myi] != 0)
+		printf "Address 0x%x, bd_next 0x%x\n", bpf_dtab[$myi], bpf_dtab[$myi]->bd_next
+		print *bpf_dtab[$myi]
+	end
+	set $myi = $myi + 1
+    end
+end
+
+define showallvols
+	printf "volume      mnt_data    mnt_devvp   typename    mountpoint\n"
+	set $kgm_vol = (mount_t) mountlist.tqh_first
+	while $kgm_vol
+		printf "0x%08x  ", $kgm_vol
+		printf "0x%08x  ", $kgm_vol->mnt_data
+		printf "0x%08x  ", $kgm_vol->mnt_devvp
+		if  ($kgm_vol->mnt_vtable->vfc_name[0] == 'h') && \
+		    ($kgm_vol->mnt_vtable->vfc_name[1] == 'f') && \
+		    ($kgm_vol->mnt_vtable->vfc_name[2] == 's') && \
+		    ($kgm_vol->mnt_vtable->vfc_name[3] == '\0')
+			set $kgm_hfsmount = \
+			    (struct hfsmount *) $kgm_vol->mnt_data
+			if $kgm_hfsmount->hfs_freezing_proc != 0
+				printf "FROZEN hfs  "
+			else
+				printf "hfs         "
+			end
+		else
+			printf "%-10s  ", $kgm_vol->mnt_vtable->vfc_name
+		end
+		printf "%s\n", $kgm_vol->mnt_vfsstat.f_mntonname
+		
+		set $kgm_vol = (mount_t) $kgm_vol->mnt_list.tqe_next
+	end
+end
+
+document showallvols
+Syntax: (gdb) showallvols
+| Display a summary of mounted volumes
+end
+
+define showvnodeheader
+	printf "vnode       usecount  iocount  v_data      vtype  parent      name\n"
+end
+
+define showvnodeint
+	set $kgm_vnode = (vnode_t) $arg0
+	printf "0x%08x  ", $kgm_vnode
+	printf "%8d  ", $kgm_vnode->v_usecount
+	printf "%7d  ", $kgm_vnode->v_iocount
+# print information about clean/dirty blocks?
+	printf "0x%08x  ", $kgm_vnode->v_data
+
+	# print the vtype, using the enum tag
+	set $kgm_vtype = $kgm_vnode->v_type
+	if $kgm_vtype == VNON
+		printf "VNON   "
+	end
+	if $kgm_vtype == VREG
+		printf "VREG   "
+	end
+	if $kgm_vtype == VDIR
+		printf "VDIR   "
+	end
+	if $kgm_vtype == VBLK
+		printf "VBLK   "
+	end
+	if $kgm_vtype == VCHR
+		printf "VCHR   "
+	end
+	if $kgm_vtype == VLNK
+		printf "VLNK   "
+	end
+	if $kgm_vtype == VSOCK
+		printf "VSOCK  "
+	end
+	if $kgm_vtype == VFIFO
+		printf "VFIFO  "
+	end
+	if $kgm_vtype == VBAD
+		printf "VBAD   "
+	end
+	if ($kgm_vtype < VNON) || ($kgm_vtype > VBAD)
+		printf "%5d  ", $kgm_vtype
+	end
+
+	printf "0x%08x  ", $kgm_vnode->v_parent
+	if $kgm_vnode->v_name != 0
+		printf "%s\n", $kgm_vnode->v_name
+	else
+		printf "\n"
+	end
+end
+
+define showvnode
+	showvnodeheader
+	showvnodeint $arg0
+end
+
+document showvnode
+Syntax: (gdb) showvnode <vnode>
+| Display info about one vnode
+end
+
+define showvolvnodes
+	showvnodeheader
+	set $kgm_vol = (mount_t) $arg0
+	set $kgm_vnode = (vnode_t) $kgm_vol.mnt_vnodelist.tqh_first
+	while $kgm_vnode
+		showvnodeint $kgm_vnode
+		set $kgm_vnode = (vnode_t) $kgm_vnode->v_mntvnodes.tqe_next
+	end
+end
+
+document showvolvnodes
+Syntax: (gdb) showvolvnodes <mouont_t>
+| Display info about all vnodes of a given mount_t
+end
+
+define showvolbusyvnodes
+	showvnodeheader
+	set $kgm_vol = (mount_t) $arg0
+	set $kgm_vnode = (vnode_t) $kgm_vol.mnt_vnodelist.tqh_first
+	while $kgm_vnode
+		if $kgm_vnode->v_iocount != 0
+			showvnodeint $kgm_vnode
+		end
+		set $kgm_vnode = (vnode_t) $kgm_vnode->v_mntvnodes.tqe_next
+	end
+end
+
+document showvolbusyvnodes
+Syntax: (gdb) showvolbusyvnodes <mount_t>
+| Display info about busy (iocount!=0) vnodes of a given mount_t
+end
+
+define showallbusyvnodes
+	showvnodeheader
+	set $kgm_vol = (mount_t) mountlist.tqh_first
+	while $kgm_vol
+		set $kgm_vnode = (vnode_t) $kgm_vol.mnt_vnodelist.tqh_first
+		while $kgm_vnode
+			if $kgm_vnode->v_iocount != 0
+				showvnodeint $kgm_vnode
+			end
+			set $kgm_vnode = (vnode_t) $kgm_vnode->v_mntvnodes.tqe_next
+		end
+		set $kgm_vol = (mount_t) $kgm_vol->mnt_list.tqe_next
+	end
+end
+
+document showallbusyvnodes
+Syntax: (gdb) showallbusyvnodes <vnode>
+| Display info about all busy (iocount!=0) vnodes
+end
+
+define showallvnodes
+	showvnodeheader
+	set $kgm_vol = (mount_t) mountlist.tqh_first
+	while $kgm_vol
+		set $kgm_vnode = (vnode_t) $kgm_vol.mnt_vnodelist.tqh_first
+		while $kgm_vnode
+			showvnodeint $kgm_vnode
+			set $kgm_vnode = (vnode_t) $kgm_vnode->v_mntvnodes.tqe_next
+		end
+		set $kgm_vol = (mount_t) $kgm_vol->mnt_list.tqe_next
+	end
+end
+
+document showallvnodes
+Syntax: (gdb) showallvnodes
+| Display info about all vnodes
+end
+
+define _showvnodelockheader
+    printf "*  type   W  held by        lock type  start               end\n"
+    printf "-  -----  -  -------------  ---------  ------------------  ------------------\n"
+end
+
+define _showvnodelock
+    set $kgm_svl_lock = ((struct lockf *)$arg0)
+
+    # decode flags
+    set $kgm_svl_flags = $kgm_svl_lock->lf_flags
+    set $kgm_svl_type = $kgm_svl_lock->lf_type
+    if ($kgm_svl_flags & 0x20)
+	printf "flock"
+    end
+    if ($kgm_svl_flags & 0x40)
+	printf "posix"
+    end
+    if ($kgm_svl_flags & 0x80)
+	printf "prov "
+    end
+    if ($kgm_svl_flags & 0x10)
+	printf "  W  "
+    else
+	printf "  .  "
+    end
+
+    # POSIX file vs. advisory range locks
+    if ($kgm_svl_flags & 0x40)
+	set $kgm_svl_proc = (proc_t)$kgm_svl_lock->lf_id
+	printf "PID %8d   ", $kgm_svl_proc->p_pid
+    else
+	printf "ID 0x%08x  ", $kgm_svl_lock->lf_id
+    end
+
+    # lock type
+    if ($kgm_svl_type == 1)
+		printf "shared     "
+    else
+	if ($kgm_svl_type == 3)
+		printf "exclusive  "
+	else
+	    if ($kgm_svl_type == 2)
+		printf "unlock     "
+	    else
+		printf "unknown    "
+	    end
+	end
+    end
+
+    # start and stop
+    printf "0x%016x..", $kgm_svl_lock->lf_start
+    printf "0x%016x  ", $kgm_svl_lock->lf_end
+    printf "\n"
+end
+# Body of showvnodelocks, not including header
+define _showvnodelocks
+    set $kgm_svl_vnode = ((vnode_t)$arg0)
+    set $kgm_svl_lockiter = $kgm_svl_vnode->v_lockf
+    while ($kgm_svl_lockiter != 0)
+	# locks that are held
+    	printf "H  "
+    	_showvnodelock $kgm_svl_lockiter
+
+	# and any locks blocked by them
+	set $kgm_svl_blocker = $kgm_svl_lockiter->lf_blkhd.tqh_first
+	while ($kgm_svl_blocker != 0)
+	    printf ">  "
+	    _showvnodelock $kgm_svl_blocker
+	    set $kgm_svl_blocker = $kgm_svl_blocker->lf_block.tqe_next
+	end
+
+	# and on to the next one...
+    	set $kgm_svl_lockiter = $kgm_svl_lockiter->lf_next
+    end
+end
+
+
+define showvnodelocks
+    if ($argc == 1)
+    	_showvnodelockheader
+	_showvnodelocks $arg0
+    else
+    	printf "| Usage:\n|\n"
+	help showvnodelocks
+    end
+end
+
+document showvnodelocks
+Syntax: (gdb) showvnodelocks <vnode_t>
+| Given a vnodet pointer, display the list of advisory record locks for the
+| referenced pvnodes
+end
+
+define showbootargs
+	printf "%s\n", (char*)((boot_args*)PE_state.bootArgs).CommandLine
+end
+
+document showbootargs
+Syntax: showbootargs
+| Display boot arguments passed to the target kernel
+end
+
+define showbootermemorymap
+       set $kgm_boot_args = kernelBootArgs
+       set $kgm_msize = kernelBootArgs->MemoryMapDescriptorSize
+       set $kgm_mcount = kernelBootArgs->MemoryMapSize / $kgm_msize
+       set $kgm_i = 0
+       
+       printf "Type       Physical Start   Number of Pages\n"
+       while $kgm_i < $kgm_mcount
+	     set $kgm_mptr = (EfiMemoryRange *)((unsigned long)kernelBootArgs->MemoryMap + $kgm_i * $kgm_msize)
+#	     p/x *$kgm_mptr
+	     if $kgm_mptr->Type == 0
+	       printf "reserved  "
+	     end
+	     if $kgm_mptr->Type == 1
+	       printf "LoaderCode"
+	     end
+	     if $kgm_mptr->Type == 2
+	       printf "LoaderData"
+	     end
+	     if $kgm_mptr->Type == 3
+	       printf "BS_code   "
+	     end
+	     if $kgm_mptr->Type == 4
+	       printf "BS_data   "
+	     end
+	     if $kgm_mptr->Type == 5
+	       printf "RT_code   "
+	     end
+	     if $kgm_mptr->Type == 6
+	       printf "RT_data   "
+	     end
+	     if $kgm_mptr->Type == 7
+	       printf "available "
+	     end
+	     if $kgm_mptr->Type == 8
+    	       printf "Unusable  "
+	     end
+	     if $kgm_mptr->Type == 9
+               printf "ACPI_recl "
+	     end
+	     if $kgm_mptr->Type == 10
+               printf "ACPI_NVS  "
+	     end
+	     if $kgm_mptr->Type == 11
+               printf "MemMapIO  "
+	     end
+	     if $kgm_mptr->Type == 12
+               printf "MemPortIO "
+	     end
+	     if $kgm_mptr->Type == 13
+               printf "PAL_code  "
+	     end
+	     if $kgm_mptr->Type > 13
+               printf "UNKNOWN   "
+	     end
+
+       	     printf " %016llx %016llx\n", $kgm_mptr->PhysicalStart, $kgm_mptr->NumberOfPages
+	     set $kgm_i = $kgm_i + 1
+       end
+end
+
+document showbootermemorymap
+Syntax: (gdb) showbootermemorymap
+| Prints out the phys memory map from kernelBootArgs
+end
+
+
+define showstacksaftertask
+    set $kgm_head_taskp = &default_pset.tasks
+    set $kgm_taskp = (struct task *)$arg0
+    while $kgm_taskp != $kgm_head_taskp
+        showtaskheader
+        showtaskint $kgm_taskp
+        set $kgm_head_actp = &($kgm_taskp->threads)
+        set $kgm_actp = (struct thread *)($kgm_taskp->threads.next) 
+        while $kgm_actp != $kgm_head_actp
+            showactheader
+            if ($decode_wait_events > 0)
+               showactint $kgm_actp 1
+            else
+               showactint $kgm_actp 2
+            end
+            set $kgm_actp = (struct thread *)($kgm_actp->task_threads.next)
+        end
+        printf "\n"
+        set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
+    end
+end
+document showstacksaftertask
+Syntax: (gdb) showstacksaftertask <task>
+| Routine to print out all stacks (as in showallstacks) starting after a given task
+| Useful if that gdb refuses to print a certain task's stack.
+end
+
+define showpmworkqueueint
+    set $kgm_pm_wq = (IOPMWorkQueue *)$arg0
+    set $kgm_pm_node = (IOService *)$kgm_pm_wq->owner
+    printf "0x%08x  0x%08x  ", $kgm_pm_wq, $kgm_pm_node
+    printf "%02d ", $kgm_pm_node->pwrMgt->CurrentPowerState
+    printf "%02d ", $kgm_pm_node->pwrMgt->MachineState
+    printf "%02d  ", $kgm_pm_node->pwrMgt->WaitReason
+    printf "%s\n", $kgm_pm_node->pwrMgt->Name
+    set $kgm_pm_queue = &($kgm_pm_wq->fWorkQueue)
+    set $kgm_pm_req = (IOPMRequest *) $kgm_pm_queue->next
+    while ( (queue_entry_t) $kgm_pm_req != (queue_entry_t) $kgm_pm_queue)
+        printf "   Request  0x%08x [%02x]  Args ", $kgm_pm_req, $kgm_pm_req->fType
+        printf "0x%08x ", $kgm_pm_req->fArg0
+        printf "0x%08x ", $kgm_pm_req->fArg1
+        printf "0x%08x\n", $kgm_pm_req->fArg2
+        set $kgm_pm_req = (IOPMRequest *)$kgm_pm_req->fCommandChain.next
+    end
+end
+
+define showallpmworkqueues
+    set $kgm_pm_next = gIOPMWorkLoop->eventChain
+    printf "WorkQueue   Owner       PS MS WT  Name\n"
+    printf "--------------------------------------\n"
+    while ( $kgm_pm_next )
+        set $kgm_vt = *((void **) $kgm_pm_next)
+        if ($kgm_vt == _ZTV13IOPMWorkQueue)
+            showpmworkqueueint $kgm_pm_next
+        end
+        set $kgm_pm_next = $kgm_pm_next->eventChainNext
+    end
+end
+
+document showallpmworkqueues
+Syntax: (gdb) showallpmworkqueues
+| Display info about all IOPMWorkQueue objects
+end
+
+define showioservicepm
+	set $kgm_iopmpriv = (IOServicePM *)$arg0
+	printf "{ this object = %08x", $kgm_iopmpriv->Owner
+	if ( $kgm_iopmpriv->WeAreRoot )
+		printf " (root)"
+	end
+	printf ", "
+	
+	printf "MachineState = %d (", $kgm_iopmpriv->MachineState
+	if ( $kgm_iopmpriv->MachineState == 1 )
+		printf "kIOPM_OurChangeTellClientsPowerDown"
+	else
+		if ( $kgm_iopmpriv->MachineState == 2 )
+			printf "kIOPM_OurChangeTellPriorityClientsPowerDown"
+		else
+			if ( $kgm_iopmpriv->MachineState == 3 )
+				printf "kIOPM_OurChangeNotifyInterestedDriversWillChange"
+			else
+				if ( $kgm_iopmpriv->MachineState == 4 )
+					printf "kIOPM_OurChangeSetPowerState"
+				else
+					if ( $kgm_iopmpriv->MachineState == 5 )
+						printf "kIOPM_OurChangeWaitForPowerSettle"
+					else
+						if ( $kgm_iopmpriv->MachineState == 6 )
+							printf "kIOPM_OurChangeNotifyInterestedDriversDidChange"
+						else
+							if ( $kgm_iopmpriv->MachineState == 7 )
+								printf "kIOPM_OurChangeFinish"
+							else
+								if ( $kgm_iopmpriv->MachineState == 8 )
+									printf "kIOPM_ParentDownTellPriorityClientsPowerDown"
+								else
+									if ( $kgm_iopmpriv->MachineState == 9 )
+										printf "kIOPM_ParentDownNotifyInterestedDriversWillChange"
+									else
+										if ( $kgm_iopmpriv->MachineState == 10 )
+											printf "Unused_MachineState_10"
+										else
+											if ( $kgm_iopmpriv->MachineState == 11 )
+												printf "kIOPM_ParentDownNotifyDidChangeAndAcknowledgeChange"
+											else
+												if ( $kgm_iopmpriv->MachineState == 12 )
+													printf "kIOPM_ParentDownSetPowerState"
+												else
+													if ( $kgm_iopmpriv->MachineState == 13 )
+														printf "kIOPM_ParentDownWaitForPowerSettle"
+													else
+														if ( $kgm_iopmpriv->MachineState == 14 )
+															printf "kIOPM_ParentDownAcknowledgeChange"
+														else
+															if ( $kgm_iopmpriv->MachineState == 15)
+																printf "kIOPM_ParentUpSetPowerState"
+															else
+																if ( $kgm_iopmpriv->MachineState == 16)
+																	printf "Unused_MachineState_16"
+																else
+																	if ( $kgm_iopmpriv->MachineState == 17)
+																		printf "kIOPM_ParentUpWaitForSettleTime"
+																	else
+																		if ( $kgm_iopmpriv->MachineState == 18)
+																			printf "kIOPM_ParentUpNotifyInterestedDriversDidChange"
+																		else
+																			if ( $kgm_iopmpriv->MachineState == 19)
+																				printf "kIOPM_ParentUpAcknowledgePowerChange"
+																			else
+																				if ( $kgm_iopmpriv->MachineState == 20)
+																					printf "kIOPM_Finished"
+                                                                                else
+                                                                                    if ( $kgm_iopmpriv->MachineState == 21)
+                                                                                        printf "kIOPM_DriverThreadCallDone"
+                                                                                    else
+                                                                                        if ( $kgm_iopmpriv->MachineState == 22)
+                                                                                            printf "kIOPM_NotifyChildrenDone"
+                                                                                        end
+                                                                                    end
+																				end
+																			end
+																		end
+																	end
+																end
+															end
+														end
+													end
+												end
+											end
+										end
+									end
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+	printf "), "
+	
+	if ( $kgm_iopmpriv->MachineState != 20 )
+        printf "DriverTimer = %d, ",(unsigned int)$kgm_iopmpriv->DriverTimer
+        printf "SettleTime  = %d, ",(unsigned int)$kgm_iopmpriv->SettleTimeUS
+        printf "HeadNoteFlags = %08x, ",(unsigned int)$kgm_iopmpriv->HeadNoteFlags
+        printf "HeadNoteState = %d, ",(unsigned int)$kgm_iopmpriv->HeadNoteState
+        printf "HeadNoteOutputFlags = %08x, ",(unsigned int)$kgm_iopmpriv->HeadNoteOutputFlags
+        printf "HeadNoteDomainState = %08x, ",(unsigned int)$kgm_iopmpriv->HeadNoteDomainState
+        printf "HeadNoteCapabilityFlags = %08x, ",(unsigned int)$kgm_iopmpriv->HeadNoteCapabilityFlags
+        printf "HeadNotePendingAcks = %x, ",(unsigned int)$kgm_iopmpriv->HeadNotePendingAcks
+	end
+
+    if ( $kgm_iopmpriv->DeviceOverrides != 0 )
+        printf"DeviceOverrides, "
+    end
+	
+    printf "DriverDesire = %d, ",(unsigned int)$kgm_iopmpriv->DriverDesire
+    printf "DeviceDesire = %d, ",(unsigned int)$kgm_iopmpriv->DeviceDesire
+    printf "DesiredPowerState = %d, ",(unsigned int)$kgm_iopmpriv->DesiredPowerState
+    printf "PreviousRequest = %d }",(unsigned int)$kgm_iopmpriv->PreviousRequest
+end
+
+document showioservicepm
+Syntax: (gdb) showioservicepm <IOServicePM pointer>
+| Routine to dump the IOServicePM object
+end
+
+define showregistryentryrecursepmstate
+    set $kgm_re         = (IOService *)$arg1
+    set $kgm$arg0_stack = (unsigned long long) $arg2
+
+    if ($arg3)
+	set $kgm$arg0_stack = $kgm$arg0_stack | (1ULL << $kgm_reg_depth)
+    else
+	set $kgm$arg0_stack = $kgm$arg0_stack & ~(1ULL << $kgm_reg_depth)
+    end
+
+    dictget $kgm_re->fRegistryTable $kgm_childkey
+    set $kgm$arg0_child_array = (OSArray *) $kgm_result
+
+    if ($kgm$arg0_child_array)
+	set $kgm$arg0_child_count = $kgm$arg0_child_array->count
+    else
+	set $kgm$arg0_child_count = 0
+    end
+
+    if ($kgm$arg0_child_count)
+	set $kgm$arg0_stack = $kgm$arg0_stack | (2ULL << $kgm_reg_depth)
+    else
+	set $kgm$arg0_stack = $kgm$arg0_stack & ~(2ULL << $kgm_reg_depth)
+    end
+
+    indent $kgm_reg_depth $kgm$arg0_stack
+    printf "+-o "
+
+    dictget $kgm_re->fRegistryTable $kgm_namekey
+    if ($kgm_result == 0)
+	dictget $kgm_re->fRegistryTable gIONameKey
+    end
+    if ($kgm_result == 0)
+	dictget $kgm_re->fPropertyTable gIOClassKey
+    end
+
+    if ($kgm_result != 0)
+	printf "%s <%p>", ((OSString *)$kgm_result)->string, $kgm_re
+    else
+ 	if (((IOService*)$kgm_re)->pwrMgt &&  ((IOService*)$kgm_re)->pwrMgt->Name)
+ 	    printf "%s <%p>", ((IOService*)$kgm_re)->pwrMgt->Name, $kgm_re
+	else
+	    printf "?? <%p>", $kgm_re
+	end
+    end
+
+    if (((IOService*)$kgm_re)->pwrMgt )
+    	printf " Current Power State: %ld ", ((IOService*)$kgm_re)->pwrMgt->CurrentPowerState
+    	#printf " Mach State %ld", ((IOService*)$kgm_re)->pwrMgt->MachineState
+        showioservicepm ((IOService*)$kgm_re)->pwrMgt
+    end
+    printf "\n"
+   
+
+    # recurse
+    if ($kgm$arg0_child_count != 0)
+
+	set $kgm_reg_depth = $kgm_reg_depth + 1
+	set $kgm$arg0_child_idx = 0
+
+	while ($kgm$arg0_child_idx < $kgm$arg0_child_count)
+	    set $kgm_re = $kgm$arg0_child_array->array[$kgm$arg0_child_idx++]
+	    set $kgm_more_sib = ($kgm$arg0_child_idx < $kgm$arg0_child_count)
+	    showregistryentryrecursepmstate _$arg0 $kgm_re $kgm$arg0_stack $kgm_more_sib
+	end
+
+	set $kgm_reg_depth = $kgm_reg_depth - 1
+    end
+end
+
+define showregistryentryintpmstate
+    set $kgm_namekey   = (OSSymbol *) $kgm_reg_plane[2]
+    set $kgm_childkey  = (OSSymbol *) $kgm_reg_plane[4]
+    showregistryentryrecursepmstate _ $arg0 0 0
+end
+
+define showregistrypmstate
+#    setregistryplane gIOPowerPlane
+    set $kgm_reg_depth  = 0
+    set $kgm_show_props = 1
+    showregistryentryintpmstate gRegistryRoot
+end
+
+document showregistrypmstate
+Syntax: (gdb) showregistrypmstate
+| Routine to dump the PM state of each IOPower registry entry
+end
+
+define showstacksafterthread
+    set $kgm_head_taskp = &default_pset.tasks
+    set $kgm_actp = (struct thread *)$arg0
+    set $kgm_actp = (struct thread *)($kgm_actp->task_threads.next)
+    set $kgm_taskp = (struct task *)$kgm_actp->task
+    while $kgm_taskp != $kgm_head_taskp
+        showtaskheader
+        showtaskint $kgm_taskp
+        set $kgm_head_actp = &($kgm_taskp->threads)
+        while $kgm_actp != $kgm_head_actp
+            showactheader
+            if ($decode_wait_events > 0)
+               showactint $kgm_actp 1
+            else
+               showactint $kgm_actp 2
+            end
+            set $kgm_actp = (struct thread *)($kgm_actp->task_threads.next)
+        end
+        printf "\n"
+        set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next) 
+    end
+end
+
+document showstacksafterthread
+Syntax: (gdb) showstacksafterthread <thread>
+| Routine to print out all stacks (as in showallstacks) starting after a given thread
+| Useful if that gdb refuses to print a certain task's stack.
+end
+
+define kdp-reenter
+       set kdp_reentry_deadline = ((unsigned) $arg0)*1000
+       continue
+end
+
+document kdp-reenter
+Syntax: (gdb) kdp-reenter <seconds>
+| Schedules reentry into the debugger after <seconds> seconds, and resumes
+| the target system.
+end
+
+define _if_present
+    if (!$arg0)
+        printf " not"
+    end
+    printf " present"
+end
+
+define showMCAstate
+    if ($kgm_mtype != 7)
+        printf "Not available for current architecture.\n"
+    else
+        printf "MCA"
+        _if_present mca_MCA_present
+        printf ", control MSR"
+        _if_present mca_control_MSR_present
+        printf ", threshold status"
+        _if_present mca_threshold_status_present
+        printf "\n%d error banks, ", mca_error_bank_count
+        printf "family code 0x%x, ", mca_family
+        printf "machine-check exception taken: %d\n", mca_exception_taken
+        set $kgm_cpu = 0
+        while cpu_data_ptr[$kgm_cpu] != 0
+            set $kgm_mcp = cpu_data_ptr[$kgm_cpu]->cpu_mca_state
+            if $kgm_mcp
+                printf "CPU %d:", $kgm_cpu
+                printf " mca_mcg_ctl: 0x%016llx", $kgm_mcp->mca_mcg_ctl
+                printf " mca_mcg_status: 0x%016llx\n", $kgm_mcp->mca_mcg_status.u64
+                printf "bank   "
+                printf "mca_mci_ctl        "
+                printf "mca_mci_status     "
+                printf "mca_mci_addr       "
+                printf "mca_mci_misc\n"
+                set $kgm_bank = 0
+                while $kgm_bank < mca_error_bank_count
+                    set $kgm_bp = &$kgm_mcp->mca_error_bank[$kgm_bank]
+                    printf " %2d:", $kgm_bank
+                    printf " 0x%016llx", $kgm_bp->mca_mci_ctl
+                    printf " 0x%016llx", $kgm_bp->mca_mci_status.u64
+                    printf " 0x%016llx", $kgm_bp->mca_mci_addr
+                    printf " 0x%016llx\n", $kgm_bp->mca_mci_misc
+                    set $kgm_bank = $kgm_bank + 1
+                end
+            end
+            set $kgm_cpu = $kgm_cpu + 1
+        end
+    end
+end
+
+document showMCAstate
+Syntax: showMCAstate
+| Print machine-check register state after MC exception.
 end

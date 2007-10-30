@@ -34,14 +34,16 @@
 .Lb libc
 .Sh SYNOPSIS
 .In aio.h
-.Ft int
-.Fn aio_return "struct aiocb *iocb"
+.Ft ssize_t
+.Fo aio_return
+.Fa "struct aiocb *aiocbp"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn aio_return
 system call returns the final status of the asynchronous I/O request
 associated with the structure pointed to by
-.Fa iocb .
+.Fa aiocbp .
 .Pp
 The
 .Fn aio_return
@@ -52,8 +54,8 @@ I/O operation once
 returns something other than
 .Er EINPROGRESS .
 .Sh RETURN VALUES
-If the asynchronous I/O request has completed, the status is returned
-as described in
+If the asynchronous I/O request has completed,
+the status is returned as described in
 .Xr read 2 ,
 .Xr write 2 ,
 or
@@ -70,12 +72,23 @@ The
 .Fn aio_return
 system call will fail if:
 .Bl -tag -width Er
+.\" ==========
 .It Bq Er EINVAL
 The
-.Fa iocb
+.Fa aiocbp
 argument
 does not reference an outstanding asynchronous I/O request.
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <aio.h>
+.Pp
+.Ft int
+.br
+.Fo aio_return
+.Fa "struct aiocb *aiocbp"
+.Fc ;
+.Pp
+The type of the return value has changed.
 .Sh SEE ALSO
 .Xr aio_cancel 2 ,
 .Xr aio_error 2 ,
@@ -84,7 +97,8 @@ does not reference an outstanding asynchronous I/O request.
 .Xr fsync 2 ,
 .Xr read 2 ,
 .Xr write 2 ,
-.Xr aio 4
+.Xr aio 4 ,
+.Xr compat 5
 .Sh STANDARDS
 The
 .Fn aio_return

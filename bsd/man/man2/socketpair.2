@@ -40,49 +40,78 @@
 .Nm socketpair
 .Nd create a pair of connected sockets
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
 .Fd #include <sys/socket.h>
 .Ft int
-.Fn socketpair "int d" "int type" "int protocol" "int *sv"
+.Fo socketpair
+.Fa "int domain"
+.Fa "int type"
+.Fa "int protocol"
+.Fa "int socket_vector[2]"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn socketpair
 call creates an unnamed pair of connected sockets in
 the specified domain
-.Fa d ,
+.Fa domain ,
 of the specified
 .Fa type ,
 and using the optionally specified
 .Fa protocol .
 The descriptors used in referencing the new sockets
 are returned in
-.Fa sv Ns [0]
+.Fa socket_vector Ns [0]
 and
-.Fa sv Ns [1] .
+.Fa socket_vector Ns [1] .
 The two sockets are indistinguishable.
-.Sh DIAGNOSTICS
-A 0 is returned if the call succeeds, -1 if it fails.
+.Sh RETURN VALUES
+.Rv -std socketpair
 .Sh ERRORS
 The call succeeds unless:
 .Bl -tag -width Er
-.It Bq Er EMFILE
-Too many descriptors are in use by this process.
+.\" ===========
 .It Bq Er EAFNOSUPPORT
 The specified address family is not supported on this machine.
-.It Bq Er EPROTONOSUPPORT
-The specified protocol is not supported on this machine.
-.It Bq Er EOPNOSUPPORT
-The specified protocol does not support creation of socket pairs.
+.\" ===========
 .It Bq Er EFAULT
 The address
-.Fa sv
-does not specify a valid part of the
-process address space.
+.Fa socket_vector
+does not specify a valid part of the process address space.
+.\" ===========
+.It Bq Er EMFILE
+No more file descriptors are available for this process.
+.\" ===========
+.It Bq Er ENFILE
+No more file descriptors are available for the system.
+.\" ===========
+.It Bq Er ENOBUFS
+Insufficient resources were available in the system
+to perform the operation.
+.\" ===========
+.It Bq Er ENOMEM
+Insufficient memory was available to fulfill the request.
+.\" ===========
+.It Bq Er EOPNOTSUPP
+The specified protocol does not support creation of socket pairs.
+.\" ===========
+.It Bq Er EPROTONOSUPPORT
+The specified protocol is not supported on this machine.
+.\" ===========
+.It Bq Er EPROTOTYPE
+The socket type is not supported by the protocol.
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/socket.h>
+.Pp
+The include file
+.In sys/types.h
+is necessary.
 .Sh SEE ALSO
+.Xr pipe 2 ,
 .Xr read 2 ,
 .Xr write 2 ,
-.Xr pipe 2
+.Xr compat 5
 .Sh BUGS
 This call is currently implemented only for the
 .Tn UNIX

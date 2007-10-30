@@ -12,23 +12,33 @@ include $(MakeInc_def)
 
 MI_DIR = platform
 NOT_EXPORT_HEADERS = 
+NOT_KF_MI_HEADERS  = AppleARMCPU.h AppleARMFunction.h AppleARMIICController.h \
+			AppleARMIICDevice.h AppleARMIISController.h \
+			AppleARMIISDevice.h AppleARMIO.h AppleARMIODevice.h \
+			AppleARMNORFlashController.h AppleARMNORFlashDevice.h \
+			AppleARMPE.h AppleARMRTC.h AppleARMSPIController.h \
+			AppleARMSPIDevice.h
 
 INSTINC_SUBDIRS =
 INSTINC_SUBDIRS_PPC =
 INSTINC_SUBDIRS_I386 =
+INSTINC_SUBDIRS_ARM =
 
 EXPINC_SUBDIRS = ${INSTINC_SUBDIRS}
 EXPINC_SUBDIRS_PPC = ${INSTINC_SUBDIRS_PPC}
 EXPINC_SUBDIRS_I386 = ${INSTINC_SUBDIRS_I386}
+EXPINC_SUBDIRS_ARM = ${INSTINC_SUBDIRS_ARM}
 
 ALL_HEADERS = $(shell (cd $(SOURCE); echo *.h))
 
 INSTALL_MI_LIST	= 
-INSTALL_MI_LCL_LIST = ""
+INSTALL_MI_LCL_LIST = 
 INSTALL_MI_DIR = $(MI_DIR)
 
 EXPORT_MI_LIST	= $(filter-out $(NOT_EXPORT_HEADERS), $(ALL_HEADERS))
 EXPORT_MI_DIR = IOKit/$(MI_DIR)
+
+INSTALL_KF_MI_LIST = $(filter-out $(NOT_KF_MI_HEADERS), $(ALL_HEADERS))
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 
@@ -37,7 +43,12 @@ typedef kern_return_t (*IOIteratePageableMapsCallback)(vm_map_t map, void * ref)
 void IOLibInit(void);
 kern_return_t IOIteratePageableMaps(vm_size_t size,
                     IOIteratePageableMapsCallback callback, void * ref);
-vm_map_t IOPageableMapForAddress( vm_address_t address );
+vm_map_t IOPageableMapForAddress(vm_address_t address);
+
+kern_return_t 
+IOMemoryDescriptorMapMemEntry(vm_map_t map, ipc_port_t entry, IOOptionBits options, bool pageable,
+				mach_vm_size_t offset, mach_vm_address_t * address, mach_vm_size_t length);
+
 SInt32 OSKernelStackRemaining( void );
 
 mach_vm_address_t
@@ -48,9 +59,8 @@ IOKernelFreeContiguous(mach_vm_address_t address, mach_vm_size_t size);
 extern vm_size_t debug_iomallocpageable_size;
 
 // osfmk/device/iokit_rpc.c
-// LP64todo - these need to expand 
 extern kern_return_t IOMapPages(vm_map_t map, mach_vm_address_t va, mach_vm_address_t pa,
-			mach_vm_size_t length, unsigned int options);
+                                 mach_vm_size_t length, unsigned int mapFlags);
 extern kern_return_t IOUnmapPages(vm_map_t map, mach_vm_address_t va, mach_vm_size_t length);
 
 extern kern_return_t IOProtectCacheMode(vm_map_t map, mach_vm_address_t va,
@@ -87,5 +97,42 @@ struct IOMDDMAWalkSegmentArgs {
     UInt8 fMapped;			// Input Variable, Require mapped IOVMA
 };
 typedef UInt8 IOMDDMAWalkSegmentState[128];
+
+struct IODMACommandInternal
+{
+    IOMDDMAWalkSegmentState fState;
+    IOMDDMACharacteristics  fMDSummary;
+
+    UInt64 fPreparedOffset;
+    UInt64 fPreparedLength;
+
+    UInt8  fCursor;
+    UInt8  fCheckAddressing;
+    UInt8  fIterateOnly;
+    UInt8  fMisaligned;
+    UInt8  fCopyContig;
+    UInt8  fPrepared;
+    UInt8  fDoubleBuffer;
+    UInt8  __pad[1];
+
+    ppnum_t  fCopyPageAlloc;
+    ppnum_t  fCopyPageCount;
+    ppnum_t  fNextRemapIndex;
+    addr64_t fCopyNext;
+
+    class IOBufferMemoryDescriptor * fCopyMD;
+
+    // IODMAEventSource use
+    IOReturn fStatus;
+    UInt64   fActualByteCount;
+};
+
+extern "C" struct timeval gIOLastSleepTime;
+extern "C" struct timeval gIOLastWakeTime;
+
+extern "C" void IOKitResetTime( void );
+extern "C" void IOKitInitializeTime( void );
+
+extern "C" OSString * IOCopyLogNameForPID(int pid);
 
 #endif /* ! _IOKIT_KERNELINTERNAL_H */

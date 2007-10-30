@@ -26,7 +26,7 @@ include $(MakeInc_def)
 #
 # XXX: CFLAGS
 #
-CFLAGS+= -DMACH_KERNEL_PRIVATE
+CFLAGS+= -imacros meta_features.h -DMACH_KERNEL_PRIVATE $(CFLAGS_INLINE_CONFIG)
 
 #
 # Directories for mig generated files
@@ -36,7 +36,9 @@ COMP_SUBDIRS = \
 	device \
 	mach_debug \
 	mach \
-	UserNotification
+	UserNotification \
+	gssd \
+	lockd
 
 COMP_SUBDIRS_I386 = \
 	mach
@@ -81,19 +83,18 @@ ${OBJS}: ${OBJSDEPS}
 LDOBJS = $(OBJS)
 
 $(COMPONENT).o: $(LDOBJS) assym.s
-	@echo "[ creating $(COMPONENT).o ]"
-	for hib_file in ${HIB_FILES};		\
+	$(_v)for hib_file in ${HIB_FILES};		\
 	do	\
                 $(SEG_HACK) __HIB $${hib_file} -o $${hib_file}__; \
                 mv $${hib_file}__ $${hib_file} ; \
 	done;
-	@echo [ updating $(COMPONENT).o ${OSFMK_KERNEL_CONFIG} ]
-	$(LD)  $(LDFLAGS_COMPONENT)  -o $(COMPONENT).o ${LDOBJS}
+	@echo LD $(COMPONENT)
+	$(_v)$(LD)  $(LDFLAGS_COMPONENT)  -o $(COMPONENT).o ${LDOBJS}
 
 do_all: $(COMPONENT).o
 
 do_depend: do_all
-	${MD} -u Makedep -f -d `ls *.d`;
+	$(_v)${MD} -u Makedep -f -d `ls *.d`;
 	
 do_build_all: do_depend
 
@@ -102,10 +103,10 @@ do_build_all: do_depend
 # dependency generation
 
 genassym.o: $(SOURCE_DIR)/$(COMPONENT)/$(ARCH_CONFIG_LC)/genassym.c
-	${KCC} ${CFLAGS} -MD ${_HOST_EXTRA_CFLAGS} -S -o ${@} -c ${INCFLAGS} $<
+	$(_v)${KCC} ${CFLAGS} -MD ${_HOST_EXTRA_CFLAGS} -S -o ${@} -c ${INCFLAGS} $<
 
 assym.s: genassym.o
-	sed -e '/#DEFINITION#/!d' -e 's/^.*#DEFINITION#//' -e 's/\$$//' genassym.o > ${@}
+	$(_v)sed -e '/#DEFINITION#/!d' -e 's/^.*#DEFINITION#//' -e 's/\$$//' -e 'p' -e 's/#//2' -e 's/[^A-Za-z0-9_]*\([A-Za-z0-9_]*\)/ \1_NUM/2' genassym.o > ${@}
 
 ${SOBJS}: assym.s
 
@@ -114,4 +115,3 @@ ${SOBJS}: assym.s
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-

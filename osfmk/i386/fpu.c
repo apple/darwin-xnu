@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -167,15 +173,12 @@ init_fpu(void)
         {
 	    /* Use FPU save/restore instructions if available */
 		if (cpuid_features() & CPUID_FEATURE_FXSR) {
-		        fp_kind = FP_FXSR;
+	    	fp_kind = FP_FXSR;
 			set_cr4(get_cr4() | CR4_FXS);
-			printf("Enabling XMM register save/restore");
 			/* And allow SIMD instructions if present */
 			if (cpuid_features() & CPUID_FEATURE_SSE) {
-		    	printf(" and SSE/SSE2");
 		    	set_cr4(get_cr4() | CR4_XMM);
 			}
-			printf(" opcodes\n");
 	    } else
 			panic("fpu is not FP_FXSR");
 
@@ -226,8 +229,7 @@ fpu_module_init(void)
  * Called only when thread terminating - no locking necessary.
  */
 void
-fpu_free(fps)
-	struct x86_fpsave_state *fps;
+fpu_free(struct x86_fpsave_state *fps)
 {
 	fp_state_free(fps);
 }
@@ -243,7 +245,7 @@ fpu_free(fps)
  */
 kern_return_t
 fpu_set_fxstate(
-	thread_t	thr_act,
+	thread_t		thr_act,
 	thread_state_t	tstate)
 {
 	struct x86_fpsave_state	*ifps;
@@ -252,7 +254,7 @@ fpu_set_fxstate(
 	pcb_t	pcb;
 
 	if (fp_kind == FP_NO)
-	        return KERN_FAILURE;
+	    return KERN_FAILURE;
 
 	state = (x86_float_state64_t *)tstate;
 
@@ -260,58 +262,63 @@ fpu_set_fxstate(
 	pcb = thr_act->machine.pcb;
 
 	if (state == NULL) {
-	        /*
-		 * new FPU state is 'invalid'.
-		 * Deallocate the fp state if it exists.
-		 */
-	        simple_lock(&pcb->lock);
+	    /*
+	     * new FPU state is 'invalid'.
+	     * Deallocate the fp state if it exists.
+	     */
+	    simple_lock(&pcb->lock);
 
 		ifps = pcb->ifps;
 		pcb->ifps = 0;
 
-		simple_unlock(&pcb->lock);
+	    simple_unlock(&pcb->lock);
 
 		if (ifps != 0)
-		        fp_state_free(ifps);
+		fp_state_free(ifps);
 	} else {
-	        /*
-		 * Valid state.  Allocate the fp state if there is none.
-		 */
-	        new_ifps = 0;
+	    /*
+	     * Valid state.  Allocate the fp state if there is none.
+	     */
+	    new_ifps = 0;
 	Retry:
-		simple_lock(&pcb->lock);
+	    simple_lock(&pcb->lock);
 
 		ifps = pcb->ifps;
-		if (ifps == 0) {
-		        if (new_ifps == 0) {
-			        simple_unlock(&pcb->lock);
-				new_ifps = fp_state_alloc();
-				goto Retry;
-			}
-			ifps = new_ifps;
-			new_ifps = 0;
-			pcb->ifps = ifps;
+	    if (ifps == 0) {
+		if (new_ifps == 0) {
+		    simple_unlock(&pcb->lock);
+		    new_ifps = fp_state_alloc();
+		    goto Retry;
 		}
-		/*
-		 * now copy over the new data.
-		 */
-		bcopy((char *)&state->fpu_fcw,
+		ifps = new_ifps;
+		new_ifps = 0;
+			pcb->ifps = ifps;
+	    }
+	    /*
+	     * now copy over the new data.
+	     */
+            bcopy((char *)&state->fpu_fcw,
 		      (char *)&ifps->fx_save_state, sizeof(struct x86_fx_save));
 
 		/* XXX The layout of the state set from user-space may need to be
 		 * validated for consistency.
 		 */
 		ifps->fp_save_layout = thread_is_64bit(thr_act) ? FXSAVE64 : FXSAVE32;
+		/* Mark the thread's floating point status as non-live. */
+		/* Temporarily disabled: radar 4647827
+		 * ifps->fp_valid = TRUE;
+		 */
+
 		/*
 		 * Clear any reserved bits in the MXCSR to prevent a GPF
 		 * when issuing an FXRSTOR.
 		 */
-		ifps->fx_save_state.fx_MXCSR &= mxcsr_capability_mask;
+	    ifps->fx_save_state.fx_MXCSR &= mxcsr_capability_mask;
 
-		simple_unlock(&pcb->lock);
+	    simple_unlock(&pcb->lock);
 
-		if (new_ifps != 0)
-		        fp_state_free(new_ifps);
+	    if (new_ifps != 0)
+		fp_state_free(new_ifps);
 	}
 	return KERN_SUCCESS;
 }
@@ -324,7 +331,7 @@ fpu_set_fxstate(
  */
 kern_return_t
 fpu_get_fxstate(
-	thread_t	thr_act,
+	thread_t				thr_act,
 	thread_state_t	tstate)
 {
 	struct x86_fpsave_state	*ifps;
@@ -333,7 +340,7 @@ fpu_get_fxstate(
 	pcb_t	pcb;
 
 	if (fp_kind == FP_NO)
-	    return KERN_FAILURE;
+		return KERN_FAILURE;
 
 	state = (x86_float_state64_t *)tstate;
 
@@ -344,10 +351,10 @@ fpu_get_fxstate(
 
 	ifps = pcb->ifps;
 	if (ifps == 0) {
-	        /*
+		/*
 		 * No valid floating-point state.
 		 */
-	        bcopy((char *)&starting_fp_state.fx_save_state,
+		bcopy((char *)&starting_fp_state.fx_save_state,
 		      (char *)&state->fpu_fcw, sizeof(struct x86_fx_save));
 
 		simple_unlock(&pcb->lock);
@@ -358,9 +365,8 @@ fpu_get_fxstate(
 	 * Make sure we`ve got the latest fp state info
 	 * If the live fpu state belongs to our target
 	 */
-	if (thr_act == current_thread())
-	{
-	        boolean_t	intr;
+	if (thr_act == current_thread()) {
+		boolean_t	intr;
 
 		intr = ml_set_interrupts_enabled(FALSE);
 
@@ -379,6 +385,7 @@ fpu_get_fxstate(
 
 	return ret;
 }
+
 
 
 /*
@@ -428,6 +435,10 @@ fpu_dup_fxstate(
 			      (char *)&(child->machine.pcb->ifps->fx_save_state), sizeof(struct x86_fx_save));
 
 			new_ifps->fp_save_layout = ppcb->ifps->fp_save_layout;
+			/* Mark the new fp saved state as non-live. */
+			/* Temporarily disabled: radar 4647827
+			 * new_ifps->fp_valid = TRUE;
+			 */
 			/*
 			 * Clear any reserved bits in the MXCSR to prevent a GPF
 			 * when issuing an FXRSTOR.
@@ -467,8 +478,8 @@ fpinit(void)
 	fldcw(control);
 
 	/* Initialize SSE/SSE2 */
-	__builtin_ia32_ldmxcsr(0x1f80);
-}
+		__builtin_ia32_ldmxcsr(0x1f80);
+	}
 
 /*
  * Coprocessor not present.
@@ -478,6 +489,15 @@ void
 fpnoextflt(void)
 {
 	boolean_t	intr;
+	thread_t	thr_act;
+	pcb_t		pcb;
+	struct x86_fpsave_state *ifps = 0;
+
+	thr_act = current_thread();
+	pcb = thr_act->machine.pcb;
+
+	if (pcb->ifps == 0 && !get_interrupt_level())
+	        ifps = fp_state_alloc();
 
 	intr = ml_set_interrupts_enabled(FALSE);
 
@@ -488,16 +508,22 @@ fpnoextflt(void)
 		 * Save current coprocessor context if valid
 		 * Initialize coprocessor live context
 		 */
-		fp_save(current_thread());
+		fp_save(thr_act);
 		fpinit();
 	} else {
+	        if (pcb->ifps == 0) {
+		        pcb->ifps = ifps;
+			ifps = 0;
+		}
 		/*
 		 * Load this thread`s state into coprocessor live context.
 		 */
-		fp_load(current_thread());
+		fp_load(thr_act);
 	}
-
 	(void)ml_set_interrupts_enabled(intr);
+
+	if (ifps)
+	        fp_state_free(ifps);
 }
 
 /*
@@ -516,7 +542,7 @@ fpextovrflt(void)
 	intr = ml_set_interrupts_enabled(FALSE);
 
 	if (get_interrupt_level())
-		panic("FPU segment overrun exception at interrupt context\n");
+		panic("FPU segment overrun exception  at interrupt context\n");
 	if (current_task() == kernel_task)
 		panic("FPU segment overrun exception in kernel thread context\n");
 

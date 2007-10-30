@@ -1,29 +1,36 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include "kpi_interface.h"
 
 #include <sys/queue.h>
 #include <sys/param.h>	/* for definition of NULL */
+#include <kern/debug.h> /* for panic */
 #include <sys/errno.h>
 #include <sys/socket.h>
 #include <sys/kern_event.h>
@@ -37,6 +44,7 @@
 #include <net/if_dl.h>
 #include <net/if_arp.h>
 #include <libkern/libkern.h>
+#include <libkern/OSAtomic.h>
 #include <kern/locks.h>
 
 #if IF_LASTCHANGEUPTIME
@@ -45,7 +53,8 @@
 #define TOUCHLASTCHANGE(__if_lastchange) microtime(__if_lastchange)
 #endif
 
-extern lck_spin_t *dlil_input_lock;
+extern struct dlil_threading_info *dlil_lo_thread_ptr;
+extern int dlil_multithreaded_input;
 
 /*
 	Temporary work around until we have real reference counting
@@ -72,6 +81,17 @@ ifnet_kpi_free(
 	dlil_if_release(ifp);
 }
 
+static __inline__ void*
+_cast_non_const(const void * ptr) {
+	union {
+		const void*		cval;
+		void*			val;
+	} ret;
+	
+	ret.cval = ptr;
+	return (ret.val);
+}
+
 errno_t
 ifnet_allocate(
 	const struct ifnet_init_params *init,
@@ -92,14 +112,19 @@ ifnet_allocate(
 	
 	error = dlil_if_acquire(init->family, init->uniqueid, init->uniqueid_len, &ifp);
 	if (error == 0)
-	{		
-		strncpy(ifp->if_name, init->name, IFNAMSIZ);
+	{
+		/*
+		 * Cast ifp->if_name as non const. dlil_if_acquire sets it up
+		 * to point to storage of at least IFNAMSIZ bytes. It is safe
+		 * to write to this.
+		 */
+		strncpy(_cast_non_const(ifp->if_name), init->name, IFNAMSIZ);
 		ifp->if_type = init->type;
 		ifp->if_family = init->family;
 		ifp->if_unit = init->unit;
 		ifp->if_output = init->output;
 		ifp->if_demux = init->demux;
-		ifp->if_add_proto_u.kpi = init->add_proto;
+		ifp->if_add_proto = init->add_proto;
 		ifp->if_del_proto = init->del_proto;
 		ifp->if_check_multi = init->check_multi;
 		ifp->if_framer = init->framer;
@@ -155,49 +180,30 @@ ifnet_allocate(
 
 errno_t
 ifnet_reference(
-	ifnet_t interface)
+	ifnet_t	ifp)
 {
-	if (interface == NULL) return EINVAL;
-	ifp_reference(interface);
+	int	oldval;
+	
+	if (ifp == NULL) return EINVAL;
+	
+	oldval = OSIncrementAtomic((SInt32 *)&ifp->if_refcnt);
+	
 	return 0;
 }
 
 errno_t
 ifnet_release(
-	ifnet_t interface)
+	ifnet_t	ifp)
 {
-	if (interface == NULL) return EINVAL;
-	ifp_release(interface);
+	int	oldval;
+	
+	if (ifp == NULL) return EINVAL;
+	
+	oldval = OSDecrementAtomic((SInt32*)&ifp->if_refcnt);
+	if (oldval == 0)
+		panic("ifnet_release - refcount decremented past zero!");
+	
 	return 0;
-}
-
-errno_t
-ifnet_attach(
-	ifnet_t interface,
-	const struct sockaddr_dl *ll_addr)
-{
-	if (interface == NULL) return EINVAL;
-	if (ll_addr && interface->if_addrlen == 0) {
-		interface->if_addrlen = ll_addr->sdl_alen;
-	}
-	else if (ll_addr && ll_addr->sdl_alen != interface->if_addrlen) {
-		return EINVAL;
-	}
-	return dlil_if_attach_with_address(interface, ll_addr);
-}
-
-errno_t
-ifnet_detach(
-	ifnet_t interface)
-{
-	errno_t	error;
-	
-	if (interface == NULL) return EINVAL;
-	
-	error = dlil_if_detach(interface);
-	if (error == DLIL_WAIT_FOR_FREE) error = 0; /* Client should always wait for detach */
-	
-	return error;
 }
 
 void*
@@ -293,7 +299,8 @@ ifnet_eflags(
 
 static const ifnet_offload_t offload_mask = IFNET_CSUM_IP | IFNET_CSUM_TCP |
 			IFNET_CSUM_UDP | IFNET_CSUM_FRAGMENT | IFNET_IP_FRAGMENT |
-			IFNET_CSUM_SUM16 | IFNET_VLAN_TAGGING | IFNET_VLAN_MTU;
+			IFNET_CSUM_SUM16 | IFNET_VLAN_TAGGING | IFNET_VLAN_MTU |
+			IFNET_MULTIPAGES;
 
 errno_t
 ifnet_set_offload(
@@ -375,26 +382,6 @@ ifnet_get_link_mib_data_length(
 }
 
 errno_t
-ifnet_attach_protocol(
-	ifnet_t interface,
-	protocol_family_t protocol,
-	const struct ifnet_attach_proto_param *proto_details)
-{
-	if (interface == NULL || protocol == 0 || proto_details == NULL)
-		return EINVAL;
-	return dlil_attach_protocol_kpi(interface, protocol, proto_details);
-}
-
-errno_t
-ifnet_detach_protocol(
-	ifnet_t interface,
-	protocol_family_t protocol)
-{
-	if (interface == NULL || protocol == 0) return EINVAL;
-	return dlil_detach_protocol(interface, protocol);
-}
-
-errno_t
 ifnet_output(
 	ifnet_t interface,
 	protocol_family_t protocol_family,
@@ -416,53 +403,12 @@ ifnet_output_raw(
 	protocol_family_t protocol_family,
 	mbuf_t m)
 {
-	if (interface == NULL || protocol_family == 0 || m == NULL) {
+	if (interface == NULL || m == NULL) {
 		if (m)
 			mbuf_freem_list(m);
 		return EINVAL;
 	}
 	return dlil_output(interface, protocol_family, m, NULL, NULL, 1);
-}
-
-errno_t
-ifnet_input(
-	ifnet_t interface,
-	mbuf_t first_packet,
-	const struct ifnet_stat_increment_param *stats)
-{
-	mbuf_t	last_packet = first_packet;
-	
-	if (interface == NULL || first_packet == NULL) {
-		if (first_packet)
-			mbuf_freem_list(first_packet);
-		return EINVAL;
-	}
-	
-	while (mbuf_nextpkt(last_packet) != NULL)
-		last_packet = mbuf_nextpkt(last_packet);
-	return dlil_input_with_stats(interface, first_packet, last_packet, stats);
-}
-
-errno_t
-ifnet_ioctl(
-	ifnet_t interface,
-	protocol_family_t	protocol_family,
-	u_int32_t ioctl_code,
-	void *ioctl_arg)
-{
-	if (interface == NULL || protocol_family == 0 || ioctl_code == 0)
-		return EINVAL;
-	return dlil_ioctl(protocol_family, interface,
-					  ioctl_code, ioctl_arg);
-}
-
-errno_t
-ifnet_event(
-	ifnet_t interface,
-	struct kern_event_msg* event_ptr)
-{
-	if (interface == NULL || event_ptr == NULL) return EINVAL;
-	return dlil_event(interface, event_ptr);
 }
 
 errno_t
@@ -599,9 +545,13 @@ ifnet_stat_increment(
 	ifnet_t interface,
 	const struct ifnet_stat_increment_param *counts)
 {
+	struct dlil_threading_info *thread;
 	if (interface == NULL) return EINVAL;
-	
-	lck_spin_lock(dlil_input_lock);
+
+       	if ((thread = interface->if_input_thread) == NULL || (dlil_multithreaded_input == 0))
+		thread = dlil_lo_thread_ptr;
+
+	lck_mtx_lock(thread->input_lck);
 
 	interface->if_data.ifi_ipackets += counts->packets_in;
 	interface->if_data.ifi_ibytes += counts->bytes_in;
@@ -617,7 +567,7 @@ ifnet_stat_increment(
 	/* Touch the last change time. */
 	TOUCHLASTCHANGE(&interface->if_lastchange);
 
-	lck_spin_unlock(dlil_input_lock);
+	lck_mtx_unlock(thread->input_lck);
 	
 	return 0;
 }
@@ -629,9 +579,14 @@ ifnet_stat_increment_in(
 	u_int32_t bytes_in,
 	u_int32_t errors_in)
 {
+	struct dlil_threading_info *thread;
+
 	if (interface == NULL) return EINVAL;
 	
-	lck_spin_lock(dlil_input_lock);
+       	if ((thread = interface->if_input_thread) == NULL || (dlil_multithreaded_input == 0))
+		thread = dlil_lo_thread_ptr;
+
+	lck_mtx_lock(thread->input_lck);
 
 	interface->if_data.ifi_ipackets += packets_in;
 	interface->if_data.ifi_ibytes += bytes_in;
@@ -639,7 +594,7 @@ ifnet_stat_increment_in(
 
 	TOUCHLASTCHANGE(&interface->if_lastchange);
 
-	lck_spin_unlock(dlil_input_lock);
+	lck_mtx_unlock(thread->input_lck);
 	
 	return 0;
 }
@@ -651,9 +606,13 @@ ifnet_stat_increment_out(
 	u_int32_t bytes_out,
 	u_int32_t errors_out)
 {
+	struct dlil_threading_info *thread;
 	if (interface == NULL) return EINVAL;
 	
-	lck_spin_lock(dlil_input_lock);
+       	if ((thread = interface->if_input_thread) == NULL || (dlil_multithreaded_input == 0))
+		thread = dlil_lo_thread_ptr;
+
+	lck_mtx_lock(thread->input_lck);
 
 	interface->if_data.ifi_opackets += packets_out;
 	interface->if_data.ifi_obytes += bytes_out;
@@ -661,7 +620,7 @@ ifnet_stat_increment_out(
 
 	TOUCHLASTCHANGE(&interface->if_lastchange);
 
-	lck_spin_unlock(dlil_input_lock);
+	lck_mtx_unlock(thread->input_lck);
 	
 	return 0;
 }
@@ -671,9 +630,14 @@ ifnet_set_stat(
 	ifnet_t interface,
 	const struct ifnet_stats_param *stats)
 {
+	struct dlil_threading_info *thread;
+
 	if (interface == NULL) return EINVAL;
 	
-	lck_spin_lock(dlil_input_lock);
+       	if ((thread = interface->if_input_thread) == NULL || (dlil_multithreaded_input == 0))
+		thread = dlil_lo_thread_ptr;
+
+	lck_mtx_lock(thread->input_lck);
 
 	interface->if_data.ifi_ipackets = stats->packets_in;
 	interface->if_data.ifi_ibytes = stats->bytes_in;
@@ -692,7 +656,7 @@ ifnet_set_stat(
 	/* Touch the last change time. */
 	TOUCHLASTCHANGE(&interface->if_lastchange);
 
-	lck_spin_unlock(dlil_input_lock);
+	lck_mtx_unlock(thread->input_lck);
 	
 	return 0;
 }
@@ -702,9 +666,14 @@ ifnet_stat(
 	ifnet_t interface,
 	struct ifnet_stats_param *stats)
 {
+	struct dlil_threading_info *thread;
+
 	if (interface == NULL) return EINVAL;
 	
-	lck_spin_lock(dlil_input_lock);
+       	if ((thread = interface->if_input_thread) == NULL || (dlil_multithreaded_input == 0))
+		thread = dlil_lo_thread_ptr;
+
+	lck_mtx_lock(thread->input_lck);
 
 	stats->packets_in = interface->if_data.ifi_ipackets;
 	stats->bytes_in = interface->if_data.ifi_ibytes;
@@ -720,7 +689,7 @@ ifnet_stat(
 	stats->dropped = interface->if_data.ifi_iqdrops;
 	stats->no_protocol = interface->if_data.ifi_noproto;
 
-	lck_spin_unlock(dlil_input_lock);
+	lck_mtx_unlock(thread->input_lck);
 	
 	return 0;
 }
@@ -729,11 +698,18 @@ errno_t
 ifnet_touch_lastchange(
 	ifnet_t interface)
 {
+	struct dlil_threading_info *thread;
+
 	if (interface == NULL) return EINVAL;
 	
-	lck_spin_lock(dlil_input_lock);
+       	if ((thread = interface->if_input_thread) == NULL || (dlil_multithreaded_input == 0))
+		thread = dlil_lo_thread_ptr;
+
+	lck_mtx_lock(thread->input_lck);
+
 	TOUCHLASTCHANGE(&interface->if_lastchange);
-	lck_spin_unlock(dlil_input_lock);
+
+	lck_mtx_unlock(thread->input_lck);
 	
 	return 0;
 }
@@ -743,11 +719,18 @@ ifnet_lastchange(
 	ifnet_t interface,
 	struct timeval *last_change)
 {
+	struct dlil_threading_info *thread;
+
 	if (interface == NULL) return EINVAL;
 	
-	lck_spin_lock(dlil_input_lock);
+       	if ((thread = interface->if_input_thread) == NULL || (dlil_multithreaded_input == 0))
+		thread = dlil_lo_thread_ptr;
+
+	lck_mtx_lock(thread->input_lck);
+
 	*last_change = interface->if_data.ifi_lastchange;
-	lck_spin_unlock(dlil_input_lock);
+	
+	lck_mtx_unlock(thread->input_lck);
 	
 #if IF_LASTCHANGEUPTIME
 	/* Crude conversion from uptime to calendar time */
@@ -762,7 +745,7 @@ ifnet_get_address_list(
 	ifnet_t interface,
 	ifaddr_t **addresses)
 {
-	if (interface == NULL || addresses == NULL) return EINVAL;
+	if (addresses == NULL) return EINVAL;
 	return ifnet_get_address_list_family(interface, addresses, 0);
 }
 
@@ -776,7 +759,7 @@ ifnet_get_address_list_family(
 	int count = 0;
 	int cmax = 0;
 	
-	if (interface == NULL || addresses == NULL) return EINVAL;
+	if (addresses == NULL) return EINVAL;
 	*addresses = NULL;
 	
 	ifnet_head_lock_shared();
@@ -1078,12 +1061,12 @@ ifnet_find_by_name(
 	{
 		struct ifaddr *ifa = ifnet_addrs[ifp->if_index - 1];
 		struct sockaddr_dl *ll_addr;
-		
+
 		if (!ifa || !ifa->ifa_addr)
 			continue;
-		
+
 		ll_addr = (struct sockaddr_dl *)ifa->ifa_addr;
-		
+
 		if ((ifp->if_eflags & IFEF_DETACHING) == 0 &&
 			namelen == ll_addr->sdl_nlen &&
 			(strncmp(ll_addr->sdl_data, ifname, ll_addr->sdl_nlen) == 0))

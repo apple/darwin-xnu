@@ -2,7 +2,7 @@ OPTIONS/show_space		optional show_space
 OPTIONS/gdb			optional gdb
 OPTIONS/iplmeas			optional iplmeas
 
-bsd/netinet/in_cksum.c		standard
+bsd/netinet/in_cksum.c		optional inet
 
 bsd/dev/ppc/conf.c		standard
 bsd/dev/ppc/cons.c		standard
@@ -18,6 +18,17 @@ bsd/dev/ppc/km.c		standard
 bsd/dev/ppc/xsumas.s		standard	
 bsd/dev/ppc/sysctl.c		standard	
 bsd/dev/ppc/munge.s		standard
+bsd/crypto/aes/ppc/aescrypt.c		optional crypto
+bsd/crypto/aes/ppc/aeskey.c			optional crypto
+bsd/crypto/aes/ppc/aestab.c			optional crypto
 
-bsd/kern/bsd_stubs.c		standard
+
+bsd/dev/ppc/dtrace_isa.c	optional config_dtrace
+bsd/dev/ppc/dtrace_subr_ppc.c	optional config_dtrace
+bsd/dev/ppc/fbt_ppc.c		optional config_dtrace
+bsd/dev/ppc/sdt_ppc.c		optional config_dtrace
+bsd/dev/ppc/fasttrap_isa.c	optional config_dtrace
+
+bsd/kern/bsd_stubs.c			standard
+
 

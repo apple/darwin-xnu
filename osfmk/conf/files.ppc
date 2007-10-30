@@ -59,12 +59,14 @@ osfmk/ppc/Emulate.s			standard
 osfmk/ppc/Emulate64.s		standard
 osfmk/ppc/AltiAssist.s		standard
 osfmk/ppc/conf.c			standard
+osfmk/ppc/etimer.c		standard
 osfmk/ppc/rtclock.c			standard
 osfmk/ppc/Diagnostics.c		standard
 osfmk/ppc/PPCcalls.c		standard
 osfmk/ppc/vmachmon.c		standard
 osfmk/ppc/vmachmon_asm.s	standard
-osfmk/ppc/pmsCPU.c			standard
+osfmk/ppc/pms.c			standard
+osfmk/ppc/pmsCPU.c		standard
 
 osfmk/ppc/Firmware.s		standard
 osfmk/ppc/FirmwareC.c		standard
@@ -109,8 +111,8 @@ osfmk/console/panic_dialog.c	optional	vc device-driver
 osfmk/console/video_console.c	optional	vc device-driver
 osfmk/console/ppc/video_scroll.s	optional	vc device-driver
 
-osfmk/ppc/hibernate_ppc.c		standard
-osfmk/ppc/hibernate_restore.s		standard
+osfmk/ppc/hibernate_ppc.c			optional hibernation
+osfmk/ppc/hibernate_restore.s		optional hibernation
 
 # DUMMIES TO FORCE GENERATION OF .h FILES
 OPTIONS/bm			optional bm

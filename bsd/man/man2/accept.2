@@ -40,26 +40,27 @@
 .Nm accept
 .Nd accept a connection on a socket
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
 .Fd #include <sys/socket.h>
 .Ft int
-.Fn accept "int s" "struct sockaddr *addr" "socklen_t *addrlen"
+.Fo accept
+.Fa "int socket"
+.Fa "struct sockaddr *restrict address"
+.Fa "socklen_t *restrict address_len"
+.Fc
 .Sh DESCRIPTION
 The argument
-.Fa s
+.Fa socket
 is a socket that has been created with
 .Xr socket 2 ,
 bound to an address with
 .Xr bind 2 ,
 and is listening for connections after a
 .Xr listen 2 .
-The
 .Fn accept
-argument
 extracts the first connection request
 on the queue of pending connections, creates
 a new socket with the same properties of 
-.Fa s
+.Fa socket ,
 and allocates a new file descriptor
 for the socket.  If no pending connections are
 present on the queue, and the socket is not marked
@@ -73,23 +74,23 @@ returns an error as described below.
 The accepted socket
 may not be used
 to accept more connections.  The original socket
-.Fa s
+.Fa socket,
 remains open.
 .Pp
 The argument
-.Fa addr
+.Fa address
 is a result parameter that is filled in with
 the address of the connecting entity,
 as known to the communications layer.
 The exact format of the
-.Fa addr
+.Fa address
 parameter is determined by the domain in which the communication
 is occurring.
 The 
-.Fa addrlen
+.Fa address_len
 is a value-result parameter; it should initially contain the
 amount of space pointed to by
-.Fa addr ;
+.Fa address ;
 on return it will contain the actual length (in bytes) of the
 address returned.
 This call
@@ -132,39 +133,78 @@ call with providing only the control information,
 or by calling
 .Xr setsockopt 2 .
 .Sh RETURN VALUES
-The call returns \-1 on error.  If it succeeds, it returns a non-negative
-integer that is a descriptor for the accepted socket.
+The call returns \-1 on error and the global variable
+.Va errno
+is set to indicate the error.
+If it succeeds, it returns a non-negative integer
+that is a descriptor for the accepted socket.
 .Sh ERRORS
 The
 .Fn accept
-will fail if:
+system call will fail if:
 .Bl -tag -width Er
+.\" ==========
 .It Bq Er EBADF
-The descriptor is invalid.
-.It Bq Er ENOTSOCK
-The descriptor references a file, not a socket.
-.It Bq Er EOPNOTSUPP
-The referenced socket is not of type
-.Dv SOCK_STREAM . 
+.Fa socket
+is not a valid file descriptor.
+.\" ==========
+.It Bq Er ECONNABORTED
+The connection to
+.Fa socket
+has been aborted.
+.\" ==========
 .It Bq Er EFAULT
 The
-.Fa addr
+.Fa address
 parameter is not in a writable part of the
 user address space.
-.It Bq Er EWOULDBLOCK
-The socket is marked non-blocking and no connections
-are present to be accepted.
+.\" ==========
+.It Bq Er EINTR
+The
+.Fn accept
+system call was terminated by a signal.
+.\" ==========
+.It Bq Er EINVAL
+.Fa socket
+is unwilling to accept connections.
+.\" ==========
 .It Bq Er EMFILE
 The per-process descriptor table is full.
+.\" ==========
 .It Bq Er ENFILE
 The system file table is full.
+.\" ==========
+.It Bq Er ENOMEM
+Insufficient memory was available to complete the operation.
+.\" ==========
+.It Bq Er ENOTSOCK
+.Fa socket
+references a file type other than a socket.
+.\" ==========
+.It Bq Er EOPNOTSUPP
+.Fa socket
+is not of type
+.Dv SOCK_STREAM
+and thus does not accept connections. 
+.\" ==========
+.It Bq Er EWOULDBLOCK
+.Fa socket
+is marked as non-blocking and no connections are present to be accepted.
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/socket.h>
+.Pp
+The include file
+.In sys/types.h
+is necessary.
 .Sh SEE ALSO
 .Xr bind 2 ,
 .Xr connect 2 ,
 .Xr listen 2 ,
 .Xr select 2 ,
-.Xr socket 2
+.Xr socket 2 ,
+.Xr compat 5
 .Sh HISTORY
 The
 .Fn accept

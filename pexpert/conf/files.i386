@@ -5,7 +5,6 @@ pexpert/i386/pe_bootargs.c            standard
 pexpert/i386/pe_identify_machine.c    standard
 pexpert/i386/pe_kprintf.c             standard
 pexpert/i386/pe_interrupt.c           standard
-pexpert/i386/fakePPCDeviceTree.c      standard
 pexpert/i386/pe_serial.c              standard
 
 

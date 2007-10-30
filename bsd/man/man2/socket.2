@@ -40,10 +40,13 @@
 .Nm socket
 .Nd create an endpoint for communication
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
 .Fd #include <sys/socket.h>
 .Ft int
-.Fn socket "int domain" "int type" "int protocol"
+.Fo socket
+.Fa "int domain"
+.Fa "int type"
+.Fa "int protocol"
+.Fc
 .Sh DESCRIPTION
 .Fn Socket
 creates an endpoint for communication and returns a descriptor.
@@ -212,27 +215,57 @@ value is a descriptor referencing the socket.
 .Sh ERRORS
 The
 .Fn socket
-call fails if:
+system call fails if:
 .Bl -tag -width Er
-.It Bq Er EPROTONOSUPPORT
-The protocol type or the specified protocol is not supported
-within this domain.
-.It Bq Er EMFILE
-The per-process descriptor table is full.
-.It Bq Er ENFILE
-The system file table is full.
+.\" ===========
 .It Bq Er EACCES
 Permission to create a socket of the specified type and/or protocol
 is denied.
+.\" ===========
+.It Bq Er EAFNOSUPPORT
+The specified address family is not supported.
+.\" ===========
+.It Bq Er EISCONN
+The per-process descriptor table is full.
+.\" ===========
+.It Bq Er EMFILE
+The per-process descriptor table is full.
+.\" ===========
+.It Bq Er ENFILE
+The system file table is full.
+.\" ===========
 .It Bq Er ENOBUFS
 Insufficient buffer space is available.
 The socket cannot be created until sufficient resources are freed.
+.\" ===========
+.It Bq Er ENOMEM
+Insufficient memory was available to fulfill the request.
+.\" ===========
+.It Bq Er EPROTONOSUPPORT
+The protocol type or the specified protocol is not supported
+within this domain.
+.\" ===========
+.It Bq Er EPROTOTYPE
+The socket type is not supported by the protocol.
 .El
+.Pp
+If a new protocol family is defined,
+the socreate process is free to return any desired error code.
+The
+.Fn socket
+system call will pass this error code along
+(even if it is undefined).
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/socket.h>
+.Pp
+The include file
+.In sys/types.h
+is necessary.
 .Sh SEE ALSO
 .Xr accept 2 ,
 .Xr bind 2 ,
 .Xr connect 2 ,
-.Xr getprotoent 3 ,
 .Xr getsockname 2 ,
 .Xr getsockopt 2 ,
 .Xr ioctl 2 ,
@@ -243,7 +276,12 @@ The socket cannot be created until sufficient resources are freed.
 .Xr send 2 ,
 .Xr shutdown 2 ,
 .Xr socketpair 2 ,
-.Xr write 2
+.Xr write 2 ,
+.Xr getprotoent 3 ,
+.Xr inet 4 ,
+.Xr inet6 4 ,
+.Xr unix 4 ,
+.Xr compat 5
 .Rs
 .%T "An Introductory 4.3 BSD Interprocess Communication Tutorial"
 .%O "reprinted in UNIX Programmer's Supplementary Documents Volume 1"

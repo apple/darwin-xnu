@@ -37,7 +37,10 @@
 .Dt STATFS 2
 .Os
 .Sh NAME
-.Nm statfs
+.Nm statfs,
+.Nm statfs64,
+.Nm fstatfs,
+.Nm fstatfs64
 .Nd get file system statistics
 .Sh SYNOPSIS
 .Fd #include <sys/param.h>
@@ -45,19 +48,29 @@
 .Ft int
 .Fn statfs "const char *path" "struct statfs *buf"
 .Ft int
+.Fn statfs64 "const char *path" "struct statfs64 *buf"
+.Ft int
 .Fn fstatfs "int fd" "struct statfs *buf"
+.Ft int
+.Fn fstatfs64 "int fd" "struct statfs64 *buf"
 .Sh DESCRIPTION
 .Fn Statfs
 returns information about a mounted file system.
 .Fa Path
 is the path name of any file within the mounted file system.
 .Fa Buf
-is a pointer to a statfs structure defined as follows:
+is a pointer to a 
+.Fa statfs
+or
+.Fa statfs64
+structure defined as follows:
 .Bd -literal
 typedef struct { int32_t val[2]; } fsid_t;
 
-#define MFSNAMELEN   15 /* length of fs type name, not inc. nul */
-#define MNAMELEN     90	/* length of buffer for returned name */
+#define MFSNAMELEN      15 /* length of fs type name, not inc. nul */
+#define MNAMELEN        90 /* length of buffer for returned name */
+#define MFSTYPENAMELEN  16 /* length of fs type name including null */
+#define MAXPATHLEN      1024	
 
 struct statfs {
     short   f_otype;	/* type of file system (reserved: zero) */
@@ -69,7 +82,7 @@ struct statfs {
     long    f_bavail;	/* free blocks avail to non-superuser */
     long    f_files;	/* total file nodes in file system */
     long    f_ffree;	/* free file nodes in fs */
-    fsid_t  f_fsid;	/* file system id (super-user only) */
+    fsid_t  f_fsid;	/* file system id */
     uid_t   f_owner;	/* user that mounted the file system */
     short   f_reserved1;	/* reserved for future use */
     short   f_type;	/* type of file system (reserved) */
@@ -81,12 +94,74 @@ struct statfs {
     char    f_reserved3;	/* reserved for future use */
     long    f_reserved4[4];	/* reserved for future use */
 };
+
+struct statfs64 {
+    uint32_t        f_bsize;        /* fundamental file system block size */ 
+    int32_t         f_iosize;       /* optimal transfer block size */ 
+    uint64_t        f_blocks;       /* total data blocks in file system */ 
+    uint64_t        f_bfree;        /* free blocks in fs */ 
+    uint64_t        f_bavail;       /* free blocks avail to non-superuser */ 
+    uint64_t        f_files;        /* total file nodes in file system */ 
+    uint64_t        f_ffree;        /* free file nodes in fs */ 
+    fsid_t          f_fsid;         /* file system id */ 
+    uid_t           f_owner;        /* user that mounted the filesystem */ 
+    uint32_t        f_type;         /* type of filesystem */ 
+    uint32_t        f_flags;        /* copy of mount exported flags */ 
+    uint32_t        f_fssubtype;    /* fs sub-type (flavor) */ 
+    char            f_fstypename[MFSTYPENAMELEN];   /* fs type name */ 
+    char            f_mntonname[MAXPATHLEN];        /* directory on which mounted */ 
+    char            f_mntfromname[MAXPATHLEN];      /* mounted filesystem */ 
+    uint32_t        f_reserved[8];  /* For future use */ 
+};
 .Ed
 .Pp
 Fields that are undefined for a particular file system are set to -1.
 .Fn Fstatfs
 returns the same information about an open file referenced by descriptor
 .Fa fd .
+.Sh FLAGS
+.Bl -tag -width MNT_UNKOWNPERMISSIONS
+These are some of the flags that may be present in the f_flags field. 
+.It Dv MNT_RDONLY
+A read-only filesystem
+.It Dv MNT_SYNCHRONOUS
+File system is written to synchronously
+.It Dv MNT_NOEXEC
+Can't exec from filesystem
+.It Dv MNT_NOSUID
+Setuid bits are not honored on this filesystem
+.It Dv MNT_NODEV
+Don't interpret special files
+.It Dv MNT_UNION
+Union with underlying filesysten
+.It Dv MNT_ASYNC
+File system written to asynchronously
+.It Dv MNT_EXPORTED
+File system is exported
+.it Dv MNT_LOCAL
+File system is stored locally
+.It Dv MNT_QUOTA
+Quotas are enabled on this file system
+.It Dv MNT_ROOTFS
+This file system is the root of the file system
+.It Dv MNT_DOVOLFS
+File system supports volfs
+.It Dv MNT_DONTBROWSE
+File system is not appropriate path to user data
+.It Dv MNT_UNKNOWNPERMISSIONS
+VFS will ignore ownership information on filesystem objects
+.It Dv MNT_AUTOMOUNTED
+File system was mounted by automounter
+.It Dv MNT_JOURNALED
+File system is journaled
+.It Dv MNT_DEFWRITE
+File system should defer writes
+.It Dv MNT_MULTILABEL
+MAC support for individual labels
+.El
+.Sh CAVEATS
+In Mac OS X versions before 10.4, f_iosize is 4096. On these older
+systems, use MAXBSIZE instead.
 .Sh RETURN VALUES
 Upon successful completion, a value of 0 is returned.
 Otherwise, -1 is returned and the global variable
@@ -148,4 +223,8 @@ error occurred while reading from or writing to the file system.
 .Sh HISTORY
 The
 .Fn statfs
-function first appeared in 4.4BSD.
+function first appeared in 4.4BSD. The
+.Fn statfs64
+and 
+.Fn fstatfs64
+first appeared in Max OS X 10.5 (Leopard).

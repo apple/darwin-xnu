@@ -1,0 +1,24 @@
+######################################################################
+#
+#  RELEASE	= [ intel mach libkerncpp config_dtrace ]
+#  PROFILE	= [ RELEASE profile ]
+#  DEBUG	= [ RELEASE debug ]
+#
+#  EMBEDDED	= [ intel mach libkerncpp ]
+#  DEVELOPMENT	= [ EMBEDDED config_dtrace ]
+#
+######################################################################
+
+#
+# Note: MAC options must be set in both bsd/conf and security/conf MASTER files
+#
+options		CONFIG_MACF			# Mandatory Access Control Framework
+options		CONFIG_MACF_SOCKET_SUBSET	# MACF subset of socket support
+#options	CONFIG_MACF_SOCKET
+#options	CONFIG_MACF_NET
+#options	CONFIG_MACF_ALWAYS_LABEL_MBUF
+#options	CONFIG_MACF_DEBUG
+#options	CONFIG_MACF_MACH
+
+machine		"i386"					# <intel>
+cpu		"i386"					# <intel>

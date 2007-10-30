@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
  
 /***************
@@ -523,6 +529,13 @@ kload_error __kload_keep_symbols(dgraph_entry_t * entry)
     unsigned long		idx, ncmds;
     vm_size_t	  		size;
     vm_address_t  		mem;
+    struct load_cmds {
+	struct mach_header     hdr;
+	struct segment_command seg;
+	struct symtab_command  symcmd;
+    };
+    struct load_cmds * cmd;
+    unsigned int symtabsize;
 
     if (entry->symbols)
 	return kload_error_none;
@@ -544,14 +557,6 @@ kload_error __kload_keep_symbols(dgraph_entry_t * entry)
     }
 
     symcmd = (struct symtab_command *) seg;
-
-    struct load_cmds {
-	struct mach_header     hdr;
-	struct segment_command seg;
-	struct symtab_command  symcmd;
-    };
-    struct load_cmds * cmd;
-    unsigned int symtabsize;
 
     symtabsize = symcmd->stroff + symcmd->strsize - symcmd->symoff;
 
@@ -578,7 +583,7 @@ kload_error __kload_keep_symbols(dgraph_entry_t * entry)
 
     cmd->seg.cmd 	= LC_SEGMENT;
     cmd->seg.cmdsize 	= sizeof(struct segment_command);
-    strcpy(cmd->seg.segname, SEG_LINKEDIT);
+    strlcpy(cmd->seg.segname, SEG_LINKEDIT, sizeof(cmd->seg.segname));
     cmd->seg.vmaddr 	= 0;
     cmd->seg.vmsize 	= 0;
     cmd->seg.fileoff 	= cmd->symcmd.symoff;
@@ -608,7 +613,7 @@ kload_error __kload_keep_symbols(dgraph_entry_t * entry)
     if (log_level >= kload_log_level_load_details)
     {
 	kload_log_message("__kload_keep_symbols %s, nsyms %ld, 0x%x bytes" KNL, 
-			    entry->name, symcmd->nsyms, size);
+			    entry->name, (unsigned long)symcmd->nsyms, size);
     }
 
     entry->symbols	  = mem;
@@ -743,13 +748,16 @@ kload_error __kload_load_modules(dgraph_t * dgraph
 {
     kload_error result = kload_error_none;
 #ifndef KERNEL
-    long int kernel_size = 0;
+    unsigned long int kernel_size = 0;
     kern_return_t mach_result = KERN_SUCCESS;
+#else
+	const char *kernel_file = "(kernel)";
 #endif /* not KERNEL */
-    char * kernel_base_addr = 0;
+	char *kernel_base_addr = NULL;
     int kld_result;
     Boolean cleanup_kld_loader = false;
     unsigned int i;
+    char opaque_now = false;
 
    /* We have to map all object files to get their CFBundleIdentifier
     * names.
@@ -813,7 +821,6 @@ kload_error __kload_load_modules(dgraph_t * dgraph
     }
 #else /* KERNEL */
 
-    const char * kernel_file = "(kernel)";
     kernel_base_addr = (char *) &_mh_execute_header;
 
 #endif /* not KERNEL */
@@ -844,7 +851,6 @@ kload_error __kload_load_modules(dgraph_t * dgraph
     }
 
     cleanup_kld_loader = true;
-    char opaque_now = false;
 
     for (i = 0; i < dgraph->length; i++) {
         dgraph_entry_t * current_entry = dgraph->load_order[i];
@@ -988,7 +994,7 @@ kload_error __kload_load_modules(dgraph_t * dgraph
                  (interactive_level == 2) ) {
 
                 int approve = (*__kload_approve_func)(1,
-                    "\nStart module %s (ansering no will abort the load)",
+                    "\nStart module %s (answering no will abort the load)",
                     current_entry->name);
 
                 if (approve > 0) {
@@ -1319,10 +1325,10 @@ kload_error __kload_load_module(dgraph_t * dgraph,
     * resident inside the kmod.
     */
     bzero(local_kmod_info->name, sizeof(local_kmod_info->name));
-    strcpy(local_kmod_info->name, entry->expected_kmod_name);
+    strlcpy(local_kmod_info->name, entry->expected_kmod_name, sizeof(local_kmod_info->name));
 
     bzero(local_kmod_info->version, sizeof(local_kmod_info->version));
-    strcpy(local_kmod_info->version, entry->expected_kmod_vers);
+    strlcpy(local_kmod_info->version, entry->expected_kmod_vers, sizeof(local_kmod_info->version));
 
     if (log_level >= kload_log_level_details) {
         kload_log_message("kmod name: %s" KNL, local_kmod_info->name);
@@ -2231,10 +2237,10 @@ kload_error __kload_output_patches(
             }
 
             patch_filename = allocated_filename;
-            strcpy(patch_filename, patch_dir);
-            strcat(patch_filename, "/");
-            strcat(patch_filename, entry->expected_kmod_name);
-            strcat(patch_filename, __KLOAD_PATCH_EXTENSION);
+            strlcpy(patch_filename, patch_dir, length);
+            strlcat(patch_filename, "/", length);
+            strlcat(patch_filename, entry->expected_kmod_name, length);
+            strlcat(patch_filename, __KLOAD_PATCH_EXTENSION, length);
 
             output_patch = 1;
             file_check = kload_file_exists(patch_filename);
@@ -2384,6 +2390,9 @@ kload_error __kload_start_module(dgraph_entry_t * entry) {
 #ifndef KERNEL
     void * kmod_control_args = 0;
     int num_args = 0;
+#elif CONFIG_MACF_KEXT
+    kmod_args_t kmod_args = entry->user_data;
+    mach_msg_type_number_t arg_size = entry->user_data_length;
 #endif /* not KERNEL */
 
     if (!entry->do_load) {
@@ -2394,6 +2403,8 @@ kload_error __kload_start_module(dgraph_entry_t * entry) {
 #ifndef KERNEL
     mach_result = kmod_control(G_kernel_priv_port,
 	    entry->kmod_id, KMOD_CNTL_START, &kmod_control_args, &num_args);
+#elif CONFIG_MACF_KEXT
+    mach_result = kmod_start_or_stop(entry->kmod_id, 1, &kmod_args, &arg_size);
 #else
     mach_result = kmod_start_or_stop(entry->kmod_id, 1, 0, 0);
 #endif /* not KERNEL */

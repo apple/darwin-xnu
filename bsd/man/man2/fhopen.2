@@ -1,0 +1,64 @@
+.\"
+.\" Copyright (c) 2007 Apple Inc.  All rights reserved.
+.\"
+.\" @APPLE_LICENSE_HEADER_START@
+.\" 
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this
+.\" file.
+.\" 
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\" 
+.\" @APPLE_LICENSE_HEADER_END@
+.\"
+.Dd January 9, 2007
+.Dt FHOPEN 2
+.Os
+.Sh NAME
+.Nm fhopen
+.Nd open a file by file handle
+.Sh SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/mount.h>
+.Ft int
+.Fn fhopen "const struct fhandle *fhp" "int flags"
+.Sh DESCRIPTION
+The file specified by the given file handle is opened for reading and/or
+writing, as specified by the argument
+.Fa flags ;
+the file descriptor is returned to the calling process.
+.Pp
+This system call is restricted to the super-user and is used by an
+NFS server's
+.Xr rpc.lockd 8
+daemon to open a file in order to perform locking operations on it.
+.Sh RETURN VALUES
+Upon successful completion, a value of 0 is returned.
+Otherwise, -1 is returned and the global variable
+.Va errno
+is set to indicate the error.
+.Sh ERRORS
+.Fn fhopen
+fails if one or more of the following are true:
+.Bl -tag -width Er
+.It Bq ESTALE
+The file handle no longer refers to a valid, NFS-exported object.
+.It Bq EPERM
+The caller is not the super-user.
+.It Bq EINVAL
+There was a problem with the value of one of the arguments.
+.It Bq EFAULT
+.Fa fhp
+points to an invalid address.
+.El
+.Sh SEE ALSO
+.Xr rpc.lockd 8

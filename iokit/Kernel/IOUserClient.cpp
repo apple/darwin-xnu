@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 1998-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 
@@ -29,10 +35,24 @@
 #include <IOKit/IOCatalogue.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOLib.h>
+#include <sys/proc.h>
 
 #include <IOKit/assert.h>
 
 #include "IOServicePrivate.h"
+#include "IOKitKernelInternal.h"
+
+#define SCALAR64(x) ((io_user_scalar_t)((unsigned int)x))
+#define SCALAR32(x) ((uint32_t )x)
+#define ARG32(x)    ((void *)SCALAR32(x))
+#define REF64(x)    ((io_user_reference_t)((natural_t)(x)))
+#define REF32(x)    ((int)(x))
+
+enum
+{
+    kIOUCAsync0Flags = 3ULL,
+    kIOUCAsync64Flag = 1ULL
+};
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -383,12 +403,12 @@ class IOServiceUserNotification : public IOUserNotification
 
     struct PingMsg {
         mach_msg_header_t		msgHdr;
-        OSNotificationHeader		notifyHeader;
+        OSNotificationHeader64		notifyHeader;
     };
 
     enum { kMaxOutstanding = 1024 };
 
-    PingMsg *		pingMsg;
+    PingMsg	*	pingMsg;
     vm_size_t		msgSize;
     OSArray 	*	newSet;
     OSObject	*	lastEntry;
@@ -397,7 +417,8 @@ class IOServiceUserNotification : public IOUserNotification
 public:
 
     virtual bool init( mach_port_t port, natural_t type,
-                       OSAsyncReference reference );
+                       void * reference, vm_size_t referenceSize,
+		       bool clientIs64 );
     virtual void free();
 
     static bool _handler( void * target,
@@ -415,16 +436,21 @@ class IOServiceMessageUserNotification : public IOUserNotification
         mach_msg_header_t		msgHdr;
 	mach_msg_body_t			msgBody;
 	mach_msg_port_descriptor_t	ports[1];
-        OSNotificationHeader		notifyHeader;
+        OSNotificationHeader64		notifyHeader;
     };
 
     PingMsg *		pingMsg;
     vm_size_t		msgSize;
+    uint8_t		clientIs64;
+    int			owningPID;
 
 public:
 
     virtual bool init( mach_port_t port, natural_t type,
-                       OSAsyncReference reference, vm_size_t extraSize );
+		       void * reference, vm_size_t referenceSize,
+		       vm_size_t extraSize,
+		       bool clientIs64 );
+
     virtual void free();
     
     static IOReturn _handler( void * target, void * ref,
@@ -505,13 +531,17 @@ OSDefineMetaClassAndStructors(IOServiceUserNotification, IOUserNotification)
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 bool IOServiceUserNotification::init( mach_port_t port, natural_t type,
-                                OSAsyncReference reference )
+				       void * reference, vm_size_t referenceSize,
+				       bool clientIs64 )
 {
     newSet = OSArray::withCapacity( 1 );
     if( !newSet)
         return( false );
 
-    msgSize = sizeof( PingMsg) + 0;
+    if (referenceSize > sizeof(OSAsyncReference64))
+        return( false );
+
+    msgSize = sizeof(PingMsg) - sizeof(OSAsyncReference64) + referenceSize;
     pingMsg = (PingMsg *) IOMalloc( msgSize);
     if( !pingMsg)
         return( false );
@@ -527,7 +557,7 @@ bool IOServiceUserNotification::init( mach_port_t port, natural_t type,
 
     pingMsg->notifyHeader.size = 0;
     pingMsg->notifyHeader.type = type;
-    bcopy( reference, pingMsg->notifyHeader.reference, sizeof(OSAsyncReference) );
+    bcopy( reference, pingMsg->notifyHeader.reference, referenceSize );
 
     return( super::init() );
 }
@@ -636,11 +666,19 @@ OSDefineMetaClassAndStructors(IOServiceMessageUserNotification, IOUserNotificati
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 bool IOServiceMessageUserNotification::init( mach_port_t port, natural_t type,
-                       OSAsyncReference reference, vm_size_t extraSize )
+				void * reference, vm_size_t referenceSize, vm_size_t extraSize,
+				bool client64 )
 {
 
-    extraSize += sizeof(IOServiceInterestContent);
-    msgSize = sizeof( PingMsg) + extraSize;
+    if (referenceSize > sizeof(OSAsyncReference64))
+        return( false );
+
+    clientIs64 = client64;
+
+    owningPID = proc_selfpid();
+
+    extraSize += sizeof(IOServiceInterestContent64);
+    msgSize = sizeof(PingMsg) - sizeof(OSAsyncReference64) + referenceSize + extraSize;
     pingMsg = (PingMsg *) IOMalloc( msgSize);
     if( !pingMsg)
         return( false );
@@ -663,7 +701,7 @@ bool IOServiceMessageUserNotification::init( mach_port_t port, natural_t type,
 
     pingMsg->notifyHeader.size 		= extraSize;
     pingMsg->notifyHeader.type 		= type;
-    bcopy( reference, pingMsg->notifyHeader.reference, sizeof(OSAsyncReference) );
+    bcopy( reference, pingMsg->notifyHeader.reference, referenceSize );
 
     return( super::init() );
 }
@@ -694,22 +732,39 @@ IOReturn IOServiceMessageUserNotification::handler( void * ref,
                                     UInt32 messageType, IOService * provider,
                                     void * messageArgument, vm_size_t argSize )
 {
-    kern_return_t		kr;
-    ipc_port_t 			thisPort, providerPort;
-    IOServiceInterestContent * 	data = (IOServiceInterestContent *)
-                                       pingMsg->notifyHeader.content;
+    kern_return_t		 kr;
+    ipc_port_t 			 thisPort, providerPort;
+    IOServiceInterestContent64 * data = (IOServiceInterestContent64 *)
+					((((uint8_t *) pingMsg) + msgSize) - pingMsg->notifyHeader.size);
+                                        // == pingMsg->notifyHeader.content;
+
+    if (kIOMessageCopyClientID == messageType)
+    {
+	*((void **) messageArgument) = IOCopyLogNameForPID(owningPID);
+	return (kIOReturnSuccess);
+    }
 
     data->messageType = messageType;
-    if( argSize == 0) {
-        argSize = sizeof( messageArgument);
-        data->messageArgument[0] = messageArgument;
-    } else {
+
+    if( argSize == 0)
+    {
+	data->messageArgument[0] = (io_user_reference_t) messageArgument;
+	if (clientIs64)
+	    argSize = sizeof(data->messageArgument[0]);
+	else
+	{
+	    data->messageArgument[0] |= (data->messageArgument[0] << 32);
+	    argSize = sizeof(messageArgument);
+	}
+    }
+    else
+    {
         if( argSize > kIOUserNotifyMaxMessageSize)
             argSize = kIOUserNotifyMaxMessageSize;
         bcopy( messageArgument, data->messageArgument, argSize );
     }
-    pingMsg->msgHdr.msgh_size = sizeof( PingMsg)
-        + sizeof( IOServiceInterestContent )
+    pingMsg->msgHdr.msgh_size = msgSize - pingMsg->notifyHeader.size
+        + sizeof( IOServiceInterestContent64 )
         - sizeof( data->messageArgument)
         + argSize;
 
@@ -752,9 +807,20 @@ void IOUserClient::setAsyncReference(OSAsyncReference asyncRef,
                                      mach_port_t wakePort,
                                      void *callback, void *refcon)
 {
-    asyncRef[kIOAsyncReservedIndex] = (natural_t) wakePort;
-    asyncRef[kIOAsyncCalloutFuncIndex] = (natural_t) callback;
+    asyncRef[kIOAsyncReservedIndex]      = ((natural_t) wakePort) 
+					 | (kIOUCAsync0Flags & asyncRef[kIOAsyncReservedIndex]);
+    asyncRef[kIOAsyncCalloutFuncIndex]   = (natural_t) callback;
     asyncRef[kIOAsyncCalloutRefconIndex] = (natural_t) refcon;
+}
+
+void IOUserClient::setAsyncReference64(OSAsyncReference64 asyncRef,
+					mach_port_t wakePort,
+					mach_vm_address_t callback, io_user_reference_t refcon)
+{
+    asyncRef[kIOAsyncReservedIndex]      = ((io_user_reference_t) wakePort)
+					 | (kIOUCAsync0Flags & asyncRef[kIOAsyncReservedIndex]);
+    asyncRef[kIOAsyncCalloutFuncIndex]   = (io_user_reference_t) callback;
+    asyncRef[kIOAsyncCalloutRefconIndex] = refcon;
 }
 
 inline OSDictionary * CopyConsoleUser(UInt32 uid)
@@ -942,6 +1008,30 @@ IOMemoryMap * IOUserClient::mapClientMemory(
     return( map );
 }
 
+IOMemoryMap * IOUserClient::mapClientMemory64( 
+	IOOptionBits		type,
+	task_t			task,
+	IOOptionBits		mapFlags,
+	mach_vm_address_t	atAddress )
+{
+    IOReturn		err;
+    IOOptionBits	options = 0;
+    IOMemoryDescriptor * memory;
+    IOMemoryMap *	map = 0;
+
+    err = clientMemoryForType( (UInt32) type, &options, &memory );
+
+    if( memory && (kIOReturnSuccess == err)) {
+
+        options = (options & ~kIOMapUserOptionsMask)
+		| (mapFlags & kIOMapUserOptionsMask);
+	map = memory->createMappingInTask( task, atAddress, options );
+	memory->release();
+    }
+
+    return( map );
+}
+
 IOReturn IOUserClient::exportObjectToClient(task_t task,
 			OSObject *obj, io_object_t *clientObj)
 {
@@ -1007,45 +1097,105 @@ getTargetAndTrapForIndex(IOService ** targetP, UInt32 index)
 IOReturn IOUserClient::sendAsyncResult(OSAsyncReference reference,
                                        IOReturn result, void *args[], UInt32 numArgs)
 {
-    struct ReplyMsg {
-        mach_msg_header_t	msgHdr;
-        OSNotificationHeader	notifyHdr;
-        IOAsyncCompletionContent asyncContent;
-        void *			args[kMaxAsyncArgs];
+    OSAsyncReference64  reference64;
+    io_user_reference_t args64[kMaxAsyncArgs];
+    unsigned int        idx;
+
+    if (numArgs > kMaxAsyncArgs)
+        return kIOReturnMessageTooLarge;
+
+    for (idx = 0; idx < kOSAsyncRef64Count; idx++)
+	reference64[idx] = REF64(reference[idx]);
+
+    for (idx = 0; idx < numArgs; idx++)
+	args64[idx] = REF64(args[idx]);
+
+    return (sendAsyncResult64(reference64, result, args64, numArgs));
+}
+
+IOReturn IOUserClient::sendAsyncResult64(OSAsyncReference64 reference,
+                                        IOReturn result, io_user_reference_t args[], UInt32 numArgs)
+{
+    struct ReplyMsg
+    {
+	mach_msg_header_t msgHdr;
+	union
+	{
+	    struct
+	    {
+		OSNotificationHeader	 notifyHdr;
+		IOAsyncCompletionContent asyncContent;
+		uint32_t		 args[kMaxAsyncArgs];
+	    } msg32;
+	    struct
+	    {
+		OSNotificationHeader64	 notifyHdr;
+		IOAsyncCompletionContent asyncContent;
+		uint32_t		 pad;
+		io_user_reference_t	 args[kMaxAsyncArgs];
+	    } msg64;
+	} m;
     };
-    ReplyMsg replyMsg;
-    mach_port_t	replyPort;
+    ReplyMsg      replyMsg;
+    mach_port_t	  replyPort;
     kern_return_t kr;
 
     // If no reply port, do nothing.
-    replyPort = (mach_port_t) reference[0];
-    if(replyPort == MACH_PORT_NULL)
+    replyPort = (mach_port_t) (reference[0] & ~kIOUCAsync0Flags);
+    if (replyPort == MACH_PORT_NULL)
         return kIOReturnSuccess;
     
-    if(numArgs > kMaxAsyncArgs)
+    if (numArgs > kMaxAsyncArgs)
         return kIOReturnMessageTooLarge;
+
     replyMsg.msgHdr.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND /*remote*/,
-                                                0 /*local*/);
-    replyMsg.msgHdr.msgh_size =
-        sizeof(replyMsg) - (kMaxAsyncArgs-numArgs)*sizeof(void *);
+						0 /*local*/);
     replyMsg.msgHdr.msgh_remote_port = replyPort;
-    replyMsg.msgHdr.msgh_local_port = 0;
-    replyMsg.msgHdr.msgh_id = kOSNotificationMessageID;
+    replyMsg.msgHdr.msgh_local_port  = 0;
+    replyMsg.msgHdr.msgh_id          = kOSNotificationMessageID;
+    if (kIOUCAsync64Flag & reference[0])
+    {
+	replyMsg.msgHdr.msgh_size =
+	    sizeof(replyMsg.msgHdr) + sizeof(replyMsg.m.msg64) 
+	    - (kMaxAsyncArgs - numArgs) * sizeof(io_user_reference_t);
+	replyMsg.m.msg64.notifyHdr.size = sizeof(IOAsyncCompletionContent)
+					+ sizeof(uint32_t)
+					+ numArgs * sizeof(io_user_reference_t);
+	replyMsg.m.msg64.notifyHdr.type = kIOAsyncCompletionNotificationType;
+	bcopy(reference, replyMsg.m.msg64.notifyHdr.reference, sizeof(OSAsyncReference64));
 
-    replyMsg.notifyHdr.size = sizeof(IOAsyncCompletionContent)
-                            + numArgs*sizeof(void *);
-    replyMsg.notifyHdr.type = kIOAsyncCompletionNotificationType;
-    bcopy( reference, replyMsg.notifyHdr.reference, sizeof(OSAsyncReference));
+	replyMsg.m.msg64.asyncContent.result = result;
+	if (numArgs)
+	    bcopy(args, replyMsg.m.msg64.args, numArgs * sizeof(io_user_reference_t));
+    }
+    else
+    {
+	unsigned int idx;
 
-    replyMsg.asyncContent.result = result;
-    if(numArgs > 0)
-        bcopy(args, replyMsg.args, sizeof(void *)*numArgs);
+	replyMsg.msgHdr.msgh_size =
+	    sizeof(replyMsg.msgHdr) + sizeof(replyMsg.m.msg32)
+	    - (kMaxAsyncArgs - numArgs) * sizeof(uint32_t);
+
+	replyMsg.m.msg32.notifyHdr.size = sizeof(IOAsyncCompletionContent)
+					+ numArgs * sizeof(uint32_t);
+	replyMsg.m.msg32.notifyHdr.type = kIOAsyncCompletionNotificationType;
+
+	for (idx = 0; idx < kOSAsyncRefCount; idx++)
+	    replyMsg.m.msg32.notifyHdr.reference[idx] = REF32(reference[idx]);
+
+	replyMsg.m.msg32.asyncContent.result = result;
+
+	for (idx = 0; idx < numArgs; idx++)
+	    replyMsg.m.msg32.args[idx] = REF32(args[idx]);
+    }
+
      kr = mach_msg_send_from_kernel( &replyMsg.msgHdr,
             replyMsg.msgHdr.msgh_size);
     if( KERN_SUCCESS != kr)
         IOLog("%s: mach_msg_send_from_kernel {%x}\n", __FILE__, kr );
     return kr;
 }
+
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -1109,7 +1259,7 @@ kern_return_t is_io_object_get_superclass(
 	my_cstr = superclass->getClassName();
 		
 	if (my_cstr) {
-		strncpy(class_name, my_cstr, sizeof(io_name_t)-1);
+		strlcpy(class_name, my_cstr, sizeof(io_name_t));
 		return( kIOReturnSuccess );
 	}
 	return (kIOReturnNotFound);
@@ -1148,7 +1298,7 @@ kern_return_t is_io_object_get_bundle_identifier(
 	
 	my_cstr = identifier->getCStringNoCopy();
 	if (my_cstr) {
-		strncpy(bundle_name, identifier->getCStringNoCopy(), sizeof(io_name_t)-1);
+		strlcpy(bundle_name, identifier->getCStringNoCopy(), sizeof(io_name_t));
 		return( kIOReturnSuccess );
 	}
 
@@ -1171,7 +1321,7 @@ kern_return_t is_io_object_conforms_to(
 /* Routine io_object_get_retain_count */
 kern_return_t is_io_object_get_retain_count(
 	io_object_t object,
-	int *retainCount )
+	uint32_t *retainCount )
 {
     if( !object)
         return( kIOReturnBadArgument );
@@ -1252,7 +1402,7 @@ kern_return_t is_io_service_match_property_table_ool(
 	io_object_t service,
 	io_buf_ptr_t matching,
 	mach_msg_type_number_t matchingCnt,
-	natural_t *result,
+	kern_return_t *result,
 	boolean_t *matches )
 {
     kern_return_t	kr;
@@ -1304,7 +1454,7 @@ kern_return_t is_io_service_get_matching_services_ool(
 	mach_port_t master_port,
 	io_buf_ptr_t matching,
 	mach_msg_type_number_t matchingCnt,
-	natural_t *result,
+	kern_return_t *result,
 	io_object_t *existing )
 {
     kern_return_t	kr;
@@ -1324,14 +1474,14 @@ kern_return_t is_io_service_get_matching_services_ool(
     return( kr );
 }
 
-/* Routine io_service_add_notification */
-kern_return_t is_io_service_add_notification(
+static kern_return_t internal_io_service_add_notification(
 	mach_port_t master_port,
 	io_name_t notification_type,
 	io_string_t matching,
 	mach_port_t port,
-	io_async_ref_t reference,
-	mach_msg_type_number_t referenceCnt,
+	void * reference,
+	vm_size_t referenceSize,
+	bool client64,
 	io_object_t * notification )
 {
     IOServiceUserNotification *	userNotify = 0;
@@ -1371,7 +1521,7 @@ kern_return_t is_io_service_add_notification(
         userNotify = new IOServiceUserNotification;
 
         if( userNotify && !userNotify->init( port, userMsgType,
-                                             reference)) {
+                                             reference, referenceSize, client64)) {
             userNotify->release();
             userNotify = 0;
         }
@@ -1398,16 +1548,48 @@ kern_return_t is_io_service_add_notification(
     return( err );
 }
 
-/* Routine io_service_add_notification_ool */
-kern_return_t is_io_service_add_notification_ool(
+
+/* Routine io_service_add_notification */
+kern_return_t is_io_service_add_notification(
+	mach_port_t master_port,
+	io_name_t notification_type,
+	io_string_t matching,
+	mach_port_t port,
+	io_async_ref_t reference,
+	mach_msg_type_number_t referenceCnt,
+	io_object_t * notification )
+{
+    return (internal_io_service_add_notification(master_port, notification_type, 
+		matching, port, &reference[0], sizeof(io_async_ref_t),
+		false, notification));
+}
+
+/* Routine io_service_add_notification_64 */
+kern_return_t is_io_service_add_notification_64(
+	mach_port_t master_port,
+	io_name_t notification_type,
+	io_string_t matching,
+	mach_port_t wake_port,
+	io_async_ref64_t reference,
+	mach_msg_type_number_t referenceCnt,
+	io_object_t *notification )
+{
+    return (internal_io_service_add_notification(master_port, notification_type, 
+		matching, wake_port, &reference[0], sizeof(io_async_ref64_t),
+		true, notification));
+}
+
+
+static kern_return_t internal_io_service_add_notification_ool(
 	mach_port_t master_port,
 	io_name_t notification_type,
 	io_buf_ptr_t matching,
 	mach_msg_type_number_t matchingCnt,
 	mach_port_t wake_port,
-	io_async_ref_t reference,
-	mach_msg_type_number_t referenceCnt,
-	natural_t *result,
+	void * reference,
+	vm_size_t referenceSize,
+	bool client64,
+	kern_return_t *result,
 	io_object_t *notification )
 {
     kern_return_t	kr;
@@ -1419,14 +1601,47 @@ kern_return_t is_io_service_add_notification_ool(
 
     if( KERN_SUCCESS == kr) {
         // must return success after vm_map_copyout() succeeds
-	*result = is_io_service_add_notification( master_port, notification_type,
-			(char *) data, wake_port, reference, referenceCnt, notification );
+	*result = internal_io_service_add_notification( master_port, notification_type,
+			(char *) data, wake_port, reference, referenceSize, client64, notification );
 	vm_deallocate( kernel_map, data, matchingCnt );
     }
 
     return( kr );
 }
 
+/* Routine io_service_add_notification_ool */
+kern_return_t is_io_service_add_notification_ool(
+	mach_port_t master_port,
+	io_name_t notification_type,
+	io_buf_ptr_t matching,
+	mach_msg_type_number_t matchingCnt,
+	mach_port_t wake_port,
+	io_async_ref_t reference,
+	mach_msg_type_number_t referenceCnt,
+	kern_return_t *result,
+	io_object_t *notification )
+{
+    return (internal_io_service_add_notification_ool(master_port, notification_type, 
+		matching, matchingCnt, wake_port, &reference[0], sizeof(io_async_ref_t),
+		false, result, notification));
+}
+
+/* Routine io_service_add_notification_ool_64 */
+kern_return_t is_io_service_add_notification_ool_64(
+	mach_port_t master_port,
+	io_name_t notification_type,
+	io_buf_ptr_t matching,
+	mach_msg_type_number_t matchingCnt,
+	mach_port_t wake_port,
+	io_async_ref64_t reference,
+	mach_msg_type_number_t referenceCnt,
+	kern_return_t *result,
+	io_object_t *notification )
+{
+    return (internal_io_service_add_notification_ool(master_port, notification_type, 
+		matching, matchingCnt, wake_port, &reference[0], sizeof(io_async_ref64_t),
+		true, result, notification));
+}
 
 /* Routine io_service_add_notification_old */
 kern_return_t is_io_service_add_notification_old(
@@ -1441,13 +1656,14 @@ kern_return_t is_io_service_add_notification_old(
             matching, port, &ref, 1, notification ));
 }
 
-/* Routine io_service_add_message_notification */
-kern_return_t is_io_service_add_interest_notification(
+
+static kern_return_t internal_io_service_add_interest_notification(
         io_object_t _service,
         io_name_t type_of_interest,
         mach_port_t port,
-	io_async_ref_t reference,
-	mach_msg_type_number_t referenceCnt,
+	void * reference,
+	vm_size_t referenceSize,
+	bool client64,
         io_object_t * notification )
 {
 
@@ -1464,7 +1680,9 @@ kern_return_t is_io_service_add_interest_notification(
         userNotify = new IOServiceMessageUserNotification;
 
         if( userNotify && !userNotify->init( port, kIOServiceMessageNotificationType,
-                                             reference, kIOUserNotifyMaxMessageSize )) {
+                                             reference, referenceSize,
+					     kIOUserNotifyMaxMessageSize,
+					     client64 )) {
             userNotify->release();
             userNotify = 0;
         }
@@ -1486,6 +1704,33 @@ kern_return_t is_io_service_add_interest_notification(
 
     return( err );
 }
+
+/* Routine io_service_add_message_notification */
+kern_return_t is_io_service_add_interest_notification(
+        io_object_t service,
+        io_name_t type_of_interest,
+        mach_port_t port,
+	io_async_ref_t reference,
+	mach_msg_type_number_t referenceCnt,
+        io_object_t * notification )
+{
+    return (internal_io_service_add_interest_notification(service, type_of_interest,
+		    port, &reference[0], sizeof(io_async_ref_t), false, notification));
+}
+
+/* Routine io_service_add_interest_notification_64 */
+kern_return_t is_io_service_add_interest_notification_64(
+	io_object_t service,
+	io_name_t type_of_interest,
+	mach_port_t wake_port,
+	io_async_ref64_t reference,
+	mach_msg_type_number_t referenceCnt,
+	io_object_t *notification )
+{
+    return (internal_io_service_add_interest_notification(service, type_of_interest,
+		    wake_port, &reference[0], sizeof(io_async_ref64_t), true, notification));
+}
+
 
 /* Routine io_service_acknowledge_notification */
 kern_return_t is_io_service_acknowledge_notification(
@@ -1534,7 +1779,7 @@ kern_return_t is_io_registry_get_root_entry(
 kern_return_t is_io_registry_create_iterator(
 	mach_port_t master_port,
 	io_name_t plane,
-	int options,
+	uint32_t options,
 	io_object_t *iterator )
 {
     if( master_port != master_device_port)
@@ -1550,7 +1795,7 @@ kern_return_t is_io_registry_create_iterator(
 kern_return_t is_io_registry_entry_create_iterator(
 	io_object_t registry_entry,
 	io_name_t plane,
-	int options,
+	uint32_t options,
 	io_object_t *iterator )
 {
     CHECK( IORegistryEntry, registry_entry, entry );
@@ -1711,7 +1956,7 @@ static kern_return_t copyoutkdata( void * data, vm_size_t len,
 kern_return_t is_io_registry_entry_get_property_bytes(
 	io_object_t registry_entry,
 	io_name_t property_name,
-	io_scalar_inband_t buf,
+	io_struct_inband_t buf,
 	mach_msg_type_number_t *dataCnt )
 {
     OSObject	*	obj;
@@ -1813,7 +2058,7 @@ kern_return_t is_io_registry_entry_get_property_recursively(
 	io_object_t registry_entry,
 	io_name_t plane,
 	io_name_t property_name,
-        int options,
+        uint32_t options,
 	io_buf_ptr_t *properties,
 	mach_msg_type_number_t *propertiesCnt )
 {
@@ -1886,7 +2131,7 @@ kern_return_t is_io_registry_entry_set_properties
 	io_object_t registry_entry,
 	io_buf_ptr_t properties,
 	mach_msg_type_number_t propertiesCnt,
-        natural_t * result)
+        kern_return_t * result)
 {
     OSObject *		obj;
     kern_return_t	err;
@@ -1948,7 +2193,7 @@ kern_return_t is_io_registry_entry_get_parent_iterator(
 /* Routine io_service_get_busy_state */
 kern_return_t is_io_service_get_busy_state(
 	io_object_t _service,
-	int *busyState )
+	uint32_t *busyState )
 {
     CHECK( IOService, _service, service );
 
@@ -1982,7 +2227,7 @@ kern_return_t is_io_service_wait_quiet(
 /* Routine io_service_request_probe */
 kern_return_t is_io_service_request_probe(
 	io_object_t _service,
-	int options )
+	uint32_t options )
 {
     CHECK( IOService, _service, service );
 
@@ -1994,7 +2239,7 @@ kern_return_t is_io_service_request_probe(
 kern_return_t is_io_service_open(
 	io_object_t _service,
 	task_t owningTask,
-	int connect_type,
+	uint32_t connect_type,
 	io_object_t *connection )
 {
     IOUserClient	*	client;
@@ -2017,11 +2262,11 @@ kern_return_t is_io_service_open(
 kern_return_t is_io_service_open_extended(
 	io_object_t _service,
 	task_t owningTask,
-	int connect_type,
+	uint32_t connect_type,
 	NDR_record_t ndr,
 	io_buf_ptr_t properties,
 	mach_msg_type_number_t propertiesCnt,
-        natural_t * result,
+        kern_return_t * result,
 	io_object_t *connection )
 {
     IOUserClient * client = 0;
@@ -2144,9 +2389,9 @@ kern_return_t is_io_connect_get_service(
 /* Routine io_connect_set_notification_port */
 kern_return_t is_io_connect_set_notification_port(
 	io_object_t connection,
-	int notification_type,
+	uint32_t notification_type,
 	mach_port_t port,
-	int reference)
+	uint32_t reference)
 {
     CHECK( IOUserClient, connection, client );
 
@@ -2154,35 +2399,49 @@ kern_return_t is_io_connect_set_notification_port(
 						reference ));
 }
 
-kern_return_t is_io_connect_map_memory(
-	io_object_t     connect,
-	int		type,
-	task_t		task,
-	vm_address_t *	mapAddr,
-	vm_size_t    *	mapSize,
-	int		flags )
+/* Routine io_connect_set_notification_port */
+kern_return_t is_io_connect_set_notification_port_64(
+	io_object_t connection,
+	uint32_t notification_type,
+	mach_port_t port,
+	io_user_reference_t reference)
+{
+    CHECK( IOUserClient, connection, client );
+
+    return( client->registerNotificationPort( port, notification_type,
+						reference ));
+}
+
+/* Routine io_connect_map_memory_into_task */
+kern_return_t is_io_connect_map_memory_into_task
+(
+	io_connect_t connection,
+	uint32_t memory_type,
+	task_t into_task,
+	mach_vm_address_t *address,
+	mach_vm_size_t *size,
+	uint32_t flags
+)
 {
     IOReturn		err;
     IOMemoryMap *	map;
 
-    CHECK( IOUserClient, connect, client );
+    CHECK( IOUserClient, connection, client );
 
-    map = client->mapClientMemory( type, task, flags, *mapAddr );
+    map = client->mapClientMemory64( memory_type, into_task, flags, *address );
 
     if( map) {
-        *mapAddr = map->getVirtualAddress();
-        if( mapSize)
-            *mapSize = map->getLength();
+        *address = map->getAddress();
+        if( size)
+            *size = map->getSize();
 
         if( client->sharedInstance
-	    || (task != current_task())) {
+	    || (into_task != current_task())) {
             // push a name out to the task owning the map,
             // so we can clean up maps
-#if IOASSERT
-	    mach_port_name_t name =
-#endif
-	    IOMachPort::makeSendRightForTask(
-                                    task, map, IKOT_IOKIT_OBJECT );
+	    mach_port_name_t name __unused =
+		IOMachPort::makeSendRightForTask(
+                                    into_task, map, IKOT_IOKIT_OBJECT );
             assert( name );
 
         } else {
@@ -2201,6 +2460,30 @@ kern_return_t is_io_connect_map_memory(
 	err = kIOReturnBadArgument;
 
     return( err );
+}
+
+/* Routine is_io_connect_map_memory */
+kern_return_t is_io_connect_map_memory(
+	io_object_t     connect,
+	uint32_t	type,
+	task_t		task,
+	vm_address_t *	mapAddr,
+	vm_size_t    *	mapSize,
+	uint32_t	flags )
+{
+    IOReturn	      err;
+    mach_vm_address_t address;
+    mach_vm_size_t    size;
+
+    address = SCALAR64(*mapAddr);
+    size    = SCALAR64(*mapSize);
+
+    err = is_io_connect_map_memory_into_task(connect, type, task, &address, &size, flags);
+
+    *mapAddr = SCALAR32(address);
+    *mapSize = SCALAR32(size);
+
+    return (err);
 }
 
 IOMemoryMap * IOUserClient::removeMappingForDescriptor(IOMemoryDescriptor * mem)
@@ -2230,27 +2513,29 @@ IOMemoryMap * IOUserClient::removeMappingForDescriptor(IOMemoryDescriptor * mem)
     return (map);
 }
 
-kern_return_t is_io_connect_unmap_memory(
-	io_object_t     connect,
-	int		type,
-	task_t		task,
-	vm_address_t 	mapAddr )
+/* Routine io_connect_unmap_memory_from_task */
+kern_return_t is_io_connect_unmap_memory_from_task
+(
+	io_connect_t connection,
+	uint32_t memory_type,
+	task_t from_task,
+	mach_vm_address_t address)
 {
     IOReturn		err;
     IOOptionBits	options = 0;
     IOMemoryDescriptor * memory;
     IOMemoryMap *	map;
 
-    CHECK( IOUserClient, connect, client );
+    CHECK( IOUserClient, connection, client );
 
-    err = client->clientMemoryForType( (UInt32) type, &options, &memory );
+    err = client->clientMemoryForType( (UInt32) memory_type, &options, &memory );
 
     if( memory && (kIOReturnSuccess == err)) {
 
         options = (options & ~kIOMapUserOptionsMask)
 		| kIOMapAnywhere | kIOMapReference;
 
-	map = memory->map( task, mapAddr, options );
+	map = memory->createMappingInTask( from_task, address, options );
 	memory->release();
         if( map)
 	{
@@ -2260,17 +2545,17 @@ kern_return_t is_io_connect_unmap_memory(
             IOLockUnlock( gIOObjectPortLock);
 
 	    mach_port_name_t name = 0;
-	    if (task != current_task())
-		name = IOMachPort::makeSendRightForTask( task, map, IKOT_IOKIT_OBJECT );
+	    if (from_task != current_task())
+		name = IOMachPort::makeSendRightForTask( from_task, map, IKOT_IOKIT_OBJECT );
 	    if (name)
 	    {
 		map->unmap();
-		err = iokit_mod_send_right( task, name, -2 );
+		err = iokit_mod_send_right( from_task, name, -2 );
 		err = kIOReturnSuccess;
 	    }
 	    else
 		IOMachPort::releasePortForObject( map, IKOT_IOKIT_OBJECT );
-	    if (task == current_task())
+	    if (from_task == current_task())
 		map->release();
         }
 	else
@@ -2278,6 +2563,22 @@ kern_return_t is_io_connect_unmap_memory(
     }
 
     return( err );
+}
+
+kern_return_t is_io_connect_unmap_memory(
+	io_object_t     connect,
+	uint32_t	type,
+	task_t		task,
+	vm_address_t 	mapAddr )
+{
+    IOReturn		err;
+    mach_vm_address_t   address;
+    
+    address = SCALAR64(mapAddr);
+    
+    err = is_io_connect_unmap_memory_from_task(connect, type, task, mapAddr);
+
+    return (err);
 }
 
 
@@ -2298,136 +2599,593 @@ kern_return_t is_io_connect_set_properties(
 	io_object_t connection,
 	io_buf_ptr_t properties,
 	mach_msg_type_number_t propertiesCnt,
-        natural_t * result)
+        kern_return_t * result)
 {
     return( is_io_registry_entry_set_properties( connection, properties, propertiesCnt, result ));
 }
 
 
+/* Routine io_user_client_method */
+kern_return_t is_io_connect_method
+(
+	io_connect_t connection,
+	uint32_t selector,
+	io_scalar_inband64_t scalar_input,
+	mach_msg_type_number_t scalar_inputCnt,
+	io_struct_inband_t inband_input,
+	mach_msg_type_number_t inband_inputCnt,
+	mach_vm_address_t ool_input,
+	mach_vm_size_t ool_input_size,
+	io_scalar_inband64_t scalar_output,
+	mach_msg_type_number_t *scalar_outputCnt,
+	io_struct_inband_t inband_output,
+	mach_msg_type_number_t *inband_outputCnt,
+	mach_vm_address_t ool_output,
+	mach_vm_size_t * ool_output_size
+)
+{
+    CHECK( IOUserClient, connection, client );
+
+    IOExternalMethodArguments args;
+    IOReturn ret;
+    IOMemoryDescriptor * inputMD  = 0;
+    IOMemoryDescriptor * outputMD = 0;
+
+    bzero(&args.__reserved[0], sizeof(args.__reserved));
+    args.version = kIOExternalMethodArgumentsCurrentVersion;
+
+    args.selector = selector;
+
+    args.asyncWakePort       = MACH_PORT_NULL;
+    args.asyncReference      = 0;
+    args.asyncReferenceCount = 0;
+
+    args.scalarInput = scalar_input;
+    args.scalarInputCount = scalar_inputCnt;
+    args.structureInput = inband_input;
+    args.structureInputSize = inband_inputCnt;
+
+    if (ool_input)
+	inputMD = IOMemoryDescriptor::withAddressRange(ool_input, ool_input_size, 
+						    kIODirectionOut, current_task());
+
+    args.structureInputDescriptor = inputMD;
+
+    args.scalarOutput = scalar_output;
+    args.scalarOutputCount = *scalar_outputCnt;
+    args.structureOutput = inband_output;
+    args.structureOutputSize = *inband_outputCnt;
+
+    if (ool_output)
+    {
+	outputMD = IOMemoryDescriptor::withAddressRange(ool_output, *ool_output_size, 
+						    kIODirectionIn, current_task());
+    }
+
+    args.structureOutputDescriptor = outputMD;
+    args.structureOutputDescriptorSize = *ool_output_size;
+
+    ret = client->externalMethod( selector, &args );
+
+    *scalar_outputCnt = args.scalarOutputCount;
+    *inband_outputCnt = args.structureOutputSize;
+    *ool_output_size  = args.structureOutputDescriptorSize;
+
+    if (inputMD)
+	inputMD->release();
+    if (outputMD)
+	outputMD->release();
+
+    return (ret);
+}
+
+/* Routine io_async_user_client_method */
+kern_return_t is_io_connect_async_method
+(
+	io_connect_t connection,
+	mach_port_t wake_port,
+	io_async_ref64_t reference,
+	mach_msg_type_number_t referenceCnt,
+	uint32_t selector,
+	io_scalar_inband64_t scalar_input,
+	mach_msg_type_number_t scalar_inputCnt,
+	io_struct_inband_t inband_input,
+	mach_msg_type_number_t inband_inputCnt,
+	mach_vm_address_t ool_input,
+	mach_vm_size_t ool_input_size,
+	io_scalar_inband64_t scalar_output,
+	mach_msg_type_number_t *scalar_outputCnt,
+	io_struct_inband_t inband_output,
+	mach_msg_type_number_t *inband_outputCnt,
+	mach_vm_address_t ool_output,
+	mach_vm_size_t * ool_output_size
+)
+{
+    CHECK( IOUserClient, connection, client );
+
+    IOExternalMethodArguments args;
+    IOReturn ret;
+    IOMemoryDescriptor * inputMD  = 0;
+    IOMemoryDescriptor * outputMD = 0;
+
+    bzero(&args.__reserved[0], sizeof(args.__reserved));
+    args.version = kIOExternalMethodArgumentsCurrentVersion;
+
+    reference[0]	     = (io_user_reference_t) wake_port;
+    if (vm_map_is_64bit(get_task_map(current_task()))) 
+	reference[0]	     |= kIOUCAsync64Flag;
+
+    args.selector = selector;
+
+    args.asyncWakePort       = wake_port;
+    args.asyncReference      = reference;
+    args.asyncReferenceCount = referenceCnt;
+
+    args.scalarInput = scalar_input;
+    args.scalarInputCount = scalar_inputCnt;
+    args.structureInput = inband_input;
+    args.structureInputSize = inband_inputCnt;
+
+    if (ool_input)
+	inputMD = IOMemoryDescriptor::withAddressRange(ool_input, ool_input_size,
+						    kIODirectionOut, current_task());
+
+    args.structureInputDescriptor = inputMD;
+
+    args.scalarOutput = scalar_output;
+    args.scalarOutputCount = *scalar_outputCnt;
+    args.structureOutput = inband_output;
+    args.structureOutputSize = *inband_outputCnt;
+
+    if (ool_output)
+    {
+	outputMD = IOMemoryDescriptor::withAddressRange(ool_output, *ool_output_size,
+						    kIODirectionIn, current_task());
+    }
+
+    args.structureOutputDescriptor = outputMD;
+    args.structureOutputDescriptorSize = *ool_output_size;
+
+    ret = client->externalMethod( selector, &args );
+
+    *inband_outputCnt = args.structureOutputSize;
+    *ool_output_size  = args.structureOutputDescriptorSize;
+
+    if (inputMD)
+	inputMD->release();
+    if (outputMD)
+	outputMD->release();
+
+    return (ret);
+}
+
 /* Routine io_connect_method_scalarI_scalarO */
 kern_return_t is_io_connect_method_scalarI_scalarO(
-	io_object_t	connect,
-	UInt32		index,
-        void *	 	input[],
-        IOByteCount	inputCount,
-        void *	 	output[],
-        IOByteCount *	outputCount )
+	io_object_t	   connect,
+	uint32_t	   index,
+        io_scalar_inband_t       input,
+        mach_msg_type_number_t	 inputCount,
+        io_scalar_inband_t       output,
+        mach_msg_type_number_t * outputCount )
 {
-    IOReturn 		err;
-    IOExternalMethod *	method;
-    IOService *		object;
-    IOMethod		func;
+    IOReturn err;
+    uint32_t i;
+    io_scalar_inband64_t _input;
+    io_scalar_inband64_t _output;
 
-    CHECK( IOUserClient, connect, client);
-    if( (method = client->getTargetAndMethodForIndex(&object, index))) {
-      do {
-        err = kIOReturnBadArgument;
-	if( kIOUCScalarIScalarO != (method->flags & kIOUCTypeMask))
-	    continue;
+    mach_msg_type_number_t struct_outputCnt = 0;
+    mach_vm_size_t ool_output_size = 0;
+
+    for (i = 0; i < inputCount; i++)
+	_input[i] = SCALAR64(input[i]);
+	
+    err = is_io_connect_method(connect, index, 
+		    _input, inputCount, 
+		    NULL, 0,
+		    0, 0,
+		    _output, outputCount,
+		    NULL, &struct_outputCnt,
+		    0, &ool_output_size);
+
+    for (i = 0; i < *outputCount; i++)
+	output[i] = SCALAR32(_output[i]);
+
+    return (err);
+}
+
+kern_return_t shim_io_connect_method_scalarI_scalarO(
+	IOExternalMethod *	method,
+	IOService *		object,
+        const io_user_scalar_t * input,
+        mach_msg_type_number_t	 inputCount,
+        io_user_scalar_t * output,
+        mach_msg_type_number_t * outputCount )
+{
+    IOMethod		func;
+    io_scalar_inband_t  _output;
+    IOReturn 		err;
+    err = kIOReturnBadArgument;
+
+    do {
+
 	if( inputCount != method->count0)
+	{
+	    IOLog("%s: IOUserClient inputCount count mismatch\n", object->getName());
 	    continue;
+	}
 	if( *outputCount != method->count1)
+	{
+	    IOLog("%s: IOUserClient outputCount count mismatch\n", object->getName());
 	    continue;
+	}
 
 	func = method->func;
 
 	switch( inputCount) {
 
 	    case 6:
-		err = (object->*func)(  input[0], input[1], input[2],
-					input[3], input[4], input[5] );
+		err = (object->*func)(  ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
+					ARG32(input[3]), ARG32(input[4]), ARG32(input[5]) );
 		break;
 	    case 5:
-		err = (object->*func)(  input[0], input[1], input[2],
-					input[3], input[4], 
-					&output[0] );
+		err = (object->*func)(  ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
+					ARG32(input[3]), ARG32(input[4]), 
+					&_output[0] );
 		break;
 	    case 4:
-		err = (object->*func)(  input[0], input[1], input[2],
-					input[3],
-					&output[0], &output[1] );
+		err = (object->*func)(  ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
+					ARG32(input[3]),
+					&_output[0], &_output[1] );
 		break;
 	    case 3:
-		err = (object->*func)(  input[0], input[1], input[2],
-					&output[0], &output[1], &output[2] );
+		err = (object->*func)(  ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
+					&_output[0], &_output[1], &_output[2] );
 		break;
 	    case 2:
-		err = (object->*func)(  input[0], input[1],
-					&output[0], &output[1], &output[2],
-					&output[3] );
+		err = (object->*func)(  ARG32(input[0]), ARG32(input[1]),
+					&_output[0], &_output[1], &_output[2],
+					&_output[3] );
 		break;
 	    case 1:
-		err = (object->*func)(  input[0],
-					&output[0], &output[1], &output[2],
-					&output[3], &output[4] );
+		err = (object->*func)(  ARG32(input[0]),
+					&_output[0], &_output[1], &_output[2],
+					&_output[3], &_output[4] );
 		break;
 	    case 0:
-		err = (object->*func)(  &output[0], &output[1], &output[2],
-					&output[3], &output[4], &output[5] );
+		err = (object->*func)(  &_output[0], &_output[1], &_output[2],
+					&_output[3], &_output[4], &_output[5] );
 		break;
 
 	    default:
-		IOLog("%s: Bad method table\n", client->getName());
+		IOLog("%s: Bad method table\n", object->getName());
 	}
-      } while( false);
+    }
+    while( false);
 
-    } else
-        err = kIOReturnUnsupported;
+    uint32_t i;
+    for (i = 0; i < *outputCount; i++)
+	output[i] = SCALAR32(_output[i]);
 
     return( err);
 }
 
+/* Routine io_async_method_scalarI_scalarO */
+kern_return_t is_io_async_method_scalarI_scalarO(
+	io_object_t	   connect,
+	mach_port_t wake_port,
+	io_async_ref_t reference,
+	mach_msg_type_number_t referenceCnt,
+	uint32_t	   index,
+        io_scalar_inband_t       input,
+        mach_msg_type_number_t	 inputCount,
+        io_scalar_inband_t       output,
+        mach_msg_type_number_t * outputCount )
+{
+    IOReturn err;
+    uint32_t i;
+    io_scalar_inband64_t _input;
+    io_scalar_inband64_t _output;
+    io_async_ref64_t _reference;
+
+    for (i = 0; i < referenceCnt; i++)
+	_reference[i] = REF64(reference[i]);
+
+    mach_msg_type_number_t struct_outputCnt = 0;
+    mach_vm_size_t ool_output_size = 0;
+
+    for (i = 0; i < inputCount; i++)
+	_input[i] = SCALAR64(input[i]);
+
+    err = is_io_connect_async_method(connect, 
+		    wake_port, _reference, referenceCnt,
+		    index, 
+		    _input, inputCount, 
+		    NULL, 0,
+		    0, 0,
+		    _output, outputCount,
+		    NULL, &struct_outputCnt,
+		    0, &ool_output_size);
+
+    for (i = 0; i < *outputCount; i++)
+	output[i] = SCALAR32(_output[i]);
+
+    return (err);
+}
+/* Routine io_async_method_scalarI_structureO */
+kern_return_t is_io_async_method_scalarI_structureO(
+	io_object_t	connect,
+	mach_port_t wake_port,
+	io_async_ref_t reference,
+	mach_msg_type_number_t referenceCnt,
+	uint32_t	index,
+        io_scalar_inband_t input,
+        mach_msg_type_number_t	inputCount,
+        io_struct_inband_t		output,
+        mach_msg_type_number_t *	outputCount )
+{
+    uint32_t i;
+    io_scalar_inband64_t _input;
+    io_async_ref64_t _reference;
+
+    for (i = 0; i < referenceCnt; i++)
+	_reference[i] = REF64(reference[i]);
+
+    mach_msg_type_number_t scalar_outputCnt = 0;
+    mach_vm_size_t ool_output_size = 0;
+
+    for (i = 0; i < inputCount; i++)
+	_input[i] = SCALAR64(input[i]);
+	
+    return (is_io_connect_async_method(connect, 
+		    wake_port, _reference, referenceCnt,
+		    index,
+		    _input, inputCount, 
+		    NULL, 0,
+		    0, 0,
+		    NULL, &scalar_outputCnt,
+		    output, outputCount,
+		    0, &ool_output_size));
+}
+
+/* Routine io_async_method_scalarI_structureI */
+kern_return_t is_io_async_method_scalarI_structureI(
+	io_connect_t		connect,
+	mach_port_t wake_port,
+	io_async_ref_t reference,
+	mach_msg_type_number_t referenceCnt,
+	uint32_t		index,
+        io_scalar_inband_t	input,
+        mach_msg_type_number_t	inputCount,
+        io_struct_inband_t	inputStruct,
+        mach_msg_type_number_t	inputStructCount )
+{
+    uint32_t i;
+    io_scalar_inband64_t _input;
+    io_async_ref64_t _reference;
+
+    for (i = 0; i < referenceCnt; i++)
+	_reference[i] = REF64(reference[i]);
+
+    mach_msg_type_number_t scalar_outputCnt = 0;
+    mach_msg_type_number_t inband_outputCnt = 0;
+    mach_vm_size_t ool_output_size = 0;
+
+    for (i = 0; i < inputCount; i++)
+	_input[i] = SCALAR64(input[i]);
+	
+    return (is_io_connect_async_method(connect, 
+		    wake_port, _reference, referenceCnt,
+		    index,
+		    _input, inputCount, 
+		    inputStruct, inputStructCount,
+		    0, 0,
+		    NULL, &scalar_outputCnt,
+		    NULL, &inband_outputCnt,
+		    0, &ool_output_size));
+}
+
+/* Routine io_async_method_structureI_structureO */
+kern_return_t is_io_async_method_structureI_structureO(
+	io_object_t	connect,
+	mach_port_t wake_port,
+	io_async_ref_t reference,
+	mach_msg_type_number_t referenceCnt,
+	uint32_t	index,
+        io_struct_inband_t		input,
+        mach_msg_type_number_t	inputCount,
+        io_struct_inband_t		output,
+        mach_msg_type_number_t *	outputCount )
+{
+    uint32_t i;
+    mach_msg_type_number_t scalar_outputCnt = 0;
+    mach_vm_size_t ool_output_size = 0;
+    io_async_ref64_t _reference;
+
+    for (i = 0; i < referenceCnt; i++)
+	_reference[i] = REF64(reference[i]);
+
+    return (is_io_connect_async_method(connect,
+		    wake_port, _reference, referenceCnt,
+		    index,
+		    NULL, 0, 
+		    input, inputCount,
+		    0, 0,
+		    NULL, &scalar_outputCnt,
+		    output, outputCount,
+		    0, &ool_output_size));
+}
+
+
+kern_return_t shim_io_async_method_scalarI_scalarO(
+	IOExternalAsyncMethod *	method,
+	IOService *		object,
+	mach_port_t             asyncWakePort,
+	io_user_reference_t *   asyncReference,
+	uint32_t                asyncReferenceCount,
+        const io_user_scalar_t * input,
+        mach_msg_type_number_t	 inputCount,
+        io_user_scalar_t * output,
+        mach_msg_type_number_t * outputCount )
+{
+    IOAsyncMethod	func;
+    uint32_t		i;
+    io_scalar_inband_t  _output;
+    IOReturn 		err;
+    io_async_ref_t	reference;
+
+    for (i = 0; i < asyncReferenceCount; i++)
+	reference[i] = REF32(asyncReference[i]);
+
+    err = kIOReturnBadArgument;
+
+    do {
+
+	if( inputCount != method->count0)
+	{
+	    IOLog("%s: IOUserClient inputCount count mismatch\n", object->getName());
+	    continue;
+	}
+	if( *outputCount != method->count1)
+	{
+	    IOLog("%s: IOUserClient outputCount count mismatch\n", object->getName());
+	    continue;
+	}
+
+	func = method->func;
+
+        switch( inputCount) {
+
+            case 6:
+                err = (object->*func)(	reference,
+                                        ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
+                                        ARG32(input[3]), ARG32(input[4]), ARG32(input[5]) );
+                break;
+            case 5:
+                err = (object->*func)(  reference,
+                                        ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
+                                        ARG32(input[3]), ARG32(input[4]),
+                                        &_output[0] );
+                break;
+            case 4:
+                err = (object->*func)(  reference,
+                                        ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
+                                        ARG32(input[3]),
+                                        &_output[0], &_output[1] );
+                break;
+            case 3:
+                err = (object->*func)(  reference,
+                                        ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
+                                        &_output[0], &_output[1], &_output[2] );
+                break;
+            case 2:
+                err = (object->*func)(  reference,
+                                        ARG32(input[0]), ARG32(input[1]),
+                                        &_output[0], &_output[1], &_output[2],
+                                        &_output[3] );
+                break;
+            case 1:
+                err = (object->*func)(  reference,
+                                        ARG32(input[0]), 
+					&_output[0], &_output[1], &_output[2],
+                                        &_output[3], &_output[4] );
+                break;
+            case 0:
+                err = (object->*func)(  reference,
+                                        &_output[0], &_output[1], &_output[2],
+                                        &_output[3], &_output[4], &_output[5] );
+                break;
+
+            default:
+                IOLog("%s: Bad method table\n", object->getName());
+        }
+    }
+    while( false);
+
+    for (i = 0; i < *outputCount; i++)
+	output[i] = SCALAR32(_output[i]);
+
+    return( err);
+}
+
+
 /* Routine io_connect_method_scalarI_structureO */
 kern_return_t is_io_connect_method_scalarI_structureO(
 	io_object_t	connect,
-	UInt32		index,
-        void *	 	input[],
-        IOByteCount	inputCount,
-        void *		output,
-        IOByteCount *	outputCount )
+	uint32_t	index,
+        io_scalar_inband_t input,
+        mach_msg_type_number_t	inputCount,
+        io_struct_inband_t		output,
+        mach_msg_type_number_t *	outputCount )
 {
-    IOReturn 		err;
-    IOExternalMethod *	method;
-    IOService *		object;
+    uint32_t i;
+    io_scalar_inband64_t _input;
+
+    mach_msg_type_number_t scalar_outputCnt = 0;
+    mach_vm_size_t ool_output_size = 0;
+
+    for (i = 0; i < inputCount; i++)
+	_input[i] = SCALAR64(input[i]);
+	
+    return (is_io_connect_method(connect, index, 
+		    _input, inputCount, 
+		    NULL, 0,
+		    0, 0,
+		    NULL, &scalar_outputCnt,
+		    output, outputCount,
+		    0, &ool_output_size));
+}
+
+kern_return_t shim_io_connect_method_scalarI_structureO(
+
+	IOExternalMethod *	method,
+	IOService *		object,
+        const io_user_scalar_t * input,
+        mach_msg_type_number_t	inputCount,
+        io_struct_inband_t		output,
+        mach_msg_type_number_t *	outputCount )
+{
     IOMethod		func;
+    IOReturn 		err;
 
-    CHECK( IOUserClient, connect, client);
+    err = kIOReturnBadArgument;
 
-    if( (method = client->getTargetAndMethodForIndex(&object, index)) ) {
-      do {
-        err = kIOReturnBadArgument;
-	if( kIOUCScalarIStructO != (method->flags & kIOUCTypeMask))
-	    continue;
+    do {
 	if( inputCount != method->count0)
+	{
+	    IOLog("%s: IOUserClient inputCount count mismatch\n", object->getName());
 	    continue;
-	if( (0xffffffff != method->count1)
+	}
+	if( (kIOUCVariableStructureSize != method->count1)
 		&& (*outputCount != method->count1))
+	{
+	    IOLog("%s: IOUserClient outputCount count mismatch\n", object->getName());
 	    continue;
+	}
 
 	func = method->func;
 
 	switch( inputCount) {
 
 	    case 5:
-		err = (object->*func)(  input[0], input[1], input[2],
-                                        input[3], input[4],
+		err = (object->*func)(  ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
+                                        ARG32(input[3]), ARG32(input[4]),
                                         output );
 		break;
 	    case 4:
-		err = (object->*func)(  input[0], input[1], input[2],
-					input[3],
+		err = (object->*func)(  ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
+					ARG32(input[3]),
 					output, (void *)outputCount );
 		break;
 	    case 3:
-		err = (object->*func)(  input[0], input[1], input[2],
+		err = (object->*func)(  ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
 					output, (void *)outputCount, 0 );
 		break;
 	    case 2:
-		err = (object->*func)(  input[0], input[1],
+		err = (object->*func)(  ARG32(input[0]), ARG32(input[1]),
 					output, (void *)outputCount, 0, 0 );
 		break;
 	    case 1:
-		err = (object->*func)(  input[0],
+		err = (object->*func)(  ARG32(input[0]),
 					output, (void *)outputCount, 0, 0, 0 );
 		break;
 	    case 0:
@@ -2435,70 +3193,173 @@ kern_return_t is_io_connect_method_scalarI_structureO(
 		break;
 
 	    default:
-		IOLog("%s: Bad method table\n", client->getName());
+		IOLog("%s: Bad method table\n", object->getName());
 	}
-      } while( false);
+    }
+    while( false);
 
-    } else
-        err = kIOReturnUnsupported;
+    return( err);
+}
+
+
+kern_return_t shim_io_async_method_scalarI_structureO(
+	IOExternalAsyncMethod *	method,
+	IOService *		object,
+	mach_port_t             asyncWakePort,
+	io_user_reference_t *   asyncReference,
+	uint32_t                asyncReferenceCount,
+        const io_user_scalar_t * input,
+        mach_msg_type_number_t	inputCount,
+        io_struct_inband_t		output,
+        mach_msg_type_number_t *	outputCount )
+{
+    IOAsyncMethod	func;
+    uint32_t		i;
+    IOReturn 		err;
+    io_async_ref_t	reference;
+
+    for (i = 0; i < asyncReferenceCount; i++)
+	reference[i] = REF32(asyncReference[i]);
+
+    err = kIOReturnBadArgument;
+    do {
+	if( inputCount != method->count0)
+	{
+	    IOLog("%s: IOUserClient inputCount count mismatch\n", object->getName());
+	    continue;
+	}
+	if( (kIOUCVariableStructureSize != method->count1)
+		&& (*outputCount != method->count1))
+	{
+	    IOLog("%s: IOUserClient outputCount count mismatch\n", object->getName());
+	    continue;
+	}
+
+	func = method->func;
+
+        switch( inputCount) {
+
+            case 5:
+                err = (object->*func)(	reference,
+                                        ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
+                                        ARG32(input[3]), ARG32(input[4]),
+                                        output );
+                break;
+            case 4:
+                err = (object->*func)(	reference,
+                                        ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
+                                        ARG32(input[3]),
+                                        output, (void *)outputCount );
+                break;
+            case 3:
+                err = (object->*func)(	reference,
+                                        ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
+                                        output, (void *)outputCount, 0 );
+                break;
+            case 2:
+                err = (object->*func)(	reference,
+                                        ARG32(input[0]), ARG32(input[1]),
+                                        output, (void *)outputCount, 0, 0 );
+                break;
+            case 1:
+                err = (object->*func)(	reference,
+                                        ARG32(input[0]),
+                                        output, (void *)outputCount, 0, 0, 0 );
+                break;
+            case 0:
+                err = (object->*func)(	reference,
+                                        output, (void *)outputCount, 0, 0, 0, 0 );
+                break;
+
+            default:
+                IOLog("%s: Bad method table\n", object->getName());
+        }
+    }
+    while( false);
 
     return( err);
 }
 
 /* Routine io_connect_method_scalarI_structureI */
 kern_return_t is_io_connect_method_scalarI_structureI(
-	io_connect_t 	connect,
-	UInt32		index,
-        void *	 	input[],
-        IOByteCount	inputCount,
-        UInt8 *		inputStruct,
-        IOByteCount	inputStructCount )
+	io_connect_t		connect,
+	uint32_t		index,
+        io_scalar_inband_t	input,
+        mach_msg_type_number_t	inputCount,
+        io_struct_inband_t	inputStruct,
+        mach_msg_type_number_t	inputStructCount )
 {
-    IOReturn 		err;
-    IOExternalMethod *	method;
-    IOService *		object;
+    uint32_t i;
+    io_scalar_inband64_t _input;
+
+    mach_msg_type_number_t scalar_outputCnt = 0;
+    mach_msg_type_number_t inband_outputCnt = 0;
+    mach_vm_size_t ool_output_size = 0;
+
+    for (i = 0; i < inputCount; i++)
+	_input[i] = SCALAR64(input[i]);
+	
+    return (is_io_connect_method(connect, index, 
+		    _input, inputCount, 
+		    inputStruct, inputStructCount,
+		    0, 0,
+		    NULL, &scalar_outputCnt,
+		    NULL, &inband_outputCnt,
+		    0, &ool_output_size));
+}
+
+kern_return_t shim_io_connect_method_scalarI_structureI(
+    IOExternalMethod *	method,
+    IOService *		object,
+        const io_user_scalar_t * input,
+        mach_msg_type_number_t	inputCount,
+        io_struct_inband_t		inputStruct,
+        mach_msg_type_number_t	inputStructCount )
+{
     IOMethod		func;
+    IOReturn		err = kIOReturnBadArgument;
 
-    CHECK( IOUserClient, connect, client);
-
-    if( (method = client->getTargetAndMethodForIndex(&object, index)) ) {
-      do {
-        err = kIOReturnBadArgument;
-	if( kIOUCScalarIStructI != (method->flags & kIOUCTypeMask))
-	    continue;
-	if( (0xffffffff != method->count0)
+    do
+    {
+	if( (kIOUCVariableStructureSize != method->count0)
 		&& (inputCount != method->count0))
+	{
+	    IOLog("%s: IOUserClient inputCount count mismatch\n", object->getName());
 	    continue;
-	if( (0xffffffff != method->count1)
+	}
+	if( (kIOUCVariableStructureSize != method->count1)
 		&& (inputStructCount != method->count1))
+	{
+	    IOLog("%s: IOUserClient outputCount count mismatch\n", object->getName());
 	    continue;
+	}
 
 	func = method->func;
 
 	switch( inputCount) {
 
 	    case 5:
-		err = (object->*func)( input[0], input[1], input[2],
-					input[3], input[4], 
+		err = (object->*func)( ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
+					ARG32(input[3]), ARG32(input[4]), 
 					inputStruct );
 		break;
 	    case 4:
-		err = (object->*func)( input[0], input[1], input[2],
-					input[3],
+		err = (object->*func)( ARG32(input[0]), ARG32(input[1]), (void *)  input[2],
+					ARG32(input[3]),
 					inputStruct, (void *)inputStructCount );
 		break;
 	    case 3:
-		err = (object->*func)( input[0], input[1], input[2],
+		err = (object->*func)( ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
 					inputStruct, (void *)inputStructCount,
 					0 );
 		break;
 	    case 2:
-		err = (object->*func)( input[0], input[1],
+		err = (object->*func)( ARG32(input[0]), ARG32(input[1]),
 					inputStruct, (void *)inputStructCount,
 					0, 0 );
 		break;
 	    case 1:
-		err = (object->*func)( input[0],
+		err = (object->*func)( ARG32(input[0]),
 					inputStruct, (void *)inputStructCount,
 					0, 0, 0 );
 		break;
@@ -2508,12 +3369,93 @@ kern_return_t is_io_connect_method_scalarI_structureI(
 		break;
 
 	    default:
-		IOLog("%s: Bad method table\n", client->getName());
+		IOLog("%s: Bad method table\n", object->getName());
 	}
-      } while( false);
+    }
+    while (false);
 
-    } else
-        err = kIOReturnUnsupported;
+    return( err);
+}
+
+kern_return_t shim_io_async_method_scalarI_structureI(
+	IOExternalAsyncMethod *	method,
+	IOService *		object,
+	mach_port_t             asyncWakePort,
+	io_user_reference_t *   asyncReference,
+	uint32_t                asyncReferenceCount,
+        const io_user_scalar_t * input,
+        mach_msg_type_number_t	inputCount,
+        io_struct_inband_t		inputStruct,
+        mach_msg_type_number_t	inputStructCount )
+{
+    IOAsyncMethod	func;
+    uint32_t		i;
+    IOReturn		err = kIOReturnBadArgument;
+    io_async_ref_t	reference;
+
+    for (i = 0; i < asyncReferenceCount; i++)
+	reference[i] = REF32(asyncReference[i]);
+
+    do
+    {
+	if( (kIOUCVariableStructureSize != method->count0)
+		&& (inputCount != method->count0))
+	{
+	    IOLog("%s: IOUserClient inputCount count mismatch\n", object->getName());
+	    continue;
+	}
+	if( (kIOUCVariableStructureSize != method->count1)
+		&& (inputStructCount != method->count1))
+	{
+	    IOLog("%s: IOUserClient outputCount count mismatch\n", object->getName());
+	    continue;
+	}
+
+        func = method->func;
+
+        switch( inputCount) {
+
+            case 5:
+                err = (object->*func)(	reference,
+                                        ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
+                                        ARG32(input[3]), ARG32(input[4]),
+                                        inputStruct );
+                break;
+            case 4:
+                err = (object->*func)(	reference,
+                                        ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
+                                        ARG32(input[3]),
+                                        inputStruct, (void *)inputStructCount );
+                break;
+            case 3:
+                err = (object->*func)(	reference,
+                                        ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
+                                        inputStruct, (void *)inputStructCount,
+                                        0 );
+                break;
+            case 2:
+                err = (object->*func)(	reference,
+                                        ARG32(input[0]), ARG32(input[1]),
+                                        inputStruct, (void *)inputStructCount,
+                                        0, 0 );
+                break;
+            case 1:
+                err = (object->*func)(	reference,
+                                        ARG32(input[0]),
+                                        inputStruct, (void *)inputStructCount,
+                                        0, 0, 0 );
+                break;
+            case 0:
+                err = (object->*func)(	reference,
+                                        inputStruct, (void *)inputStructCount,
+                                        0, 0, 0, 0 );
+                break;
+
+            default:
+                IOLog("%s: Bad method table\n", object->getName());
+        }
+    }
+    while (false);
 
     return( err);
 }
@@ -2521,30 +3463,49 @@ kern_return_t is_io_connect_method_scalarI_structureI(
 /* Routine io_connect_method_structureI_structureO */
 kern_return_t is_io_connect_method_structureI_structureO(
 	io_object_t	connect,
-	UInt32		index,
-        UInt8 *		input,
-        IOByteCount	inputCount,
-        UInt8 *		output,
-        IOByteCount *	outputCount )
+	uint32_t	index,
+        io_struct_inband_t		input,
+        mach_msg_type_number_t	inputCount,
+        io_struct_inband_t		output,
+        mach_msg_type_number_t *	outputCount )
 {
-    IOReturn 		err;
-    IOExternalMethod *	method;
-    IOService *		object;
+    mach_msg_type_number_t scalar_outputCnt = 0;
+    mach_vm_size_t ool_output_size = 0;
+
+    return (is_io_connect_method(connect, index, 
+		    NULL, 0, 
+		    input, inputCount,
+		    0, 0,
+		    NULL, &scalar_outputCnt,
+		    output, outputCount,
+		    0, &ool_output_size));
+}
+
+kern_return_t shim_io_connect_method_structureI_structureO(
+    IOExternalMethod *	method,
+    IOService *		object,
+        io_struct_inband_t		input,
+        mach_msg_type_number_t	inputCount,
+        io_struct_inband_t		output,
+        mach_msg_type_number_t *	outputCount )
+{
     IOMethod		func;
+    IOReturn 		err = kIOReturnBadArgument;
 
-    CHECK( IOUserClient, connect, client);
-
-    if( (method = client->getTargetAndMethodForIndex(&object, index)) ) {
-      do {
-        err = kIOReturnBadArgument;
-	if( kIOUCStructIStructO != (method->flags & kIOUCTypeMask))
-	    continue;
-	if( (0xffffffff != method->count0)
+    do 
+    {
+	if( (kIOUCVariableStructureSize != method->count0)
 		&& (inputCount != method->count0))
+	{
+	    IOLog("%s: IOUserClient inputCount count mismatch\n", object->getName());
 	    continue;
-	if( (0xffffffff != method->count1)
+	}
+	if( (kIOUCVariableStructureSize != method->count1)
 		&& (*outputCount != method->count1))
+	{
+	    IOLog("%s: IOUserClient outputCount count mismatch\n", object->getName());
 	    continue;
+	}
 
 	func = method->func;
 
@@ -2558,288 +3519,48 @@ kern_return_t is_io_connect_method_structureI_structureO(
 	} else {
 		err = (object->*func)( input, (void *)inputCount, 0, 0, 0, 0 );
 	}
+    }
+    while( false);
 
-      } while( false);
-
-    } else
-        err = kIOReturnUnsupported;
 
     return( err);
 }
 
-kern_return_t is_io_async_method_scalarI_scalarO(
-        io_object_t	connect,
-        mach_port_t	wakePort,
-	io_async_ref_t		reference,
-	mach_msg_type_number_t	referenceCnt,
-        UInt32		index,
-        void *	 	input[],
-        IOByteCount	inputCount,
-        void *	 	output[],
-        IOByteCount *	outputCount )
+kern_return_t shim_io_async_method_structureI_structureO(
+	IOExternalAsyncMethod *	method,
+	IOService *		object,
+	mach_port_t           asyncWakePort,
+	io_user_reference_t * asyncReference,
+	uint32_t              asyncReferenceCount,
+        io_struct_inband_t		input,
+        mach_msg_type_number_t	inputCount,
+        io_struct_inband_t		output,
+        mach_msg_type_number_t *	outputCount )
 {
-    IOReturn 		err;
-    IOExternalAsyncMethod *method;
-    IOService *		object;
     IOAsyncMethod	func;
-
-    CHECK( IOUserClient, connect, client);
-    if( (method = client->getAsyncTargetAndMethodForIndex(&object, index)) ) {
-      do {
-        err = kIOReturnBadArgument;
-        if( kIOUCScalarIScalarO != (method->flags & kIOUCTypeMask))
-            continue;
-        if( inputCount != method->count0)
-            continue;
-        if( *outputCount != method->count1)
-            continue;
-
-        reference[0] = (natural_t) wakePort;
-        func = method->func;
-
-        switch( inputCount) {
-
-            case 6:
-                err = (object->*func)(	reference,
-                                        input[0], input[1], input[2],
-                                        input[3], input[4], input[5] );
-                break;
-            case 5:
-                err = (object->*func)(  reference,
-                                        input[0], input[1], input[2],
-                                        input[3], input[4],
-                                        &output[0] );
-                break;
-            case 4:
-                err = (object->*func)(  reference,
-                                        input[0], input[1], input[2],
-                                        input[3],
-                                        &output[0], &output[1] );
-                break;
-            case 3:
-                err = (object->*func)(  reference,
-                                        input[0], input[1], input[2],
-                                        &output[0], &output[1], &output[2] );
-                break;
-            case 2:
-                err = (object->*func)(  reference,
-                                        input[0], input[1],
-                                        &output[0], &output[1], &output[2],
-                                        &output[3] );
-                break;
-            case 1:
-                err = (object->*func)(  reference,
-                                        input[0],
-                                        &output[0], &output[1], &output[2],
-                                        &output[3], &output[4] );
-                break;
-            case 0:
-                err = (object->*func)(  reference,
-                                        &output[0], &output[1], &output[2],
-                                        &output[3], &output[4], &output[5] );
-                break;
-
-            default:
-                IOLog("%s: Bad method table\n", client->getName());
-        }
-      } while( false);
-
-    } else
-        err = kIOReturnUnsupported;
-
-    return( err);
-}
-
-kern_return_t is_io_async_method_scalarI_structureO(
-        io_object_t	connect,
-        mach_port_t	wakePort,
-	io_async_ref_t		reference,
-	mach_msg_type_number_t	referenceCnt,
-        UInt32		index,
-        void *	 	input[],
-        IOByteCount	inputCount,
-        void *		output,
-        IOByteCount *	outputCount )
-{
+    uint32_t            i;
     IOReturn 		err;
-    IOExternalAsyncMethod *method;
-    IOService *		object;
-    IOAsyncMethod	func;
+    io_async_ref_t	reference;
 
-    CHECK( IOUserClient, connect, client);
+    for (i = 0; i < asyncReferenceCount; i++)
+	reference[i] = REF32(asyncReference[i]);
 
-    if( (method = client->getAsyncTargetAndMethodForIndex(&object, index)) ) {
-      do {
-        err = kIOReturnBadArgument;
-        if( kIOUCScalarIStructO != (method->flags & kIOUCTypeMask))
-            continue;
-        if( inputCount != method->count0)
-            continue;
-        if( (0xffffffff != method->count1)
-                && (*outputCount != method->count1))
-            continue;
+    err = kIOReturnBadArgument;
+    do 
+    {
+	if( (kIOUCVariableStructureSize != method->count0)
+		&& (inputCount != method->count0))
+	{
+	    IOLog("%s: IOUserClient inputCount count mismatch\n", object->getName());
+	    continue;
+	}
+	if( (kIOUCVariableStructureSize != method->count1)
+		&& (*outputCount != method->count1))
+	{
+	    IOLog("%s: IOUserClient outputCount count mismatch\n", object->getName());
+	    continue;
+	}
 
-        reference[0] = (natural_t) wakePort;
-        func = method->func;
-
-        switch( inputCount) {
-
-            case 5:
-                err = (object->*func)(	reference,
-                                        input[0], input[1], input[2],
-                                        input[3], input[4],
-                                        output );
-                break;
-            case 4:
-                err = (object->*func)(	reference,
-                                        input[0], input[1], input[2],
-                                        input[3],
-                                        output, (void *)outputCount );
-                break;
-            case 3:
-                err = (object->*func)(	reference,
-                                        input[0], input[1], input[2],
-                                        output, (void *)outputCount, 0 );
-                break;
-            case 2:
-                err = (object->*func)(	reference,
-                                        input[0], input[1],
-                                        output, (void *)outputCount, 0, 0 );
-                break;
-            case 1:
-                err = (object->*func)(	reference,
-                                        input[0],
-                                        output, (void *)outputCount, 0, 0, 0 );
-                break;
-            case 0:
-                err = (object->*func)(	reference,
-                                        output, (void *)outputCount, 0, 0, 0, 0 );
-                break;
-
-            default:
-                IOLog("%s: Bad method table\n", client->getName());
-        }
-      } while( false);
-
-    } else
-        err = kIOReturnUnsupported;
-
-    return( err);
-}
-
-kern_return_t is_io_async_method_scalarI_structureI(
-            io_connect_t 	connect,
-            mach_port_t		wakePort,
-	    io_async_ref_t	    reference,
-	    mach_msg_type_number_t  referenceCnt,
-            UInt32		index,
-            void *	 	input[],
-            IOByteCount	inputCount,
-            UInt8 *		inputStruct,
-            IOByteCount	inputStructCount )
-{
-    IOReturn 		err;
-    IOExternalAsyncMethod *method;
-    IOService *		object;
-    IOAsyncMethod	func;
-
-    CHECK( IOUserClient, connect, client);
-
-    if( (method = client->getAsyncTargetAndMethodForIndex(&object, index)) ) {
-      do {
-        err = kIOReturnBadArgument;
-        if( kIOUCScalarIStructI != (method->flags & kIOUCTypeMask))
-            continue;
-        if( (0xffffffff != method->count0)
-                && (inputCount != method->count0))
-            continue;
-        if( (0xffffffff != method->count1)
-                && (inputStructCount != method->count1))
-            continue;
-
-        reference[0] = (natural_t) wakePort;
-        func = method->func;
-
-        switch( inputCount) {
-
-            case 5:
-                err = (object->*func)(	reference,
-                                        input[0], input[1], input[2],
-                                        input[3], input[4],
-                                        inputStruct );
-                break;
-            case 4:
-                err = (object->*func)(	reference,
-                                        input[0], input[1], input[2],
-                                        input[3],
-                                        inputStruct, (void *)inputStructCount );
-                break;
-            case 3:
-                err = (object->*func)(	reference,
-                                        input[0], input[1], input[2],
-                                        inputStruct, (void *)inputStructCount,
-                                        0 );
-                break;
-            case 2:
-                err = (object->*func)(	reference,
-                                        input[0], input[1],
-                                        inputStruct, (void *)inputStructCount,
-                                        0, 0 );
-                break;
-            case 1:
-                err = (object->*func)(	reference,
-                                        input[0],
-                                        inputStruct, (void *)inputStructCount,
-                                        0, 0, 0 );
-                break;
-            case 0:
-                err = (object->*func)(	reference,
-                                        inputStruct, (void *)inputStructCount,
-                                        0, 0, 0, 0 );
-                break;
-
-            default:
-                IOLog("%s: Bad method table\n", client->getName());
-        }
-      } while( false);
-
-    } else
-        err = kIOReturnUnsupported;
-
-    return( err);
-}
-
-kern_return_t is_io_async_method_structureI_structureO(
-        io_object_t	connect,
-        mach_port_t wakePort,
-	io_async_ref_t		reference,
-	mach_msg_type_number_t	referenceCnt,
-        UInt32		index,
-        UInt8 *		input,
-        IOByteCount	inputCount,
-        UInt8 *		output,
-        IOByteCount *	outputCount )
-{
-    IOReturn 		err;
-    IOExternalAsyncMethod *method;
-    IOService *		object;
-    IOAsyncMethod	func;
-
-    CHECK( IOUserClient, connect, client);
-
-    if( (method = client->getAsyncTargetAndMethodForIndex(&object, index)) ) {
-      do {
-        err = kIOReturnBadArgument;
-        if( kIOUCStructIStructO != (method->flags & kIOUCTypeMask))
-            continue;
-        if( (0xffffffff != method->count0)
-                && (inputCount != method->count0))
-            continue;
-        if( (0xffffffff != method->count1)
-                && (*outputCount != method->count1))
-            continue;
-
-        reference[0] = (natural_t) wakePort;
         func = method->func;
 
         if( method->count1) {
@@ -2855,21 +3576,19 @@ kern_return_t is_io_async_method_structureI_structureO(
                 err = (object->*func)( reference,
                                        input, (void *)inputCount, 0, 0, 0, 0 );
         }
-
-      } while( false);
-
-    } else
-        err = kIOReturnUnsupported;
+    }
+    while( false);
 
     return( err);
 }
+
 /* Routine io_make_matching */
 kern_return_t is_io_make_matching(
-	mach_port_t 	master_port,
-	UInt32		type,
-	IOOptionBits	options,
-        UInt8 *		input,
-        IOByteCount	inputCount,
+	mach_port_t	    master_port,
+	uint32_t	    type,
+	uint32_t		options,
+        io_struct_inband_t	input,
+        mach_msg_type_number_t	inputCount,
 	io_string_t	matching )
 {
     OSSerialize * 	s;
@@ -2918,8 +3637,8 @@ kern_return_t is_io_make_matching(
 	    continue;
         } else
             strcpy( matching, s->text());
-
-    } while( false);
+    }
+    while( false);
 
     if( s)
 	s->release();
@@ -2932,10 +3651,10 @@ kern_return_t is_io_make_matching(
 /* Routine io_catalog_send_data */
 kern_return_t is_io_catalog_send_data(
         mach_port_t		master_port,
-        int                     flag,
+        uint32_t                flag,
         io_buf_ptr_t 		inData,
         mach_msg_type_number_t 	inDataCount,
-        natural_t *		result)
+        kern_return_t *		result)
 {
     OSObject * obj = 0;
     vm_offset_t data;
@@ -2947,7 +3666,7 @@ kern_return_t is_io_catalog_send_data(
         return kIOReturnNotPrivileged;
 
     // FIXME: This is a hack. Should have own function for removeKernelLinker()
-    if(flag != kIOCatalogRemoveKernelLinker && ( !inData || !inDataCount) )
+    if( (flag != kIOCatalogRemoveKernelLinker && flag != kIOCatalogKextdFinishedLaunching) && ( !inData || !inDataCount) )
         return kIOReturnBadArgument;
 
     if (inData) {
@@ -3030,6 +3749,21 @@ kern_return_t is_io_catalog_send_data(
             }
             break;
 
+        case kIOCatalogKextdFinishedLaunching: {
+#if !NO_KEXTD
+                static bool clearedBusy = false;
+                if (!clearedBusy) {
+                    IOService * serviceRoot = IOService::getServiceRoot();
+                    if (serviceRoot) {
+                        serviceRoot->adjustBusy(-1);
+                        clearedBusy = true;
+                    }
+                }
+#endif
+                kr = kIOReturnSuccess;
+            }
+            break;
+
         default:
             kr = kIOReturnBadArgument;
             break;
@@ -3044,7 +3778,7 @@ kern_return_t is_io_catalog_send_data(
 /* Routine io_catalog_terminate */
 kern_return_t is_io_catalog_terminate(
 	mach_port_t master_port,
-	int flag,
+	uint32_t flag,
 	io_name_t name )
 {
     kern_return_t	   kr;
@@ -3099,7 +3833,7 @@ kern_return_t is_io_catalog_terminate(
 /* Routine io_catalog_get_data */
 kern_return_t is_io_catalog_get_data(
         mach_port_t		master_port,
-        int                     flag,
+        uint32_t                flag,
         io_buf_ptr_t 		*outData,
         mach_msg_type_number_t 	*outDataCount)
 {
@@ -3143,7 +3877,7 @@ kern_return_t is_io_catalog_get_data(
 /* Routine io_catalog_get_gen_count */
 kern_return_t is_io_catalog_get_gen_count(
         mach_port_t		master_port,
-        int                     *genCount)
+        uint32_t                *genCount)
 {
     if( master_port != master_device_port)
         return kIOReturnNotPrivileged;
@@ -3178,7 +3912,7 @@ kern_return_t is_io_catalog_module_loaded(
 
 kern_return_t is_io_catalog_reset(
 	mach_port_t		master_port,
-	int			flag)
+	uint32_t		flag)
 {
     if( master_port != master_device_port)
         return kIOReturnNotPrivileged;
@@ -3223,9 +3957,147 @@ kern_return_t iokit_user_client_trap(struct iokit_user_client_trap_args *args)
     return result;
 }
 
+IOReturn IOUserClient::externalMethod( uint32_t selector, IOExternalMethodArguments * args,
+					IOExternalMethodDispatch * dispatch, OSObject * target, void * reference )
+{
+    IOReturn    err;
+    IOService * object;
+
+    if (dispatch)
+    {
+	uint32_t count;
+	count = dispatch->checkScalarInputCount;
+	if ((kIOUCVariableStructureSize != count) && (count != args->scalarInputCount))
+	{
+	    return (kIOReturnBadArgument);
+	}
+
+	count = dispatch->checkStructureInputSize;
+	if ((kIOUCVariableStructureSize != count) 
+	    && (count != ((args->structureInputDescriptor) 
+			    ? args->structureInputDescriptor->getLength() : args->structureInputSize)))
+	{
+	    return (kIOReturnBadArgument);
+	}
+
+	count = dispatch->checkScalarOutputCount;
+	if ((kIOUCVariableStructureSize != count) && (count != args->scalarOutputCount))
+	{
+	    return (kIOReturnBadArgument);
+	}
+
+	count = dispatch->checkStructureOutputSize;
+	if ((kIOUCVariableStructureSize != count) 
+	    && (count != ((args->structureOutputDescriptor) 
+			    ? args->structureOutputDescriptor->getLength() : args->structureOutputSize)))
+	{
+	    return (kIOReturnBadArgument);
+	}
+
+	if (dispatch->function)
+	    err = (*dispatch->function)(target, reference, args);
+	else
+	    err = kIOReturnNoCompletion;	    /* implementator can dispatch */
+
+	return (err);
+    }
+
+    // pre-Leopard API's don't do ool structs
+    if (args->structureInputDescriptor || args->structureOutputDescriptor)
+    {
+       err = kIOReturnIPCError;
+       return (err);
+    }
+
+    if (args->asyncWakePort)
+    {
+	IOExternalAsyncMethod *	method;
+
+	if( !(method = getAsyncTargetAndMethodForIndex(&object, selector)) )
+	    return (kIOReturnUnsupported);
+
+	switch (method->flags & kIOUCTypeMask)
+	{
+	    case kIOUCScalarIStructI:
+		err = shim_io_async_method_scalarI_structureI( method, object,
+					args->asyncWakePort, args->asyncReference, args->asyncReferenceCount,
+					args->scalarInput, args->scalarInputCount,
+					(char *)args->structureInput, args->structureInputSize );
+		break;
+
+	    case kIOUCScalarIScalarO:
+		err = shim_io_async_method_scalarI_scalarO( method, object,
+					args->asyncWakePort, args->asyncReference, args->asyncReferenceCount,
+					args->scalarInput, args->scalarInputCount,
+					args->scalarOutput, &args->scalarOutputCount );
+		break;
+
+	    case kIOUCScalarIStructO:
+		err = shim_io_async_method_scalarI_structureO( method, object,
+					args->asyncWakePort, args->asyncReference, args->asyncReferenceCount,
+					args->scalarInput, args->scalarInputCount,
+					(char *) args->structureOutput, &args->structureOutputSize );
+		break;
+
+
+	    case kIOUCStructIStructO:
+		err = shim_io_async_method_structureI_structureO( method, object,
+					args->asyncWakePort, args->asyncReference, args->asyncReferenceCount,
+					(char *)args->structureInput, args->structureInputSize,
+					(char *) args->structureOutput, &args->structureOutputSize );
+		break;
+
+	    default:
+		err = kIOReturnBadArgument;
+		break;
+	}
+    }
+    else
+    {
+	IOExternalMethod *	method;
+
+	if( !(method = getTargetAndMethodForIndex(&object, selector)) )
+	    return (kIOReturnUnsupported);
+
+	switch (method->flags & kIOUCTypeMask)
+	{
+	    case kIOUCScalarIStructI:
+		err = shim_io_connect_method_scalarI_structureI( method, object,
+					args->scalarInput, args->scalarInputCount,
+					(char *)args->structureInput, args->structureInputSize );
+		break;
+
+	    case kIOUCScalarIScalarO:
+		err = shim_io_connect_method_scalarI_scalarO( method, object,
+					args->scalarInput, args->scalarInputCount,
+					args->scalarOutput, &args->scalarOutputCount );
+		break;
+
+	    case kIOUCScalarIStructO:
+		err = shim_io_connect_method_scalarI_structureO( method, object,
+					args->scalarInput, args->scalarInputCount,
+					(char *) args->structureOutput, &args->structureOutputSize );
+		break;
+
+
+	    case kIOUCStructIStructO:
+		err = shim_io_connect_method_structureI_structureO( method, object,
+					(char *)args->structureInput, args->structureInputSize,
+					(char *) args->structureOutput, &args->structureOutputSize );
+		break;
+
+	    default:
+		err = kIOReturnBadArgument;
+		break;
+	}
+    }
+    return (err);
+}
+
+
 };	/* extern "C" */
 
-OSMetaClassDefineReservedUnused(IOUserClient, 0);
+OSMetaClassDefineReservedUsed(IOUserClient, 0);
 OSMetaClassDefineReservedUnused(IOUserClient, 1);
 OSMetaClassDefineReservedUnused(IOUserClient, 2);
 OSMetaClassDefineReservedUnused(IOUserClient, 3);

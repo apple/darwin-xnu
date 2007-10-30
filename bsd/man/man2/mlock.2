@@ -41,60 +41,67 @@
 .Nm munlock
 .Nd lock (unlock) physical pages in memory
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
 .Fd #include <sys/mman.h>
 .Ft int
-.Fn mlock "caddr_t addr" "size_t len"
+.Fo mlock
+.Fa "const void *addr"
+.Fa "size_t len"
+.Fc
 .Ft int
-.Fn munlock "caddr_t addr" "size_t len"
+.Fo munlock
+.Fa "const void *addr"
+.Fa "size_t len"
+.Fc
 .Sh DESCRIPTION
 The
 .Nm mlock
 system call
-locks into memory the physical pages associated with the virtual address
-range starting at
+locks a set of physical pages into memory.
+The pages are associated with a virtual address range
+that starts at
 .Fa addr
-for
+and extends for
 .Fa len
 bytes.
 The
 .Nm munlock
-call unlocks pages previously locked by one or more
+call unlocks pages that were previously locked by one or more
 .Nm mlock
 calls.
-For both, the
+For both calls, the
 .Fa addr
 parameter should be aligned to a multiple of the page size.
 If the
 .Fa len
-parameter is not a multiple of the page size, it will be rounded up
-to be so.
+parameter is not a multiple of the page size,
+it will be rounded up to be so.
 The entire range must be allocated.
 .Pp
 After an
 .Nm mlock
 call, the indicated pages will cause neither a non-resident page
 nor address-translation fault until they are unlocked.
-They may still cause protection-violation faults or TLB-miss faults on
-architectures with software-managed TLBs.
-The physical pages remain in memory until all locked mappings for the pages
-are removed.
-Multiple processes may have the same physical pages locked via their own
-virtual address mappings.
-A single process may likewise have pages multiply-locked via different virtual
-mappings of the same pages or via nested
+They may still cause protection-violation faults or TLB-miss faults
+on architectures with software-managed TLBs.
+The physical pages remain in memory until all locked mappings
+for the pages are removed.
+.Pp
+Multiple processes may have the same physical pages locked
+via their own virtual address mappings.
+Similarly, a single process may have pages multiply-locked
+via different virtual mappings of the same pages or via nested
 .Nm mlock
 calls on the same address range.
 Unlocking is performed explicitly by
 .Nm munlock
 or implicitly by a call to
-.Nm munmap
+.Nm munmap ,
 which deallocates the unmapped address range.
 Locked mappings are not inherited by the child process after a
 .Xr fork 2 .
 .Pp
-Since physical memory is a potentially scarce resource, processes are
-limited in how much they can lock down.
+Because physical memory is a potentially scarce resource,
+processes are limited in how much memory they can lock down.
 A single process can
 .Nm mlock
 the minimum of
@@ -103,35 +110,75 @@ the per-process
 .Li RLIMIT_MEMLOCK
 resource limit.
 .Sh RETURN VALUES
-A return value of 0 indicates that the call
-succeeded and all pages in the range have either been locked or unlocked.
-A return value of -1 indicates an error occurred and the locked
-status of all pages in the range remains unchanged.
+A return value of 0 indicates that the call succeeded
+and all pages in the range have either been locked or unlocked,
+as requested.
+A return value of -1 indicates an error occurred
+and the locked status of all pages in the range remains unchanged.
 In this case, the global location
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
 .Fn Mlock
+and 
+.Fn munlock
 will fail if:
 .Bl -tag -width Er
+.\" ===========
 .It Bq Er EINVAL
-The address given is not page aligned or the length is negative.
+The address given is not page-aligned or the length is negative.
+.\" ===========
+.It Bq Er ENOMEM
+Part or all of the specified address range
+is not mapped to the process.
+.El
+.Pp
+.Fn Mlock
+will fail if:
+.Bl -tag -width Er
+.\" ===========
 .It Bq Er EAGAIN
 Locking the indicated range would exceed either the system or per-process
 limit for locked memory.
+.\" ===========
 .It Bq Er ENOMEM
 Some portion of the indicated address range is not allocated.
 There was an error faulting/mapping a page.
 .El
+.Pp
 .Fn Munlock
 will fail if:
 .Bl -tag -width Er
-.It Bq Er EINVAL
-The address given is not page aligned or the length is negative.
+.\" ===========
 .It Bq Er ENOMEM
 Some portion of the indicated address range is not allocated.
 Some portion of the indicated address range is not locked.
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/mman.h>
+.Pp
+The include file
+.In sys/types.h
+is necessary.
+.Pp
+.Ft int
+.br
+.Fo mlock
+.Fa "caddr_t addr"
+.Fa "size_t len"
+.Fc ;
+.Pp
+.Ft int
+.br
+.Fo munlock
+.Fa "caddr_t addr"
+.Fa "size_t len"
+.Fc ;
+.Pp
+The variable type of
+.Fa addr
+has changed.
 .Sh "SEE ALSO"
 .Xr fork 2 ,
 .Xr mincore 2 ,
@@ -139,7 +186,8 @@ Some portion of the indicated address range is not locked.
 .Xr mmap 2 ,
 .Xr munmap 2 ,
 .Xr setrlimit 2 ,
-.Xr getpagesize 3
+.Xr getpagesize 3 ,
+.Xr compat 5
 .Sh BUGS
 Unlike The Sun implementation, multiple
 .Nm mlock

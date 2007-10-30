@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -350,12 +356,12 @@ struct per_proc_info {
 	/* PPC cache line boundary here - 160 */
 	struct savearea *	db_saved_state;
 	time_base_enable_t	time_base_enable;
-	int				ppXFlags;
+	uint32_t		ppXFlags;
 	int				running;
 	int				debugger_is_slave;
 	int				debugger_active;
 	int				debugger_pending;
-	int				debugger_holdoff;
+	uint32_t		debugger_holdoff;
 	
 	/* PPC cache line boundary here - 180 */
     uint64_t        Uassist;            /* User Assist DoubleWord */
@@ -513,10 +519,15 @@ struct per_proc_info {
 	hwCtrs			hwCtr;					/* Hardware exception counters */
 /*								   - A00 */
 	addr64_t		pp2ndPage;				/* Physical address of the second page of the per_proc */
-	uint32_t		pprsvd0A08[6];
+	addr64_t		ijsave;					/* Pointer to original savearea for injected code */
+	uint32_t		pprsvd0A10[4];
 /*								   - A20 */
 	pmsd			pms;					/* Power Management Stepper control */
-	unsigned int	pprsvd0A40[368];		/* Reserved out to next page boundary */
+	unsigned int	pprsvd0A40[16];			/* Reserved */
+/*								   - A80 */
+	uint32_t		pprsvd0A80[16];			/* Reserved */
+	
+	unsigned int	pprsvd0AC0[336];		/* Reserved out to next page boundary */
 /*								   - 1000 */
 
 /*
@@ -560,7 +571,7 @@ struct per_proc_entry {
 extern	struct per_proc_entry PerProcTable[MAX_CPUS-1];
 
 
-extern char *trap_type[];
+extern const char *trap_type[];
 
 #endif /* ndef ASSEMBLER */					/* with this savearea should be redriven */
 
@@ -568,8 +579,6 @@ extern char *trap_type[];
 #define SIGPactive	0x8000
 #define needSRload	0x4000
 #define turnEEon	0x2000
-#define traceBE     0x1000					/* user mode BE tracing in enabled */
-#define traceBEb    3						/* bit number for traceBE */
 #define SleepState	0x0800
 #define SleepStateb	4
 #define mcountOff	0x0400
@@ -634,6 +643,8 @@ extern char *trap_type[];
 #define T_INSTRUMENTATION		(0x2B * T_VECTOR_SIZE)
 #define T_ARCHDEP0				(0x2C * T_VECTOR_SIZE)
 #define T_HDEC					(0x2D * T_VECTOR_SIZE)
+#define T_INJECT_EXIT			(0x2E * T_VECTOR_SIZE)
+#define T_DTRACE_RET			T_INJECT_EXIT
 
 #define T_AST					(0x100 * T_VECTOR_SIZE) 
 #define T_MAX					T_CHOKE		 /* Maximum exception no */

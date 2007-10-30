@@ -37,11 +37,13 @@
 .Nm shmget
 .Nd get shared memory area identifier
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
-.Fd #include <sys/ipc.h>
 .Fd #include <sys/shm.h>
 .Ft int
-.Fn shmget "key_t key" "int size" "int shmflg"
+.Fo shmget
+.Fa "key_t key"
+.Fa "size_t size"
+.Fa "int shmflg"
+.Fc
 .Sh DESCRIPTION
 .Fn shmget
 returns the shared memory identifier associated with the key
@@ -96,30 +98,65 @@ Otherwise, -1 is returned and the global variable
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
+The
+.Fn shmget
+system call will fail if:
 .Bl -tag -width Er
-.It Bq Er EACESS
+.\" ===========
+.It Bq Er EACCES
 A shared memory segment is already associated with
 .Fa key
 and the caller has no permission to access it.
+.\" ===========
 .It Bq Er EEXIST
 Both IPC_CREAT and IPC_EXCL are set in
 .Fa shmflg ,
 and a shared memory segment is already associated with
 .Fa key .
-.It Bq Er ENOSPC
-A new shared memory indentifier could not be created because the system limit
-for the number of shared memory identifiers has been reached.
+.\" ===========
+.It Bq Er EINVAL
+No shared memory segment is to be created,
+and a shared memory segment exists for
+.Fa key ,
+but the size of the segment associated with it
+is less than
+.Fa size ,
+which is non-zero.
+.\" ===========
 .It Bq Er ENOENT
 IPC_CREAT was not set in
 .Fa shmflg
 and no shared memory segment associated with
 .Fa key
 was found.
+.\" ===========
 .It Bq Er ENOMEM
 There is not enough memory left to created a shared memory segment of the
 requested size.
+.\" ===========
+.It Bq Er ENOSPC
+A new shared memory identifier could not be created because the system limit
+for the number of shared memory identifiers has been reached.
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/ipc.h>
+.Fd #include <sys/shm.h>
+.Pp
+.Ft int
+.br
+.Fo shmget
+.Fa "key_t key"
+.Fa "int size"
+.Fa "int shmflg"
+.Fc ;
+.Pp
+All of these include files are necessary.
+The type of
+.Fa size
+has changed.
 .Sh SEE ALSO
-.Xr shmctl 2 ,
 .Xr shmat 2 ,
-.Xr shmdt 2
+.Xr shmctl 2 ,
+.Xr shmdt 2 ,
+.Xr compat 5

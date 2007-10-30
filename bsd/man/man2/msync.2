@@ -41,10 +41,13 @@
 .Sh LIBRARY
 .Lb libc
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
 .Fd #include <sys/mman.h>
 .Ft int
-.Fn msync "void *addr" "size_t len" "int flags"
+.Fo msync
+.Fa "void *addr"
+.Fa "size_t len"
+.Fa "int flags"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn msync
@@ -55,6 +58,7 @@ Only those pages containing
 and
 .Fa len-1
 succeeding locations will be examined.
+.Pp
 The
 .Fa flags
 argument may be specified as follows:
@@ -75,23 +79,45 @@ Otherwise, a 0 value is returned.
 .Fn msync
 will fail if:
 .Bl -tag -width Er
+.\" ===========
+.It Bq Er EBUSY
+Some of the specified addresses are locked
+and MS_INVALIDATE is specified.
+.\" ===========
 .It Bq Er EINVAL
 .Fa addr
 is not a multiple of the hardware page size.
+.\" ===========
 .It Bq Er EINVAL
 .Fa len
 is too large, or less than 1.
+.\" ===========
 .It Bq Er EINVAL
 .Fa flags
-combined MS_ASYNC with another flag, which is not permitted.
+is invalid
+(e.g., it combines MS_ASYNC with another flag,
+which is not permitted).
+.\" ===========
 .It Bq Er EIO
-An I/O error occurred while writing to the file system.
+An I/O error occurs while writing to the file system.
+.\" ===========
+.It Bq Er ENOMEM
+The specified address range is outside of the address range
+of the process or includes an unmapped page.
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/mman.h>
+.Pp
+The include file
+.In sys/types.h
+is necessary.
 .Sh SEE ALSO
 .Xr madvise 2 ,
 .Xr mincore 2 ,
 .Xr mprotect 2 ,
-.Xr munmap 2
+.Xr munmap 2 ,
+.Xr compat 5
 .Sh HISTORY
 The
 .Fn msync

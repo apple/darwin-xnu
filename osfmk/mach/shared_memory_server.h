@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *
@@ -26,6 +32,16 @@
  * 	protos and struct definitions for shared library
  *	server and interface
  */
+
+/*
+ * XXX
+ * 
+ * NOTE: this file is deprecated and will be removed in the near future.
+ * Any project that includes this file should be changed to:
+ * 1. use <mach/shared_region.h> instead of this file,
+ * 2. handle the new shared regions, now available on more platforms
+ */
+
 #ifndef _MACH_SHARED_MEMORY_SERVER_H_
 #define _MACH_SHARED_MEMORY_SERVER_H_
 
@@ -37,16 +53,17 @@
 #define VM_PROT_COW  0x8  /* must not interfere with normal prot assignments */
 #define VM_PROT_ZF  0x10  /* must not interfere with normal prot assignments */
 
+#define GLOBAL_SHARED_TEXT_SEGMENT	0x90000000U
+#define GLOBAL_SHARED_DATA_SEGMENT	0xA0000000U
+#define GLOBAL_SHARED_SEGMENT_MASK	0xF0000000U
+
+#define	SHARED_TEXT_REGION_SIZE		0x10000000
+#define	SHARED_DATA_REGION_SIZE		0x10000000
 
 #if !defined(__LP64__)
 
 #define	SHARED_LIBRARY_SERVER_SUPPORTED
-#define GLOBAL_SHARED_TEXT_SEGMENT	0x90000000
-#define GLOBAL_SHARED_DATA_SEGMENT	0xA0000000
-#define GLOBAL_SHARED_SEGMENT_MASK	0xF0000000
 
-#define	SHARED_TEXT_REGION_SIZE		0x10000000
-#define	SHARED_DATA_REGION_SIZE		0x10000000
 #define	SHARED_ALTERNATE_LOAD_BASE	0x09000000
 
 /* 
@@ -57,8 +74,6 @@
  */
 #define	SHARED_TEXT_REGION_MASK		0x0FFFFFFF
 #define	SHARED_DATA_REGION_MASK		0x0FFFFFFF
-
-#define SHARED_LIB_ALIAS  0x10
 
 
 /* flags field aliases for copyin_shared_file and load_shared_file */
@@ -81,16 +96,6 @@ struct sf_mapping {
 	vm_offset_t	cksum;
 };
 typedef struct sf_mapping sf_mapping_t;
-
-#ifndef KERNEL
-/* load_shared_file and friends is deprecated */
-__BEGIN_DECLS
-int	load_shared_file(char *, caddr_t, u_long,
-		caddr_t *, int, sf_mapping_t *, int *);
-int	reset_shared_file(caddr_t *, int, sf_mapping_t *);
-int	new_system_shared_regions(void);
-__END_DECLS
-#endif /* !KERNEL */
 
 #endif  /* !defined(__LP64__) */
 

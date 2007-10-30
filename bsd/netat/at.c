@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *	Copyright (c) 1998 Apple Computer, Inc. 
@@ -41,8 +47,8 @@
 #include <net/if_types.h>
 #include <net/dlil.h>
 
-#include <netat/appletalk.h>
 #include <netat/sysglue.h>
+#include <netat/appletalk.h>
 #include <netat/at_pcb.h>
 #include <netat/at_var.h>
 #include <netat/ddp.h>
@@ -51,13 +57,13 @@
 #include <netat/debug.h>
 
 #include <sys/kern_event.h>
+#include <net/kpi_protocol.h>
 
-extern int at_ioctl(struct atpcb *, u_long, caddr_t, int fromKernel);
+int lap_online( at_ifaddr_t *, at_if_cfg_t *cfgp);
+
 extern int routerStart(at_kern_err_t *);
 extern void elap_offline(at_ifaddr_t *);
 extern at_ifaddr_t *find_ifID(char *);
-extern at_nvestr_t *getRTRLocalZone(zone_usage_t *);
-extern int setLocalZones(at_nvestr_t *, int);
 
 extern int xpatcnt;
 extern at_ifaddr_t at_interfaces[];
@@ -136,7 +142,6 @@ at_control(so, cmd, data, ifp)
 {
 	struct ifreq *ifr = (struct ifreq *)data;
 	int pat_id = 0, error = 0;
-	struct proc *p = current_proc();       
 	at_ifaddr_t *ifID = 0;
 	struct ifaddr *ifa;
 	struct sockaddr_dl *sdl;
@@ -222,7 +227,7 @@ at_control(so, cmd, data, ifp)
 	  	at_def_zone_t *defzonep = (at_def_zone_t *)data;
 
 		/* check for root access */
-		if (error = suser(kauth_cred_get(), 0))
+		if ((error = suser(kauth_cred_get(), 0)))
 			return(EACCES);
 
 		ifID = 0;
@@ -460,7 +465,7 @@ at_control(so, cmd, data, ifp)
 	  	at_router_params_t *rt = (at_router_params_t *)data;
 
 		/* check for root access */
-		if (error = suser(kauth_cred_get(), 0))
+		if ((error = suser(kauth_cred_get(), 0)))
 			return(EACCES);
 
 		/* when in routing/multihome mode the AIOCSETROUTER IOCTL 
@@ -531,7 +536,7 @@ at_control(so, cmd, data, ifp)
 		    ret;
 
 		/* check for root access */
-		if (error = suser(kauth_cred_get(), 0))
+		if ((error = suser(kauth_cred_get(), 0)))
 			return(EACCES);
 
 		ret = ddp_shutdown(*count_only);
@@ -558,12 +563,11 @@ at_control(so, cmd, data, ifp)
 
 	case SIOCSIFADDR:
 		/* check for root access */
-		if (error = suser(kauth_cred_get(), 0))
+		if ((error = suser(kauth_cred_get(), 0)))
 			error = EACCES;
 		else if (ifID)
 			error = EEXIST;
 		else {
-			int s;
 			if (xpatcnt == 0) {
 				at_state.flags |= AT_ST_STARTING;
 				ddp_brt_init();
@@ -576,6 +580,17 @@ at_control(so, cmd, data, ifp)
 
 			ifID->aa_ifp = ifp;
 			ifa = &ifID->aa_ifa;
+			error = proto_plumb(PF_APPLETALK, ifp);
+			if (error == EEXIST) {
+			    ifID->at_was_attached = 1;
+			    error = 0;
+			}
+			if (error != 0) {
+				break;
+			}
+			/* XXX ethernet-specific */
+			ifID->cable_multicast_addr = etalk_multicast_addr;
+			xpatcnt++;
 			ifnet_lock_exclusive(ifp);
 			TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) 
 				if ((sdl = (struct sockaddr_dl *)ifa->ifa_addr) &&
@@ -599,31 +614,6 @@ at_control(so, cmd, data, ifp)
 			   is set */
 			if_attach_ifa(ifp, ifa);
 			ifnet_lock_done(ifp);
-
-			switch (ifp->if_type) {
-			case IFT_ETHER:
-                        case IFT_L2VLAN:
-                        case IFT_IEEE8023ADLAG: /* bonded ethernet */
-				ether_attach_at(ifp);
-				error = 0;
-				ifID->cable_multicast_addr = etalk_multicast_addr;
-
-				xpatcnt++;
-				break;
-			case IFT_FDDI:
-				ifID->cable_multicast_addr = etalk_multicast_addr;
-				ddp_bit_reverse(&ifID->cable_multicast_addr);
-				xpatcnt++;
-				break;
-			case IFT_ISO88025: /* token ring */	
-				ifID->cable_multicast_addr = ttalk_multicast_addr;
-				ddp_bit_reverse(&ifID->cable_multicast_addr);
-
-				xpatcnt++;
-				break;
-			default:
-				error = EINVAL;
-			}
 		}
 	  break;
 
@@ -682,10 +672,36 @@ at_control(so, cmd, data, ifp)
         break;
     }
         
+	case SIOCPROTOATTACH:
+		/* check for root access */
+		if (suser(kauth_cred_get(), 0) != 0) {
+			error = EACCES;
+			break;
+		}
+		error = proto_plumb(PF_APPLETALK, ifp);
+		if (ifID != NULL
+		    && (error == 0 || error == EEXIST)) {
+			ifID->at_was_attached = 1;
+		}
+		break;
+
+	case SIOCPROTODETACH:
+		/* check for root access */
+		if (suser(kauth_cred_get(), 0) != 0) {
+			error = EACCES;
+			break;
+		}
+		if (ifID != NULL) {
+			error = EBUSY;
+			break;
+		}
+		error = proto_unplumb(PF_APPLETALK, ifp);
+		break;
+
 	default:
 		if (ifp == 0 || ifp->if_ioctl == 0)
 			return (EOPNOTSUPP);
-		return dlil_ioctl(0, ifp, cmd, (caddr_t) data);
+		return ifnet_ioctl(ifp, 0, cmd, data);
 	}
 
 	return(error);

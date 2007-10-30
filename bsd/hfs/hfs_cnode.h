@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2002-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #ifndef _HFS_CNODE_H_
 #define _HFS_CNODE_H_
@@ -71,7 +77,22 @@ typedef struct filefork filefork_t;
 #define	fcbBTCBPtr       ff_sysfileinfo
 
 typedef u_int8_t atomicflag_t;
- 
+
+
+/*
+ * Hardlink Origin (for hardlinked directories).
+ */
+struct linkorigin {
+	TAILQ_ENTRY(linkorigin)  lo_link;  /* chain */
+	void *  lo_thread;      /* thread that performed the lookup */
+	cnid_t  lo_cnid;        /* hardlink's cnid */
+	cnid_t  lo_parentcnid;  /* hardlink's parent cnid */
+};
+typedef struct linkorigin linkorigin_t;
+
+#define MAX_CACHED_ORIGINS  10
+
+
 /*
  * The cnode is used to represent each active (or recently active)
  * file or directory in the HFS filesystem.
@@ -87,19 +108,21 @@ struct cnode {
 	u_int32_t		c_hflag;	/* cnode's flags for maintaining hash - protected by global hash lock */
 	struct vnode		*c_vp;		/* vnode for data fork or dir */
 	struct vnode		*c_rsrc_vp;	/* vnode for resource fork */
-	struct vnode		*c_devvp;	/* vnode for block I/O */
 	dev_t			c_dev;		/* cnode's device */
         struct dquot		*c_dquot[MAXQUOTAS]; /* cnode's quota info */
 	struct klist		c_knotes;	/* knotes attached to this vnode */
-	u_long			c_childhint;	/* catalog hint for children */
+	u_int32_t		c_childhint;	 /* catalog hint for children (small dirs only) */
+	u_int32_t		c_dirthreadhint; /* catalog hint for directory's thread rec */
 	struct cat_desc		c_desc;		/* cnode's descriptor */
 	struct cat_attr		c_attr;		/* cnode's attributes */
-	TAILQ_HEAD(hfs_hinthead, directoryhint) c_hintlist;  /* directory hint list */
+	TAILQ_HEAD(hfs_originhead, linkorigin) c_originlist;  /* hardlink origin cache */
+	TAILQ_HEAD(hfs_hinthead, directoryhint) c_hintlist;  /* readdir directory hint list */
   	int16_t			c_dirhinttag;	/* directory hint tag */
 	union {
 	    int16_t     cu_dirhintcnt;          /* directory hint count */
 	    int16_t     cu_syslockcount;        /* system file use only */
 	} c_union;
+	u_int32_t		c_dirchangecnt; /* changes each insert/delete (in-core only) */
  	struct filefork		*c_datafork;	/* cnode's data fork */
 	struct filefork		*c_rsrcfork;	/* cnode's rsrc fork */
 	atomicflag_t	c_touch_acctime;
@@ -116,10 +139,10 @@ typedef struct cnode cnode_t;
 
 #define c_fileid	c_attr.ca_fileid
 #define c_mode		c_attr.ca_mode
-#define c_nlink		c_attr.ca_nlink
+#define c_linkcount	c_attr.ca_linkcount
 #define c_uid		c_attr.ca_uid
 #define c_gid		c_attr.ca_gid
-#define c_rdev		c_attr.ca_rdev
+#define c_rdev		c_attr.ca_union1.cau_rdev
 #define c_atime		c_attr.ca_atime
 #define c_mtime		c_attr.ca_mtime
 #define c_ctime		c_attr.ca_ctime
@@ -127,9 +150,8 @@ typedef struct cnode cnode_t;
 #define c_btime		c_attr.ca_btime
 #define c_flags		c_attr.ca_flags
 #define c_finderinfo	c_attr.ca_finderinfo
-#define c_blocks	c_attr.ca_blocks
-#define c_attrblks	c_attr.ca_attrblks
-#define c_entries	c_attr.ca_entries
+#define c_blocks	c_attr.ca_union2.cau_blocks
+#define c_entries	c_attr.ca_union2.cau_entries
 #define c_zftimeout	c_childhint
 
 #define c_dirhintcnt    c_union.cu_dirhintcnt
@@ -152,16 +174,25 @@ typedef struct cnode cnode_t;
 #define C_MODIFIED         0x00010  /* CNode has been modified */
 #define C_NOEXISTS         0x00020  /* CNode has been deleted, catalog entry is gone */
 #define C_DELETED          0x00040  /* CNode has been marked to be deleted */
-#define C_HARDLINK         0x00080  /* CNode is a hard link */
+#define C_HARDLINK         0x00080  /* CNode is a hard link (file or dir) */
 
 #define C_FORCEUPDATE      0x00100  /* force the catalog entry update */
 #define C_HASXATTRS        0x00200  /* cnode has extended attributes */
+#define C_NEG_ENTRIES      0x00400  /* directory has negative name entries */
+#define C_WARNED_RSRC      0x00800  /* cnode lookup warning has been issued */ 
 
 #define C_NEED_DATA_SETSIZE  0x01000  /* Do a ubc_setsize(0) on c_rsrc_vp after the unlock */
 #define C_NEED_RSRC_SETSIZE  0x02000  /* Do a ubc_setsize(0) on c_vp after the unlock */
-
+#define C_DIR_MODIFICATION   0x04000  /* Directory is being modified, wait for lookups */
 
 #define ZFTIMELIMIT	(5 * 60)
+
+/*
+ * The following is the "invisible" bit from the fdFlags field
+ * in the FndrFileInfo.
+ */
+enum { kFinderInvisibleMask = 1 << 14 };
+
 
 /*
  * Convert between cnode pointers and vnode pointers
@@ -182,6 +213,10 @@ typedef struct cnode cnode_t;
 #define VTOF(vp)	((vp) == VTOC((vp))->c_rsrc_vp ?	\
 			 VTOC((vp))->c_rsrcfork :		\
 			 VTOC((vp))->c_datafork)
+
+#define VCTOF(vp, cp)	((vp) == (cp)->c_rsrc_vp ?	\
+			 (cp)->c_rsrcfork :		\
+			 (cp)->c_datafork)
 
 #define FTOV(fp)	((fp) == FTOC(fp)->c_rsrcfork ?		\
 			 FTOC(fp)->c_rsrc_vp :			\
@@ -206,12 +241,25 @@ struct hfsfid {
 };
 
 
+/* Get new default vnode */
+extern int hfs_getnewvnode(struct hfsmount *hfsmp, struct vnode *dvp, struct componentname *cnp,
+                           struct cat_desc *descp, int flags, struct cat_attr *attrp,
+                           struct cat_fork *forkp, struct vnode **vpp);
+
+
+#define GNV_WANTRSRC   0x01  /* Request the resource fork vnode. */
+#define GNV_SKIPLOCK   0x02  /* Skip taking the cnode lock (when getting resource fork). */
+#define GNV_CREATE     0x04  /* The vnode is for a newly created item. */
+
+
+/* Touch cnode times based on c_touch_xxx flags */
 extern void hfs_touchtimes(struct hfsmount *, struct cnode *);
 
 /*
  * HFS cnode hash functions.
  */
 extern void  hfs_chashinit(void);
+extern void  hfs_chashinit_finish(void);
 extern void  hfs_chashinsert(struct cnode *cp);
 extern int   hfs_chashremove(struct cnode *cp);
 extern void  hfs_chash_abort(struct cnode *cp);
@@ -223,13 +271,9 @@ extern struct vnode * hfs_chash_getvnode(dev_t dev, ino_t inum, int wantrsrc, in
 extern struct cnode * hfs_chash_getcnode(dev_t dev, ino_t inum, struct vnode **vpp, int wantrsrc, int skiplock);
 extern int hfs_chash_snoop(dev_t, ino_t, int (*)(const struct cat_desc *,
                             const struct cat_attr *, void *), void *);
+extern int hfs_valid_cnode(struct hfsmount *hfsmp, struct vnode *dvp, struct componentname *cnp, cnid_t cnid);
 				
-/*
- * HFS directory hint functions.
- */
-extern directoryhint_t * hfs_getdirhint(struct cnode *, int);
-extern void  hfs_reldirhint(struct cnode *, directoryhint_t *);
-extern void  hfs_reldirhints(struct cnode *, int);
+extern int hfs_chash_set_childlinkbit(dev_t dev, cnid_t cnid);
 
 /*
  * HFS cnode lock functions.
@@ -242,8 +286,9 @@ extern void  hfs_reldirhints(struct cnode *, int);
  *  4. system files (as needed)
  *       A. Catalog B-tree file
  *       B. Attributes B-tree file
- *       C. Allocation Bitmap file (always exclusive, supports recursion)
- *       D. Overflow Extents B-tree file (always exclusive, supports recursion)
+ *       C. Startup file (if there is one)
+ *       D. Allocation Bitmap file (always exclusive, supports recursion)
+ *       E. Overflow Extents B-tree file (always exclusive, supports recursion)
  *  5. hfs mount point (always last)
  *
  */
@@ -260,7 +305,7 @@ extern void hfs_unlockpair(struct cnode *, struct cnode *);
 extern void hfs_unlockfour(struct cnode *, struct cnode *, struct cnode *, struct cnode *);
 
 extern void hfs_lock_truncate(struct cnode *, int);
-extern void hfs_unlock_truncate(struct cnode *);
+extern void hfs_unlock_truncate(struct cnode *, int);
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */

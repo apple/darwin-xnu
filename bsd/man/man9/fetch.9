@@ -41,28 +41,41 @@
 .Nm fetch ,
 .Nm fubyte ,
 .Nm fuibyte ,
-.Nm fuword ,
 .Nm fuiword ,
 .Nm fulong ,
-.Nm fuulong
+.Nm fuulong ,
+.Nm fuword
 .Nd fetch data from user-space
 .Sh SYNOPSIS
 .In sys/types.h
 .In sys/time.h
 .In sys/systm.h
 .In sys/resourcevar.h
+.\"
 .Ft int
-.Fn fubyte "const user_addr_t addr"
+.Fo fubyte
+.Fa "const user_addr_t addr"
+.Fc
 .Ft int
-.Fn fuibyte "const user_addr_t addr"
+.Fo fuibyte
+.Fa "const user_addr_t addr"
+.Fc
 .Ft int
-.Fn fuword "user_addr_t addr"
-.Ft int
-.Fn fuiword "user_addr_t addr"
+.Fo fuiword
+.Fa "user_addr_t addr"
+.Fc
 .Ft int64_t
-.Fn fulong "user_addr_t addr"
+.Fo fulong
+.Fa "user_addr_t addr"
+.Fc
 .Ft uint64_t
-.Fn fuulong "user_addr_t addr"
+.Fo fuulong
+.Fa "user_addr_t addr"
+.Fc
+.Ft int
+.Fo fuword
+.Fa "user_addr_t addr"
+.Fc
 .Sh DESCRIPTION
 The
 .Nm
@@ -72,25 +85,31 @@ The
 .Nm
 routines provide the following functionality:
 .Bl -tag -width "fuiword()"
+.\" ==========
 .It Fn fubyte
 Fetches a byte of data from the user-space address
 .Pa addr .
+.\" ==========
 .It Fn fuibyte
 Fetches a byte of data from the user-space address
 .Pa addr .
 This function is safe to call during an interrupt context.
-.It Fn fuword
-Fetches a word of data from the user-space address
-.Pa addr .
+.\" ==========
 .It Fn fuiword
 Fetches a word of data from the user-space address
 .Pa addr .
 This function is safe to call during an interrupt context.
+.\" ==========
 .It Fn fulong
 Fetches a long word of data from the user-space address
 .Pa addr .
+.\" ==========
 .It Fn fuulong
 Fetches a unsigned long word of data from the user-space address
+.Pa addr .
+.\" ==========
+.It Fn fuword
+Fetches a word of data from the user-space address
 .Pa addr .
 .El
 .Sh RETURN VALUES

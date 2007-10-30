@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -48,6 +54,12 @@
  * the rights to redistribute these changes.
  */
 /*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
+/*
  */
 /*
  *	File:	mach/port.h
@@ -74,6 +86,7 @@
 #ifndef	_MACH_PORT_H_
 #define _MACH_PORT_H_
 
+#include <sys/cdefs.h>
 #include <stdint.h>
 #include <mach/boolean.h>
 #include <mach/machine/vm_types.h>
@@ -224,7 +237,8 @@ typedef natural_t mach_port_right_t;
 #define MACH_PORT_RIGHT_SEND_ONCE	((mach_port_right_t) 2)
 #define MACH_PORT_RIGHT_PORT_SET	((mach_port_right_t) 3)
 #define MACH_PORT_RIGHT_DEAD_NAME	((mach_port_right_t) 4)
-#define MACH_PORT_RIGHT_NUMBER		((mach_port_right_t) 5)
+#define MACH_PORT_RIGHT_LABELH	        ((mach_port_right_t) 5)
+#define MACH_PORT_RIGHT_NUMBER		((mach_port_right_t) 6)
 
 typedef natural_t mach_port_type_t;
 typedef mach_port_type_t *mach_port_type_array_t;
@@ -238,6 +252,7 @@ typedef mach_port_type_t *mach_port_type_array_t;
 #define MACH_PORT_TYPE_SEND_ONCE    MACH_PORT_TYPE(MACH_PORT_RIGHT_SEND_ONCE)
 #define MACH_PORT_TYPE_PORT_SET	    MACH_PORT_TYPE(MACH_PORT_RIGHT_PORT_SET)
 #define MACH_PORT_TYPE_DEAD_NAME    MACH_PORT_TYPE(MACH_PORT_RIGHT_DEAD_NAME)
+#define MACH_PORT_TYPE_LABELH       MACH_PORT_TYPE(MACH_PORT_RIGHT_LABELH)
 
 /* Convenient combinations. */
 
@@ -276,7 +291,7 @@ typedef natural_t mach_port_rights_t;		/* number of rights */
 typedef unsigned int mach_port_srights_t;	/* status of send rights */
 
 typedef struct mach_port_status {
-	mach_port_name_t	mps_pset;	/* containing port set */
+	mach_port_rights_t	mps_pset;	/* count of containing port sets */
 	mach_port_seqno_t	mps_seqno;	/* sequence number */
 	mach_port_mscount_t	mps_mscount;	/* make-send count */
 	mach_port_msgcount_t	mps_qlimit;	/* queue limit */
@@ -288,8 +303,14 @@ typedef struct mach_port_status {
 	natural_t		mps_flags;		/* port flags */
 } mach_port_status_t;
 
-#define MACH_PORT_QLIMIT_DEFAULT	((mach_port_msgcount_t) 5)
-#define MACH_PORT_QLIMIT_MAX	((mach_port_msgcount_t) 16)
+/* System-wide values for setting queue limits on a port */
+#define MACH_PORT_QLIMIT_ZERO		((mach_port_msgcount_t) 0)
+#define MACH_PORT_QLIMIT_BASIC		((mach_port_msgcount_t) 5)
+#define MACH_PORT_QLIMIT_SMALL		((mach_port_msgcount_t) 16)
+#define MACH_PORT_QLIMIT_LARGE		((mach_port_msgcount_t) 1024)
+#define MACH_PORT_QLIMIT_MIN		MACH_PORT_QLIMIT_ZERO
+#define MACH_PORT_QLIMIT_DEFAULT	MACH_PORT_QLIMIT_BASIC
+#define MACH_PORT_QLIMIT_MAX		MACH_PORT_QLIMIT_LARGE
 
 typedef struct mach_port_limits {
 	mach_port_msgcount_t	mpl_qlimit;	/* number of msgs */
@@ -314,13 +335,13 @@ typedef int	mach_port_flavor_t;
  * Must be padded to 64-bits total length.
  */
 typedef struct mach_port_qos {
-	boolean_t		name:1;		/* name given */
-	boolean_t		prealloc:1;	/* prealloced message */
+	unsigned int		name:1;		/* name given */
+	unsigned int 		prealloc:1;	/* prealloced message */
 	boolean_t		pad1:30;
 	natural_t		len;
 } mach_port_qos_t;
 
-#if	!defined(_POSIX_C_SOURCE) && !defined(_NO_PORT_T_FROM_MACH)
+#if	!__DARWIN_UNIX03 && !defined(_NO_PORT_T_FROM_MACH)
 /*
  *  Mach 3.0 renamed everything to have mach_ in front of it.
  *  These types and macros are provided for backward compatibility
@@ -335,6 +356,6 @@ typedef mach_port_name_t	*port_name_array_t;
 #define PORT_VALID(name) \
 		((port_t)(name) != PORT_NULL && (port_t)(name) != PORT_DEAD)
 
-#endif	/* !_POSIX_C_SOURCE && !_NO_PORT_T_FROM_MACH */
+#endif	/* !__DARWIN_UNIX03 && !_NO_PORT_T_FROM_MACH */
 
 #endif	/* _MACH_PORT_H_ */

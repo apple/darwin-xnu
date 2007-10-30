@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -37,7 +43,6 @@
  * the values, but we cannot run anything on the target machine.
  */
 
-#include <va_list.h>
 #include <types.h>
 
 #include <kern/task.h>
@@ -67,6 +72,11 @@
 #include <ppc/mem.h>
 #include <ppc/boot.h>
 #include <ppc/lowglobals.h>
+
+#if	CONFIG_DTRACE
+#define NEED_DTRACE_DEFS
+#include <../bsd/sys/lockstat.h>
+#endif
 
 /* Undefine standard offsetof because it is different than the one here */
 #undef offsetof
@@ -435,6 +445,8 @@ int main(int argc, char *argv[])
 	DECLARE("hwMckIEratPE",			offsetof(struct per_proc_info *, hwCtr.hwMckIEratPE));
 	DECLARE("hwMckDEratPE",			offsetof(struct per_proc_info *, hwCtr.hwMckDEratPE));
 
+	DECLARE("ijsave", 				offsetof(struct per_proc_info *, ijsave));
+
 	DECLARE("napStamp", 			offsetof(struct per_proc_info *, hwCtr.napStamp));
 	DECLARE("napTotal", 			offsetof(struct per_proc_info *, hwCtr.napTotal));
 	DECLARE("PP_PROCESSOR",			offsetof(struct per_proc_info *, processor[0]));
@@ -464,8 +476,8 @@ int main(int argc, char *argv[])
 #define IKSBASE (u_int)STACK_IKS(0)
 
 	/* values from kern/thread.h */
-	DECLARE("THREAD_OPTIONS",		offsetof(thread_t, options));
-	DECLARE("TH_OPT_DELAYIDLE", 	TH_OPT_DELAYIDLE);
+	DECLARE("THREAD_STATE",		offsetof(thread_t, state));
+	DECLARE("TH_IDLE",				TH_IDLE);
 	DECLARE("THREAD_KERNEL_STACK",	offsetof(thread_t, kernel_stack));
 	DECLARE("THREAD_RECOVER",		offsetof(thread_t, recover));
 	DECLARE("THREAD_FUNNEL_LOCK",
@@ -746,13 +758,13 @@ int main(int argc, char *argv[])
 	DECLARE("vmm64Bit",				vmm64Bit);
 
 	/* values from kern/task.h */
-	DECLARE("TASK_SYSCALLS_MACH",
-		offsetof(struct task *, syscalls_mach));
-	DECLARE("TASK_SYSCALLS_UNIX",
-		offsetof(struct task *, syscalls_unix));
+	DECLARE("TASK_SYSCALLS_MACH",	offsetof(struct task *, syscalls_mach));
+	DECLARE("TASK_SYSCALLS_UNIX",	offsetof(struct task *, syscalls_unix));
+
+	DECLARE("TASK_VTIMERS",			offsetof(struct task *, vtimers));
 
 	/* values from vm/vm_map.h */
-	DECLARE("VMMAP_PMAP",	offsetof(struct vm_map *, pmap));
+	DECLARE("VMMAP_PMAP",	offsetof(struct _vm_map *, pmap));
 
 	/* values from machine/pmap.h */
 	DECLARE("pmapSpace",			offsetof(struct pmap *, space));
@@ -796,6 +808,7 @@ int main(int argc, char *argv[])
 	DECLARE("pmapVAddr",			offsetof(struct pmapTransTab *, pmapVAddr));
 	DECLARE("pmapTransSize",		sizeof(pmapTransTab));
 	DECLARE("pmapResidentCnt",		offsetof(struct pmap *, stats.resident_count));
+	DECLARE("pmapResidentMax",		offsetof(struct pmap *, stats.resident_max));
 
 	DECLARE("maxAdrSp",				maxAdrSp);
 	DECLARE("maxAdrSpb",			maxAdrSpb);
@@ -852,9 +865,13 @@ int main(int argc, char *argv[])
 	DECLARE("TIMER_HIGHCHK",	offsetof(struct timer *, high_bits_check));
 	DECLARE("TIMER_TSTAMP",		offsetof(struct timer *, tstamp));
 
-	DECLARE("CURRENT_TIMER",	offsetof(struct processor *, processor_data.current_timer));
+	DECLARE("THREAD_TIMER",		offsetof(struct processor *, processor_data.thread_timer));
+	DECLARE("KERNEL_TIMER",		offsetof(struct processor *, processor_data.kernel_timer));
 	DECLARE("SYSTEM_TIMER",		offsetof(struct thread *, system_timer));
 	DECLARE("USER_TIMER",		offsetof(struct thread *, user_timer));
+	DECLARE("SYSTEM_STATE",		offsetof(struct processor *, processor_data.system_state));
+	DECLARE("USER_STATE",		offsetof(struct processor *, processor_data.user_state));
+	DECLARE("CURRENT_STATE",	offsetof(struct processor *, processor_data.current_state));
 
 	/* Constants from pmap.h */
 	DECLARE("PPC_SID_KERNEL", PPC_SID_KERNEL);
@@ -876,6 +893,7 @@ int main(int argc, char *argv[])
 	/* Misc values used by assembler */
 	DECLARE("AST_ALL", AST_ALL);
 	DECLARE("AST_URGENT", AST_URGENT);
+	DECLARE("AST_BSD", AST_BSD);
 
 	/* Spin Lock structure */
 	DECLARE("SLOCK_ILK",	offsetof(lck_spin_t *, interlock));
@@ -1410,6 +1428,11 @@ int main(int argc, char *argv[])
 	DECLARE("scomreg",				offsetof(struct scomcomm *, scomreg));
 	DECLARE("scomstat",				offsetof(struct scomcomm *, scomstat));
 	DECLARE("scomdata",				offsetof(struct scomcomm *, scomdata));
+
+#if	CONFIG_DTRACE
+	DECLARE("LS_LCK_MTX_UNLOCK_RELEASE", LS_LCK_MTX_UNLOCK_RELEASE);
+	DECLARE("LS_LCK_MTX_LOCK_ACQUIRE", LS_LCK_MTX_LOCK_ACQUIRE);
+#endif
 
 	return(0);  /* For ANSI C :-) */
 }

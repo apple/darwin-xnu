@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright 1995 NeXT Computer, Inc. All rights reserved. */
 /*
@@ -209,42 +215,159 @@
 #endif
 
 /*
- * The __DARWIN_ALIAS macros is used to do symbol renaming, 
- * they allow old code to use the old symbol thus maintiang binary 
- * compatability while new code can use a new improved version of the 
- * same function.
+ * COMPILATION ENVIRONMENTS
  *
- * By default newly complied code will actually get the same symbols
- * that the old code did.  Defining any of _APPLE_C_SOURCE, _XOPEN_SOURCE,
- * or _POSIX_C_SOURCE will give you the new symbols.  Defining _XOPEN_SOURCE
- * or _POSIX_C_SOURCE also restricts the avilable symbols to a subset of
- * Apple's APIs.
+ * DEFAULT	By default newly complied code will get POSIX APIs plus
+ *		Apple API extensions in scope.
+ *
+ *		Most users will use this compilation environment to avoid
+ *		behavioural differences between 32 and 64 bit code.
+ *
+ * LEGACY	Defining _NONSTD_SOURCE will get pre-POSIX APIs plus Apple
+ *		API extensions in scope.
+ *
+ *		This is generally equivalent to the Tiger release compilation
+ *		environment, except that it cannot be applied to 64 bit code;
+ *		its use is discouraged.
+ *
+ *		We expect this environment to be deprecated in the future.
+ *
+ * STRICT	Defining _POSIX_C_SOURCE or _XOPEN_SOURCE restricts the
+ *		available APIs to exactly the set of APIs defined by the
+ *		corresponding standard, based on the value defined.
+ *
+ *		A correct, portable definition for _POSIX_C_SOURCE is 200112L.
+ *		A correct, portable definition for _XOPEN_SOURCE is 600L.
+ *
+ *		Apple API extensions are not visible in this environment,
+ *		which can cause Apple specific code to fail to compile,
+ *		or behave incorrectly if prototypes are not in scope or
+ *		warnings about missing prototypes are not enabled or ignored.
+ *
+ * In any compilation environment, for correct symbol resolution to occur,
+ * function prototypes must be in scope.  It is recommended that all Apple
+ * tools users add etiher the "-Wall" or "-Wimplicit-function-declaration"
+ * compiler flags to their projects to be warned when a function is being
+ * used without a prototype in scope.
+ */
+
+/*
+ * The __DARWIN_ALIAS macros are used to do symbol renaming; they allow
+ * legacy code to use the old symbol, thus maintiang binary compatability
+ * while new code can use a standards compliant version of the same function.
  *
  * __DARWIN_ALIAS is used by itself if the function signature has not
  * changed, it is used along with a #ifdef check for __DARWIN_UNIX03
  * if the signature has changed.  Because the __LP64__ enviroment
  * only supports UNIX03 sementics it causes __DARWIN_UNIX03 to be
  * defined, but causes __DARWIN_ALIAS to do no symbol mangling.
+ *
+ * As a special case, when XCode is used to target a specific version of the
+ * OS, the manifest constant __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__
+ * will be defined by the compiler, with the digits representing major version
+ * time 100 + minor version times 10 (e.g. 10.5 := 1050).  If we are targetting
+ * pre-10.5, and it is the default compilation environment, revert the
+ * compilation environment to pre-__DARWIN_UNIX03.
  */
-
 #if !defined(__DARWIN_UNIX03)
-#if defined(_APPLE_C_SOURCE) || defined(_XOPEN_SOURCE) || defined(_POSIX_C_SOURCE) || defined(__LP64__)
-#if defined(_NONSTD_SOURCE)
-#error "Can't define both _NONSTD_SOURCE and any of _APPLE_C_SOURCE, _XOPEN_SOURCE, _POSIX_C_SOURCE, or __LP64__"
-#endif /* _NONSTD_SOURCE */
-#define __DARWIN_UNIX03	1
-#elif defined(_NONSTD_SOURCE)
-#define __DARWIN_UNIX03	0
-#else /* default */
-#define __DARWIN_UNIX03	0
-#endif /* _APPLE_C_SOURCE || _XOPEN_SOURCE || _POSIX_C_SOURCE || __LP64__ */
+#  if defined(_DARWIN_C_SOURCE) || defined(_XOPEN_SOURCE) || defined(_POSIX_C_SOURCE) || defined(__LP64__) || (defined(__arm__) && !defined(KERNEL))
+#    if defined(_NONSTD_SOURCE)
+#      error "Can't define both _NONSTD_SOURCE and any of _DARWIN_C_SOURCE, _XOPEN_SOURCE, _POSIX_C_SOURCE, or __LP64__"
+#    endif /* _NONSTD_SOURCE */
+#    define __DARWIN_UNIX03	1
+#  elif defined(_NONSTD_SOURCE) || defined(KERNEL)
+#    define __DARWIN_UNIX03	0
+#  else /* default */
+#    if defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && ((__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__-0) < 1050)
+#      define __DARWIN_UNIX03	0
+#    else /* __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1050 */
+#      define __DARWIN_UNIX03	1
+#    endif /* __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1050 */
+#  endif /* _DARWIN_C_SOURCE || _XOPEN_SOURCE || _POSIX_C_SOURCE || __LP64__ */
 #endif /* !__DARWIN_UNIX03 */
 
-#if __DARWIN_UNIX03 && !defined(__LP64__)
-#define __DARWIN_ALIAS(sym) __asm("_" __STRING(sym) "$UNIX2003")
-#else
-#define __DARWIN_ALIAS(sym)
-#endif
+#if !defined(__DARWIN_64_BIT_INO_T)
+#  if defined(_DARWIN_USE_64_BIT_INODE)
+#    define __DARWIN_64_BIT_INO_T 1
+#  elif defined(_DARWIN_NO_64_BIT_INODE) || defined(KERNEL)
+#    define __DARWIN_64_BIT_INO_T 0
+#  else /* default */
+#    define __DARWIN_64_BIT_INO_T 0
+#  endif
+#endif /* !__DARWIN_64_BIT_INO_T */
+
+#if !defined(__DARWIN_NON_CANCELABLE)
+#  if defined(KERNEL)
+#    define __DARWIN_NON_CANCELABLE 0
+#  else /* default */
+#    define __DARWIN_NON_CANCELABLE 0
+#  endif
+#endif /* !__DARWIN_NON_CANCELABLE */
+
+#if !defined(__DARWIN_VERS_1050)
+#  if !defined(KERNEL) && defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && ((__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__-0) >= 1050)
+#    define __DARWIN_VERS_1050 1
+#  else /* default */
+#    define __DARWIN_VERS_1050 0
+#  endif
+#endif /* !__DARWIN_NON_CANCELABLE */
+
+/*
+ * symbol suffixes used for symbol versioning
+ */
+#if __DARWIN_UNIX03
+#  if !defined(__LP64__) && !defined(__arm__)
+#    define __DARWIN_SUF_UNIX03		"$UNIX2003"
+#    define __DARWIN_SUF_UNIX03_SET	1
+#  else /* __LP64__ || __arm__ */
+#    define __DARWIN_SUF_UNIX03		/* nothing */
+#    define __DARWIN_SUF_UNIX03_SET	0
+#  endif /* !__LP64__ && !__arm__ */
+
+#  if __DARWIN_64_BIT_INO_T
+#    define __DARWIN_SUF_64_BIT_INO_T	"$INODE64"
+#  else /* !__DARWIN_64_BIT_INO_T */
+#    define __DARWIN_SUF_64_BIT_INO_T	/* nothing */
+#  endif /* __DARWIN_UNIX03 */
+
+#  if __DARWIN_NON_CANCELABLE
+#    define __DARWIN_SUF_NON_CANCELABLE	"$NOCANCEL"
+#  else /* !__DARWIN_NON_CANCELABLE */
+#    define __DARWIN_SUF_NON_CANCELABLE	/* nothing */
+#  endif /* __DARWIN_NON_CANCELABLE */
+
+#  if __DARWIN_VERS_1050
+#    define __DARWIN_SUF_1050		"$1050"
+#  else /* !__DARWIN_VERS_1050 */
+#    define __DARWIN_SUF_1050		/* nothing */
+#  endif /* __DARWIN_VERS_1050 */
+
+#else /* !__DARWIN_UNIX03 */
+#  define __DARWIN_SUF_UNIX03		/* nothing */
+#  define __DARWIN_SUF_UNIX03_SET	0
+#  define __DARWIN_SUF_64_BIT_INO_T	/* nothing */
+#  define __DARWIN_SUF_NON_CANCELABLE	/* nothing */
+#  define __DARWIN_SUF_1050		/* nothing */
+#endif /* __DARWIN_UNIX03 */
+
+#define __DARWIN_SUF_EXTSN		"$DARWIN_EXTSN"
+
+/*
+ * symbol versioning macros
+ */
+#define __DARWIN_ALIAS(sym)		__asm("_" __STRING(sym) __DARWIN_SUF_UNIX03)
+#define __DARWIN_ALIAS_C(sym)		__asm("_" __STRING(sym) __DARWIN_SUF_NON_CANCELABLE __DARWIN_SUF_UNIX03)
+#define __DARWIN_ALIAS_I(sym)		__asm("_" __STRING(sym) __DARWIN_SUF_64_BIT_INO_T __DARWIN_SUF_UNIX03)
+#define __DARWIN_INODE64(sym)		__asm("_" __STRING(sym) __DARWIN_SUF_64_BIT_INO_T)
+
+#define __DARWIN_1050(sym)		__asm("_" __STRING(sym) __DARWIN_SUF_1050)
+#define __DARWIN_1050ALIAS(sym)		__asm("_" __STRING(sym) __DARWIN_SUF_1050 __DARWIN_SUF_UNIX03)
+#define __DARWIN_1050ALIAS_C(sym)	__asm("_" __STRING(sym) __DARWIN_SUF_1050 __DARWIN_SUF_NON_CANCELABLE __DARWIN_SUF_UNIX03)
+#define __DARWIN_1050ALIAS_I(sym)	__asm("_" __STRING(sym) __DARWIN_SUF_1050 __DARWIN_SUF_64_BIT_INO_T __DARWIN_SUF_UNIX03)
+#define __DARWIN_1050INODE64(sym)	__asm("_" __STRING(sym) __DARWIN_SUF_1050 __DARWIN_SUF_64_BIT_INO_T)
+
+#define __DARWIN_EXTSN(sym)		__asm("_" __STRING(sym) __DARWIN_SUF_EXTSN)
+#define __DARWIN_EXTSN_C(sym)		__asm("_" __STRING(sym) __DARWIN_SUF_EXTSN __DARWIN_SUF_NON_CANCELABLE)
 
 
 /*
@@ -327,12 +450,49 @@
 #   define	__DARWIN_LDBL_COMPAT2(x) /* nothing */
 #   define	__DARWIN_LONG_DOUBLE_IS_DOUBLE	1
 #  endif
-#elif defined(__i386__) || defined(__ppc64__) || defined(__x86_64__)
+#elif defined(__i386__) || defined(__ppc64__) || defined(__x86_64__) || defined (__arm__)
 #  define	__DARWIN_LDBL_COMPAT(x)	/* nothing */
 #  define	__DARWIN_LDBL_COMPAT2(x) /* nothing */
 #  define	__DARWIN_LONG_DOUBLE_IS_DOUBLE	0
 #else
 #  error Unknown architecture
+#endif
+
+/*
+ * Deprecation macro
+ */
+#if __GNUC__ >= 3
+#define __deprecated __attribute__((deprecated))
+#else
+#define __deprecated /* nothing */
+#endif
+
+/*****************************************
+ *  Public darwin-specific feature macros
+ *****************************************/
+
+/*
+ * _DARWIN_FEATURE_LONG_DOUBLE_IS_DOUBLE indicates when the long double type
+ * is the same as the double type (ppc only)
+ */
+#if __DARWIN_LONG_DOUBLE_IS_DOUBLE
+#define _DARWIN_FEATURE_LONG_DOUBLE_IS_DOUBLE	1
+#endif
+
+/*
+ * _DARWIN_FEATURE_UNIX_CONFORMANCE indicates whether UNIX conformance is on,
+ * and specifies the conformance level (3 is SUSv3)
+ */
+#if __DARWIN_UNIX03
+#define _DARWIN_FEATURE_UNIX_CONFORMANCE	3
+#endif
+
+/*
+ * _DARWIN_FEATURE_64_BIT_INODE indicates that the ino_t type is 64-bit, and
+ * structures modified for 64-bit inodes (like struct stat) will be used.
+ */
+#if __DARWIN_64_BIT_INO_T
+#define _DARWIN_FEATURE_64_BIT_INODE		1
 #endif
 
 #endif /* !_CDEFS_H_ */

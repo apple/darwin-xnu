@@ -1,33 +1,30 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1991-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-/* Copyright (c) 1991 NeXT Computer, Inc.  All rights reserved.
- *
- *	File:	kern/mach_fat.c
- *	Author:	Peter King
- *
- *	Fat file support routines.
- *
- */
-
 #include <sys/param.h>
 #include <sys/types.h>
 #include <sys/uio.h>
@@ -79,7 +76,9 @@ fatfile_getarch2(
 	int			grade;
 	int			best_grade;
 	int			nfat_arch;
-	off_t		end_of_archs;
+	off_t			end_of_archs;
+	cpu_type_t		testtype;
+	cpu_type_t		testsubtype;
 	struct fat_header	*header;
 #if 0
 	off_t filesize;
@@ -97,8 +96,8 @@ fatfile_getarch2(
 	 */
 	nfat_arch = OSSwapBigToHostInt32(header->nfat_arch);
 
-	end_of_archs = (off_t)nfat_arch * sizeof(struct fat_arch) + 
-		sizeof(struct fat_header);
+	end_of_archs = (off_t)nfat_arch * sizeof(struct fat_arch) +
+			sizeof(struct fat_header);
 #if 0
 	filesize = ubc_getsize(vp);
 	if (end_of_archs > (int)filesize) {
@@ -111,7 +110,7 @@ fatfile_getarch2(
 	 * only PAGE_SIZE bytes
 	 */
 	if (end_of_archs > PAGE_SIZE ||
-		end_of_archs < (sizeof(struct fat_header)+sizeof(struct fat_arch)))
+	    end_of_archs < (sizeof(struct fat_header)+sizeof(struct fat_arch)))
 		return(LOAD_BADMACHO);
 
 	/*
@@ -122,26 +121,41 @@ fatfile_getarch2(
 		return(LOAD_BADMACHO);
 
 	/*
-	 * Scan the fat_arch's looking for the best one.
+	 * Ignore LIB64 flag so that binary slices with the flag set
+	 * don't choke in grade_binary.
 	 */
+	mask_bits |= CPU_SUBTYPE_LIB64;
+
+	/*
+	 * Scan the fat_arch's looking for the best one.  */
 	addr = data_ptr;
 	best_arch = NULL;
 	best_grade = 0;
 	arch = (struct fat_arch *) (addr + sizeof(struct fat_header));
 	for (; nfat_arch-- > 0; arch++) {
 
+		/* 
+		 *	Collect flags from both cputype and cpusubtype 
+		 */
+ 		testtype = OSSwapBigToHostInt32(arch->cputype) |
+ 				(OSSwapBigToHostInt32(arch->cpusubtype) & 
+ 					CPU_SUBTYPE_MASK);
+ 		testsubtype = OSSwapBigToHostInt32(arch->cpusubtype) 
+ 			& ~CPU_SUBTYPE_MASK;
+
 		/*
 		 *	Check to see if right cpu type.
 		 */
-		if(((cpu_type_t)OSSwapBigToHostInt32(arch->cputype) & ~mask_bits) != req_cpu_type)
+ 		if((testtype & ~mask_bits) != req_cpu_type) {
 			continue;
+		}
 
 		/*
-		 * 	Get the grade of the cpu subtype.
+		 * 	Get the grade of the cpu subtype (without feature flags)
 		 */
-		grade = grade_binary(
-			    OSSwapBigToHostInt32(arch->cputype),
-			    OSSwapBigToHostInt32(arch->cpusubtype));
+ 		grade = grade_binary(
+				(testtype & ~CPU_SUBTYPE_LIB64), 
+				testsubtype);
 
 		/*
 		 *	Remember it if it's the best we've seen.
@@ -197,13 +211,14 @@ fatfile_getarch_affinity(
 				fallback_type = CPU_TYPE_POWERPC;
 		}
 		/*
-		 * Ignore the architectural bits when determining if an image
+		 * Ignore all architectural bits when determining if an image
 		 * in a fat file should be skipped or graded.
 		 */
-		lret = fatfile_getarch2(vp, data_ptr, primary_type, CPU_ARCH_MASK, archret);
+		lret = fatfile_getarch2(vp, data_ptr, primary_type, 
+				CPU_ARCH_MASK, archret);
 		if ((lret != 0) && handler) {
 			lret = fatfile_getarch2(vp, data_ptr, fallback_type,
-						0, archret);
+						CPU_SUBTYPE_LIB64, archret);
 		}
 		return lret;
 }
@@ -228,7 +243,8 @@ fatfile_getarch(
 	vm_offset_t 	data_ptr,
 	struct fat_arch		*archret)
 {
-	return fatfile_getarch2(vp, data_ptr, cpu_type(), 0, archret);
+	return fatfile_getarch2(vp, data_ptr, cpu_type(), 
+			CPU_SUBTYPE_LIB64, archret);
 }
 
 /**********************************************************************
@@ -253,6 +269,7 @@ fatfile_getarch_with_bits(
 	vm_offset_t 	data_ptr,
 	struct fat_arch		*archret)
 {
-	return fatfile_getarch2(vp, data_ptr, archbits | cpu_type(), 0, archret);
+	return fatfile_getarch2(vp, data_ptr, archbits | cpu_type(), 
+			CPU_SUBTYPE_LIB64, archret);
 }
 

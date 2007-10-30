@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1998-2002 Luigi Rizzo, Universita` di Pisa
@@ -181,6 +187,13 @@ SYSCTL_INT(_net_inet_ip_dummynet, OID_AUTO, debug, CTLFLAG_RW, &dummynet_debug,
 #define	DPRINTF(X)
 #endif
 
+/* contrary to the comment above random(), it does not actually
+ * return a value [0, 2^31 - 1], which breaks plr amongst other
+ * things. Masking it should work even if the behavior of
+ * the function is fixed.
+ */
+#define MY_RANDOM (random() & 0x7FFFFFFF)
+
 /* dummynet lock */
 lck_grp_t         *dn_mutex_grp;
 lck_grp_attr_t    *dn_mutex_grp_attr;
@@ -197,8 +210,6 @@ static ip_dn_io_t dummynet_io;
 static void dn_rule_delete(void *);
 
 int if_tx_rdy(struct ifnet *ifp);
-
-extern lck_mtx_t *rt_mtx; /* route global lock */
 
 /*
  * Heap management functions.
@@ -300,9 +311,9 @@ heap_insert(struct dn_heap *h, dn_key key1, void *p)
 static void
 heap_extract(struct dn_heap *h, void *obj)
 {
-    int child, father, max = h->elements - 1 ;
+    int child, father, maxelt = h->elements - 1 ;
 
-    if (max < 0) {
+    if (maxelt < 0) {
 	printf("dummynet: warning, extract from empty heap 0x%p\n", h);
 	return ;
     }
@@ -319,8 +330,8 @@ heap_extract(struct dn_heap *h, void *obj)
     }
     RESET_OFFSET(h, father);
     child = HEAP_LEFT(father) ;		/* left child */
-    while (child <= max) {		/* valid entry */
-	if (child != max && DN_KEY_LT(h->p[child+1].key, h->p[child].key) )
+    while (child <= maxelt) {		/* valid entry */
+	if (child != maxelt && DN_KEY_LT(h->p[child+1].key, h->p[child].key) )
 	    child = child+1 ;		/* take right child, otherwise left */
 	h->p[father] = h->p[child] ;
 	SET_OFFSET(h, father);
@@ -328,11 +339,11 @@ heap_extract(struct dn_heap *h, void *obj)
 	child = HEAP_LEFT(child) ;   /* left child for next loop */
     }
     h->elements-- ;
-    if (father != max) {
+    if (father != maxelt) {
 	/*
 	 * Fill hole with last entry and bubble up, reusing the insert code
 	 */
-	h->p[father] = h->p[max] ;
+	h->p[father] = h->p[maxelt] ;
 	heap_insert(h, father, NULL); /* this one cannot fail */
     }
 }
@@ -347,7 +358,7 @@ heap_move(struct dn_heap *h, dn_key new_key, void *object)
 {
     int temp;
     int i ;
-    int max = h->elements-1 ;
+    int maxelt = h->elements-1 ;
     struct dn_heap_entry buf ;
 
     if (h->offset <= 0)
@@ -363,8 +374,8 @@ heap_move(struct dn_heap *h, dn_key new_key, void *object)
 	}
     } else {		/* must move down */
 	h->p[i].key = new_key ;
-	while ( (temp = HEAP_LEFT(i)) <= max ) { /* found left child */
-	    if ((temp != max) && DN_KEY_GT(h->p[temp].key, h->p[temp+1].key))
+	while ( (temp = HEAP_LEFT(i)) <= maxelt ) { /* found left child */
+	    if ((temp != maxelt) && DN_KEY_GT(h->p[temp].key, h->p[temp+1].key))
 		temp++ ; /* select child with min key */
 	    if (DN_KEY_GT(new_key, h->p[temp].key)) { /* go down */
 		HEAP_SWAP(h->p[i], h->p[temp], buf) ;
@@ -399,7 +410,7 @@ heap_free(struct dn_heap *h)
 {
     if (h->size >0 )
 	FREE(h->p, M_DUMMYNET);
-    bzero(h, sizeof(*h) );
+    bzero(h, sizeof(*h));
 }
 
 /*
@@ -446,7 +457,6 @@ transmit_event(struct dn_pipe *pipe)
 {
     struct mbuf *m ;
     struct dn_pkt_tag *pkt ;
-    struct ip *ip;
 	
 	lck_mtx_assert(dn_mutex, LCK_MTX_ASSERT_OWNED);
 	
@@ -466,7 +476,7 @@ transmit_event(struct dn_pipe *pipe)
 		switch (pkt->dn_dir) {
 			case DN_TO_IP_OUT: {
 				struct route tmp_rt = pkt->ro;
-				(void)ip_output(m, NULL, NULL, pkt->flags, NULL);
+				(void)ip_output(m, NULL, NULL, pkt->flags, NULL, NULL);
 				if (tmp_rt.ro_rt) {
 					rtfree(tmp_rt.ro_rt);
 				}
@@ -749,7 +759,7 @@ ready_event_wfq(struct dn_pipe *p)
  * increment the current tick counter and schedule expired events.
  */
 static void
-dummynet(void * __unused unused)
+dummynet(__unused void * unused)
 {
     void *p ; /* generic parameter to handler */
     struct dn_heap *h ;
@@ -836,7 +846,7 @@ if_tx_rdy(struct ifnet *ifp)
 	    break ;
     if (p == NULL) {
 	char buf[32];
-	sprintf(buf, "%s%d",ifp->if_name, ifp->if_unit);
+	snprintf(buf, sizeof(buf), "%s%d",ifp->if_name, ifp->if_unit);
 	for (p = all_pipes; p ; p = p->next )
 	    if (!strcmp(p->if_name, buf) ) {
 		p->ifp = ifp ;
@@ -1074,7 +1084,7 @@ red_drops(struct dn_flow_set *fs, struct dn_flow_queue *q, int len)
     if (fs->flags_fs & DN_QSIZE_IS_BYTES)
 	p_b = (p_b * len) / fs->max_pkt_size;
     if (++q->count == 0)
-	q->random = random() & 0xffff;
+	q->random = MY_RANDOM & 0xffff;
     else {
 	/*
 	 * q->count counts packets arrived since last drop, so a greater
@@ -1084,7 +1094,7 @@ red_drops(struct dn_flow_set *fs, struct dn_flow_queue *q, int len)
 	    q->count = 0;
 	    DPRINTF(("dummynet: - red drop"));
 	    /* after a drop we calculate a new random value */
-	    q->random = random() & 0xffff;
+	    q->random = MY_RANDOM & 0xffff;
 	    return 1;    /* drop */
 	}
     }
@@ -1201,7 +1211,7 @@ dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa)
      */
     q->tot_bytes += len ;
     q->tot_pkts++ ;
-    if ( fs->plr && random() < fs->plr )
+    if ( fs->plr && (MY_RANDOM < fs->plr) )
 	goto dropit ;		/* random pkt drop			*/
     if ( fs->flags_fs & DN_QSIZE_IS_BYTES) {
     	if (q->len_bytes > fs->qsize)
@@ -1237,7 +1247,7 @@ dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa)
 	lck_mtx_lock(rt_mtx);
 	pkt->ro = *(fwa->ro);
 	if (fwa->ro->ro_rt)
-	    fwa->ro->ro_rt->rt_refcnt++ ;
+	    rtref(fwa->ro->ro_rt);
 	if (fwa->dst == (struct sockaddr_in *)&fwa->ro->ro_dst) /* dst points into ro */
 	    fwa->dst = (struct sockaddr_in *)&(pkt->ro.ro_dst) ;
 	lck_mtx_unlock(rt_mtx);
@@ -1428,7 +1438,7 @@ purge_pipe(struct dn_pipe *pipe)
  * remove references from all ipfw rules to all pipes.
  */
 static void
-dummynet_flush()
+dummynet_flush(void)
 {
     struct dn_pipe *curr_p, *p ;
     struct dn_flow_set *fs, *curr_fs;
@@ -1785,7 +1795,7 @@ pipe_remove_from_heap(struct dn_heap *h, struct dn_pipe *p)
  * drain all queues. Called in case of severe mbuf shortage.
  */
 void
-dummynet_drain()
+dummynet_drain(void)
 {
     struct dn_flow_set *fs;
     struct dn_pipe *p;
@@ -1913,7 +1923,7 @@ dn_copy_set(struct dn_flow_set *set, char *bp)
 		printf("dummynet: ++ at %d: wrong fs ptr (have %p, should be %p)\n",
 			i, q->fs, set);
 	    copied++ ;
-	    bcopy(q, qp, sizeof( *q ) );
+	    bcopy(q, qp, sizeof(*q));
 	    /* cleanup pointers */
 	    qp->next = NULL ;
 	    qp->head = qp->tail = NULL ;
@@ -1938,10 +1948,10 @@ dn_calc_size(void)
      * compute size of data structures: list of pipes and flow_sets.
      */
     for (p = all_pipes, size = 0 ; p ; p = p->next )
-	size += sizeof( *p ) +
+	size += sizeof(*p) +
 	    p->fs.rq_elements * sizeof(struct dn_flow_queue);
     for (set = all_flow_sets ; set ; set = set->next )
-	size += sizeof ( *set ) +
+	size += sizeof(*set) +
 	    set->rq_elements * sizeof(struct dn_flow_queue);
     return size ;
 }
@@ -1983,7 +1993,7 @@ dummynet_get(struct sockopt *sopt)
 	 * then copy the flow_set descriptor(s) one at a time.
 	 * After each flow_set, copy the queue descriptor it owns.
 	 */
-	bcopy(p, bp, sizeof( *p ) );
+	bcopy(p, bp, sizeof(*p));
 	pipe_bp->delay = (pipe_bp->delay * 1000) / (hz*10) ; 
 	/*
 	 * XXX the following is a hack based on ->next being the
@@ -1998,17 +2008,17 @@ dummynet_get(struct sockopt *sopt)
 	pipe_bp->fs.pipe = NULL ;
 	pipe_bp->fs.rq = NULL ;
 
-	bp += sizeof( *p ) ;
+	bp += sizeof(*p);
 	bp = dn_copy_set( &(p->fs), bp );
     }
     for (set = all_flow_sets ; set ; set = set->next ) {
 	struct dn_flow_set *fs_bp = (struct dn_flow_set *)bp ;
-	bcopy(set, bp, sizeof( *set ) );
+	bcopy(set, bp, sizeof(*set));
 	/* XXX same hack as above */
 	fs_bp->next = (struct dn_flow_set *)DN_IS_QUEUE ;
 	fs_bp->pipe = NULL ;
 	fs_bp->rq = NULL ;
-	bp += sizeof( *set ) ;
+	bp += sizeof(*set);
 	bp = dn_copy_set( set, bp );
     }
     lck_mtx_unlock(dn_mutex);
@@ -2046,7 +2056,7 @@ ip_dn_ctl(struct sockopt *sopt)
 
     case IP_DUMMYNET_CONFIGURE :
 	p = &tmp_pipe ;
-	error = sooptcopyin(sopt, p, sizeof *p, sizeof *p);
+	error = sooptcopyin(sopt, p, sizeof(*p), sizeof(*p));
 	if (error)
 	    break ;
 	error = config_pipe(p);
@@ -2054,7 +2064,7 @@ ip_dn_ctl(struct sockopt *sopt)
 
     case IP_DUMMYNET_DEL :	/* remove a pipe or queue */
 	p = &tmp_pipe ;
-	error = sooptcopyin(sopt, p, sizeof *p, sizeof *p);
+	error = sooptcopyin(sopt, p, sizeof(*p), sizeof(*p));
 	if (error)
 	    break ;
 

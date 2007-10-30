@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -38,12 +44,12 @@
 #include <kern/processor.h>
 #include <kern/macro_help.h>
 #include <kern/spl.h>
+#include <kern/pms.h>
 
 #include <machine/commpage.h>
 #include <machine/machine_routines.h>
 #include <ppc/exception.h>
 #include <ppc/proc_reg.h>
-#include <ppc/pms.h>
 #include <ppc/rtclock.h>
 
 #include <sys/kdebug.h>
@@ -85,12 +91,11 @@ timebase_callback(
 	struct timebase_freq_t	*freq)
 {
 	uint32_t	numer, denom;
-	uint64_t	abstime;
 	spl_t		s;
 
 	if (	freq->timebase_den < 1 || freq->timebase_den > 4	||
 			freq->timebase_num < freq->timebase_den				)			
-		panic("rtclock timebase_callback: invalid constant %d / %d",
+		panic("rtclock timebase_callback: invalid constant %lu / %lu",
 					freq->timebase_num, freq->timebase_den);
 
 	denom = freq->timebase_num;
@@ -103,9 +108,6 @@ timebase_callback(
 		rtclock_timebase_const.numer = numer;
 		rtclock_timebase_const.denom = denom;
 		rtclock_sec_divisor = freq->timebase_num / freq->timebase_den;
-
-		nanoseconds_to_absolutetime(NSEC_PER_HZ, &abstime);
-		rtclock_tick_interval = abstime;
 
 		ml_init_lock_timeout();
 	}
@@ -140,14 +142,6 @@ rtclock_config(void)
 int
 rtclock_init(void)
 {
-	uint64_t				abstime;
-	struct per_proc_info	*pp;
-
-	pp = getPerProc();
-
-	abstime = mach_absolute_time();
-	pp->rtclock_intr_deadline = abstime + rtclock_tick_interval;	/* Get the time we need to pop */
-	
 	etimer_resync_deadlines();			/* Start the timers going */
 
 	return (1);

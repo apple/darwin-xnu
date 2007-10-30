@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  	File:		PseudoKernel.c
@@ -31,6 +37,7 @@
 */
 
 #include <mach/mach_types.h>
+#include <mach/mach_host.h>
 #include <mach/kern_return.h>
 
 #include <kern/kalloc.h>
@@ -47,6 +54,9 @@
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
 
+extern int is_suser(void);
+extern void tbeproc(void *proc);
+
 void bbSetRupt(ReturnHandler *rh, thread_t ct);
 
 /*
@@ -61,10 +71,10 @@ void bbSetRupt(ReturnHandler *rh, thread_t ct);
 ** Notes:
 **
 */
-kern_return_t syscall_notify_interrupt ( void ) {
-  
-    UInt32			interruptState; 
-    task_t			task;
+kern_return_t
+syscall_notify_interrupt(void)
+{
+	task_t			task;
 	thread_t 		act, fact;
 	bbRupt			*bbr;
 	BTTD_t			*bttd;
@@ -75,7 +85,7 @@ kern_return_t syscall_notify_interrupt ( void ) {
 	task_lock(task);						/* Lock our task */
 	
 	fact = (thread_t)task->threads.next;		/* Get the first activation on task */
-	act = 0;										/* Pretend we didn't find it yet */
+	act = NULL;										/* Pretend we didn't find it yet */
 	
 	for(i = 0; i < task->thread_count; i++) {		/* Scan the whole list */
 		if(fact->machine.bbDescAddr) {					/* Is this a Blue thread? */
@@ -104,7 +114,7 @@ kern_return_t syscall_notify_interrupt ( void ) {
 	 * setting up the asynchronous task by setting a pending interrupt.
 	 */
 	
-	if ( (unsigned int)act == (unsigned int)current_thread() ) {		
+	if (act == current_thread()) {		
 		bttd->InterruptControlWord = bttd->InterruptControlWord | 
 			((bttd->postIntMask >> kCR2ToBackupShift) & kBackupCR2Mask);
 				
@@ -146,7 +156,7 @@ kern_return_t syscall_notify_interrupt ( void ) {
 
 void bbSetRupt(ReturnHandler *rh, thread_t act) {
 
-	savearea 	*sv;
+	struct savearea	*sv;
 	BTTD_t		*bttd;
 	bbRupt		*bbr;
 	UInt32		interruptState;
@@ -214,14 +224,20 @@ void bbSetRupt(ReturnHandler *rh, thread_t act) {
  * The assist code can be called from two types of threads.  The blue thread, which handles 
  * traps, system calls and interrupts and preemptive threads that only issue system calls.
  *
+ * Parameters:	host			.
+ * 		_taskID			opaque task ID
+ * 		_TWI_TableStart		Start of TWI table
+ * 		_Desc_TableStart	Start of descriptor table
  */ 
 
-kern_return_t enable_bluebox(
-      host_t host,
-	  void *taskID,								/* opaque task ID */
-	  void *TWI_TableStart,						/* Start of TWI table */
-	  char *Desc_TableStart						/* Start of descriptor table */
-	 ) {
+kern_return_t
+enable_bluebox(host_t host, unsigned _taskID, unsigned _TWI_TableStart,
+	       unsigned _Desc_TableStart)
+{
+	/* XXX mig funness */
+	void *taskID = (void *)_taskID;
+	void *TWI_TableStart = (void *)_TWI_TableStart;
+	char *Desc_TableStart = (char *)_Desc_TableStart;
 	
 	thread_t 		th;
 	vm_offset_t		kerndescaddr, origdescoffset;
@@ -254,7 +270,7 @@ kern_return_t enable_bluebox(
 	}
 		
 	physdescpage = 											/* Get the physical page number of the page */
-		pmap_find_phys(th->map->pmap, (addr64_t)Desc_TableStart);
+		pmap_find_phys(th->map->pmap, CAST_USER_ADDR_T(Desc_TableStart));
 
 	ret =  kmem_alloc_pageable(kernel_map, &kerndescaddr, PAGE_SIZE);	/* Find a virtual address to use */
 	if(ret != KERN_SUCCESS) {								/* Could we get an address? */
@@ -294,7 +310,6 @@ kern_return_t enable_bluebox(
 		
 	{
 		/* mark the proc to indicate that this is a TBE proc */
-		extern void tbeproc(void *proc);
 
 		tbeproc(th->task->bsd_info);
 	}
@@ -351,7 +366,10 @@ int bb_enable_bluebox( struct savearea *save )
 {
 	kern_return_t rc;
 
-	rc = enable_bluebox( (host_t)0xFFFFFFFF, (void *)save->save_r3, (void *)save->save_r4, (char *)save->save_r5 );
+	rc = enable_bluebox((host_t)0xFFFFFFFF,
+			    CAST_DOWN(unsigned, save->save_r3),
+			    CAST_DOWN(unsigned, save->save_r4),
+			    CAST_DOWN(unsigned, save->save_r5));
 	save->save_r3 = rc;
 	return 1;										/* Return with normal AST checking */
 }
@@ -389,7 +407,7 @@ int bb_settaskenv( struct savearea *save )
 
 	task_lock(task);								/* Lock our task */
 	fact = (thread_t)task->threads.next;		/* Get the first activation on task */
-	act = 0;										/* Pretend we didn't find it yet */
+	act = NULL;										/* Pretend we didn't find it yet */
 	
 	for(i = 0; i < task->thread_count; i++) {		/* Scan the whole list */
 		if(fact->machine.bbDescAddr) {					/* Is this a Blue thread? */

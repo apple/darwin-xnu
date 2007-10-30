@@ -42,34 +42,36 @@
 .Sh SYNOPSIS
 .Fd #include <unistd.h>
 .Ft int
-.Fn pipe "int *fildes"
+.Fo pipe
+.Fa "int fildes[2]"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn pipe
 function
 creates a
-.Em pipe ,
-which is an object allowing
-unidirectional data flow,
+.Em pipe
+(an object that allows unidirectional data flow)
 and allocates a pair of file descriptors.
 The first descriptor connects to the
 .Em read end
-of the pipe,
-and the second connects to the
-.Em write end  ,
-so that data written to
+of the pipe;
+the second connects to the
+.Em write end .
+.Pp
+Data written to
 .Fa fildes[1]
 appears on (i.e., can be read from)
 .Fa fildes[0] .
 This allows the output of one program to be
 sent
 to another program:
-the source's standard output is set up to be
-the write end of the pipe,
-and the sink's standard input is set up to be
-the read end of the pipe.
-The pipe itself persists until all its associated descriptors are
-closed.
+the source's standard output is set up
+to be the write end of the pipe;
+the sink's standard input is set up
+to be the read end of the pipe.
+The pipe itself persists
+until all of its associated descriptors are closed.
 .Pp
 A pipe whose read or write end has been closed is considered
 .Em widowed .
@@ -91,22 +93,25 @@ The
 .Fn pipe
 call will fail if:
 .Bl -tag -width Er
-.It Bq Er EMFILE
-Too many descriptors are active.
-.It Bq Er ENFILE
-The system file table is full.
+.\" ===========
 .It Bq Er EFAULT
 The
 .Fa fildes
 buffer is in an invalid area of the process's address
 space.
+.\" ===========
+.It Bq Er EMFILE
+Too many descriptors are active.
+.\" ===========
+.It Bq Er ENFILE
+The system file table is full.
 .El
 .Sh SEE ALSO
 .Xr sh 1 ,
-.Xr read 2 ,
-.Xr write 2 ,
 .Xr fork 2 ,
-.Xr socketpair 2
+.Xr read 2 ,
+.Xr socketpair 2 ,
+.Xr write 2
 .Sh HISTORY
 A
 .Fn pipe

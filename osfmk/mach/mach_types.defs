@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -48,6 +54,12 @@
  * the rights to redistribute these changes.
  */
 /*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
+/*
  */
 /*
  *	Mach kernel interface type declarations
@@ -62,6 +74,7 @@
 type memory_object_offset_t 	= uint64_t;
 type memory_object_size_t 	= uint64_t;
 type memory_object_cluster_size_t = uint32_t;
+type memory_object_fault_info_t = array[16] of integer_t;
 
 #ifdef KERNEL_PRIVATE
 
@@ -171,7 +184,7 @@ type vm_inherit_t = int;
 type vm_purgable_t = int;
 type xxx_vm_statistics_data_t = struct[13] of integer_t;
 type vm_behavior_t = int;
-type vm_statistics_data_t = struct[14] of integer_t;
+type vm_statistics_data_t = struct[15] of integer_t;
 type vm_machine_attribute_t = int;
 type vm_machine_attribute_val_t = int;
 type vm_sync_t = int;
@@ -283,12 +296,12 @@ type host_security_t = mach_port_t
 		 * host_sched_info_t (2 ints)
 		 * kernel_resource_sizes_t (5 ints)
 		 * host_load_info_t (6 ints)
-		 * vm_statistics_t (14 ints)
+		 * vm_statistics_t (15 ints)
 		 * If other host_info flavors are added, this definition may
 		 * need to be changed. (See mach/{host_info,vm_statistics}.h)
 		 */
 type host_flavor_t		= int;
-type host_info_t 		= array[*:14] of integer_t;
+type host_info_t 		= array[*:15] of integer_t;
 
 type processor_t = mach_port_t
 #if	KERNEL_SERVER
@@ -380,6 +393,8 @@ type ledger_item_t		= integer_t;
 
 type security_token_t		= struct[2] of uint32_t;
 type audit_token_t		= struct[8] of uint32_t;
+
+type msg_labels_t = mach_port_t;
 
 		/* memory_object_info_t: variable-size inline array:
 		 * memory_object_attr_info_t (5 ints)
@@ -478,3 +493,5 @@ import <mach/mig.h>;
 import <mach/mach_types.h>;
 
 #endif	/* _MACH_MACH_TYPES_DEFS_ */
+
+/* vim: set ft=c : */

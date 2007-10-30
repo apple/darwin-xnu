@@ -42,22 +42,25 @@
 .Sh SYNOPSIS
 .Fd #include <signal.h>
 .Ft int
-.Fn kill "pid_t pid" "int sig"
+.Fo kill
+.Fa "pid_t pid"
+.Fa "int sig"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn kill
-function sends the signal given by
+function sends the signal specified by
 .Fa sig
 to
 .Fa pid ,
 a
 process or a group of processes.
+Typically,
 .Fa Sig
-may be one of the signals specified in
-.Xr sigaction 2
-or it may be 0, in which case
-error checking is performed but no
-signal is actually sent. 
+will be one of the signals specified in
+.Xr sigaction 2 .
+A value of 0, however,
+will cause error checking to be performed (with no signal being sent). 
 This can be used to check the validity of
 .Fa pid .
 .Pp
@@ -67,8 +70,8 @@ by
 the real or effective user ID of the receiving process must match
 that of the sending process or the user must have appropriate privileges
 (such as given by a set-user-ID program or the user is the super-user).
-A single exception is the signal SIGCONT, which may always be sent
-to any descendant of the current process.
+A single exception is the signal SIGCONT,
+which may always be sent to any descendant of the current process.
 .Bl -tag -width Ds
 .It \&If Fa pid No \&is greater than zero :
 .Fa Sig
@@ -77,16 +80,17 @@ is sent to the process whose ID is equal to
 .It \&If Fa pid No \&is zero :
 .Fa Sig
 is sent to all processes whose group ID is equal
-to the process group ID of the sender, and for which the
-process has permission;
+to the process group ID of the sender,
+and for which the process has permission;
 this is a variant of
 .Xr killpg 2 .
 .It \&If Fa pid No \&is -1 :
 If the user has super-user privileges,
 the signal is sent to all processes excluding
 system processes and the process sending the signal.
-If the user is not the super user, the signal is sent to all processes
-with the same uid as the user excluding the process sending the signal.
+If the user is not the super user,
+the signal is sent to all processes with the same uid as the user,
+excluding the process sending the signal.
 No error is returned if any process could be signaled.
 .El
 .Pp
@@ -105,24 +109,29 @@ is set to indicate the error.
 .Fn Kill
 will fail and no signal will be sent if:
 .Bl -tag -width Er
+.\" ==========
 .It Bq Er EINVAL
 .Fa Sig
-is not a valid signal number.
-.It Bq Er ESRCH
-No process can be found corresponding to that specified by
-.Fa pid .
-.It Bq Er ESRCH
-The process id was given as 0
-but the sending process does not have a process group.
+is not a valid, supported signal number.
+.\" ==========
 .It Bq Er EPERM
 The sending process is not the super-user and its effective
 user id does not match the effective user-id of the receiving process.
 When signaling a process group, this error is returned if any members
 of the group could not be signaled.
+.\" ==========
+.It Bq Er ESRCH
+No process or process group can be found
+corresponding to that specified by
+.Fa pid .
+.\" ==========
+.It Bq Er ESRCH
+The process id was given as 0,
+but the sending process does not have a process group.
 .El
 .Sh SEE ALSO
-.Xr getpid 2 ,
 .Xr getpgrp 2 ,
+.Xr getpid 2 ,
 .Xr killpg 2 ,
 .Xr sigaction 2
 .Sh STANDARDS

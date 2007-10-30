@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -58,9 +64,8 @@
  *	@(#)fdesc_vfsops.c	8.10 (Berkeley) 5/14/95
  *
  */
-
 /*
- * /dev/fd Filesystem
+* /dev/fd Filesystem
  */
 
 #include <sys/param.h>
@@ -79,8 +84,8 @@
 /*
  * Mount the per-process file descriptors (/dev/fd)
  */
-int
-fdesc_mount(struct mount *mp, vnode_t devvp, __unused user_addr_t data, vfs_context_t context)
+static int
+fdesc_mount(struct mount *mp, __unused vnode_t devvp, __unused user_addr_t data, __unused vfs_context_t context)
 {
 	int error = 0;
 	struct fdescmount *fmp;
@@ -114,20 +119,14 @@ fdesc_mount(struct mount *mp, vnode_t devvp, __unused user_addr_t data, vfs_cont
 	return (0);
 }
 
-int
-fdesc_start(mp, flags, context)
-	struct mount *mp;
-	int flags;
-	vfs_context_t context;
+static int
+fdesc_start(__unused struct mount *mp, __unused int flags, __unused vfs_context_t context)
 {
 	return (0);
 }
 
-int
-fdesc_unmount(mp, mntflags, context)
-	struct mount *mp;
-	int mntflags;
-	vfs_context_t context;
+static int
+fdesc_unmount(struct mount *mp, int mntflags, __unused vfs_context_t context)
 {
 	int error;
 	int flags = 0;
@@ -156,16 +155,13 @@ fdesc_unmount(mp, mntflags, context)
 	 * Finally, throw away the fdescmount structure
 	 */
 	_FREE(mp->mnt_data, M_UFSMNT);	/* XXX */
-	mp->mnt_data = 0;
+	mp->mnt_data = NULL;
 
 	return (0);
 }
 
 int
-fdesc_root(mp, vpp, context)
-	struct mount *mp;
-	struct vnode **vpp;
-	vfs_context_t context;
+fdesc_root(struct mount *mp, struct vnode **vpp, __unused vfs_context_t context)
 {
 	struct vnode *vp;
 
@@ -178,13 +174,14 @@ fdesc_root(mp, vpp, context)
 	return (0);
 }
 
+#if 0
+/*
+ * XXX commented out in mount.h
+ */
 int
-fdesc_statfs(mp, sbp, context)
-	struct mount *mp;
-	struct vfsstatfs *sbp;
-	vfs_context_t context;
+fdesc_statfs(__unused struct mount *mp, struct vfsstatfs *sbp, vfs_context_t context)
 {
-	struct proc *p = vfs_context_proc(context);
+	proc_t p = vfs_context_proc(context);
 	struct filedesc *fdp;
 	int lim;
 	int i;
@@ -224,9 +221,10 @@ fdesc_statfs(mp, sbp, context)
 
 	return (0);
 }
+#endif	/* 0 */
 
 static int
-fdesc_vfs_getattr(mount_t mp, struct vfs_attr *fsap, vfs_context_t context)
+fdesc_vfs_getattr(__unused mount_t mp, struct vfs_attr *fsap, vfs_context_t context)
 {
 	VFSATTR_RETURN(fsap, f_bsize, DEV_BSIZE);
 	VFSATTR_RETURN(fsap, f_iosize, DEV_BSIZE);
@@ -240,7 +238,7 @@ fdesc_vfs_getattr(mount_t mp, struct vfs_attr *fsap, vfs_context_t context)
 	    VFSATTR_IS_ACTIVE(fsap, f_files) ||
 	    VFSATTR_IS_ACTIVE(fsap, f_ffree))
 	{
-		struct proc *p = vfs_context_proc(context);
+		proc_t p = vfs_context_proc(context);
 		struct filedesc *fdp;
 		int lim;
 		int i;
@@ -278,11 +276,8 @@ fdesc_vfs_getattr(mount_t mp, struct vfs_attr *fsap, vfs_context_t context)
 	return 0;
 }
 
-int
-fdesc_sync(mp, waitfor, context)
-	struct mount *mp;
-	int waitfor;
-	vfs_context_t context;
+static int
+fdesc_sync(__unused struct mount *mp, __unused int waitfor, __unused vfs_context_t context)
 {
 
 	return (0);
@@ -300,10 +295,13 @@ struct vfsops fdesc_vfsops = {
 	fdesc_root,
 	NULL, 			/* quotactl */
 	fdesc_vfs_getattr,
+/*	fdesc_statfs,	XXX commented out in mount.h */
 	fdesc_sync,
 	fdesc_vget,
 	fdesc_fhtovp,
 	fdesc_vptofh,
 	fdesc_init,
-	fdesc_sysctl
+	fdesc_sysctl,
+	NULL,
+	{NULL}
 };

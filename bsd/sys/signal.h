@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -66,8 +72,10 @@
 #include <sys/cdefs.h>
 #include <sys/appleapiopts.h>
 
-#if !defined(_ANSI_SOURCE) && !defined(_POSIX_C_SOURCE)
-#define NSIG	32		/* counting 0; could be 33 (mask is 1-32) */
+#define __DARWIN_NSIG	32	/* counting 0; could be 33 (mask is 1-32) */
+
+#if !defined(_ANSI_SOURCE) && (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE))
+#define NSIG	__DARWIN_NSIG
 #endif
 
 #include <machine/signal.h>	/* sigcontext; codes for SIGILL, SIGFPE */
@@ -78,12 +86,12 @@
 #define	SIGILL	4	/* illegal instruction (not reset when caught) */
 #define	SIGTRAP	5	/* trace trap (not reset when caught) */
 #define	SIGABRT	6	/* abort() */
-#if  defined(_POSIX_C_SOURCE)
+#if  (defined(_POSIX_C_SOURCE) && !defined(_DARWIN_C_SOURCE))
 #define	SIGPOLL	7	/* pollable event ([XSR] generated, not supported) */
-#else	/* !_POSIX_C_SOURCE */
+#else	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 #define	SIGIOT	SIGABRT	/* compatibility */
 #define	SIGEMT	7	/* EMT instruction */
-#endif	/* !_POSIX_C_SOURCE */
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 #define	SIGFPE	8	/* floating point exception */
 #define	SIGKILL	9	/* kill (cannot be caught or ignored) */
 #define	SIGBUS	10	/* bus error */
@@ -99,21 +107,21 @@
 #define	SIGCHLD	20	/* to parent on child stop or exit */
 #define	SIGTTIN	21	/* to readers pgrp upon background tty read */
 #define	SIGTTOU	22	/* like TTIN for output if (tp->t_local&LTOSTOP) */
-#if  !defined(_POSIX_C_SOURCE)
+#if  (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE))
 #define	SIGIO	23	/* input/output possible signal */
 #endif
 #define	SIGXCPU	24	/* exceeded CPU time limit */
 #define	SIGXFSZ	25	/* exceeded file size limit */
 #define	SIGVTALRM 26	/* virtual time alarm */
 #define	SIGPROF	27	/* profiling time alarm */
-#if  !defined(_POSIX_C_SOURCE)
+#if  (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE))
 #define SIGWINCH 28	/* window size changes */
 #define SIGINFO	29	/* information request */
 #endif
 #define SIGUSR1 30	/* user defined signal 1 */
 #define SIGUSR2 31	/* user defined signal 2 */
 
-#if defined(_ANSI_SOURCE) || defined(_POSIX_C_SOURCE) || defined(__cplusplus)
+#if defined(_ANSI_SOURCE) || __DARWIN_UNIX03 || defined(__cplusplus)
 /*
  * Language spec sez we must list exactly one parameter, even though we
  * actually supply three.  Ugh!
@@ -134,17 +142,16 @@
 #ifndef _ANSI_SOURCE
 #include <sys/_types.h>
 
-#ifndef _MCONTEXT_T
-#define _MCONTEXT_T
-typedef __darwin_mcontext_t		mcontext_t;
-#endif
-
-#ifndef _POSIX_C_SOURCE
-#ifndef _MCONTEXT64_T
-#define _MCONTEXT64_T
-typedef __darwin_mcontext64_t		mcontext64_t;
-#endif
-#endif /* _POSIX_C_SOURCE */
+#define __need_mcontext_t
+#define __need_stack_t
+#define __need_ucontext_t
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+#if defined(__ppc__) || defined(__ppc64__)
+#define __need_mcontext64_t
+#define __need_ucontext64_t
+#endif /* __ppc__  || __ppc64__ */
+#endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
+#include <sys/_structs.h>
 
 #ifndef _PID_T
 #define _PID_T
@@ -165,18 +172,6 @@ typedef __darwin_sigset_t		sigset_t;
 #define	_SIZE_T
 typedef	__darwin_size_t			size_t;
 #endif
-
-#ifndef _UCONTEXT_T
-#define _UCONTEXT_T
-typedef __darwin_ucontext_t		ucontext_t;
-#endif
-
-#ifndef _POSIX_C_SOURCE
-#ifndef _UCONTEXT64_T
-#define _UCONTEXT64_T
-typedef __darwin_ucontext64_t		ucontext64_t;
-#endif
-#endif /* _POSIX_C_SOURCE */
 
 #ifndef _UID_T
 #define _UID_T
@@ -201,7 +196,6 @@ struct sigevent {
 	pthread_attr_t	*sigev_notify_attributes;	/* Notification attributes */
 };
 
-// LP64todo - should this move?
 #ifdef BSD_KERNEL_PRIVATE
 
 union user_sigval {
@@ -232,7 +226,7 @@ typedef struct __siginfo {
 	void	*si_addr;		/* faulting instruction */
 	union sigval si_value;		/* signal value */
 	long	si_band;		/* band event for SIGPOLL */
-	unsigned long	pad[7];		/* Reserved for Future Use */
+	unsigned long	__pad[7];	/* Reserved for Future Use */
 } siginfo_t;
 
 #ifdef BSD_KERNEL_PRIVATE
@@ -244,7 +238,7 @@ typedef struct __user_siginfo {
 	pid_t		si_pid;		/* sending process */
 	uid_t		si_uid;		/* sender's ruid */
 	int		si_status;	/* exit value */
-	user_addr_t	si_addr;	/* faulting instruction */
+	user_addr_t	si_addr;	/* faulting instruction (see below) */
 	union user_sigval si_value;	/* signal value */
 	user_long_t	si_band;	/* band event for SIGPOLL */
 	user_ulong_t	pad[7];		/* Reserved for Future Use */
@@ -253,19 +247,20 @@ typedef struct __user_siginfo {
 #endif	/* BSD_KERNEL_PRIVATE */
 
 /* 
- * Incase of SIGILL and SIGFPE, si_addr contains the address of 
- *  faulting instruction.
- * Incase of SIGSEGV and SIGBUS, si_addr contains address of 
- *  faulting memory reference.
- * Incase of SIGCHLD, si_pid willhave child process ID,
- *  si_status will contain exit value or signal.
- *  si_uid contains real user ID of the process that sent the signal
+ * When the signal is SIGILL or SIGFPE, si_addr contains the address of 
+ * the faulting instruction.
+ * When the signal is SIGSEGV or SIGBUS, si_addr contains the address of 
+ * the faulting memory reference. Although for x86 there are cases of SIGSEGV
+ * for which si_addr cannot be determined and is NULL. 
+ * If the signal is SIGCHLD, the si_pid field will contain the child process ID,
+ *  si_status contains the exit value or signal and
+ *  si_uid contains the real user ID of the process that sent the signal.
  */
 
 /* Values for si_code */
 
 /* Codes for SIGILL */
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	ILL_NOOP	0	/* if only I knew... */
 #endif
 #define	ILL_ILLOPC	1	/* [XSI] illegal opcode */
@@ -278,7 +273,7 @@ typedef struct __user_siginfo {
 #define	ILL_BADSTK	8	/* [XSI] internal stack error -NOTIMP */
 
 /* Codes for SIGFPE */
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	FPE_NOOP	0	/* if only I knew... */
 #endif
 #define FPE_FLTDIV	1	/* [XSI] floating point divide by zero */
@@ -291,14 +286,14 @@ typedef struct __user_siginfo {
 #define	FPE_INTOVF	8	/* [XSI] integer overflow -NOTIMP */
 
 /* Codes for SIGSEGV */
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	SEGV_NOOP	0	/* if only I knew... */
 #endif
 #define	SEGV_MAPERR	1	/* [XSI] address not mapped to object */
 #define	SEGV_ACCERR	2	/* [XSI] invalid permission for mapped object */
 
 /* Codes for SIGBUS */
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	BUS_NOOP	0	/* if only I knew... */
 #endif
 #define	BUS_ADRALN	1	/* [XSI] Invalid address alignment */
@@ -310,7 +305,7 @@ typedef struct __user_siginfo {
 #define	TRAP_TRACE	2	/* [XSI] Process trace trap -NOTIMP */
 
 /* Codes for SIGCHLD */
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	CLD_NOOP	0	/* if only I knew... */
 #endif
 #define	CLD_EXITED	1	/* [XSI] child has exited */
@@ -389,17 +384,24 @@ struct	__user_sigaction {
 
 #define SA_ONSTACK	0x0001	/* take signal on signal stack */
 #define SA_RESTART	0x0002	/* restart system on signal return */
-#define	SA_DISABLE	0x0004	/* disable taking signals on alternate stack */
+#ifdef	BSD_KERNEL_PRIVATE
+#define	SA_DISABLE	0x0004	/* disable taking signals on alternate stack - for user_sigaltstack.ss_flags only */
+#endif	/* BSD_KERNEL_PRIVATE */
 #define	SA_RESETHAND	0x0004	/* reset to SIG_DFL when taking signal */
 #define SA_NOCLDSTOP	0x0008	/* do not generate SIGCHLD on child stop */
 #define	SA_NODEFER	0x0010	/* don't mask the signal we're delivering */
 #define	SA_NOCLDWAIT	0x0020	/* don't keep zombies around */
 #define	SA_SIGINFO	0x0040	/* signal handler with SA_SIGINFO args */
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	SA_USERTRAMP	0x0100	/* do not bounce off kernel's sigtramp */
 /* This will provide 64bit register set in a 32bit user address space */
 #define	SA_64REGSET	0x0200	/* signal handler with SA_SIGINFO args with 64bit regs information */
-#endif /* !_POSIX_C_SOURCE */
+#endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
+
+/* the following are the only bits we support from user space, the 
+ * rest are for kernel use only.
+ */
+#define SA_USERSPACE_MASK (SA_ONSTACK | SA_RESTART | SA_RESETHAND | SA_NOCLDSTOP | SA_NODEFER | SA_NOCLDWAIT | SA_SIGINFO)
 
 /*
  * Flags for sigprocmask:
@@ -415,7 +417,7 @@ struct	__user_sigaction {
 #define SI_ASYNCIO	0x10004	/* [CX] aio request completion */
 #define SI_MESGQ	0x10005	/* [CX]	from message arrival on empty queue */
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 typedef	void (*sig_t)(int);	/* type of signal function */
 #endif
 
@@ -432,17 +434,12 @@ struct  user_sigaltstack {
 
 #endif	/* BSD_KERNEL_PRIVATE */
 
-#ifndef _STACK_T
-#define _STACK_T
-typedef __darwin_stack_t stack_t;
-#endif
-
 #define SS_ONSTACK	0x0001	/* take signal on signal stack */
 #define	SS_DISABLE	0x0004	/* disable taking signals on alternate stack */
 #define	MINSIGSTKSZ	32768	/* (32K)minimum allowable stack */
 #define	SIGSTKSZ	131072	/* (128K)recommended stack size */
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /*
  * 4.3 compatibility:
  * Signal vector "template" used in sigvec call.
@@ -461,7 +458,7 @@ struct	sigvec {
 #define SV_SIGINFO	SA_SIGINFO
 
 #define sv_onstack sv_flags	/* isn't compatibility wonderful! */
-#endif /* !_POSIX_C_SOURCE */
+#endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 /*
  * Structure used in sigstack call.
@@ -471,7 +468,7 @@ struct	sigstack {
 	int	ss_onstack;		/* current status */
 };
 
-#ifndef _POSIX_C_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /*
  * Macro for converting signal number to a mask suitable for
  * sigblock().
@@ -491,7 +488,7 @@ struct	sigstack {
 
 #define	BADSIG		SIG_ERR
 
-#endif	/* !_POSIX_C_SOURCE */
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 #endif	/* !_ANSI_SOURCE */
 
 /*

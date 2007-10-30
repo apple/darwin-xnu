@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2002-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <vc.h>
@@ -28,7 +34,7 @@
 #include <mach/mach_time.h>
 #include <sys/errno.h>
 #include <string.h>
-
+#include <machine/machlimits.h>
 
 extern struct vc_info vinfo;
 extern boolean_t panicDialogDesired;
@@ -37,17 +43,18 @@ extern boolean_t panicDialogDesired;
 
 void panic_ui_initialize(const unsigned char * system_clut);
 int panic_dialog_set_image( const unsigned char * ptr, unsigned int size );
-void panic_dialog_get_image( unsigned char ** ptr, unsigned int * size );
+void panic_dialog_get_image(const unsigned char **ptr, unsigned int *size);
 void draw_panic_dialog( void );
 void panic_dialog_test( void );
 
 static int panic_dialog_verify( const struct panicimage * data, unsigned int size );
 static int pixels_needed_to_blit_digit( int digit );
 static void blit_digit( int digit );
-static char * strnstr(const char * s, const char * find, size_t slen);
+static const char * strnstr(const char * s, const char * find, size_t slen);
 static void dim_screen(void);
-static void panic_blit_rect(unsigned int x, unsigned int y, unsigned int width, unsigned int height,
-							int transparent, unsigned char * dataPtr );
+static void panic_blit_rect(unsigned int x, unsigned int y, unsigned int width,
+			    unsigned int height, int transparent,
+			    const unsigned char * dataPtr);
 
 static int panic_info_x;
 static int panic_info_y;
@@ -60,14 +67,16 @@ static const struct panicimage * panic_dialog = NULL;		/* the active panic dialo
 static const unsigned char * panic_dialog_data = NULL;		/* where the image data starts */
 static const unsigned char * panic_dialog_clut = NULL;		/* where the clut used for the image starts */
 
-static unsigned char * curr_image_ptr = NULL;				/* If NULL, the default panic dialog is active */
+static const unsigned char *curr_image_ptr; /* If NULL, the default panic
+					       dialog is active */
 static unsigned int curr_image_size = 0;
 
 #define FONT_WIDTH	8
 #define FONT_HEIGHT	16
 static unsigned short rendered_font[FONT_HEIGHT][FONT_WIDTH];
 
-static char versionbuf[20];		/* ####.###~###\0 */
+#define VERSIONBUF_LEN 20
+static char versionbuf[VERSIONBUF_LEN];		/* ####.###~###\0 */
 
 #define isdigit(d) ((d) >= '0' && (d) <= '9')
 
@@ -81,31 +90,29 @@ static char versionbuf[20];		/* ####.###~###\0 */
 
 extern unsigned char iso_font[];
 extern const char version[];
-extern unsigned int panic_caller;
 
 void
 panic_ui_initialize(const unsigned char * system_clut)
 {
-	char vstr[20];
-
+	char vstr[VERSIONBUF_LEN];
 
 	panic_dialog_set_image( NULL, 0 );
 
 	active_clut = system_clut;
 
-	strcpy(vstr, "custom");
+	strlcpy(vstr, "custom", VERSIONBUF_LEN);
 
 	/* Convert xnu-####.###.obj~### into ####.###~### */
 
 	if (version) {
-		char * versionpos = strnstr(version, "xnu-", 20);
+		const char *versionpos = strnstr(version, "xnu-", VERSIONBUF_LEN);
 
 		if (versionpos) {
 			int len, i;
 
 			vstr[0] = '\0';
 
-			for (i=0,len=4;len<20;len++) {
+			for (i = 0, len = 4; len < VERSIONBUF_LEN; len++) {
 				if (isdigit(versionpos[len]) || versionpos[len] == '.') {	/* extract ####.###. */
 					vstr[i++] = versionpos[len];
 					continue;
@@ -116,7 +123,7 @@ panic_ui_initialize(const unsigned char * system_clut)
 			if ( versionpos[len-1] == '.' )     		/* remove trailing period if present */
 				i--;
 
-			for (;len<20;len++) {						/* skip to next digit if present */
+			for (; len < VERSIONBUF_LEN; len++) {						/* skip to next digit if present */
 				if ( !isdigit(versionpos[len]) )
 					continue;
 				break;
@@ -124,7 +131,7 @@ panic_ui_initialize(const unsigned char * system_clut)
 
 			if ( versionpos[len-1] == '~' ) {				/* extract ~### if present */
 				vstr[i++] = versionpos[len-1];
-				for (;len<20;len++) {						/* extract ### */
+				for (; len < VERSIONBUF_LEN; len++) {						/* extract ### */
 					if ( isdigit(versionpos[len]) ) {
 						vstr[i++] = versionpos[len];
 						continue;
@@ -137,7 +144,7 @@ panic_ui_initialize(const unsigned char * system_clut)
 		}
 	}
 
-	strcpy(versionbuf, vstr);
+	strlcpy(versionbuf, vstr, VERSIONBUF_LEN);
 }
 
 
@@ -148,12 +155,12 @@ panic_dialog_test( void )
 	boolean_t o_panicDialogDrawn = panicDialogDrawn;
 	boolean_t o_panicDialogDesired = panicDialogDesired;
 	unsigned int o_logPanicDataToScreen = logPanicDataToScreen;
-	unsigned int o_panic_caller = panic_caller;
+	unsigned long o_panic_caller = panic_caller;
 	unsigned int o_panicDebugging = panicDebugging;
 
 
 	panicDebugging = TRUE;
-	panic_caller = (unsigned int) __builtin_return_address(0);
+	panic_caller = (unsigned long)(char *)__builtin_return_address(0);
 	logPanicDataToScreen = FALSE;
 	panicDialogDesired = TRUE;
 	panicDialogDrawn = FALSE;
@@ -194,8 +201,9 @@ draw_panic_dialog( void )
 			pd_y = (vinfo.v_height/2) - panic_dialog->pd_height/2;
 		
 			/*  draw panic dialog at pd_x/pd_y */
-			panic_blit_rect( pd_x, pd_y, panic_dialog->pd_width, panic_dialog->pd_height, 
-										 0, (unsigned char*) panic_dialog_data);
+			panic_blit_rect(pd_x, pd_y, panic_dialog->pd_width,
+					panic_dialog->pd_height, 0,
+					panic_dialog_data);
 		
 			panic_dialog_count = 0;		/* number of info items to display at the bottom of dialog */
 
@@ -397,7 +405,7 @@ panic_dialog_set_image( const unsigned char * ptr, unsigned int size )
 		newsize = sizeof(struct panicimage) + newimage->pd_dataSize;
 	}
 	else {
-		newimage = (struct panicimage *) ptr;
+		newimage = (const struct panicimage *)ptr;
 		newsize = size;
 	}
 
@@ -408,7 +416,7 @@ panic_dialog_set_image( const unsigned char * ptr, unsigned int size )
 	panic_dialog_data = &panic_dialog->data[0];
 	panic_dialog_clut = &panic_dialog->data[panic_dialog->pd_dataSize-CLUT_SIZE];
 
-	curr_image_ptr = (unsigned char *) ptr;
+	curr_image_ptr = ptr;
 	curr_image_size = size;
 
 	return (0);
@@ -421,7 +429,7 @@ panic_dialog_set_image( const unsigned char * ptr, unsigned int size )
  */
 
 void
-panic_dialog_get_image( unsigned char ** ptr, unsigned int * size )
+panic_dialog_get_image(const unsigned char ** ptr, unsigned int * size )
 {
 	*ptr =  curr_image_ptr;
 	*size = curr_image_size;
@@ -462,13 +470,18 @@ panic_dialog_verify( const struct panicimage * newimage, unsigned int size )
 
 
 static const struct rendered_num * find_rendered_digit( int digit );
-static void panic_blit_rect_8(	unsigned int x, unsigned int y, unsigned int width, unsigned int height,
-								int transparent, unsigned char * dataPtr );
-static void panic_blit_rect_16(	unsigned int x, unsigned int y, unsigned int width, unsigned int height,
-								int transparent, unsigned char * dataPtr );
-static void panic_blit_rect_32(	unsigned int x, unsigned int y, unsigned int width, unsigned int height,
-								int transparent, unsigned char * dataPtr );
-static int decode_rle( unsigned char * dataPtr, unsigned int * quantity, unsigned int * depth, unsigned char ** value );
+static void panic_blit_rect_8(unsigned int x, unsigned int y,
+			      unsigned int width, unsigned int height,
+			      int transparent, const unsigned char *dataPtr);
+static void panic_blit_rect_16(unsigned int x, unsigned int y,
+			       unsigned int width, unsigned int height,
+			       int transparent, const unsigned char *dataPtr);
+static void panic_blit_rect_32(unsigned int x, unsigned int y,
+			       unsigned int width, unsigned int height,
+			       int transparent, const unsigned char *dataPtr);
+static int decode_rle(const unsigned char *dataPtr,
+		      unsigned int *quantity, unsigned int *depth,
+		      const unsigned char **value);
 
 
 /* Utilities to convert 8 bit/gray */
@@ -479,7 +492,7 @@ static unsigned char findbestgray( unsigned int color24 );
 static int isActiveClutOK( void );
 
 static int
-pixels_needed_to_blit_digit( int digit )
+pixels_needed_to_blit_digit(__unused int digit )
 {
 	return FONT_WIDTH;
 }
@@ -506,7 +519,8 @@ find_rendered_digit( int digit )
 static void 
 blit_digit( int digit )
 {
-	unsigned char * raw_data = (unsigned char *) find_rendered_digit( digit );
+	const unsigned char *raw_data =
+		(const unsigned char *)find_rendered_digit(digit);
 	unsigned width = FONT_WIDTH, height = FONT_HEIGHT;
 	int row;
 
@@ -531,9 +545,9 @@ blit_digit( int digit )
 
 
 static void 
-panic_blit_rect(	unsigned int x, unsigned int y,
-					unsigned int width, unsigned int height,
-					int transparent, unsigned char * dataPtr )
+panic_blit_rect(unsigned int x, unsigned int y, unsigned int width,
+		unsigned int height, int transparent,
+		const unsigned char *dataPtr)
 {
 	if(!vinfo.v_depth)
 		return;
@@ -557,15 +571,15 @@ panic_blit_rect(	unsigned int x, unsigned int y,
  */
 
 static void 
-panic_blit_rect_8(	unsigned int x, unsigned int y,
-					unsigned int width, unsigned int height,
-					int transparent, unsigned char * dataPtr )
+panic_blit_rect_8(unsigned int x, unsigned int y, unsigned int width,
+		  unsigned int height, __unused int transparent,
+		  const unsigned char * dataPtr)
 {
 	volatile unsigned char * dst;
 	unsigned int line, col, i;
 	static int clutOK = -1;
 	unsigned int data, quantity, depth;
-	unsigned char * value;
+	const unsigned char *value;
 	
 
 	if ( clutOK == -1 )
@@ -609,16 +623,16 @@ panic_blit_rect_8(	unsigned int x, unsigned int y,
  *	pixel values (RGB) and writes each pixel to the screen.
  */
 
- static void 
- panic_blit_rect_16(	unsigned int x, unsigned int y,
-			 			unsigned int width, unsigned int height,
-			 			int transparent, unsigned char * dataPtr )
- {
+static void 
+panic_blit_rect_16(unsigned int x, unsigned int y, unsigned int width,
+		   unsigned int height, __unused int transparent,
+		   const unsigned char *dataPtr)
+{
 
 	volatile unsigned short * dst;
 	unsigned int line, col, i;
 	unsigned int  quantity, index, data, depth;
-	unsigned char * value;
+	const unsigned char *value;
 
 	dst = (volatile unsigned short *) (vinfo.v_baseaddr +
 									  (y * vinfo.v_rowbytes) +
@@ -659,15 +673,15 @@ panic_blit_rect_8(	unsigned int x, unsigned int y,
  *	 writes it to the screen.
  */	
 
- static void 
- panic_blit_rect_32(	unsigned int x, unsigned int y,
-			 			unsigned int width, unsigned int height,
-			 			int transparent, unsigned char * dataPtr )
- {
+static void 
+panic_blit_rect_32(unsigned int x, unsigned int y, unsigned int width,
+		   unsigned int height, __unused int transparent,
+		   const unsigned char *dataPtr)
+{
 	volatile unsigned int * dst;
 	unsigned int line, col, i;
 	unsigned int quantity, index, data, depth;
-	unsigned char * value;
+	const unsigned char *value;
 
 
 	dst = (volatile unsigned int *) (vinfo.v_baseaddr +
@@ -730,7 +744,8 @@ panic_blit_rect_8(	unsigned int x, unsigned int y,
 */
 
 static int
-decode_rle( unsigned char * dataPtr, unsigned int * quantity, unsigned int * depth, unsigned char ** value )
+decode_rle(const unsigned char *dataPtr, unsigned int *quantity,
+	   unsigned int *depth, const unsigned char **value )
 {
 	unsigned int mask;
 	int i, runlen, runsize;
@@ -789,14 +804,15 @@ dim_screen(void)
 
 	for (row = p ; row < endp ; row += rowlongs) {
 		for (p = &row[0], col = 0; col < rowline; col++) {
-			*p++ = (*p >> 1) & mask;
+			*p = (*p >> 1) & mask;
+			++p;
 		}
 	}
 }
 
 
 /* From user mode Libc - this ought to be in a library */
-static char *
+static const char *
 strnstr(const char * s, const char * find, size_t slen)
 {
   char c, sc;
@@ -814,7 +830,7 @@ strnstr(const char * s, const char * find, size_t slen)
     } while (strncmp(s, find, len) != 0);
     s--; 
   }       
-  return ((char *)s);
+  return s;
 } 
 
 /*
@@ -863,7 +879,7 @@ findbestgray( unsigned int color24 )
 	}
 
 	/* Did we fail to find any grays ? */
-	if ( bestindex == -1 ) {
+	if (ULONG_MAX == bestindex) {
 		/* someday we should look for the best color match */
 		/* but for now just return the gray as the index */
 		/* at least there might be something readble on the display */
@@ -890,7 +906,7 @@ color24togray8( unsigned int color24 )
     Gray = (R*30) + (G*59) + (B*11);
     gray8 = (unsigned char) ((Gray + 50) / 100);
     return gray8;
-}       
+}
 
 
 static unsigned char

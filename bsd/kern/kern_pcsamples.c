@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <sys/kdebug.h>
@@ -50,7 +56,7 @@ unsigned int pcsample_end    = 0;
 
 static pid_t global_state_pid = -1;       /* Used to control exclusive use of pc_buffer */
 
-extern int pc_trace_buf[];
+extern unsigned int pc_trace_buf[];
 extern int pc_trace_cnt;
 
 void add_pcbuffer(void);
@@ -69,9 +75,10 @@ enable_branch_tracing(void)
 #ifndef i386
   struct proc *p;
   if (-1 != pc_sample_pid) {
-    p = pfind(pc_sample_pid);
+    p = proc_find(pc_sample_pid);
     if (p) {
-      p->p_flag |= P_BTRACE;
+      p->p_btrace = 1;
+	 proc_rele(p);
     } 
   }
   else {
@@ -96,9 +103,10 @@ disable_branch_tracing(void)
     case 0:
         break;
     default:
-        p = pfind(pc_sample_pid);
+        p = proc_find(pc_sample_pid);
         if (p) {
-            p->p_flag &= ~P_BTRACE;
+            p->p_btrace = 0;
+			proc_rele(p);
         }
         break;
     }
@@ -116,7 +124,7 @@ branch_tracing_enabled(void)
   struct proc *p = current_proc();
   if (TRUE == pc_trace_frameworks) return TRUE;
   if (p) {
-    return (P_BTRACE == (p->p_flag & P_BTRACE));
+    return (p->p_btrace);
   }
   return 0;
 }
@@ -242,13 +250,14 @@ pcsamples_control(int *name, __unused u_int namelen, user_addr_t where, size_t *
 	      global_state_pid = curpid;
 	    else if (global_state_pid != curpid)
 	      {
-		if((p = pfind(global_state_pid)) == NULL)
+		if((p = proc_find(global_state_pid)) == NULL)
 		  {
 		    /* The global pid no longer exists */
 		    global_state_pid = curpid;
 		  }
 		else
 		  {
+			proc_rele(p);
 		    /* The global pid exists, deny this request */
 		    return(EBUSY);
 		  }

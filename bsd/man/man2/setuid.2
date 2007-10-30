@@ -37,22 +37,29 @@
 .Dt SETUID 2
 .Os BSD 4.2
 .Sh NAME
-.Nm setuid ,
+.Nm setegid ,
 .Nm seteuid ,
 .Nm setgid ,
-.Nm setegid
+.Nm setuid
 .Nd set user and group ID
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
 .Fd #include <unistd.h>
 .Ft int
-.Fn setuid "uid_t uid"
+.Fo setegid
+.Fa "gid_t egid"
+.Fc
 .Ft int
-.Fn seteuid "uid_t euid"
+.Fo seteuid
+.Fa "uid_t euid"
+.Fc
 .Ft int
-.Fn setgid "gid_t gid"
+.Fo setgid
+.Fa "gid_t gid"
+.Fc
 .Ft int
-.Fn setegid "gid_t egid"
+.Fo setuid
+.Fa "uid_t uid"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn setuid
@@ -106,9 +113,38 @@ otherwise \-1 is returned.
 If the user is not the super user, or the uid
 specified is not the real, effective ID, or saved ID,
 these functions return \-1.
+.Pp
+.Sh ERRORS
+The
+.Fn setegid ,
+.Fn seteuid ,
+.Fn setgid ,
+and
+.Fn setuid
+system calls will fail if:
+.Bl -tag -width Er
+.\" ===========
+.It Bq Er EINVAL
+The value of the {group,user} ID argument is invalid
+and is not supported by the implementation.
+.\" ===========
+.It Bq Er EPERM
+The process does not have appropriate privileges and
+the ID argument
+does not match the real ID
+or the saved set-{group,user}-ID.
+.El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <unistd.h>
+.Pp
+The include file
+.In sys/types.h
+is necessary for all functions.
 .Sh SEE ALSO
+.Xr getgid 2 ,
 .Xr getuid 2 ,
-.Xr getgid 2
+.Xr compat 5
 .Sh STANDARDS
 The
 .Fn setuid

@@ -3,6 +3,32 @@
 ######################################################################
 
 #
+# ppc should be (mostly) warning free
+#
+CFLAGS+= $(WERROR)
+CWARNFLAGS= $(filter-out -Wbad-function-cast, $(CWARNFLAGS_STD))
+
+# Objects that don't compile cleanly:
+OBJS_NO_WERROR=                         \
+	UNDRequest.o			\
+	machine_routines.o		\
+	db_examine.o			\
+	db_macro.o			\
+	db_print.o			\
+	db_sym.o			\
+	db_variables.o			\
+	ppc_disasm.o			\
+	db_disasm.o			\
+	db_trace.o			\
+	db_low_trace.o			\
+	gssd_mach.o			\
+	kdp_machdep.o
+
+OBJS_WERROR=$(filter-out $(OBJS_NO_WERROR),$(OBJS))
+
+$(OBJS_WERROR):         WERROR=-Werror
+
+#
 # KDB support
 #
 
@@ -18,8 +44,9 @@ ppc_disasm.c ppc_disasm.h : $(SRCROOT)/osfmk/ppc/ppc_disasm.i makedis
 db_disasm.o : ppc_disasm.h
 
 # Files that must go in the __HIB segment:
-HIB_FILES=                              \
+UNCONFIGURED_HIB_FILES=                              \
            hibernate_restore.o
+HIB_FILES=$(filter $(UNCONFIGURED_HIB_FILES),$(OBJS))
 
 ######################################################################
 #END	Machine dependent Makefile fragment for ppc

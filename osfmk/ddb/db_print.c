@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -120,12 +126,6 @@ ipc_port_t db_lookup_port(
 	thread_t	thr_act,
 	int		id);
 
-static void db_print_port_id(
-	int		id,
-	ipc_port_t	port,
-	unsigned	bits,
-	int		n);
-
 void db_print_act(
 	thread_t 	thr_act,
 	int		act_id,
@@ -146,11 +146,8 @@ void db_system_stats(void);
 
 
 void
-db_show_regs(
-	db_expr_t	addr,
-	boolean_t	have_addr,
-	db_expr_t	count,
-	char		*modif)
+db_show_regs(db_expr_t addr, boolean_t have_addr, __unused db_expr_t count,
+	     char *modif)
 {
 	register struct db_variable *regp;
 	db_expr_t	value;
@@ -164,9 +161,9 @@ db_show_regs(
 	aux_param.thr_act = THREAD_NULL;
 	if (db_option(modif, 't')) {
 	    if (have_addr) {
-		if (!db_check_act_address_valid((thread_t)addr))
+		if (!db_check_act_address_valid((thread_t)(unsigned long)addr))
 		    return;
-		aux_param.thr_act = (thread_t)addr;
+		aux_param.thr_act = (thread_t)(unsigned long)addr;
 	    } else
 	        aux_param.thr_act = db_default_act;
 	    if (aux_param.thr_act != THREAD_NULL)
@@ -244,9 +241,7 @@ db_act_stat(
 }
 
 char *
-db_act_swap_stat(
-	register thread_t	thr_act,
-	char			*status)
+db_act_swap_stat(__unused thread_t thr_act, char *status)
 {
 	register char *p = status;
 	*p++ = 0;
@@ -254,8 +249,7 @@ db_act_swap_stat(
 	return status;
 }
 
-char	*policy_list[] = { "TS", "RR", "??", "FF",
-			   "??", "??", "??", "BE"};
+const char *policy_list[] = { "TS", "RR", "??", "FF", "??", "??", "??", "BE"};
 
 void
 db_print_act(
@@ -266,7 +260,7 @@ db_print_act(
 	thread_t athread;
 	char status[8];
 	char swap_status[3];
-	char *indent = "";
+	const char *indent = "";
 	int	 policy;
 
 	if (!thr_act) {
@@ -330,7 +324,7 @@ db_print_act(
 		if (!athread->kernel_stack) {
 		    if (athread->continuation) {
 			db_printf("(");
-			db_task_printsym((db_addr_t)athread->continuation,
+			db_task_printsym((db_addr_t)(unsigned long)athread->continuation,
 						DB_STGY_ANY, kernel_task);
 			db_printf(")");
 		    } else {
@@ -441,10 +435,7 @@ db_print_task(
 }
 
 void
-db_print_space(
-	task_t	task,
-	int	task_id,
-	int	flag)
+db_print_space(task_t task, int task_id, __unused int flag)
 {
 	ipc_space_t space;
 	thread_t act = (thread_t)queue_first(&task->threads);
@@ -460,11 +451,8 @@ db_print_space(
 }
 
 void
-db_print_task_vm(
-	task_t		task,
-	int		task_id,
-	boolean_t	title,
-	char		*modif)
+db_print_task_vm(task_t task, int task_id, boolean_t title,
+		 __unused char *modif)
 {
 	vm_map_t	map;
 	pmap_t		pmap;
@@ -479,7 +467,7 @@ db_print_task_vm(
 	map = task->map;
 	pmap = vm_map_pmap(map);
 
-	size = db_vm_map_total_size(map);
+	size = db_vm_map_total_size((unsigned long)map);
 	resident = pmap->stats.resident_count;
 	wired = pmap->stats.wired_count;
 
@@ -495,11 +483,8 @@ db_print_task_vm(
 
 
 void
-db_show_one_task_vm(
-	db_expr_t	addr,
-	boolean_t	have_addr,
-	db_expr_t	count,
-	char		*modif)
+db_show_one_task_vm(db_expr_t addr, boolean_t have_addr,
+		    __unused db_expr_t count, char *modif)
 {
 	thread_t	thread;
 	task_t		task;
@@ -514,7 +499,7 @@ db_show_one_task_vm(
 		}
 		task = thread->task;
 	} else {
-		task = (task_t) addr;
+		task = (task_t)(unsigned long)addr;
 	}
 
 	task_id = db_lookup_task(task);
@@ -527,19 +512,15 @@ db_show_one_task_vm(
 }
 
 void
-db_show_all_task_vm(
-	db_expr_t	addr,
-	boolean_t	have_addr,
-	db_expr_t	count,
-	char		*modif)
+db_show_all_task_vm(__unused db_expr_t addr, __unused boolean_t have_addr,
+		    __unused db_expr_t count, char *modif)
 {
 	task_t		task;
 	int		task_id;
 	boolean_t	title = TRUE;
-	processor_set_t	pset = &default_pset;
 
 	task_id = 0;
-	queue_iterate(&pset->tasks, task, task_t, pset_tasks) {
+	queue_iterate(&tasks, task, task_t, tasks) {
 		db_print_task_vm(task, task_id, title, modif);
 		title = FALSE;
 		task_id++;
@@ -547,16 +528,12 @@ db_show_all_task_vm(
 }
 
 void
-db_show_all_acts(
-	db_expr_t	addr,
-	boolean_t	have_addr,
-	db_expr_t	count,
-	char *		modif)
+db_show_all_acts(__unused db_expr_t addr, __unused boolean_t have_addr,
+		 __unused db_expr_t count, char *modif)
 {
 	task_t task;
 	int task_id;
 	int flag;
-	processor_set_t pset = &default_pset;
 
 	flag = OPTION_TASK_TITLE|OPTION_INDENT;
 	if (db_option(modif, 'u'))
@@ -565,7 +542,7 @@ db_show_all_acts(
 	    flag |= OPTION_LONG;
 
 	task_id = 0;
-	queue_iterate(&pset->tasks, task, task_t, pset_tasks) {
+	queue_iterate(&tasks, task, task_t, tasks) {
 		db_print_task(task, task_id, flag);
 		flag &= ~OPTION_TASK_TITLE;
 		task_id++;
@@ -575,11 +552,8 @@ db_show_all_acts(
 }
 
 void
-db_show_one_space(
-	db_expr_t	addr,
-	boolean_t	have_addr,
-	db_expr_t	count,
-	char *		modif)
+db_show_one_space(db_expr_t addr, boolean_t have_addr,
+		  __unused db_expr_t count, char *modif)
 {
 	int		flag;
 	int		task_id;
@@ -598,7 +572,7 @@ db_show_one_space(
 		/*NOTREACHED*/
 	    }
 	} else
-	    task = (task_t) addr;
+	    task = (task_t)(unsigned long)addr;
 
 	if ((task_id = db_lookup_task(task)) < 0) {
 	    db_printf("bad task address 0x%llx\n", (unsigned long long)addr);
@@ -611,16 +585,12 @@ db_show_one_space(
 }
 
 void
-db_show_all_spaces(
-	db_expr_t	addr,
-	boolean_t	have_addr,
-	db_expr_t	count,
-	char *		modif)
+db_show_all_spaces(__unused db_expr_t addr, __unused boolean_t have_addr,
+		   __unused db_expr_t count, char *modif)
 {
 	task_t task;
 	int task_id = 0;
 	int flag;
-	processor_set_t pset = &default_pset;
 
 	flag = OPTION_TASK_TITLE|OPTION_INDENT;
 	if (db_option(modif, 'u'))
@@ -629,7 +599,7 @@ db_show_all_spaces(
 	    flag |= OPTION_LONG;
 
 	db_printf(" ID: TASK     SPACE    MAP               COUNT\n");
-	queue_iterate(&pset->tasks, task, task_t, pset_tasks) {
+	queue_iterate(&tasks, task, task_t, tasks) {
 		db_print_space(task, task_id, flag);
 		task_id++;
 	}
@@ -642,12 +612,11 @@ db_task_from_space(
 {
 	task_t task;
 	int tid = 0;
-	processor_set_t pset = &default_pset;
 
-	queue_iterate(&pset->tasks, task, task_t, pset_tasks) {
+	queue_iterate(&tasks, task, task_t, tasks) {
 		if (task->itk_space == space) {
 			*task_id = tid;
-			return (db_addr_t)task;
+			return (db_addr_t)(unsigned long)task;
 		}
 		tid++;
 	}
@@ -656,11 +625,8 @@ db_task_from_space(
 }
 
 void
-db_show_one_act(
-	db_expr_t	addr,
-	boolean_t	have_addr,
-	db_expr_t	count,
-	char *		modif)
+db_show_one_act(db_expr_t addr, boolean_t have_addr, __unused db_expr_t	count,
+		char *modif)
 {
 	int		flag;
 	int		act_id;
@@ -679,7 +645,7 @@ db_show_one_act(
 		/*NOTREACHED*/
 	    }
 	} else
-	    thr_act = (thread_t) addr;
+	    thr_act = (thread_t)(unsigned long)addr;
 
 	if ((act_id = db_lookup_act(thr_act)) < 0) {
 	    db_printf("bad thr_act address %#llX\n", (unsigned long long)addr);
@@ -708,11 +674,8 @@ db_show_one_act(
 }
 
 void
-db_show_one_task(
-	db_expr_t	addr,
-	boolean_t	have_addr,
-	db_expr_t	count,
-	char *		modif)
+db_show_one_task(db_expr_t addr, boolean_t have_addr,
+		 __unused db_expr_t count, char *modif)
 {
 	int		flag;
 	int		task_id;
@@ -731,7 +694,7 @@ db_show_one_task(
 		/*NOTREACHED*/
 	    }
 	} else
-	    task = (task_t) addr;
+	    task = (task_t)(unsigned long)addr;
 
 	if ((task_id = db_lookup_task(task)) < 0) {
 	    db_printf("bad task address 0x%llX\n", (unsigned long long)addr);
@@ -743,16 +706,13 @@ db_show_one_task(
 }
 
 void
-db_show_shuttle(
-	db_expr_t	addr,
-	boolean_t	have_addr,
-	db_expr_t	count,
-	char *		modif)
+db_show_shuttle(db_expr_t addr, boolean_t have_addr, __unused db_expr_t	count,
+		__unused char *modif)
 {
 	thread_t			thread;
 
 	if (have_addr)
-	    thread = (thread_t) addr;
+	    thread = (thread_t)(unsigned long)addr;
 	else {
 	    thread = current_thread();
 	    if (thread == THREAD_NULL) {
@@ -782,12 +742,8 @@ void db_reset_print_entry(
 }
 
 void
-db_print_one_entry(
-	ipc_entry_t		entry,
-	int			index,
-	mach_port_name_t	name,
-	boolean_t		is_pset,
-	ipc_space_t		space)
+db_print_one_entry(ipc_entry_t entry, int index, mach_port_name_t name,
+		   boolean_t is_pset, __unused ipc_space_t space)
 {
 	ipc_port_t aport = (ipc_port_t)entry->ie_object;
 	ipc_entry_bits_t bits;
@@ -876,7 +832,7 @@ db_lookup_port(
 	if (thr_act == THREAD_NULL)
 	    return(0);
 	space = thr_act->task->itk_space;
-	if (id < 0 || id >= space->is_table_size)
+	if (id < 0 || (unsigned)id >= space->is_table_size)
 	    return(0);
 	entry = &space->is_table[id];
 	if (entry->ie_bits & MACH_PORT_TYPE_PORT_RIGHTS)
@@ -884,26 +840,9 @@ db_lookup_port(
 	return(0);
 }
 
-static void
-db_print_port_id(
-	int		id,
-	ipc_port_t	port,
-	unsigned	bits,
-	int		n)
-{
-	if (n != 0 && n % 3 == 0)
-	    db_printf("\n");
-	db_printf("\tport%d(%s,%x)", id,
-		(bits & MACH_PORT_TYPE_RECEIVE)? "r":
-		(bits & MACH_PORT_TYPE_SEND)? "s": "S", port);
-}
-
 void
-db_show_port_id(
-	db_expr_t	addr,
-	boolean_t	have_addr,
-	db_expr_t	count,
-	char *		modif)
+db_show_port_id(db_expr_t addr, boolean_t have_addr, __unused db_expr_t count,
+		char *modif)
 {
 	thread_t thr_act;
 
@@ -914,7 +853,7 @@ db_show_port_id(
 		/*NOTREACHED*/
 	    }
 	} else
-	    thr_act = (thread_t) addr;
+	    thr_act = (thread_t)(unsigned long)addr;
 	if (db_lookup_act(thr_act) < 0) {
 	    db_printf("Bad thr_act address 0x%llX\n", addr);
 	    db_error(0);
@@ -924,14 +863,13 @@ db_show_port_id(
 	    db_printf("\n");
 }
 
+extern void db_sched(void);
 /*
  *	Useful system state when the world has hung.
  */
 void
-db_system_stats()
+db_system_stats(void)
 {
-	extern void	db_sched(void);
-
 	db_sched();
 	iprintf("\n");
 	db_vm();
@@ -944,28 +882,23 @@ db_system_stats()
 void db_show_one_runq(run_queue_t runq);
 
 void
-db_show_runq(
-	db_expr_t	addr,
-	boolean_t	have_addr,
-	db_expr_t	count,
-	char *		modif)
+db_show_runq(__unused db_expr_t addr, __unused boolean_t have_addr,
+	     __unused db_expr_t count, __unused char *modif)
 {
-	processor_set_t pset = &default_pset;
 	processor_t proc;
 	run_queue_t runq;
 	boolean_t showedany = FALSE;
 
-	queue_iterate(&pset->processors, proc, processor_t, processors) {
+	for (proc = processor_list; proc != PROCESSOR_NULL; proc = proc->processor_list) {
 		runq = &proc->runq;
 		if (runq->count > 0) {
-		    db_printf("PROCESSOR %x IN SET %x\n", proc, pset);
+		    db_printf("PROCESSOR %x IN SET %x\n", proc, proc->processor_set);
 		    db_show_one_runq(runq);
 		    showedany = TRUE;
 		}
 	}
-	runq = &pset->runq;
-	if (runq->count > 0) {
-		db_printf("PROCESSOR SET %x\n", pset);
+	if (rt_runq.count > 0) {
+		db_printf("REAL TIME\n");
 		db_show_one_runq(runq);
 		showedany = TRUE;
 	}

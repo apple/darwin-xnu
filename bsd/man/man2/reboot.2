@@ -47,10 +47,14 @@
 .Fn reboot "int howto"
 .Sh DESCRIPTION
 .Fn Reboot
-reboots the system.
-Only the super-user may reboot a machine on demand.
-However, a reboot is invoked
-automatically in the event of unrecoverable system failures.
+reboots the system.  Only the super-user may reboot a machine on demand.
+However, a reboot may be invoked automatically in the event of
+unrecoverable system failures.  Programs other than
+.Xr reboot 8
+should not call
+.Fn reboot .
+.Xr Shutdown 8
+or a higher-level API will shut the system down cleanly.
 .Pp
 .Fa Howto
 is a mask of options; the system call interface allows the following
@@ -143,12 +147,10 @@ variable
 The caller is not the super-user.
 .El
 .Sh SEE ALSO
-.Xr kadb 4 ,
-.Xr crash 8 ,
+.Xr shutdown 8 ,
 .Xr halt 8 ,
-.Xr init 8 ,
-.Xr reboot 8 ,
-.Xr savecore 8
+.Xr launchd 8 ,
+.Xr reboot 8
 .Sh BUGS
 The HP300 implementation supports neither
 .Dv RB_DFLTROOT

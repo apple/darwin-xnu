@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1998, 1999 Apple Computer, Inc. All Rights Reserved */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -68,6 +74,12 @@
  *	New version based on 4.4
  *	Purged old history
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 #ifndef	_SYS_MBUF_H_
 #define	_SYS_MBUF_H_
@@ -100,16 +112,9 @@
  * Macros for type conversion
  * mtod(m,t) -	convert mbuf pointer to data pointer of correct type
  * dtom(x) -	convert data pointer within mbuf to mbuf pointer (XXX)
- * mtocl(x) -	convert pointer within cluster to cluster index #
- * cltom(x) -	convert cluster # to ptr to beginning of cluster
  */
 #define mtod(m,t)       ((t)m_mtod(m))
 #define dtom(x)         m_dtom(x)
-#define mtocl(x)        m_mtocl(x)
-#define cltom(x)        m_cltom(x)
-
-#define MCLREF(p)       m_mclref(p)
-#define MCLUNREF(p)     m_mclunref(p)
 
 /* header at beginning of each mbuf: */
 struct m_hdr {
@@ -144,7 +149,7 @@ struct	pkthdr {
 #endif KERNEL_PRIVATE
         int     csum_flags;             /* flags regarding checksum */       
         int     csum_data;              /* data field used by csum routines */
-	struct mbuf *aux;		/* extra data buffer; ipsec/others */
+	void	*reserved0;		/* unused, for future use */
 #ifdef KERNEL_PRIVATE
 	u_short	vlan_tag;		/* VLAN tag, host byte order */
 	u_short socket_id;		/* socket id */
@@ -164,6 +169,10 @@ struct m_ext {
 	struct	ext_refsq {		/* references held */
 		struct ext_refsq *forward, *backward;
 	} ext_refs;
+	struct ext_ref {
+		u_int32_t refcnt;
+		u_int32_t flags;
+	} *ext_refflags;
 };
 
 struct mbuf {
@@ -270,23 +279,6 @@ struct mbuf {
 #define	M_WAIT		M_WAITOK
 
 /*
- * mbuf utility macros:
- *
- *	MBUFLOCK(code)
- * prevents a section of code from from being interrupted by network
- * drivers.
- */
-
-#ifdef _KERN_LOCKS_H_
-extern lck_mtx_t * mbuf_mlock;
-#else
-extern void * mbuf_mlock;
-#endif
-
-#define MBUF_LOCK()	lck_mtx_lock(mbuf_mlock);
-#define MBUF_UNLOCK()	lck_mtx_unlock(mbuf_mlock);
-
-/*
  * mbuf allocation/deallocation macros:
  *
  *	MGET(struct mbuf *m, int how, int type)
@@ -302,8 +294,6 @@ extern void * mbuf_mlock;
 #else
 #define MCHECK(m)
 #endif
-
-extern struct mbuf *mfree;				/* mbuf free list */
 
 #define	MGET(m, how, type) ((m) = m_get((how), (type)))
 
@@ -341,6 +331,12 @@ union mbigcluster {
 	char 			mbc_buf[NBPG];
 };
 
+#define	M16KCLBYTES	(16 * 1024)
+
+union m16kcluster {
+	union m16kcluster	*m16kcl_next;
+	char			m16kcl_buf[M16KCLBYTES];
+};
 
 #define MCLHASREFERENCE(m) m_mclhasreference(m)
 
@@ -406,72 +402,114 @@ union mbigcluster {
 #endif /* KERNEL_PRIVATE */
 
 /*
- * Mbuf statistics.
+ * Mbuf statistics (legacy).
  */
-/* LP64todo - not 64-bit safe */
 struct mbstat {
-	u_long  m_mbufs;        /* mbufs obtained from page pool */
-	u_long  m_clusters;     /* clusters obtained from page pool */
-	u_long  m_spare;        /* spare field */
-	u_long  m_clfree;       /* free clusters */
-	u_long  m_drops;        /* times failed to find space */
-	u_long  m_wait;         /* times waited for space */
-	u_long  m_drain;        /* times drained protocols for space */
-	u_short m_mtypes[256];  /* type specific mbuf allocations */
-	u_long  m_mcfail;       /* times m_copym failed */
-	u_long  m_mpfail;       /* times m_pullup failed */
-	u_long  m_msize;        /* length of an mbuf */
-	u_long  m_mclbytes;     /* length of an mbuf cluster */
-	u_long  m_minclsize;    /* min length of data to allocate a cluster */
-	u_long  m_mlen;         /* length of data in an mbuf */
-	u_long  m_mhlen;        /* length of data in a header mbuf */
-	u_long  m_bigclusters;     /* clusters obtained from page pool */
-	u_long  m_bigclfree;       /* free clusters */
-	u_long  m_bigmclbytes;     /* length of an mbuf cluster */
+	u_int32_t	m_mbufs;	/* mbufs obtained from page pool */
+	u_int32_t	m_clusters;	/* clusters obtained from page pool */
+	u_int32_t	m_spare;	/* spare field */
+	u_int32_t	m_clfree;	/* free clusters */
+	u_int32_t	m_drops;	/* times failed to find space */
+	u_int32_t	m_wait;		/* times waited for space */
+	u_int32_t	m_drain;	/* times drained protocols for space */
+	u_short		m_mtypes[256];	/* type specific mbuf allocations */
+	u_int32_t	m_mcfail;	/* times m_copym failed */
+	u_int32_t	m_mpfail;	/* times m_pullup failed */
+	u_int32_t	m_msize;	/* length of an mbuf */
+	u_int32_t	m_mclbytes;	/* length of an mbuf cluster */
+	u_int32_t	m_minclsize;	/* min length of data to allocate a cluster */
+	u_int32_t	m_mlen;		/* length of data in an mbuf */
+	u_int32_t	m_mhlen;	/* length of data in a header mbuf */
+	u_int32_t	m_bigclusters;	/* clusters obtained from page pool */
+	u_int32_t	m_bigclfree;	/* free clusters */
+	u_int32_t	m_bigmclbytes;	/* length of an mbuf cluster */
 };
 
 /* Compatibillity with 10.3 */
 struct ombstat {
-	u_long	m_mbufs;	/* mbufs obtained from page pool */
-	u_long	m_clusters;	/* clusters obtained from page pool */
-	u_long	m_spare;	/* spare field */
-	u_long	m_clfree;	/* free clusters */
-	u_long	m_drops;	/* times failed to find space */
-	u_long	m_wait;		/* times waited for space */
-	u_long	m_drain;	/* times drained protocols for space */
-	u_short	m_mtypes[256];	/* type specific mbuf allocations */
-	u_long	m_mcfail;	/* times m_copym failed */
-	u_long	m_mpfail;	/* times m_pullup failed */
-	u_long	m_msize;	/* length of an mbuf */
-	u_long	m_mclbytes;	/* length of an mbuf cluster */
-	u_long	m_minclsize;	/* min length of data to allocate a cluster */
-	u_long	m_mlen;		/* length of data in an mbuf */
-	u_long	m_mhlen;	/* length of data in a header mbuf */
+	u_int32_t	m_mbufs;	/* mbufs obtained from page pool */
+	u_int32_t	m_clusters;	/* clusters obtained from page pool */
+	u_int32_t	m_spare;	/* spare field */
+	u_int32_t	m_clfree;	/* free clusters */
+	u_int32_t	m_drops;	/* times failed to find space */
+	u_int32_t	m_wait;		/* times waited for space */
+	u_int32_t	m_drain;	/* times drained protocols for space */
+	u_short		m_mtypes[256];	/* type specific mbuf allocations */
+	u_int32_t	m_mcfail;	/* times m_copym failed */
+	u_int32_t	m_mpfail;	/* times m_pullup failed */
+	u_int32_t	m_msize;	/* length of an mbuf */
+	u_int32_t	m_mclbytes;	/* length of an mbuf cluster */
+	u_int32_t	m_minclsize;	/* min length of data to allocate a cluster */
+	u_int32_t	m_mlen;		/* length of data in an mbuf */
+	u_int32_t	m_mhlen;	/* length of data in a header mbuf */
 };
-#ifdef KERNEL_PRIVATE
 
 /*
- * pkthdr.aux type tags.
+ * mbuf class statistics.
  */
-struct mauxtag {
-	int af;
-	int type;
-};
+#define	MAX_MBUF_CNAME	15
+
+typedef struct mb_class_stat {
+	char		mbcl_cname[MAX_MBUF_CNAME + 1]; /* class name */
+	u_int32_t	mbcl_size;	/* buffer size */
+	u_int32_t	mbcl_total;	/* # of buffers created */
+	u_int32_t	mbcl_active;	/* # of active buffers */
+	u_int32_t	mbcl_infree;	/* # of available buffers */
+	u_int32_t	mbcl_slab_cnt;	/* # of available slabs */
+	u_int64_t	mbcl_alloc_cnt;	/* # of times alloc is called */
+	u_int64_t	mbcl_free_cnt;	/* # of times free is called */
+	u_int64_t	mbcl_notified;	/* # of notified wakeups */
+	u_int64_t	mbcl_purge_cnt;	/* # of purges so far */
+	u_int64_t	mbcl_fail_cnt;	/* # of allocation failures */
+	u_int32_t	mbcl_ctotal;	/* total only for this class */
+	/*
+	 * Cache layer statistics
+	 */
+	u_int32_t	mbcl_mc_state;	/* cache state (see below) */
+	u_int32_t	mbcl_mc_cached;	/* # of cached buffers */
+	u_int32_t	mbcl_mc_waiter_cnt;  /* # waiters on the cache */
+	u_int32_t	mbcl_mc_wretry_cnt;  /* # of wait retries */
+	u_int32_t	mbcl_mc_nwretry_cnt; /* # of no-wait retry attempts */
+	u_int64_t	mbcl_reserved[4];    /* for future use */
+} mb_class_stat_t;
+
+#define	MCS_DISABLED	0	/* cache is permanently disabled */
+#define	MCS_ONLINE	1	/* cache is online */
+#define	MCS_PURGING	2	/* cache is being purged */
+#define	MCS_OFFLINE	3	/* cache is offline (resizing) */
+
+typedef struct mb_stat {
+	u_int32_t	mbs_cnt;	/* number of classes */
+	mb_class_stat_t	mbs_class[1];	/* class array */
+} mb_stat_t;
+
+#ifdef KERNEL_PRIVATE
 
 #ifdef	KERNEL
 extern union 	mcluster *mbutl;	/* virtual address of mclusters */
 extern union 	mcluster *embutl;	/* ending virtual address of mclusters */
-extern short 	*mclrefcnt;		/* cluster reference counts */
-extern int 	*mcl_paddr;		/* physical addresses of clusters */
 extern struct 	mbstat mbstat;		/* statistics */
 extern int 	nmbclusters;		/* number of mapped clusters */
-extern union 	mcluster *mclfree;	/* free mapped cluster list */
+extern int	njcl;			/* # of clusters for jumbo sizes */
+extern int	njclbytes;		/* size of a jumbo cluster */
 extern int	max_linkhdr;		/* largest link-level header */
 extern int	max_protohdr;		/* largest protocol header */
 extern int	max_hdr;		/* largest link+protocol header */
 extern int	max_datalen;		/* MHLEN - max_hdr */
 
 __BEGIN_DECLS
+/* Not exported */
+__private_extern__ void mbinit(void);
+__private_extern__ struct mbuf *m_clattach(struct mbuf *, int, caddr_t,
+    void (*)(caddr_t , u_int, caddr_t), u_int, caddr_t, int);
+__private_extern__ caddr_t m_bigalloc(int);
+__private_extern__ void m_bigfree(caddr_t, u_int, caddr_t);
+__private_extern__ struct mbuf *m_mbigget(struct mbuf *, int);
+__private_extern__ caddr_t m_16kalloc(int);
+__private_extern__ void m_16kfree(caddr_t, u_int, caddr_t);
+__private_extern__ struct mbuf *m_m16kget(struct mbuf *, int);
+
+/* Exported */
 struct	mbuf *m_copym(struct mbuf *, int, int, int);
 struct	mbuf *m_split(struct mbuf *, int, int);
 struct	mbuf *m_free(struct mbuf *);
@@ -490,10 +528,6 @@ int m_freem_list(struct mbuf *);
 struct	mbuf *m_devget(char *, int, int, struct ifnet *, void (*)(const void *, void *, size_t));
 char   *mcl_to_paddr(char *);
 struct mbuf *m_pulldown(struct mbuf*, int, int, int*);
-struct mbuf *m_aux_add(struct mbuf *, int, int);
-struct mbuf *m_aux_find(struct mbuf *, int, int);
-void m_aux_delete(struct mbuf *, struct mbuf *);
-struct mbuf *m_aux_copy(struct mbuf *, struct mbuf *);
 
 struct mbuf *m_mclget(struct mbuf *, int);
 caddr_t m_mclalloc(int);
@@ -512,6 +546,7 @@ union mcluster *m_cltom(int );
 int m_trailingspace(struct mbuf *);
 int m_leadingspace(struct mbuf *);
 
+struct mbuf *m_normalize(struct mbuf *m);
 void m_mchtype(struct mbuf *m, int t);
 void m_mcheck(struct mbuf*);
 
@@ -562,7 +597,12 @@ enum {
 	KERNEL_TAG_TYPE_DUMMYNET		= 1,
 	KERNEL_TAG_TYPE_DIVERT			= 2,
 	KERNEL_TAG_TYPE_IPFORWARD		= 3,
-	KERNEL_TAG_TYPE_IPFILT			= 4
+	KERNEL_TAG_TYPE_IPFILT			= 4,
+	KERNEL_TAG_TYPE_MACLABEL		= 5,
+	KERNEL_TAG_TYPE_MAC_POLICY_LABEL	= 6,
+	KERNEL_TAG_TYPE_ENCAP			= 8,
+	KERNEL_TAG_TYPE_INET6			= 9,
+	KERNEL_TAG_TYPE_IPSEC			= 10
 };
 
 /*

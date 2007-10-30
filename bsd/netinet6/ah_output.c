@@ -81,6 +81,8 @@
 static struct in_addr *ah4_finaldst(struct mbuf *);
 #endif
 
+extern lck_mtx_t *sadb_mutex;
+
 /*
  * compute AH header size.
  * transport mode only.  for tunnel mode, we should implement
@@ -90,8 +92,6 @@ size_t
 ah_hdrsiz(isr)
 	struct ipsecrequest *isr;
 {
-	const struct ah_algorithm *algo;
-	size_t hdrsiz;
 
 	/* sanity check */
 	if (isr == NULL)
@@ -100,33 +100,46 @@ ah_hdrsiz(isr)
 	if (isr->saidx.proto != IPPROTO_AH)
 		panic("unsupported mode passed to ah_hdrsiz");
 
-	if (isr->sav == NULL)
-		goto estimate;
-	if (isr->sav->state != SADB_SASTATE_MATURE
-	 && isr->sav->state != SADB_SASTATE_DYING)
-		goto estimate;
+#if 0
+	{
 
-	/* we need transport mode AH. */
-	algo = ah_algorithm_lookup(isr->sav->alg_auth);
-	if (!algo)
-		goto estimate;
+		lck_mtx_lock(sadb_mutex);
+		const struct ah_algorithm *algo;
+		size_t hdrsiz;
 
-	/*
-	 * XXX
-	 * right now we don't calcurate the padding size.  simply
-	 * treat the padding size as constant, for simplicity.
-	 *
-	 * XXX variable size padding support
-	 */
-	hdrsiz = (((*algo->sumsiz)(isr->sav) + 3) & ~(4 - 1));
-	if (isr->sav->flags & SADB_X_EXT_OLD)
-		hdrsiz += sizeof(struct ah);
-	else
-		hdrsiz += sizeof(struct newah);
+		/*%%%%% this needs to change - no sav in ipsecrequest any more */
+		if (isr->sav == NULL)
+			goto estimate;
+		if (isr->sav->state != SADB_SASTATE_MATURE
+		 && isr->sav->state != SADB_SASTATE_DYING)
+			goto estimate;
+	
+		/* we need transport mode AH. */
+		algo = ah_algorithm_lookup(isr->sav->alg_auth);
+		if (!algo)
+			goto estimate;
+	
+		/*
+		 * XXX
+		 * right now we don't calcurate the padding size.  simply
+		 * treat the padding size as constant, for simplicity.
+		 *
+		 * XXX variable size padding support
+		 */
+		hdrsiz = (((*algo->sumsiz)(isr->sav) + 3) & ~(4 - 1));
+		if (isr->sav->flags & SADB_X_EXT_OLD)
+			hdrsiz += sizeof(struct ah);
+		else
+			hdrsiz += sizeof(struct newah);
+	
+		lck_mtx_unlock(sadb_mutex);
+		return hdrsiz;
+	}
 
-	return hdrsiz;
+estimate:
+#endif
 
-    estimate:
+    //lck_mtx_unlock(sadb_mutex);
 	/* ASSUMING:
 	 *	sizeof(struct newah) > sizeof(struct ah).
 	 *	16 = (16 + 3) & ~(4 - 1).
@@ -143,11 +156,10 @@ ah_hdrsiz(isr)
  * the function does not modify m.
  */
 int
-ah4_output(m, isr)
+ah4_output(m, sav)
 	struct mbuf *m;
-	struct ipsecrequest *isr;
+	struct secasvar *sav;
 {
-	struct secasvar *sav = isr->sav;
 	const struct ah_algorithm *algo;
 	u_int32_t spi;
 	u_char *ahdrpos;
@@ -156,21 +168,19 @@ ah4_output(m, isr)
 	size_t plen = 0;	/*AH payload size in bytes*/
 	size_t ahlen = 0;	/*plen + sizeof(ah)*/
 	struct ip *ip;
-	struct in_addr dst;
+	struct in_addr dst = { 0 };
 	struct in_addr *finaldst;
 	int error;
 
 	/* sanity checks */
 	if ((sav->flags & SADB_X_EXT_OLD) == 0 && !sav->replay) {
-		struct ip *ip;
-
 		ip = mtod(m, struct ip *);
 		ipseclog((LOG_DEBUG, "ah4_output: internal error: "
 			"sav->replay is null: %x->%x, SPI=%u\n",
 			(u_int32_t)ntohl(ip->ip_src.s_addr),
 			(u_int32_t)ntohl(ip->ip_dst.s_addr),
 			(u_int32_t)ntohl(sav->spi)));
-		ipsecstat.out_inval++;
+		IPSEC_STAT_INCREMENT(ipsecstat.out_inval);
 		m_freem(m);
 		return EINVAL;
 	}
@@ -179,7 +189,7 @@ ah4_output(m, isr)
 	if (!algo) {
 		ipseclog((LOG_ERR, "ah4_output: unsupported algorithm: "
 		    "SPI=%u\n", (u_int32_t)ntohl(sav->spi)));
-		ipsecstat.out_inval++;
+		IPSEC_STAT_INCREMENT(ipsecstat.out_inval);
 		m_freem(m);
 		return EINVAL;
 	}
@@ -261,12 +271,14 @@ ah4_output(m, isr)
 				ipseclog((LOG_WARNING,
 				    "replay counter overflowed. %s\n",
 				    ipsec_logsastr(sav)));
-				ipsecstat.out_inval++;
+				IPSEC_STAT_INCREMENT(ipsecstat.out_inval);
 				m_freem(m);
 				return EINVAL;
 			}
 		}
+		lck_mtx_lock(sadb_mutex);
 		sav->replay->count++;
+		lck_mtx_unlock(sadb_mutex);
 		/*
 		 * XXX sequence number must not be cycled, if the SA is
 		 * installed by IKE daemon.
@@ -283,7 +295,7 @@ ah4_output(m, isr)
 		ip->ip_len = htons(ntohs(ip->ip_len) + ahlen);
 	else {
 		ipseclog((LOG_ERR, "IPv4 AH output: size exceeds limit\n"));
-		ipsecstat.out_inval++;
+		IPSEC_STAT_INCREMENT(ipsecstat.out_inval);
 		m_freem(m);
 		return EMSGSIZE;
 	}
@@ -311,7 +323,7 @@ ah4_output(m, isr)
 		    "error after ah4_calccksum, called from ah4_output"));
 		m_freem(m);
 		m = NULL;
-		ipsecstat.out_inval++;
+		IPSEC_STAT_INCREMENT(ipsecstat.out_inval);
 		return error;
 	}
 
@@ -319,8 +331,10 @@ ah4_output(m, isr)
 		ip = mtod(m, struct ip *);	/*just to make sure*/
 		ip->ip_dst.s_addr = dst.s_addr;
 	}
+	lck_mtx_lock(sadb_stat_mutex);
 	ipsecstat.out_success++;
 	ipsecstat.out_ahhist[sav->alg_auth]++;
+	lck_mtx_unlock(sadb_stat_mutex);
 	key_sa_recordxfer(sav, m);
 
 	return 0;
@@ -356,15 +370,14 @@ ah_hdrlen(sav)
  * Fill in the Authentication Header and calculate checksum.
  */
 int
-ah6_output(m, nexthdrp, md, isr)
+ah6_output(m, nexthdrp, md, sav)
 	struct mbuf *m;
 	u_char *nexthdrp;
 	struct mbuf *md;
-	struct ipsecrequest *isr;
+	struct secasvar *sav;
 {
 	struct mbuf *mprev;
 	struct mbuf *mah;
-	struct secasvar *sav = isr->sav;
 	const struct ah_algorithm *algo;
 	u_int32_t spi;
 	u_char *ahsumpos = NULL;
@@ -421,9 +434,9 @@ ah6_output(m, nexthdrp, md, isr)
 
 	if ((sav->flags & SADB_X_EXT_OLD) == 0 && !sav->replay) {
 		ipseclog((LOG_DEBUG, "ah6_output: internal error: "
-			"sav->replay is null: SPI=%u\n",
-			(u_int32_t)ntohl(sav->spi)));
-		ipsec6stat.out_inval++;
+			  "sav->replay is null: SPI=%u\n",
+			  (u_int32_t)ntohl(sav->spi)));
+		IPSEC_STAT_INCREMENT(ipsec6stat.out_inval);
 		m_freem(m);
 		return EINVAL;
 	}
@@ -432,7 +445,7 @@ ah6_output(m, nexthdrp, md, isr)
 	if (!algo) {
 		ipseclog((LOG_ERR, "ah6_output: unsupported algorithm: "
 		    "SPI=%u\n", (u_int32_t)ntohl(sav->spi)));
-		ipsec6stat.out_inval++;
+		IPSEC_STAT_INCREMENT(ipsec6stat.out_inval);
 		m_freem(m);
 		return EINVAL;
 	}
@@ -466,14 +479,16 @@ ah6_output(m, nexthdrp, md, isr)
 			if ((sav->flags & SADB_X_EXT_CYCSEQ) == 0) {
 				/* XXX Is it noisy ? */
 				ipseclog((LOG_WARNING,
-				    "replay counter overflowed. %s\n",
+				     "replay counter overflowed. %s\n",
 				    ipsec_logsastr(sav)));
-				ipsec6stat.out_inval++;
+				IPSEC_STAT_INCREMENT(ipsec6stat.out_inval);
 				m_freem(m);
 				return EINVAL;
 			}
 		}
+		lck_mtx_lock(sadb_mutex);
 		sav->replay->count++;
+		lck_mtx_unlock(sadb_mutex);
 		/*
 		 * XXX sequence number must not be cycled, if the SA is
 		 * installed by IKE daemon.
@@ -488,13 +503,13 @@ ah6_output(m, nexthdrp, md, isr)
 	 */
 	error = ah6_calccksum(m, (caddr_t)ahsumpos, plen, algo, sav);
 	if (error) {
-		ipsec6stat.out_inval++;
+		IPSEC_STAT_INCREMENT(ipsec6stat.out_inval);
 		m_freem(m);
 	} else {
-		ipsec6stat.out_success++;
+		IPSEC_STAT_INCREMENT(ipsec6stat.out_success);
 		key_sa_recordxfer(sav, m);
 	}
-	ipsec6stat.out_ahhist[sav->alg_auth]++;
+	IPSEC_STAT_INCREMENT(ipsec6stat.out_ahhist[sav->alg_auth]);
 
 	return(error);
 }

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1991, 1993
@@ -67,9 +73,12 @@
 #include <sys/kern_event.h>
 #include <sys/syslog.h>
 
+#include <pexpert/pexpert.h>
+
 #include <net/if.h>
 #include <net/if_types.h>
 #include <net/route.h>
+#include <net/kpi_protocol.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -102,10 +111,31 @@ SYSCTL_INT(_net_inet_ip, OID_AUTO, subnets_are_local, CTLFLAG_RW,
 
 struct in_multihead in_multihead; /* XXX BSS initialization */
 
-extern lck_mtx_t *rt_mtx;
-
 /* Track whether or not the SIOCARPIPLL ioctl has been called */
 __private_extern__	u_int32_t	ipv4_ll_arp_aware = 0;
+
+int
+inaddr_local(struct in_addr in)
+{
+	struct rtentry *rt;
+	struct sockaddr_in sin;
+	int local = 0;
+
+	sin.sin_family = AF_INET;
+	sin.sin_len = sizeof (sin);
+	sin.sin_addr = in;
+	rt = rtalloc1((struct sockaddr *)&sin, 0, 0UL);
+
+	if (rt != NULL) {
+		if (rt->rt_gateway->sa_family == AF_LINK ||
+		    (rt->rt_ifp->if_flags & IFF_LOOPBACK))
+			local = 1;
+		rtfree(rt);
+	} else {
+		local = in_localaddr(in);
+	}
+	return (local);
+}
 
 /*
  * Return 1 if an internet address is for a ``local'' host
@@ -114,8 +144,7 @@ __private_extern__	u_int32_t	ipv4_ll_arp_aware = 0;
  * Otherwise, it includes only the directly-connected (sub)nets.
  */
 int
-in_localaddr(in)
-	struct in_addr in;
+in_localaddr(struct in_addr in)
 {
 	u_long i = ntohl(in.s_addr);
 	struct in_ifaddr *ia;
@@ -148,8 +177,7 @@ in_localaddr(in)
  * may be forwarded.
  */
 int
-in_canforward(in)
-	struct in_addr in;
+in_canforward(struct in_addr in)
 {
 	u_long i = ntohl(in.s_addr);
 	u_long net;
@@ -168,8 +196,7 @@ in_canforward(in)
  * Trim a mask in a sockaddr
  */
 static void
-in_socktrim(ap)
-struct sockaddr_in *ap;
+in_socktrim(struct sockaddr_in *ap)
 {
     char *cplim = (char *) &ap->sin_addr;
     char *cp = (char *) (&ap->sin_addr + 1);
@@ -183,10 +210,9 @@ struct sockaddr_in *ap;
 }
 
 static int
-in_mask2len(mask)
-	struct in_addr *mask;
+in_mask2len(struct in_addr *mask)
 {
-	int x, y;
+	size_t x, y;
 	u_char *p;
 
 	p = (u_char *)mask;
@@ -205,9 +231,7 @@ in_mask2len(mask)
 }
 
 static void
-in_len2mask(mask, len)
-	struct in_addr *mask;
-	int len;
+in_len2mask(struct in_addr *mask, int len)
 {
 	int i;
 	u_char *p;
@@ -225,6 +249,22 @@ static int in_interfaces;	/* number of external internet interfaces */
 /*
  * Generic internet control operations (ioctl's).
  * Ifp is 0 if not an interface-specific ioctl.
+ *
+ * Returns:	0			Success
+ *		EINVAL
+ *		EADDRNOTAVAIL
+ *		EDESTADDRREQ
+ *		EPERM
+ *		ENOBUFS
+ *		EBUSY
+ *		EOPNOTSUPP
+ *	proc_suser:EPERM
+ *	suser:EPERM
+ *	in_lifaddr_ioctl:???
+ *	dlil_ioctl:???
+ *	in_ifinit:???
+ *	dlil_plumb_protocol:???
+ *	dlil_unplumb_protocol:???
  */
 /* ARGSUSED */
 int
@@ -236,13 +276,12 @@ in_control(
 	struct proc *p)
 {
 	struct ifreq *ifr = (struct ifreq *)data;
-	struct in_ifaddr *ia = 0, *iap;
+	struct in_ifaddr *ia = NULL, *iap;
 	struct ifaddr *ifa;
-	struct in_ifaddr *oia;
 	struct in_aliasreq *ifra = (struct in_aliasreq *)data;
 	struct sockaddr_in oldaddr;
-	int error, hostIsNew, maskIsNew;
-	u_long i;
+	int error = 0;
+	int hostIsNew, maskIsNew;
 	struct kev_msg        ev_msg;
 	struct kev_in_data    in_event_data;
 
@@ -280,20 +319,33 @@ in_control(
 						break;
 				}
 			}
+		/* take a reference on ia before releasing mutex */
+		if (ia != NULL) {
+			ifaref(&ia->ia_ifa);
+		}
 		lck_mtx_unlock(rt_mtx);
 	}
 	switch (cmd) {
 	case SIOCAUTOADDR:
 	case SIOCARPIPLL:
-		if (p && (error = proc_suser(p)) != 0)
-			return error;
+		if (p && (error = proc_suser(p)) != 0) {
+			goto done;
+		}
+		if (ifp == 0) {
+			error = EADDRNOTAVAIL;
+			goto done;
+		}
 		break;
 
 	case SIOCAIFADDR:
 	case SIOCDIFADDR:
-		if (ifp == 0)
-			return (EADDRNOTAVAIL);
+		if (ifp == 0) {
+			error = EADDRNOTAVAIL;
+			goto done;
+		}
 		if (ifra->ifra_addr.sin_family == AF_INET) {
+			struct in_ifaddr *oia;
+
 			lck_mtx_lock(rt_mtx);
 			for (oia = ia; ia; ia = ia->ia_link.tqe_next) {
 				if (ia->ia_ifp == ifp  &&
@@ -301,34 +353,54 @@ in_control(
 				    ifra->ifra_addr.sin_addr.s_addr)
 					break;
 			}
+			/* take a reference on ia before releasing mutex */
+			if (ia != NULL && ia != oia) {
+				ifaref(&ia->ia_ifa);
+			}
 			lck_mtx_unlock(rt_mtx);
+			if (oia != NULL && oia != ia) {
+				ifafree(&oia->ia_ifa);
+			}
 			if ((ifp->if_flags & IFF_POINTOPOINT)
 			    && (cmd == SIOCAIFADDR)
 			    && (ifra->ifra_dstaddr.sin_addr.s_addr
 				== INADDR_ANY)) {
-				return EDESTADDRREQ;
+				error = EDESTADDRREQ;
+				goto done;
 			}
 		}
-        else if (cmd == SIOCAIFADDR)
-            return (EINVAL);
-		if (cmd == SIOCDIFADDR && ia == 0)
-			return (EADDRNOTAVAIL);
+		else if (cmd == SIOCAIFADDR) {
+			error = EINVAL;
+			goto done;
+		}
+		if (cmd == SIOCDIFADDR && ia == 0) {
+			error = EADDRNOTAVAIL;
+			goto done;
+		}
 		/* FALLTHROUGH */
 	case SIOCSIFADDR:
 	case SIOCSIFNETMASK:
 	case SIOCSIFDSTADDR:
-		if ((so->so_state & SS_PRIV) == 0)
-			return (EPERM);
-
-		if (ifp == 0)
-			return (EADDRNOTAVAIL);
-        if (ifra->ifra_addr.sin_family != AF_INET && cmd == SIOCSIFADDR)
-            return (EINVAL);
+		if ((so->so_state & SS_PRIV) == 0) {
+			error = EPERM;
+			goto done;
+		}
+		if (ifp == 0) {
+			error = EADDRNOTAVAIL;
+			goto done;
+		}
+		if (ifra->ifra_addr.sin_family != AF_INET 
+		    && cmd == SIOCSIFADDR) {
+			error = EINVAL;
+			goto done;
+		}
 		if (ia == (struct in_ifaddr *)0) {
 			ia = (struct in_ifaddr *)
 				_MALLOC(sizeof *ia, M_IFADDR, M_WAITOK);
-			if (ia == (struct in_ifaddr *)NULL)
-				return (ENOBUFS);
+			if (ia == (struct in_ifaddr *)NULL) {
+				error = ENOBUFS;
+				goto done;
+			}
 			bzero((caddr_t)ia, sizeof *ia);
 			/*
 			 * Protect from ipintr() traversing address list
@@ -337,6 +409,8 @@ in_control(
 			
 			ifa = &ia->ia_ifa;
 
+			ia->ia_addr.sin_family = AF_INET;
+			ia->ia_addr.sin_len = sizeof (ia->ia_addr);
 			ifa->ifa_addr = (struct sockaddr *)&ia->ia_addr;
 			ifa->ifa_dstaddr = (struct sockaddr *)&ia->ia_dstaddr;
 			ifa->ifa_netmask = (struct sockaddr *)&ia->ia_sockmask;
@@ -353,14 +427,17 @@ in_control(
 			ifnet_lock_done(ifp);
 
 			lck_mtx_lock(rt_mtx);
+			ifaref(&ia->ia_ifa);
 			TAILQ_INSERT_TAIL(&in_ifaddrhead, ia, ia_link);
 			lck_mtx_unlock(rt_mtx);
 
 			/* Generic protocol plumbing */
 
-			if (error = dlil_plumb_protocol(PF_INET, ifp)) {
-				kprintf("in.c: warning can't plumb proto if=%s%n type %d error=%d\n",
-					ifp->if_name, ifp->if_unit, ifp->if_type, error);
+			if ((error = proto_plumb(PF_INET, ifp))) {
+				if (error != EEXIST) {
+					kprintf("in.c: warning can't plumb proto if=%s%d type %d error=%d\n",
+						ifp->if_name, ifp->if_unit, ifp->if_type, error);
+				}
 				error = 0; /*discard error, can be cold with unsupported interfaces */
 			}
 
@@ -369,19 +446,25 @@ in_control(
 
 	case SIOCPROTOATTACH:
 	case SIOCPROTODETACH:
-		if (p && (error = proc_suser(p)) != 0)
-			return error;
-		if (ifp == 0)
-			return (EADDRNOTAVAIL);
+		if (p && (error = proc_suser(p)) != 0) {
+			goto done;
+		}
+		if (ifp == 0) {
+			error = EADDRNOTAVAIL;
+			goto done;
+		}
 		break;
                 
 	case SIOCSIFBRDADDR:
 #ifdef __APPLE__
-		if ((so->so_state & SS_PRIV) == 0)
-			return (EPERM);
+		if ((so->so_state & SS_PRIV) == 0) {
+			error = EPERM;
+			goto done;
+		}
 #else
-		if (p && (error = suser(p)) != 0)
-			return error;
+		if (p && (error = suser(p)) != 0) {
+			goto done;
+		}
 #endif
 		/* FALLTHROUGH */
 
@@ -389,14 +472,14 @@ in_control(
 	case SIOCGIFNETMASK:
 	case SIOCGIFDSTADDR:
 	case SIOCGIFBRDADDR:
-		if (ia == (struct in_ifaddr *)0)
-			return (EADDRNOTAVAIL);
+		if (ia == (struct in_ifaddr *)0) {
+			error = EADDRNOTAVAIL;
+			goto done;
+		}
 		break;
 	}
 	switch (cmd) {
 	case SIOCAUTOADDR:
-		if (ifp == 0)
-			return (EADDRNOTAVAIL);
 		ifnet_lock_exclusive(ifp);
 		if (ifr->ifr_intval)
 			ifp->if_eflags |= IFEF_AUTOCONFIGURING;
@@ -406,8 +489,6 @@ in_control(
 		break;
 	
 	case SIOCARPIPLL:
-		if (ifp == 0)
-			return (EADDRNOTAVAIL);
 		ipv4_ll_arp_aware = 1;
 		ifnet_lock_exclusive(ifp);
 		if (ifr->ifr_data)
@@ -422,14 +503,18 @@ in_control(
 		break;
 
 	case SIOCGIFBRDADDR:
-		if ((ifp->if_flags & IFF_BROADCAST) == 0)
-			return (EINVAL);
+		if ((ifp->if_flags & IFF_BROADCAST) == 0) {
+			error = EINVAL;
+			break;
+		}
 		*((struct sockaddr_in *)&ifr->ifr_dstaddr) = ia->ia_broadaddr;
 		break;
 
 	case SIOCGIFDSTADDR:
-		if ((ifp->if_flags & IFF_POINTOPOINT) == 0)
-			return (EINVAL);
+		if ((ifp->if_flags & IFF_POINTOPOINT) == 0) {
+			error = EINVAL;
+			break;
+		}
 		*((struct sockaddr_in *)&ifr->ifr_dstaddr) = ia->ia_dstaddr;
 		break;
 
@@ -438,17 +523,19 @@ in_control(
 		break;
 
 	case SIOCSIFDSTADDR:
-		if ((ifp->if_flags & IFF_POINTOPOINT) == 0)
-			return (EINVAL);
+		if ((ifp->if_flags & IFF_POINTOPOINT) == 0) {
+			error = EINVAL;
+			break;
+		}
 		oldaddr = ia->ia_dstaddr;
 		ia->ia_dstaddr = *(struct sockaddr_in *)&ifr->ifr_dstaddr;
-		error = dlil_ioctl(PF_INET, ifp, SIOCSIFDSTADDR, (caddr_t)ia);
-		if (error == EOPNOTSUPP)
-		     error = 0;
-
+		error = ifnet_ioctl(ifp, PF_INET, SIOCSIFDSTADDR, ia);
+		if (error == EOPNOTSUPP) {
+			error = 0;
+		}
 		if (error) {
-		     ia->ia_dstaddr = oldaddr;
-		     return error;
+			ia->ia_dstaddr = oldaddr;
+			break;
 		}
 
 		ev_msg.vendor_code    = KEV_VENDOR_APPLE;
@@ -490,8 +577,10 @@ in_control(
 		break;
 
 	case SIOCSIFBRDADDR:
-		if ((ifp->if_flags & IFF_BROADCAST) == 0)
-			return (EINVAL);
+		if ((ifp->if_flags & IFF_BROADCAST) == 0) {
+			error = EINVAL;
+			break;
+		}
 		ia->ia_broadaddr = *(struct sockaddr_in *)&ifr->ifr_broadaddr;
 
 		ev_msg.vendor_code    = KEV_VENDOR_APPLE;
@@ -525,14 +614,12 @@ in_control(
 		break;
 
 	case SIOCSIFADDR:
-		return (in_ifinit(ifp, ia,
-		    (struct sockaddr_in *) &ifr->ifr_addr, 1));
+		error = in_ifinit(ifp, ia, (struct sockaddr_in *) &ifr->ifr_addr, 1);
+		break;
 
 	case SIOCPROTOATTACH:
-		error = dlil_plumb_protocol(PF_INET, ifp);
-		if (error)
-			return(error);
-                break;
+		error = proto_plumb(PF_INET, ifp);
+		break;
                 
 	case SIOCPROTODETACH:
                 // if an ip address is still present, refuse to detach
@@ -541,16 +628,18 @@ in_control(
 			if (ifa->ifa_addr->sa_family == AF_INET)
 				break;
 		ifnet_lock_done(ifp);
-		if (ifa != 0)
-			return EBUSY;
+		if (ifa != 0) {
+			error =  EBUSY;
+			break;
+		}
 
-		error = dlil_unplumb_protocol(PF_INET, ifp);
-		if (error)
-			return(error);
+		error = proto_unplumb(PF_INET, ifp);
 		break;
 		
 
-	case SIOCSIFNETMASK:
+	case SIOCSIFNETMASK: {
+		u_long i;
+		
 		i = ifra->ifra_addr.sin_addr.s_addr;
 		ia->ia_subnetmask = ntohl(ia->ia_sockmask.sin_addr.s_addr = i);
 		ev_msg.vendor_code    = KEV_VENDOR_APPLE;
@@ -582,7 +671,7 @@ in_control(
 		kev_post_msg(&ev_msg);
 
 		break;
-
+	}
 	case SIOCAIFADDR:
 		maskIsNew = 0;
 		hostIsNew = 1;
@@ -652,15 +741,15 @@ in_control(
 
 		     kev_post_msg(&ev_msg);
 		}
-
-		return (error);
+		break;
 
 	case SIOCDIFADDR:
-		error = dlil_ioctl(PF_INET, ifp, SIOCDIFADDR, (caddr_t)ia);
+		error = ifnet_ioctl(ifp, PF_INET, SIOCDIFADDR, ia);
 		if (error == EOPNOTSUPP)
 			error = 0;
-		if (error)
-		    return error;
+		if (error != 0) {
+			break;
+		}
 
 		/* Fill out the kernel event information */
 		ev_msg.vendor_code    = KEV_VENDOR_APPLE;
@@ -696,10 +785,18 @@ in_control(
 		 */
 		in_ifscrub(ifp, ia, 1);
 		ifa = &ia->ia_ifa;
+#if CONFIG_FORCE_OUT_IFP	
+		// Cleanup any pdp hack related route
+		if (ia->ia_route)
+		{
+			ia->ia_route->rt_flags &= ~RTF_UP;
+			rtfree_locked(ia->ia_route);
+			ia->ia_route = NULL;
+		}
+#endif
 		lck_mtx_unlock(rt_mtx);
 		ifnet_lock_exclusive(ifp);
 		if_detach_ifa(ifp, ifa);
-		ifafree(&ia->ia_ifa);
         
 #ifdef __APPLE__
        /*
@@ -727,6 +824,20 @@ in_control(
 
 		/* Post the kernel event */
 		kev_post_msg(&ev_msg);
+
+		/*
+		 * See if there is any IPV4 address left and if so,
+		 * reconfigure KDP to use current primary address.
+		 */
+		ifa = ifa_ifpgetprimary(ifp, AF_INET);
+		if (ifa != NULL) {
+			error = ifnet_ioctl(ifp, PF_INET, SIOCSIFADDR, ifa);
+			if (error == EOPNOTSUPP)
+				error = 0;
+
+			/* Release reference from ifa_ifpgetprimary() */
+			ifafree(ifa);
+		}
 		break;
 
 #ifdef __APPLE__
@@ -819,9 +930,13 @@ in_control(
 #endif /* __APPLE__ */
 
 	default:
-		return EOPNOTSUPP;
+		error = EOPNOTSUPP;
 	}
-	return (0);
+ done:
+	if (ia != NULL) {
+		ifafree(&ia->ia_ifa);
+	}
+	return (error);
 }
 
 /*
@@ -914,7 +1029,8 @@ in_lifaddr_ioctl(
 	case SIOCDLIFADDR:
 	    {
 		struct in_ifaddr *ia;
-		struct in_addr mask, candidate, match;
+		struct in_addr mask, candidate;
+		struct in_addr match = { 0 };
 		struct sockaddr_in *sin;
 		int cmp;
 
@@ -1041,18 +1157,40 @@ in_ifinit(
 	u_long i = ntohl(sin->sin_addr.s_addr);
 	struct sockaddr_in oldaddr;
 	int flags = RTF_UP, error;
+	struct ifaddr *ifa0;
+	unsigned int cmd;
 
 	oldaddr = ia->ia_addr;
 	ia->ia_addr = *sin;
 
 	/*
-	 * Give the interface a chance to initialize
-	 * if this is its first address,
-	 * and to validate the address if necessary.
+	 * Give the interface a chance to initialize if this is its first
+	 * address, and to validate the address if necessary.  Send down
+	 * SIOCSIFADDR for first address, and SIOCAIFADDR for alias(es).
+	 * We find the first IPV4 address assigned to it and check if this
+	 * is the same as the one passed into this routine.
 	 */
-	error = dlil_ioctl(PF_INET, ifp, SIOCSIFADDR, (caddr_t)ia);
+	ifa0 = ifa_ifpgetprimary(ifp, AF_INET);
+	cmd = (&ia->ia_ifa == ifa0) ? SIOCSIFADDR : SIOCAIFADDR;
+	error = ifnet_ioctl(ifp, PF_INET, cmd, ia);
 	if (error == EOPNOTSUPP)
-	     error = 0;
+		error = 0;
+	/*
+	 * If we've just sent down SIOCAIFADDR, send another ioctl down
+	 * for SIOCSIFADDR for the first IPV4 address of the interface,
+	 * because an address change on one of the addresses will result
+	 * in the removal of the previous first IPV4 address.  KDP needs
+	 * be reconfigured with the current primary IPV4 address.
+	 */
+	if (error == 0 && cmd == SIOCAIFADDR) {
+		error = ifnet_ioctl(ifp, PF_INET, SIOCSIFADDR, ifa0);
+		if (error == EOPNOTSUPP)
+			error = 0;
+	}
+
+	/* Release reference from ifa_ifpgetprimary() */
+	ifafree(ifa0);
+
 	if (error) {
 		ia->ia_addr = oldaddr;
 		return (error);
@@ -1284,7 +1422,7 @@ in_delmulti(
 	}
 	if (inm2 != *inm) {
 		lck_mtx_unlock(rt_mtx);
-		printf("in_delmulti - ignorning invalid inm (0x%x)\n", *inm);
+		printf("in_delmulti - ignoring invalid inm (%p)\n", *inm);
 		return;
 	}
 	lck_mtx_unlock(rt_mtx);
@@ -1298,10 +1436,11 @@ in_delmulti(
 }
 
 #if !NFSCLIENT
+int inet_aton(char *cp, struct in_addr *pin);
 int
 inet_aton(char * cp, struct in_addr * pin)
 {
-    u_char * b = (char *)pin;
+    u_char * b = (unsigned char *)pin;
     int	   i;
     char * p;
 

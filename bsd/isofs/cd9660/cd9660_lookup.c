@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*	$NetBSD: cd9660_lookup.c,v 1.13 1994/12/24 15:30:03 cgd Exp $	*/
 
@@ -146,7 +152,6 @@ cd9660_lookup(struct vnop_lookup_args *ap)
 	int flags = cnp->cn_flags;
 	int nameiop = cnp->cn_nameiop;
 	vfs_context_t ctx = cnp->cn_context;
-	struct proc *p = vfs_context_proc(ctx);
 	size_t altlen;
 	
 	bp = NULL;
@@ -242,7 +247,7 @@ searchloop:
 		 * Get pointer to next entry.
 		 */
 		ep = (struct iso_directory_record *)
-			((char *)buf_dataptr(bp) + entryoffsetinblock);
+			((char *)0 + buf_dataptr(bp) + entryoffsetinblock);
 		
 		reclen = isonum_711(ep->length);
 		if (reclen == 0) {
@@ -297,8 +302,7 @@ searchloop:
 					if (namelen != 1
 					    || ep->name[0] != 0)
 						goto notfound;
-				} else if (imp->iso_ftype != ISO_FTYPE_JOLIET && !(res = isofncmp(name,len,
-							    ep->name,namelen))) {
+				} else if (imp->iso_ftype != ISO_FTYPE_JOLIET && !(res = isofncmp(name, len, ep->name, namelen))) {
 					if ( isoflags & directoryBit )
 						ino = isodirino(ep, imp);
 					else
@@ -338,7 +342,7 @@ foundino:
 			}
 			entryoffsetinblock = saveoffset & bmask;
 			ep = (struct iso_directory_record *)
-				((char *)buf_dataptr(bp) + entryoffsetinblock);
+				((char *)0 + buf_dataptr(bp) + entryoffsetinblock);
 			dp->i_offset = saveoffset;
 		}
 		goto found;
@@ -402,7 +406,8 @@ found:
 	 */
 	if (flags & ISDOTDOT) {
 		error = cd9660_vget_internal(vnode_mount(vdp), dp->i_ino, &tdp, NULL, NULL,
-					     dp->i_ino != ino, ep, p);
+					     dp->i_ino != ino, ep,
+					     vfs_context_proc(ctx));
 		VTOI(tdp)->i_parent = VTOI(pdp)->i_number;
 		buf_brelse(bp);
 
@@ -413,7 +418,7 @@ found:
 		*vpp = vdp;
 	} else {
 	        error = cd9660_vget_internal(vnode_mount(vdp), dp->i_ino, &tdp, vdp, cnp,
-					     dp->i_ino != ino, ep, p);
+			     dp->i_ino != ino, ep, vfs_context_proc(ctx));
 		/* save parent inode number */
 		VTOI(tdp)->i_parent = VTOI(pdp)->i_number;
 		buf_brelse(bp);
@@ -455,7 +460,7 @@ cd9660_blkatoff(vnode_t vp, off_t offset, char **res, buf_t *bpp)
 		return (error);
 	}
 	if (res)
-		*res = (char *)buf_dataptr(bp) + blkoff(imp, offset);
+		*res = (char *)0 + buf_dataptr(bp) + blkoff(imp, offset);
 	*bpp = bp;
 	
 	return (0);

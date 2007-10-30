@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -66,6 +72,16 @@
 
 
 #include <sys/kdebug.h>
+
+#if	CONFIG_DTRACE
+/*
+ * We need only enough declarations from the BSD-side to be able to
+ * test if our probe is active, and to call __dtrace_probe().  Setting
+ * NEED_DTRACE_DEFS gets a local copy of those definitions pulled in.
+ */
+#define NEED_DTRACE_DEFS
+#include <../bsd/sys/lockstat.h>
+#endif
 
 #define	LCK_MTX_SLEEP_CODE		0
 #define	LCK_MTX_SLEEP_DEADLINE_CODE	1
@@ -138,7 +154,7 @@ void
 lck_grp_attr_setstat(
 	lck_grp_attr_t	*attr)
 {
-	(void)hw_atomic_or((uint32_t *)&attr->grp_attr_val, LCK_GRP_ATTR_STAT);
+	(void)hw_atomic_or(&attr->grp_attr_val, LCK_GRP_ATTR_STAT);
 }
 
 
@@ -227,7 +243,7 @@ void
 lck_grp_reference(
 	lck_grp_t	*grp)
 {
-	(void)hw_atomic_add((uint32_t *)(&grp->lck_grp_refcnt), 1);
+	(void)hw_atomic_add(&grp->lck_grp_refcnt, 1);
 }
 
 
@@ -239,7 +255,7 @@ void
 lck_grp_deallocate(
 	lck_grp_t	*grp)
 {
-	if (hw_atomic_sub((uint32_t *)(&grp->lck_grp_refcnt), 1) == 0)
+	if (hw_atomic_sub(&grp->lck_grp_refcnt, 1) == 0)
 	 	kfree(grp, sizeof(lck_grp_t));
 }
 
@@ -268,7 +284,7 @@ lck_grp_lckcnt_incr(
 		return panic("lck_grp_lckcnt_incr(): invalid lock type: %d\n", lck_type);
 	}
 
-	(void)hw_atomic_add((uint32_t *)lckcnt, 1);
+	(void)hw_atomic_add(lckcnt, 1);
 }
 
 /*
@@ -296,7 +312,7 @@ lck_grp_lckcnt_decr(
 		return panic("lck_grp_lckcnt_decr(): invalid lock type: %d\n", lck_type);
 	}
 
-	(void)hw_atomic_sub((uint32_t *)lckcnt, 1);
+	(void)hw_atomic_sub(lckcnt, 1);
 }
 
 /*
@@ -343,7 +359,17 @@ void
 lck_attr_setdebug(
 	lck_attr_t	*attr)
 {
-	(void)hw_atomic_or((uint32_t *)&attr->lck_attr_val, LCK_ATTR_DEBUG);
+	(void)hw_atomic_or(&attr->lck_attr_val, LCK_ATTR_DEBUG);
+}
+
+/*
+ * Routine:	lck_attr_setdebug
+ */
+void
+lck_attr_cleardebug(
+	lck_attr_t	*attr)
+{
+	(void)hw_atomic_and(&attr->lck_attr_val, ~LCK_ATTR_DEBUG);
 }
 
 
@@ -354,7 +380,7 @@ void
 lck_attr_rw_shared_priority(
 	lck_attr_t	*attr)
 {
-	(void)hw_atomic_or((uint32_t *)&attr->lck_attr_val, LCK_ATTR_RW_SHARED_PRIORITY);
+	(void)hw_atomic_or(&attr->lck_attr_val, LCK_ATTR_RW_SHARED_PRIORITY);
 }
 
 
@@ -517,6 +543,13 @@ lck_mtx_lock_wait (
 	lck_mtx_t		*mutex;
 	integer_t		priority;
 	spl_t			s = splsched();
+#if	CONFIG_DTRACE
+	uint64_t		sleep_start = 0;
+
+	if (lockstat_probemap[LS_LCK_MTX_LOCK_BLOCK] || lockstat_probemap[LS_LCK_MTX_EXT_LOCK_BLOCK]) {
+		sleep_start = mach_absolute_time();
+	}
+#endif
 
 	if (lck->lck_mtx_tag != LCK_MTX_TAG_INDIRECT)
 		mutex = lck;
@@ -569,6 +602,21 @@ lck_mtx_lock_wait (
 	thread_block(THREAD_CONTINUE_NULL);
 
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_WAIT_CODE) | DBG_FUNC_END, 0, 0, 0, 0, 0);
+#if	CONFIG_DTRACE
+	/*
+	 * Record the Dtrace lockstat probe for blocking, block time
+	 * measured from when we were entered.
+	 */
+	if (sleep_start) {
+		if (lck->lck_mtx_tag != LCK_MTX_TAG_INDIRECT) {
+			LOCKSTAT_RECORD(LS_LCK_MTX_LOCK_BLOCK, lck,
+			    mach_absolute_time() - sleep_start);
+		} else {
+			LOCKSTAT_RECORD(LS_LCK_MTX_EXT_LOCK_BLOCK, lck,
+			    mach_absolute_time() - sleep_start);
+		}
+	}
+#endif
 }
 
 /*
@@ -649,7 +697,7 @@ lck_mtx_unlock_wakeup (
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_UNLCK_WAKEUP_CODE) | DBG_FUNC_START, (int)lck, (int)holder, 0, 0, 0);
 
 	if (thread != holder)
-		panic("lck_mtx_unlock_wakeup: mutex %x holder %x\n", mutex, holder);
+		panic("lck_mtx_unlock_wakeup: mutex %p holder %p\n", mutex, holder);
 
 	if (thread->promotions > 0) {
 		spl_t		s = splsched();
@@ -686,23 +734,88 @@ lck_mtx_unlock_wakeup (
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_UNLCK_WAKEUP_CODE) | DBG_FUNC_END, 0, 0, 0, 0, 0);
 }
 
+void
+lck_mtx_unlockspin_wakeup (
+	lck_mtx_t			*lck)
+{
+	assert(lck->lck_mtx_waiters > 0);
+	thread_wakeup_one((event_t)(((unsigned int*)lck)+(sizeof(lck_mtx_t)-1)/sizeof(unsigned int)));
+
+	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_UNLCK_WAKEUP_CODE) | DBG_FUNC_NONE, (int)lck, 0, 0, 1, 0);
+#if CONFIG_DTRACE
+	/*
+	 * When there are waiters, we skip the hot-patch spot in the
+	 * fastpath, so we record it here.
+	 */
+	LOCKSTAT_RECORD(LS_LCK_MTX_UNLOCK_RELEASE, lck, 0);
+#endif
+}
+
+
 /*
  * Routine: 	mutex_pause
  *
  * Called by former callers of simple_lock_pause().
  */
+#define MAX_COLLISION_COUNTS	32
+#define MAX_COLLISION 	8
+
+unsigned int max_collision_count[MAX_COLLISION_COUNTS];
+
+uint32_t collision_backoffs[MAX_COLLISION] = {
+        10, 50, 100, 200, 400, 600, 800, 1000
+};
+
 
 void
-mutex_pause(void)
+mutex_pause(uint32_t collisions)
 {
 	wait_result_t wait_result;
+	uint32_t	back_off;
 
-	wait_result = assert_wait_timeout((event_t)mutex_pause, THREAD_UNINT, 1, 1000*NSEC_PER_USEC);
+	if (collisions >= MAX_COLLISION_COUNTS)
+	        collisions = MAX_COLLISION_COUNTS - 1;
+	max_collision_count[collisions]++;
+
+	if (collisions >= MAX_COLLISION)
+	        collisions = MAX_COLLISION - 1;
+	back_off = collision_backoffs[collisions];
+
+	wait_result = assert_wait_timeout((event_t)mutex_pause, THREAD_UNINT, back_off, NSEC_PER_USEC);
 	assert(wait_result == THREAD_WAITING);
 
 	wait_result = thread_block(THREAD_CONTINUE_NULL);
 	assert(wait_result == THREAD_TIMED_OUT);
 }
+
+
+unsigned int mutex_yield_wait = 0;
+unsigned int mutex_yield_no_wait = 0;
+
+void
+mutex_yield(
+	    mutex_t	*mutex)
+{
+        lck_mtx_t	*lck;
+
+#if DEBUG
+	_mutex_assert(mutex, MA_OWNED);
+#endif /* DEBUG */
+
+	lck = (lck_mtx_t *) mutex;
+	if (lck->lck_mtx_tag == LCK_MTX_TAG_INDIRECT)
+	        lck = &lck->lck_mtx_ptr->lck_mtx;
+
+	if (! lck->lck_mtx_waiters) {
+	        mutex_yield_no_wait++;
+	} else {
+	        mutex_yield_wait++;
+		mutex_unlock(mutex);
+		mutex_pause(0);
+		mutex_lock(mutex);
+	}
+}
+
 
 /*
  * Routine:	lck_rw_sleep

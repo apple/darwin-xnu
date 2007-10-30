@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -80,7 +86,9 @@
 #include <ddb/db_cond.h>
 #include <ddb/db_examine.h>
 #include <ddb/db_expr.h>
+#if defined(__ppc__)
 #include <ppc/db_low_trace.h>
+#endif
 #include <ddb/db_macro.h>
 #include <ddb/db_print.h>
 #include <ddb/db_run.h>
@@ -142,8 +150,6 @@ void db_command(
 
 void db_help_cmd(void);
 
-void db_output_prompt(void);
-
 void db_fncall(void);
 
 void db_cmd_list(struct db_command *table);
@@ -173,7 +179,7 @@ db_cmd_search(
 
 	for (cmd = table; cmd->name != 0; cmd++) {
 	    register char *lp;
-	    register char *rp;
+	    const char *rp;
 	    register int  c;
 
 	    lp = name;
@@ -212,9 +218,9 @@ db_cmd_search(
 void
 db_cmd_list(struct db_command *table)
 {
-	register struct db_command *new;
-	register struct db_command *old;
-	register struct db_command *cur;
+	struct db_command *new;
+	struct db_command *old;
+	struct db_command *cur;
 	unsigned int l;
 	unsigned int len;
 
@@ -228,9 +234,9 @@ db_cmd_list(struct db_command *table)
 	    new = (struct db_command *)0;
 	    for (cur = table; cur->name != 0; cur++)
 		if ((new == (struct db_command *)0 ||
-		     strcmp(cur->name, new->name) < 0) &&
+		     strncmp(cur->name, new->name, strlen(cur->name)) < 0) &&
 		    (old == (struct db_command *)0 ||
-		     strcmp(cur->name, old->name) > 0))
+		     strncmp(cur->name, old->name, strlen(cur->name)) > 0))
 		    new = cur;
 	    if (new == (struct db_command *)0)
 		    return;
@@ -252,7 +258,7 @@ db_command(
 	char		modif[TOK_STRING_SIZE];
 	char		*modifp = &modif[0];
 	db_expr_t	addr, count;
-	boolean_t	have_addr;
+	boolean_t	have_addr = FALSE;
 	int		result;
 
 	t = db_read_token();
@@ -324,7 +330,7 @@ db_command(
 			db_flush_lex();
 			return;
 		    }
-		    strcpy(modif, db_tok_string);
+		    strlcpy(modif, db_tok_string, TOK_STRING_SIZE);
 		}
 		else {
 		    db_unread_token(t);
@@ -382,7 +388,7 @@ db_command(
 	}
 	*last_cmdp = cmd;
 	*last_countp = count;
-	strcpy(last_modifp, modifp);
+	strlcpy(last_modifp, modifp, TOK_STRING_SIZE);
 }
 
 void
@@ -402,138 +408,437 @@ db_command_list(
 extern void	db_system_stats(void);
 
 struct db_command db_show_all_cmds[] = {
-	{ "acts",	db_show_all_acts,			0,	0 },
-	{ "spaces",	db_show_all_spaces,			0,	0 },
-	{ "tasks",	db_show_all_acts,			0,	0 },
+	{
+		.name = "acts",
+		.fcn = db_show_all_acts,
+	},
+	{
+		.name = "spaces",
+		.fcn = db_show_all_spaces,
+	},
+	{
+		.name = "tasks",
+		.fcn = db_show_all_acts,
+	},
 	/* temporary alias for sanity preservation */
-	{ "threads",	db_show_all_acts,			0,	0 },
-	{ "zones",	db_show_all_zones,			0,	0 },
-	{ "vmtask",	db_show_all_task_vm,			0,	0 },
-	{ (char *)0 }
+	{
+		.name ="threads",
+		db_show_all_acts,
+	},
+	{
+		.name = "zones",
+		.fcn = db_show_all_zones,
+	},
+	{
+		.name = "vmtask",
+		.fcn = db_show_all_task_vm,
+	},
+	{
+		.name = (const char *)NULL,
+       	},
 };
 
 /* XXX */
 
 extern void		db_show_thread_log(void);
-extern void		db_show_one_lock(lock_t*);
 extern void		db_show_etap_log(db_expr_t, int, db_expr_t, char *);
 
 struct db_command db_show_cmds[] = {
-	{ "all",	0,				0,	db_show_all_cmds },
-	{ "registers",	db_show_regs,			0,	0 },
-	{ "variables",	(db_func) db_show_variable,	CS_OWN,	0 },
-	{ "breaks",	(db_func) db_listbreak_cmd,	0,	0 },
-	{ "watches",	(db_func) db_listwatch_cmd,	0,	0 },
-	{ "task",	db_show_one_task,		0,	0 },
-	{ "act",	db_show_one_act,		0,	0 },
-	{ "shuttle",	db_show_shuttle,		0,	0 },
+	{
+		.name = "all",
+		.more = db_show_all_cmds
+	},
+	{
+		.name = "registers",
+		.fcn = db_show_regs,
+	},
+	{
+		.name = "variables",
+		.fcn = db_show_variable,
+		.flag = CS_OWN,
+	},
+	{
+		.name = "breaks",
+		.fcn = db_listbreak_cmd,
+	},
+	{
+		.name = "watches",
+		.fcn = db_listwatch_cmd,
+	},
+	{
+		.name = "task",
+		.fcn = db_show_one_task,
+	},
+	{
+		.name = "act",
+		.fcn = db_show_one_act,
+	},
+	{
+		.name = "shuttle",
+		.fcn = db_show_shuttle,
+	},
 #if 0
-	{ "thread",	db_show_one_thread,		0,	0 },
+	{
+		.name = "thread",
+		.fcn = db_show_one_thread,
+	},
 #endif
-	{ "vmtask",	db_show_one_task_vm,		0,	0 },
-	{ "macro",	(db_func) db_show_macro,	CS_OWN, 0 },
-	{ "runq",	(db_func) db_show_runq,		0,	0 },
-	{ "map",	(db_func) vm_map_print,		0,	0 },
-	{ "object",	(db_func) vm_object_print,	0,	0 },
-	{ "page",	(db_func) vm_page_print,	0,	0 },
-	{ "copy",	(db_func) vm_map_copy_print,	0,	0 },
-	{ "port",	(db_func) ipc_port_print,	0,	0 },
-	{ "pset",	(db_func) ipc_pset_print,	0,	0 },
-	{ "kmsg",	(db_func) ipc_kmsg_print,	0,	0 },
-	{ "msg",	(db_func) ipc_msg_print,	0,	0 },
-	{ "ipc_port",	db_show_port_id,		0,	0 },
-#if	NORMA_VM
-	{ "xmm_obj",	(db_func) xmm_obj_print,	0,	0 },
-	{ "xmm_reply",	(db_func) xmm_reply_print,	0,	0 },
+	{
+		.name = "vmtask",
+		.fcn = db_show_one_task_vm,
+	},
+	{
+		.name = "macro",
+		.fcn = (db_func)db_show_macro,
+		.flag = CS_OWN,
+	},
+	{
+		.name = "runq",
+		.fcn = (db_func)db_show_runq,
+	},
+	{
+		.name = "map",
+		.fcn = (db_func)vm_map_print,
+	},
+	{
+		.name = "object",
+		.fcn = vm_object_print,
+	},
+	{
+		.name = "page",
+		.fcn = (db_func)vm_page_print,
+	},
+	{
+		.name = "copy",
+		.fcn = (db_func)vm_map_copy_print,
+	},
+	{
+		.name = "port",
+		.fcn = (db_func)ipc_port_print,
+	},
+	{
+		.name = "pset",
+		.fcn = (db_func)ipc_pset_print,
+	},
+	{
+		.name = "kmsg",
+		.fcn = (db_func)ipc_kmsg_print,
+	},
+	{
+		.name = "msg",
+		.fcn = (db_func)ipc_msg_print,
+	},
+	{
+		.name = "ipc_port",
+		.fcn = db_show_port_id,
+	},
+#if NORMA_VM
+	{
+		.name = "xmm_obj",
+		.fcn = (db_func)xmm_obj_print,
+	},
+	{
+		.name = "xmm_reply",
+		.fcn = (db_func)xmm_reply_print,
+	},
 #endif	/* NORMA_VM */
-#if	TRACE_BUFFER
-	{ "tr",		db_show_tr,			0,	0 },
+#if TRACE_BUFFER
+	{
+		.name = "tr",
+		.fcn = db_show_tr,
+	},
 #endif	/* TRACE_BUFFER */
-	{ "space",	db_show_one_space,		0,	0 },
-	{ "system",	(db_func) db_system_stats,	0,	0 },
-	{ "zone",	db_show_one_zone,		0,	0 },
-	{ "lock",	(db_func)db_show_one_lock,	0,	0 },
-	{ "mutex_lock",	(db_func)db_show_one_mutex,	0,	0 },
-	{ "simple_lock", (db_func)db_show_one_simple_lock,	0,	0 },
-	{ "thread_log", (db_func)db_show_thread_log,	0,	0 },
-	{ "shuttle",	db_show_shuttle,		0,	0 },
-	{ (char *)0, }
+	{
+		.name = "space",
+		.fcn = db_show_one_space,
+	},
+	{
+		.name = "system",
+		.fcn = (db_func)db_system_stats,
+	},
+	{
+		.name = "zone",
+		.fcn = db_show_one_zone,
+	},
+	{
+		.name = "lock",
+		.fcn = (db_func)db_show_one_lock,
+	},
+	{
+		.name = "mutex_lock",
+		.fcn = (db_func)db_show_one_mutex,
+	},
+	{
+		.name = "simple_lock",
+		.fcn = (db_func)db_show_one_simple_lock,
+	},
+	{
+		.name = "thread_log",
+		(db_func)db_show_thread_log,
+	},
+	{
+		.name = "shuttle",
+		.fcn = db_show_shuttle,
+	},
+	{
+		.name = (const char *)NULL,
+	},
 };
 
 #define	db_switch_cpu kdb_on
-extern void	db_switch_cpu(int);
 
 struct db_command db_command_table[] = {
 #if DB_MACHINE_COMMANDS
-
-/* this must be the first entry, if it exists */
-	{ "machine",	0,				0,			0 },
-#endif
-	{ "print",	(db_func) db_print_cmd,		CS_OWN,			0 },
-	{ "examine",	db_examine_cmd,			CS_MORE|CS_SET_DOT,	0 },
-	{ "x",		db_examine_cmd,			CS_MORE|CS_SET_DOT,	0 },
-	{ "xf",		db_examine_forward,		CS_SET_DOT,		0 },
-	{ "xb",		db_examine_backward,		CS_SET_DOT,		0 },
-	{ "search",	(db_func) db_search_cmd,	CS_OWN|CS_SET_DOT,	0 },
-	{ "set",	(db_func) db_set_cmd,		CS_OWN,			0 },
-	{ "write",	db_write_cmd,			CS_MORE|CS_SET_DOT,	0 },
-	{ "w",		db_write_cmd,			CS_MORE|CS_SET_DOT,	0 },
-	{ "delete",	(db_func) db_delete_cmd,	CS_OWN,			0 },
-	{ "d",		(db_func) db_delete_cmd,	CS_OWN,			0 },
-	{ "break",	db_breakpoint_cmd,		CS_MORE,		0 },
-	{ "dwatch",	db_deletewatch_cmd,		CS_MORE,		0 },
-	{ "watch",	db_watchpoint_cmd,		CS_MORE,		0 },
-	{ "step",	db_single_step_cmd,		0,			0 },
-	{ "s",		db_single_step_cmd,		0,			0 },
-	{ "continue",	db_continue_cmd,		0,			0 },
-	{ "c",		db_continue_cmd,		0,			0 },
-	{ "gdb",	db_continue_gdb,		0,			0 },
-	{ "until",	db_trace_until_call_cmd,	0,			0 },
+	/* this must be the first entry, if it exists */
+	{
+		.name = "machine",
+	},
+#endif /* DB_MACHINE_COMMANDS */
+	{
+		.name = "print",
+		.fcn = (db_func)db_print_cmd,
+		.flag = CS_OWN,
+	},
+	{
+		.name = "examine",
+		.fcn = db_examine_cmd,
+		.flag = CS_MORE|CS_SET_DOT,
+	},
+	{
+		.name = "x",
+		.fcn = db_examine_cmd,
+		.flag = CS_MORE|CS_SET_DOT,
+	},
+	{
+		.name = "xf",
+		.fcn = db_examine_forward,
+		.flag = CS_SET_DOT,
+	},
+	{
+		.name = "xb",
+		.fcn = db_examine_backward,
+		.flag = CS_SET_DOT,
+	},
+	{
+		.name = "search",
+		.fcn = (db_func)db_search_cmd,
+		.flag = CS_OWN|CS_SET_DOT,
+	},
+	{
+		.name = "set",
+		.fcn = (db_func)db_set_cmd,
+		.flag = CS_OWN,
+	},
+	{
+		.name = "write",
+		.fcn = db_write_cmd,
+		.flag = CS_MORE|CS_SET_DOT,
+	},
+	{
+		.name = "w",
+		.fcn = db_write_cmd,
+		.flag = CS_MORE|CS_SET_DOT,
+	},
+	{
+		.name = "delete",
+		.fcn = (db_func)db_delete_cmd,
+		.flag = CS_OWN,
+	},
+	{
+		.name = "d",
+		.fcn = (db_func)db_delete_cmd,
+		.flag = CS_OWN,
+	},
+	{
+		.name = "break",
+		.fcn = db_breakpoint_cmd,
+		.flag = CS_MORE,
+	},
+	{
+		.name = "dwatch",
+		.fcn = db_deletewatch_cmd,
+		.flag = CS_MORE,
+	},
+	{
+		.name = "watch",
+		.fcn = db_watchpoint_cmd,
+		.flag = CS_MORE,
+	},
+	{
+		.name = "step",
+		.fcn = db_single_step_cmd,
+	},
+	{
+		.name = "s",
+		.fcn = db_single_step_cmd,
+	},
+	{
+		.name = "continue",
+		.fcn = db_continue_cmd,
+	},
+	{
+		.name = "c",
+		.fcn = db_continue_cmd,
+	},
+	{
+		.name = "gdb",
+		.fcn = db_continue_gdb,
+	},
+	{
+		.name = "until",
+		.fcn = db_trace_until_call_cmd,
+	},
 
 	/* As per request of DNoveck, CR1550, leave this disabled	*/
 #if 0	/* until CR1440 is fixed, to avoid toe-stubbing			*/
-	{ "next",	db_trace_until_matching_cmd,	0,			0 },
+	{
+		.name = "next",
+		.fcn = db_trace_until_matching_cmd,
+	},
 #endif
-	{ "match",	db_trace_until_matching_cmd,	0	,		0 },
-	{ "trace",	db_stack_trace_cmd,		0,			0 },
-	{ "cond",	(db_func) db_cond_cmd,		CS_OWN,			0 },
-	{ "call",	(db_func) db_fncall,		CS_OWN,			0 },
-	{ "macro",	(db_func) db_def_macro_cmd,	CS_OWN,			0 },
-	{ "dmacro",	(db_func) db_del_macro_cmd,	CS_OWN,			0 },
-	{ "show",	0,				0,			db_show_cmds },
-	{ "cpu",	(db_func) db_switch_cpu,	0,			0 },
-	{ "dr",		db_display_real,		CS_MORE|CS_SET_DOT,	0 },
-	{ "di",		db_display_iokit,		CS_MORE,			0 },
-	{ "dk",		db_display_kmod,		CS_MORE,			0 },
+	{
+		.name = "match",
+		.fcn = db_trace_until_matching_cmd,
+	},
+	{
+		.name = "trace",
+		.fcn = db_stack_trace_cmd,
+	},
+	{
+		.name = "cond",
+		.fcn = (db_func)db_cond_cmd,
+		.flag = CS_OWN,
+	},
+	{
+		.name = "call",
+		.fcn = (db_func)db_fncall,
+		.flag = CS_OWN,
+	},
+	{
+		.name = "macro",
+		.fcn = (db_func)db_def_macro_cmd,
+		.flag = CS_OWN,
+	},
+	{
+		.name = "dmacro",
+		.fcn = (db_func)db_del_macro_cmd,
+		.flag = CS_OWN,
+	},
+	{
+		.name = "show",
+		.more = db_show_cmds
+	},
+	{
+		.name = "cpu",
+		.fcn = (db_func)db_switch_cpu,
+	},
+	{
+		.name = "dr",
+		.fcn = db_display_real,
+		.flag = CS_MORE|CS_SET_DOT,
+	},
+	{
+		.name = "di",
+		.fcn = db_display_iokit,
+		.flag = CS_MORE,
+	},
+	{
+		.name = "dk",
+		.fcn = db_display_kmod,
+		.flag = CS_MORE,
+	},
 
-	{ "reboot",	(db_func) db_reboot,		0,			0 },
+	{
+		.name = "reboot",
+		(db_func)db_reboot,
+	},
 #if !defined(__ppc__)	
-	{ "pm",		db_pmgr,				CS_MORE,			0 },
-	{ "na",		db_nap,					CS_MORE,			0 },
-	{ "ms",		db_msr,					CS_MORE,			0 },
-	{ "cp",		db_cpuid,				CS_MORE,			0 },
-	{ "da",		db_apic,				CS_MORE,			0 },
-	{ "ts",		db_test,				CS_MORE,			0 },
-	{ "dn",		db_intcnt,				CS_MORE,			0 },
-	{ "hp",		db_hpet,				CS_MORE,			0 },
-	{ "cf",		db_cfg,					CS_MORE,			0 },
-	{ "dt",		db_dtimers,				CS_MORE,			0 },
-#endif
+	{
+		.name = "ms",
+		.fcn = db_msr,
+		.flag = CS_MORE,
+	},
+	{
+		.name = "cp",
+		.fcn = db_cpuid,
+		.flag = CS_MORE,
+	},
+	{
+		.name = "da",
+		.fcn = db_apic,
+		.flag = CS_MORE,
+	},
+	{
+		.name = "hp",
+		.fcn = db_hpet,
+		.flag = CS_MORE,
+	},
+#endif /* !__ppc__ */
 #if defined(__ppc__)	
-	{ "lt",		db_low_trace,			CS_MORE|CS_SET_DOT,	0 },
-	{ "dl",		db_display_long,		CS_MORE|CS_SET_DOT,	0 },
-	{ "dc",		db_display_char,		CS_MORE|CS_SET_DOT,	0 },
-	{ "dv",		db_display_virtual,		CS_MORE|CS_SET_DOT,	0 },
-	{ "dm",		db_display_mappings,	CS_MORE|CS_SET_DOT,	0 },
-	{ "dh",		db_display_hash,		CS_MORE|CS_SET_DOT,	0 },
-	{ "dp",		db_display_pmap,		CS_MORE,			0 },
-	{ "ds",		db_display_save,		CS_MORE|CS_SET_DOT,	0 },
-	{ "dx",		db_display_xregs,		CS_MORE|CS_SET_DOT,	0 },
-	{ "gs",		db_gsnoop,				CS_MORE,			0 },
-	{ "cm",		db_check_mappings,		CS_MORE,			0 },
-	{ "cp",		db_check_pmaps,			CS_MORE,			0 },
-#endif
-	{ (char *)0, }
+	{
+		.name = "lt",
+		.fcn = db_low_trace,
+		.flag = CS_MORE|CS_SET_DOT,
+	},
+	{
+		.name = "dl",
+		.fcn = db_display_long,
+		.flag = CS_MORE|CS_SET_DOT,
+	},
+	{
+		.name = "dc",
+		.fcn = db_display_char,
+		.flag = CS_MORE|CS_SET_DOT,
+	},
+	{
+		.name = "dv",
+		.fcn = db_display_virtual,
+		.flag = CS_MORE|CS_SET_DOT,
+	},
+	{
+		.name = "dm",
+		.fcn = db_display_mappings,
+		.flag = CS_MORE|CS_SET_DOT,
+	},
+	{
+		.name = "dh",
+		.fcn = db_display_hash,
+		.flag = CS_MORE|CS_SET_DOT,
+	},
+	{
+		.name = "dp",
+		.fcn = db_display_pmap,
+		.flag = CS_MORE,
+	},
+	{
+		.name = "ds",
+		.fcn = db_display_save,
+		.flag = CS_MORE|CS_SET_DOT,
+	},
+	{
+		.name = "dx",
+		.fcn = db_display_xregs,
+		.flag = CS_MORE|CS_SET_DOT,
+	},
+	{
+		.name = "gs",
+		.fcn = db_gsnoop,
+		.flag = CS_MORE,
+	},
+	{
+		.name = "cm",
+		.fcn = db_check_mappings,
+		.flag = CS_MORE,
+	},
+	{
+		.name = "cp",
+		.fcn = db_check_pmaps,
+		.flag = CS_MORE,
+	},
+#endif /* __ppc__ */
+	{
+		.name = (const char *)NULL,
+	},
 };
 
 /* this function should be called to install the machine dependent
@@ -563,14 +868,14 @@ db_help_cmd(void)
 
 int	(*ddb_display)(void);
 
+extern int db_output_line;
+extern int db_macro_level;
+
 void
 db_command_loop(void)
 {
 	jmp_buf_t db_jmpbuf;
 	jmp_buf_t *prev = db_recover;
-	extern int db_output_line;
-	extern int db_macro_level;
-	extern int db_indent;
 
 	/*
 	 * Initialize 'prev' and 'next' to dot.
@@ -622,8 +927,6 @@ db_exec_cmd_nest(
 void
 db_error(const char *s)
 {
-	extern int db_macro_level;
-
 	db_macro_level = 0;
 	if (db_recover) {
 	    if (s > (char *)1)
@@ -661,7 +964,7 @@ db_fncall(void)
 	    db_flush_lex();
 	    return;
 	}
-	func = (uint32_t (*) (uint32_t, ...)) fn_addr;
+	func = (uint32_t (*) (uint32_t, ...))(unsigned long)fn_addr;
 
 	t = db_read_token();
 	if (t == tLPAREN) {
@@ -704,7 +1007,7 @@ db_option(
 	const char	*modif,
 	int		option)
 {
-	register char *p;
+	const char *p;
 
 	for (p = modif; *p; p++)
 	    if (*p == option)

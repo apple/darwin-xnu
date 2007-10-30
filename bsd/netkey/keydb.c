@@ -49,9 +49,11 @@
 
 #include <net/net_osdep.h>
 
+extern lck_mtx_t  *sadb_mutex;
+
 MALLOC_DEFINE(M_SECA, "key mgmt", "security associations, key management");
 
-static void keydb_delsecasvar(struct secasvar *);
+// static void keydb_delsecasvar(struct secasvar *); // not used
 
 /*
  * secpolicy management
@@ -60,6 +62,8 @@ struct secpolicy *
 keydb_newsecpolicy()
 {
 	struct secpolicy *p;
+
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 
 	p = (struct secpolicy *)_MALLOC(sizeof(*p), M_SECA, M_WAITOK);
 	if (!p)
@@ -85,8 +89,15 @@ keydb_newsecashead()
 	struct secashead *p;
 	int i;
 
-	p = (struct secashead *)_MALLOC(sizeof(*p), M_SECA, M_WAITOK);
-	if (!p)
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+
+	p = (struct secashead *)_MALLOC(sizeof(*p), M_SECA, M_NOWAIT);
+	if (!p) {
+		lck_mtx_unlock(sadb_mutex);
+		p = (struct secashead *)_MALLOC(sizeof(*p), M_SECA, M_WAITOK);
+		lck_mtx_lock(sadb_mutex);
+	}
+	if (!p) 
 		return p;
 	bzero(p, sizeof(*p));
 	for (i = 0; i < sizeof(p->savtree)/sizeof(p->savtree[0]); i++)
@@ -94,6 +105,7 @@ keydb_newsecashead()
 	return p;
 }
 
+#if 0
 void
 keydb_delsecashead(p)
 	struct secashead *p;
@@ -102,13 +114,17 @@ keydb_delsecashead(p)
 	_FREE(p, M_SECA);
 }
 
-/*
+
+
+/* 
  * secasvar management (reference counted)
  */
 struct secasvar *
 keydb_newsecasvar()
 {
 	struct secasvar *p;
+
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 
 	p = (struct secasvar *)_MALLOC(sizeof(*p), M_SECA, M_WAITOK);
 	if (!p)
@@ -122,25 +138,23 @@ void
 keydb_refsecasvar(p)
 	struct secasvar *p;
 {
-	int s;
 
-	s = splnet();
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+
 	p->refcnt++;
-	splx(s);
 }
 
 void
 keydb_freesecasvar(p)
 	struct secasvar *p;
 {
-	int s;
 
-	s = splnet();
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+
 	p->refcnt--;
 	/* negative refcnt will cause panic intentionally */
 	if (p->refcnt <= 0)
 		keydb_delsecasvar(p);
-	splx(s);
 }
 
 static void
@@ -153,6 +167,7 @@ keydb_delsecasvar(p)
 
 	_FREE(p, M_SECA);
 }
+#endif
 
 /*
  * secreplay management
@@ -162,17 +177,29 @@ keydb_newsecreplay(wsize)
 	size_t wsize;
 {
 	struct secreplay *p;
+	
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 
-	p = (struct secreplay *)_MALLOC(sizeof(*p), M_SECA, M_WAITOK);
+	p = (struct secreplay *)_MALLOC(sizeof(*p), M_SECA, M_NOWAIT);
+	if (!p) {
+		lck_mtx_unlock(sadb_mutex);
+		p = (struct secreplay *)_MALLOC(sizeof(*p), M_SECA, M_WAITOK);
+		lck_mtx_lock(sadb_mutex);
+	}
 	if (!p)
 		return p;
 
 	bzero(p, sizeof(*p));
 	if (wsize != 0) {
-		p->bitmap = (caddr_t)_MALLOC(wsize, M_SECA, M_WAITOK);
+		p->bitmap = (caddr_t)_MALLOC(wsize, M_SECA, M_NOWAIT);
 		if (!p->bitmap) {
-			_FREE(p, M_SECA);
-			return NULL;
+			lck_mtx_unlock(sadb_mutex);
+			p->bitmap = (caddr_t)_MALLOC(wsize, M_SECA, M_WAITOK);
+			lck_mtx_lock(sadb_mutex);
+			if (!p->bitmap) {
+				_FREE(p, M_SECA);
+				return NULL;
+			}
 		}
 		bzero(p->bitmap, wsize);
 	}
@@ -190,7 +217,8 @@ keydb_delsecreplay(p)
 	_FREE(p, M_SECA);
 }
 
-/*
+#if 0
+/*	NOT USED
  * secreg management
  */
 struct secreg *
@@ -211,3 +239,4 @@ keydb_delsecreg(p)
 
 	_FREE(p, M_SECA);
 }
+#endif

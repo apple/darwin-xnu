@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -92,15 +98,11 @@ db_lookup_task(task_t target_task)
 {
 	register task_t task;
 	register int task_id;
-	register processor_set_t pset = &default_pset;
-	register int npset = 0;
 
 	task_id = 0;
-	if (npset++ >= DB_MAX_PSETS)
+	if (queue_first(&tasks) == 0)
 		return(-1);
-	if (queue_first(&pset->tasks) == 0)
-		return(-1);
-	queue_iterate(&pset->tasks, task, task_t, pset_tasks) {
+	queue_iterate(&tasks, task, task_t, tasks) {
 		if (target_task == task)
 		    return(task_id);
 		if (task_id++ >= DB_MAX_TASKID)
@@ -141,15 +143,11 @@ db_lookup_act(thread_t target_act)
 {
 	register int act_id;
 	register task_t task;
-	register processor_set_t pset = &default_pset;
 	register int ntask = 0;
-	register int npset = 0;
 
-	if (npset++ >= DB_MAX_PSETS)
+	if (queue_first(&tasks) == 0)
 		return(-1);
-	if (queue_first(&pset->tasks) == 0)
-		return(-1);
-	queue_iterate(&pset->tasks, task, task_t, pset_tasks) {
+	queue_iterate(&tasks, task, task_t, tasks) {
 		if (ntask++ > DB_MAX_TASKID)
 		    return(-1);
 		if (task->thread_count == 0)
@@ -180,19 +178,15 @@ db_check_act_address_valid(thread_t thr_act)
  * convert task_id(queue postion) to task address
  */
 task_t
-db_lookup_task_id(register task_id)
+db_lookup_task_id(int task_id)
 {
 	register task_t task;
-	register processor_set_t pset = &default_pset;
-	register int npset = 0;
 
 	if (task_id > DB_MAX_TASKID)
 	    return(TASK_NULL);
-	if (npset++ >= DB_MAX_PSETS)
+	if (queue_first(&tasks) == 0)
 		return(TASK_NULL);
-	if (queue_first(&pset->tasks) == 0)
-		return(TASK_NULL);
-	queue_iterate(&pset->tasks, task, task_t, pset_tasks) {
+	queue_iterate(&tasks, task, task_t, tasks) {
 		if (task_id-- <= 0)
 			return(task);
 	}
@@ -235,7 +229,7 @@ db_get_next_act(
 
 	*actp = THREAD_NULL;
 	if (db_expression(&value)) {
-	    thr_act = (thread_t) value;
+	    thr_act = (thread_t)(unsigned long)value;
 	    if (!db_check_act_address_valid(thr_act)) {
 		db_flush_lex();
 		return(FALSE);
@@ -267,11 +261,8 @@ db_init_default_act(void)
  * in the command line
  */
 int
-db_set_default_act(
-	struct db_variable	*vp,
-	db_expr_t		*valuep,
-	int			flag,
-	db_var_aux_param_t	ap)			/* unused */
+db_set_default_act(__unused struct db_variable *vp, db_expr_t *valuep,
+		   int flag, __unused db_var_aux_param_t ap)
 {
 	thread_t	thr_act;
 	int		task_id;
@@ -290,10 +281,10 @@ db_set_default_act(
 	}
 
 	if (flag != DB_VAR_SET) {
-	    *valuep = (db_expr_t) db_default_act;
+	    *valuep = (db_expr_t)(unsigned long)db_default_act;
 	    return(0);
 	}
-	thr_act = (thread_t) *valuep;
+	thr_act = (thread_t)(unsigned long)*valuep;
 	if (thr_act != THREAD_NULL && !db_check_act_address_valid(thr_act))
 	    db_error(0);
 	    /* NOTREACHED */
@@ -307,11 +298,8 @@ db_set_default_act(
  * convert $taskXXX[.YYY] type DDB variable to task or thread address
  */
 int
-db_get_task_act(
-	struct db_variable	*vp,
-	db_expr_t		*valuep,
-	int			flag,
-	db_var_aux_param_t	ap)
+db_get_task_act(__unused struct db_variable *vp, db_expr_t *valuep, int flag,
+		db_var_aux_param_t ap)
 {
 	task_t	 		task;
 	thread_t		thr_act;
@@ -335,7 +323,7 @@ db_get_task_act(
 	    /* NOTREACHED */
 	}
 	if (ap->level <= 1) {
-	    *valuep = (db_expr_t) task;
+	    *valuep = (db_expr_t)(unsigned long)task;
 	    return(0);
 	}
 	if ((thr_act = db_lookup_act_id(task, ap->suffix[1])) == THREAD_NULL){
@@ -344,6 +332,6 @@ db_get_task_act(
 	    db_error(0);
 	    /* NOTREACHED */
 	}
-	*valuep = (db_expr_t) thr_act;
+	*valuep = (db_expr_t)(unsigned long)thr_act;
 	return(0);
 }

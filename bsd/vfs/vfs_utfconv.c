@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
  
  /*
@@ -27,6 +33,7 @@
 #include <sys/param.h>
 #include <sys/utfconv.h>
 #include <sys/errno.h>
+#include <sys/malloc.h>
 #include <libkern/OSByteOrder.h>
 
 /*
@@ -143,44 +150,80 @@ static u_int16_t unicode_combine(u_int16_t base, u_int16_t combining);
 
 static void priortysort(u_int16_t* characters, int count);
 
+static u_int16_t  ucs_to_sfm(u_int16_t ucs_ch, int lastchar);
+
+static u_int16_t  sfm_to_ucs(u_int16_t ucs_ch);
+
+
 char utf_extrabytes[32] = {
 	 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
 	-1, -1, -1, -1, -1, -1, -1, -1,  1,  1,  1,  1,  2,  2,  3, -1
 };
 
+const char hexdigits[16] = {
+	 '0',  '1',  '2',  '3',  '4',  '5',  '6', '7',
+	 '8',  '9',  'A',  'B',  'C',  'D',  'E', 'F'
+};
 
 /*
- * utf8_encodelen - Calculates the UTF-8 encoding length for a Unicode filename
+ * utf8_encodelen - Calculate the UTF-8 encoding length
  *
- * NOTES:
- *    If '/' chars are allowed on disk then an alternate
- *    (replacement) char must be provided in altslash.
+ * This function takes a Unicode input string, ucsp, of ucslen bytes
+ * and calculates the size of the UTF-8 output in bytes (not including
+ * a NULL termination byte). The string must reside in kernel memory.
  *
- * input flags:
- *    UTF_REVERSE_ENDIAN: Unicode byteorder is opposite current runtime
+ * If '/' chars are possible in the Unicode input then an alternate
+ * (replacement) char should be provided in altslash.
+ *
+ * FLAGS
+ *    UTF_REVERSE_ENDIAN:  Unicode byte order is opposite current runtime
+ *
+ *    UTF_BIG_ENDIAN:  Unicode byte order is always big endian
+ *
+ *    UTF_LITTLE_ENDIAN:  Unicode byte order is always little endian
+ *
+ *    UTF_DECOMPOSED:  generate fully decomposed output
+ *
+ *    UTF_PRECOMPOSED is ignored since utf8_encodestr doesn't support it
+ *
+ * ERRORS
+ *    None
  */
 size_t
-utf8_encodelen(const u_int16_t * ucsp, size_t ucslen, u_int16_t altslash,
-               int flags)
+utf8_encodelen(const u_int16_t * ucsp, size_t ucslen, u_int16_t altslash, int flags)
 {
 	u_int16_t ucs_ch;
+	u_int16_t * chp = NULL;
+	u_int16_t sequence[8];
+	int extra = 0;
 	int charcnt;
 	int swapbytes = (flags & UTF_REVERSE_ENDIAN);
+	int decompose = (flags & UTF_DECOMPOSED);
 	size_t len;
-	
+
 	charcnt = ucslen / 2;
 	len = 0;
 
 	while (charcnt-- > 0) {
-		ucs_ch = *ucsp++;
-
-		if (swapbytes)
-			ucs_ch = OSSwapInt16(ucs_ch);
-		if (ucs_ch == '/')
-			ucs_ch = altslash ? altslash : '_';
-		else if (ucs_ch == '\0')
-			ucs_ch = UCS_ALT_NULL;
-		
+		if (extra > 0) {
+			--extra;
+			ucs_ch = *chp++;
+		} else {
+			ucs_ch = *ucsp++;
+			if (swapbytes) {
+				ucs_ch = OSSwapInt16(ucs_ch);
+			}
+			if (ucs_ch == '/') {
+				ucs_ch = altslash ? altslash : '_';
+			} else if (ucs_ch == '\0') {
+				ucs_ch = UCS_ALT_NULL;
+			} else if (decompose && unicode_decomposeable(ucs_ch)) {
+				extra = unicode_decompose(ucs_ch, sequence) - 1;
+				charcnt += extra;
+				ucs_ch = sequence[0];
+				chp = &sequence[1];
+			}
+		}
 		len += UNICODE_TO_UTF8_LEN(ucs_ch);
 	}
 
@@ -199,10 +242,18 @@ utf8_encodelen(const u_int16_t * ucsp, size_t ucslen, u_int16_t altslash,
  *
  * input flags:
  *    UTF_REVERSE_ENDIAN: Unicode byteorder is opposite current runtime
+ *
+ *    UTF_BIG_ENDIAN:  Unicode byte order is always big endian
+ *
+ *    UTF_LITTLE_ENDIAN:  Unicode byte order is always little endian
+ *
+ *    UTF_DECOMPOSED:  generate fully decomposed output
+ *
  *    UTF_NO_NULL_TERM:  don't add NULL termination to UTF-8 output
  *
  * result:
  *    ENAMETOOLONG: Name didn't fit; only buflen bytes were encoded
+ *
  *    EINVAL: Illegal char found; char was replaced by an '_'.
  */
 int
@@ -219,8 +270,9 @@ utf8_encodestr(const u_int16_t * ucsp, size_t ucslen, u_int8_t * utf8p,
 	int swapbytes = (flags & UTF_REVERSE_ENDIAN);
 	int nullterm  = ((flags & UTF_NO_NULL_TERM) == 0);
 	int decompose = (flags & UTF_DECOMPOSED);
+	int sfmconv = (flags & UTF_SFM_CONVERSIONS);
 	int result = 0;
-	
+
 	bufstart = utf8p;
 	bufend = bufstart + buflen;
 	if (nullterm)
@@ -270,6 +322,12 @@ utf8_encodestr(const u_int16_t * ucsp, size_t ucslen, u_int8_t * utf8p,
 			*utf8p++ = 0x80 | (0x3f & ucs_ch);
 
 		} else {
+			/* These chars never valid Unicode. */
+			if (ucs_ch == 0xFFFE || ucs_ch == 0xFFFF) {
+				result = EINVAL;
+				break;
+			}
+
 			/* Combine valid surrogate pairs */
 			if (ucs_ch >= SP_HIGH_FIRST && ucs_ch <= SP_HIGH_LAST
 				&& charcnt > 0) {
@@ -290,6 +348,16 @@ utf8_encodestr(const u_int16_t * ucsp, size_t ucslen, u_int8_t * utf8p,
 					*utf8p++ = 0x80 | (0x3f & (pair >> 12));
 					*utf8p++ = 0x80 | (0x3f & (pair >> 6));
 					*utf8p++ = 0x80 | (0x3f & pair);
+					continue;
+				}
+			} else if (sfmconv) {
+				ucs_ch = sfm_to_ucs(ucs_ch);
+				if (ucs_ch < 0x0080) {
+					if (utf8p >= bufend) {
+						result = ENAMETOOLONG;
+						break;
+					}			
+					*utf8p++ = ucs_ch;
 					continue;
 				}
 			}
@@ -322,11 +390,21 @@ utf8_encodestr(const u_int16_t * ucsp, size_t ucslen, u_int8_t * utf8p,
  *    (replacement) char must be provided in altslash.
  *
  * input flags:
- *    UTF_REV_ENDIAN:   Unicode byteorder is oposite current runtime
- *    UTF_DECOMPOSED:   Unicode output string must be fully decompsed
+ *    UTF_REV_ENDIAN:  Unicode byte order is opposite current runtime
+ *
+ *    UTF_BIG_ENDIAN:  Unicode byte order is always big endian
+ *
+ *    UTF_LITTLE_ENDIAN:  Unicode byte order is always little endian
+ *
+ *    UTF_DECOMPOSED:  generate fully decomposed output (NFD)
+ *
+ *    UTF_PRECOMPOSED:  generate precomposed output (NFC)
+ *
+ *    UTF_ESCAPE_ILLEGAL:  percent escape any illegal UTF-8 input
  *
  * result:
  *    ENAMETOOLONG: Name didn't fit; only ucslen chars were decoded.
+ *
  *    EINVAL: Illegal UTF-8 sequence found.
  */
 int
@@ -339,11 +417,15 @@ utf8_decodestr(const u_int8_t* utf8p, size_t utf8len, u_int16_t* ucsp,
 	unsigned int byte;
 	int combcharcnt = 0;
 	int result = 0;
-	int decompose, precompose, swapbytes;
+	int decompose, precompose, swapbytes, escaping;
+	int sfmconv;
+	int extrabytes;
 
-	decompose =  (flags & UTF_DECOMPOSED);
+	decompose  = (flags & UTF_DECOMPOSED);
 	precompose = (flags & UTF_PRECOMPOSED);
-	swapbytes =  (flags & UTF_REVERSE_ENDIAN);
+	swapbytes  = (flags & UTF_REVERSE_ENDIAN);
+	escaping   = (flags & UTF_ESCAPE_ILLEGAL);
+	sfmconv    = (flags & UTF_SFM_CONVERSIONS);
 
 	bufstart = ucsp;
 	bufend = (u_int16_t *)((u_int8_t *)ucsp + buflen);
@@ -354,13 +436,14 @@ utf8_decodestr(const u_int8_t* utf8p, size_t utf8len, u_int16_t* ucsp,
 
 		/* check for ascii */
 		if (byte < 0x80) {
-			ucs_ch = byte;                 /* 1st byte */
+			ucs_ch = sfmconv ? ucs_to_sfm(byte, utf8len == 0) : byte;
 		} else {
 			u_int32_t ch;
-			int extrabytes = utf_extrabytes[byte >> 3];
 
-			if (utf8len < extrabytes)
-				goto invalid;
+			extrabytes = utf_extrabytes[byte >> 3];
+			if ((extrabytes < 0) || ((int)utf8len < extrabytes)) {
+				goto escape;
+			}
 			utf8len -= extrabytes;
 
 			switch (extrabytes) {
@@ -368,31 +451,31 @@ utf8_decodestr(const u_int8_t* utf8p, size_t utf8len, u_int16_t* ucsp,
 				ch = byte; ch <<= 6;   /* 1st byte */
 				byte = *utf8p++;       /* 2nd byte */
 				if ((byte >> 6) != 2)
-					goto invalid;
+					goto escape2;
 				ch += byte;
 				ch -= 0x00003080UL;
 				if (ch < 0x0080)
-					goto invalid;
+					goto escape2;
 				ucs_ch = ch;
 			        break;
 			case 2:
 				ch = byte; ch <<= 6;   /* 1st byte */
 				byte = *utf8p++;       /* 2nd byte */
 				if ((byte >> 6) != 2)
-					goto invalid;
+					goto escape2;
 				ch += byte; ch <<= 6;
 				byte = *utf8p++;       /* 3rd byte */
 				if ((byte >> 6) != 2)
-					goto invalid;
+					goto escape3;
 				ch += byte;
 				ch -= 0x000E2080UL;
 				if (ch < 0x0800)
-					goto invalid;
+					goto escape3;
 				if (ch >= 0xD800) {
 					if (ch <= 0xDFFF)
-						goto invalid;
+						goto escape3;
 					if (ch == 0xFFFE || ch == 0xFFFF)
-						goto invalid;
+						goto escape3;
 				}
 				ucs_ch = ch;
 				break;
@@ -400,49 +483,52 @@ utf8_decodestr(const u_int8_t* utf8p, size_t utf8len, u_int16_t* ucsp,
 				ch = byte; ch <<= 6;   /* 1st byte */
 				byte = *utf8p++;       /* 2nd byte */
 				if ((byte >> 6) != 2)
-					goto invalid;
+					goto escape2;
 				ch += byte; ch <<= 6;
 				byte = *utf8p++;       /* 3rd byte */
 				if ((byte >> 6) != 2)
-					goto invalid;
+					goto escape3;
 				ch += byte; ch <<= 6;
 				byte = *utf8p++;       /* 4th byte */
 				if ((byte >> 6) != 2)
-					goto invalid;
+					goto escape4;
 			        ch += byte;
 				ch -= 0x03C82080UL + SP_HALF_BASE;
 				ucs_ch = (ch >> SP_HALF_SHIFT) + SP_HIGH_FIRST;
 				if (ucs_ch < SP_HIGH_FIRST || ucs_ch > SP_HIGH_LAST)
-					goto invalid;
-				*ucsp++ = swapbytes ? OSSwapInt16(ucs_ch) : ucs_ch;
+					goto escape4;
+				*ucsp++ = swapbytes ? OSSwapInt16(ucs_ch) : (u_int16_t)ucs_ch;
 				if (ucsp >= bufend)
 					goto toolong;
 				ucs_ch = (ch & SP_HALF_MASK) + SP_LOW_FIRST;
-				if (ucs_ch < SP_LOW_FIRST || ucs_ch > SP_LOW_LAST)
-					goto invalid;
-				*ucsp++ = swapbytes ? OSSwapInt16(ucs_ch) : ucs_ch;
+				if (ucs_ch < SP_LOW_FIRST || ucs_ch > SP_LOW_LAST) {
+					--ucsp;
+					goto escape4;
+				}
+				*ucsp++ = swapbytes ? OSSwapInt16(ucs_ch) : (u_int16_t)ucs_ch;
 			        continue;
 			default:
-				goto invalid;
+				result = EINVAL;
+				goto exit;
 			}
 			if (decompose) {
 				if (unicode_decomposeable(ucs_ch)) {
 					u_int16_t sequence[8];
 					int count, i;
-					
-					/* Before decomposing a new unicode character, sort
-					 * previous combining characters, if any, and reset 
-					 * the counter
+
+					/* Before decomposing a new unicode character, sort 
+					 * previous combining characters, if any, and reset
+					 * the counter.
 					 */
-					if (combcharcnt > 1){
+					if (combcharcnt > 1) {
 						priortysort(ucsp - combcharcnt, combcharcnt);
 					}
 					combcharcnt = 0;
-					count = unicode_decompose(ucs_ch, sequence);
 
+					count = unicode_decompose(ucs_ch, sequence);
 					for (i = 0; i < count; ++i) {
 						ucs_ch = sequence[i];
-						*ucsp++ = swapbytes ? OSSwapInt16(ucs_ch) : ucs_ch;
+						*ucsp++ = swapbytes ? OSSwapInt16(ucs_ch) : (u_int16_t)ucs_ch;
 						if (ucsp >= bufend)
 							goto toolong;
 					}
@@ -478,7 +564,39 @@ utf8_decodestr(const u_int8_t* utf8p, size_t utf8len, u_int16_t* ucsp,
 			}
 			combcharcnt = 0;  /* start over */
 		}
-		*ucsp++ = swapbytes ? OSSwapInt16(ucs_ch) : ucs_ch;
+
+		*ucsp++ = swapbytes ? OSSwapInt16(ucs_ch) : (u_int16_t)ucs_ch;
+		continue;
+
+		/* 
+		 * Escape illegal UTF-8 into something legal.
+		 */
+escape4:
+		utf8p -= 3;
+		goto escape;
+escape3:
+		utf8p -= 2;
+		goto escape;
+escape2:
+		utf8p -= 1;
+escape:
+		if (!escaping) {
+			result = EINVAL;
+			goto exit;
+		}
+		if (extrabytes > 0)
+			utf8len += extrabytes;
+		byte = *(utf8p - 1);
+
+		if ((ucsp + 2) >= bufend)
+			goto toolong;
+
+		ucs_ch = '%';
+		*ucsp++ = swapbytes ? OSSwapInt16(ucs_ch) : (u_int16_t)ucs_ch;
+		ucs_ch =  hexdigits[byte >> 4];
+		*ucsp++ = swapbytes ? OSSwapInt16(ucs_ch) : (u_int16_t)ucs_ch;
+		ucs_ch =  hexdigits[byte & 0x0F];
+		*ucsp++ = swapbytes ? OSSwapInt16(ucs_ch) : (u_int16_t)ucs_ch;
 	}
 	/*
 	 * Make a previous combining sequence canonical
@@ -486,15 +604,10 @@ utf8_decodestr(const u_int8_t* utf8p, size_t utf8len, u_int16_t* ucsp,
 	if (combcharcnt > 1) {
 		priortysort(ucsp - combcharcnt, combcharcnt);
 	}
-
 exit:
 	*ucslen = (u_int8_t*)ucsp - (u_int8_t*)bufstart;
 
 	return (result);
-
-invalid:
-	result = EINVAL;
-	goto exit;
 
 toolong:
 	result = ENAMETOOLONG;
@@ -584,6 +697,122 @@ utf8_validatestr(const u_int8_t* utf8p, size_t utf8len)
 	return (0);
 invalid:
 	return (EINVAL);
+}
+
+/*
+ * utf8_normalizestr - Normalize a UTF-8 string (NFC or NFD)
+ *
+ * This function takes an UTF-8 input string, instr, of inlen bytes
+ * and produces normalized UTF-8 output into a buffer of buflen bytes
+ * pointed to by outstr. The size of the output in bytes (not including
+ * a NULL termination byte) is returned in outlen. In-place conversions
+ * are not supported (i.e. instr != outstr).]
+ 
+ * FLAGS
+ *    UTF_DECOMPOSED:  output string will be fully decomposed (NFD)
+ *
+ *    UTF_PRECOMPOSED:  output string will be precomposed (NFC)
+ *
+ *    UTF_NO_NULL_TERM:  do not add null termination to output string
+ *
+ *    UTF_ESCAPE_ILLEGAL:  percent escape any illegal UTF-8 input
+ *
+ * ERRORS
+ *    ENAMETOOLONG:  output did not fit or input exceeded MAXPATHLEN bytes
+ *
+ *    EINVAL:  illegal UTF-8 sequence encountered or invalid flags
+ */
+int
+utf8_normalizestr(const u_int8_t* instr, size_t inlen, u_int8_t* outstr,
+                  size_t *outlen, size_t buflen, int flags)
+{
+	u_int16_t unicodebuf[32];
+	u_int16_t* unistr = NULL;
+	size_t unicode_bytes;
+	size_t uft8_bytes;
+	size_t inbuflen;
+	u_int8_t *outbufstart, *outbufend;
+	const u_int8_t *inbufstart;
+	unsigned int byte;
+	int decompose, precompose;
+	int result = 0;
+
+	if (flags & ~(UTF_DECOMPOSED | UTF_PRECOMPOSED | UTF_NO_NULL_TERM | UTF_ESCAPE_ILLEGAL)) {
+		return (EINVAL);
+	}
+	decompose = (flags & UTF_DECOMPOSED);
+	precompose = (flags & UTF_PRECOMPOSED);
+	if ((decompose && precompose) || (!decompose && !precompose)) {
+		return (EINVAL);
+	}
+	outbufstart = outstr;
+	outbufend = outbufstart + buflen;
+	inbufstart = instr;
+	inbuflen = inlen;
+
+	while (inlen-- > 0 && (byte = *instr++) != '\0') {
+		if (outstr >= outbufend) {
+			result = ENAMETOOLONG;
+			goto exit;
+		}
+		if (byte >= 0x80) {
+			goto nonASCII;
+		}
+		/* ASCII is already normalized. */
+		*outstr++ = byte;
+	}
+exit:
+	*outlen = outstr - outbufstart;
+	if (((flags & UTF_NO_NULL_TERM) == 0)) {
+		if (outstr < outbufend)
+			*outstr++ = '\0';
+		else
+			result = ENAMETOOLONG;
+	}
+	return (result);
+
+
+	/* 
+	 * Non-ASCII uses the existing utf8_encodestr/utf8_decodestr
+	 * functions to perform the normalization.  Since this will
+	 * presumably be used to normalize filenames in the back-end
+	 * (on disk or over-the-wire), it should be fast enough.
+	 */
+nonASCII:
+
+	/* Make sure the input size is reasonable. */
+	if (inbuflen > MAXPATHLEN) {
+		result = ENAMETOOLONG;
+		goto exit;
+	}
+	/*
+	 * Compute worst case Unicode buffer size.
+	 *
+	 * For pre-composed output, every UTF-8 input byte will be at
+	 * most 2 Unicode bytes.  For decomposed output, 2 UTF-8 bytes
+	 * (smallest composite char sequence) may yield 6 Unicode bytes
+	 * (1 base char + 2 combining chars).
+	 */
+	unicode_bytes = precompose ? (inbuflen * 2) : (inbuflen * 3);
+
+	if (unicode_bytes <= sizeof(unicodebuf))
+		unistr = &unicodebuf[0];
+	else
+		MALLOC(unistr, u_int16_t *, unicode_bytes, M_TEMP, M_WAITOK);
+
+	/* Normalize the string. */
+	result = utf8_decodestr(inbufstart, inbuflen, unistr, &unicode_bytes,
+	                        unicode_bytes, 0, flags & ~UTF_NO_NULL_TERM);
+	if (result == 0) {
+		/* Put results back into UTF-8. */
+		result = utf8_encodestr(unistr, unicode_bytes, outbufstart,
+		                        &uft8_bytes, buflen, 0, UTF_NO_NULL_TERM);
+		outstr = outbufstart + uft8_bytes;
+	}
+	if (unistr && unistr != &unicodebuf[0]) {
+		FREE(unistr, M_TEMP);
+	}
+	goto exit;
 }
 
 
@@ -771,7 +1000,7 @@ unicode_combine(u_int16_t base, u_int16_t combining)
 	if (value) {
 		value = getmappedvalue16(
 			(const unicode_mappings16 *)
-			((u_int32_t *)__CFUniCharBMPPrecompDestinationTable + (value & 0xFFFF)),
+			((const u_int32_t *)__CFUniCharBMPPrecompDestinationTable + (value & 0xFFFF)),
 			(value >> 16), base);
 	}
 	return (value);
@@ -813,3 +1042,108 @@ priortysort(u_int16_t* characters, int count)
 		}
 	} while (changes);
 }
+
+
+/*
+ * Invalid NTFS filename characters are encodeded using the
+ * SFM (Services for Macintosh) private use Unicode characters.
+ *
+ * These should only be used for SMB, MSDOS or NTFS.
+ *
+ *    Illegal NTFS Char   SFM Unicode Char
+ *  ----------------------------------------
+ *    0x01-0x1f           0xf001-0xf01f
+ *    '"'                 0xf020
+ *    '*'                 0xf021
+ *    '/'                 0xf022
+ *    '<'                 0xf023
+ *    '>'                 0xf024
+ *    '?'                 0xf025
+ *    '\'                 0xf026
+ *    '|'                 0xf027
+ *    ' '                 0xf028  (Only if last char of the name)
+ *    '.'                 0xf029  (Only if last char of the name)
+ *  ----------------------------------------
+ *
+ *  Reference: http://support.microsoft.com/kb/q117258/
+ */
+
+#define MAX_SFM2MAC           0x29
+#define SFMCODE_PREFIX_MASK   0xf000 
+
+/*
+ * In the Mac OS 9 days the colon was illegal in a file name. For that reason
+ * SFM had no conversion for the colon. There is a conversion for the
+ * slash. In Mac OS X the slash is illegal in a file name. So for us the colon
+ * is a slash and a slash is a colon. So we can just replace the slash with the
+ * colon in our tables and everything will just work. 
+ */
+static u_int8_t
+sfm2mac[42] = {
+	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,   /* 00 - 07 */
+	0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,   /* 08 - 0F */
+	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,   /* 10 - 17 */
+	0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,   /* 18 - 1F */
+	0x22, 0x2a, 0x3a, 0x3c, 0x3e, 0x3f, 0x5c, 0x7c,   /* 20 - 27 */
+	0x20, 0x2e                                        /* 28 - 29 */
+};
+
+static u_int8_t
+mac2sfm[112] = {
+	0x20, 0x21, 0x20, 0x23, 0x24, 0x25, 0x26, 0x27,	  /* 20 - 27 */
+	0x28, 0x29, 0x21, 0x2b, 0x2c, 0x2d, 0x2e, 0x22,   /* 28 - 2f */
+	0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,   /* 30 - 37 */
+	0x38, 0x39, 0x22, 0x3b, 0x23, 0x3d, 0x24, 0x25,   /* 38 - 3f */
+	0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47,   /* 40 - 47 */
+	0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f,   /* 48 - 4f */
+	0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57,   /* 50 - 57 */
+	0x58, 0x59, 0x5a, 0x5b, 0x26, 0x5d, 0x5e, 0x5f,   /* 58 - 5f */
+	0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67,   /* 60 - 67 */
+	0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e, 0x6f,   /* 68 - 6f */
+	0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77,   /* 70 - 77 */
+	0x78, 0x79, 0x7a, 0x7b, 0x27, 0x7d, 0x7e, 0x7f    /* 78 - 7f */
+};
+
+
+/*
+ * Encode illegal NTFS filename characters into SFM Private Unicode characters
+ *
+ * Assumes non-zero ASCII input.
+ */
+static u_int16_t
+ucs_to_sfm(u_int16_t ucs_ch, int lastchar)
+{
+	/* The last character of filename cannot be a space or period. */
+	if (lastchar) {
+		if (ucs_ch == 0x20)
+			return (0xf028);
+		else if (ucs_ch == 0x2e)
+			return (0xf029);
+	}
+	/* 0x01 - 0x1f is simple transformation. */
+	if (ucs_ch <= 0x1f) {
+		return (ucs_ch | 0xf000);
+	} else /* 0x20 - 0x7f */ {
+		u_int16_t lsb;
+
+		lsb = mac2sfm[ucs_ch - 0x0020];
+		if (lsb != ucs_ch)
+			return(0xf000 | lsb); 
+	}
+	return (ucs_ch);
+}
+
+/*
+ * Decode any SFM Private Unicode characters
+ */
+static u_int16_t
+sfm_to_ucs(u_int16_t ucs_ch)
+{
+	if (((ucs_ch & 0xffC0) == SFMCODE_PREFIX_MASK) && 
+	    ((ucs_ch & 0x003f) <= MAX_SFM2MAC)) {
+		ucs_ch = sfm2mac[ucs_ch & 0x003f];
+	}
+	return (ucs_ch);
+}
+
+

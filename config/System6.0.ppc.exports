@@ -115,6 +115,7 @@ __ZN19IODBDMAMemoryCursorC2EPK11OSMetaClass
 __ZN19IODBDMAMemoryCursorC2Ev
 __ZN19IODBDMAMemoryCursorD0Ev
 __ZN19IODBDMAMemoryCursorD2Ev
+__ZN24IOBufferMemoryDescriptor22inTaskWithPhysicalMaskEP4taskmyy
 __ZN8AppleCPU10gMetaClassE
 __ZN8AppleCPU10getCPUNameEv
 __ZN8AppleCPU10quiesceCPUEv
@@ -227,6 +228,8 @@ _delay_for_interval
 _gGetDefaultBusSpeedsKey
 _get_io_base_addr
 _get_preemption_level
+_hfs_addconverter
+_hfs_remconverter
 _ignore_zero_fault
 _killprint
 _kprintf_lock
@@ -241,4 +244,7 @@ _ml_throttle
 _ml_mem_backoff
 _pe_do_clock_test
 _pe_run_clock_test
+_pmsRunLocal
 _scc
+_rc4_crypt
+_rc4_init

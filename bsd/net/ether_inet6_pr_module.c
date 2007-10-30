@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1989, 1993
@@ -105,9 +111,7 @@ extern struct ifqueue pkintrq;
 #include <net/if_vlan_var.h>
 #endif /* NVLAN > 0 */
 
-/* Local function declerations */
-int ether_attach_inet6(struct ifnet *ifp, u_long protocol_family);
-int ether_detach_inet6(struct ifnet *ifp, u_long protocol_family);
+#include <net/ether_if_module.h>
 
 /*
  * Process a received Ethernet packet;
@@ -115,18 +119,21 @@ int ether_detach_inet6(struct ifnet *ifp, u_long protocol_family);
  * the ether header, which is provided separately.
  */
 static errno_t
-inet6_ether_input(
+ether_inet6_input(
 	__unused ifnet_t	ifp,
 	protocol_family_t	protocol,
 	mbuf_t				packet,
 	__unused char		*header)
 {
-	proto_input(protocol, packet);
-	return 0;
+	errno_t error;
+
+	if ((error = proto_input(protocol, packet)))
+		m_freem(packet);
+	return error;
 }
 
 static errno_t
-inet6_ether_pre_output(
+ether_inet6_pre_output(
     ifnet_t		    			ifp,
     __unused protocol_family_t	protocol_family,
     mbuf_t			     		*m0,
@@ -200,37 +207,29 @@ ether_inet6_prmod_ioctl(
     struct ifreq *ifr = (struct ifreq *) data;
     int error = 0;
 
-    switch (command) {
-    case SIOCSIFADDR:
-	 if ((ifp->if_flags & IFF_RUNNING) == 0) {
-	      ifnet_set_flags(ifp, IFF_UP, IFF_UP);
-	      dlil_ioctl(0, ifp, SIOCSIFFLAGS, (caddr_t) 0);
-	 }
+	switch (command) {
+	case SIOCSIFADDR:
+		if ((ifp->if_flags & IFF_RUNNING) == 0) {
+			ifnet_set_flags(ifp, IFF_UP, IFF_UP);
+			ifnet_ioctl(ifp, 0, SIOCSIFFLAGS, NULL);
+		}
+		break;
 
+	case SIOCGIFADDR:
+	ifnet_lladdr_copy_bytes(ifp, ifr->ifr_addr.sa_data, ETHER_ADDR_LEN);
 	break;
 
-    case SIOCGIFADDR:
-	ifnet_lladdr_copy_bytes(ifp, ifr->ifr_addr.sa_data, ETHER_ADDR_LEN);
-    break;
-
-    case SIOCSIFMTU:
-	/*
-	 * IOKit IONetworkFamily will set the right MTU according to the driver
-	 */
-
-	 return (0);
-
     default:
-	 return EOPNOTSUPP;
+	error = EOPNOTSUPP;
+	break;
     }
-
     return (error);
 }
 
-int
+errno_t
 ether_attach_inet6(
 	struct ifnet	*ifp,
-	__unused u_long	protocol_family)
+	__unused protocol_family_t protocol_family)
 {
 	struct ifnet_attach_proto_param	proto;
 	struct ifnet_demux_desc demux[1];
@@ -243,8 +242,8 @@ ether_attach_inet6(
 	demux[0].datalen = sizeof(en_6native);
 	proto.demux_list = demux;
 	proto.demux_count = 1;
-	proto.input = inet6_ether_input;
-	proto.pre_output = inet6_ether_pre_output;
+	proto.input = ether_inet6_input;
+	proto.pre_output = ether_inet6_pre_output;
 	proto.ioctl = ether_inet6_prmod_ioctl;
 	proto.resolve = ether_inet6_resolve_multi;
 	error = ifnet_attach_protocol(ifp, protocol_family, &proto);
@@ -256,19 +255,17 @@ ether_attach_inet6(
 	return error;
 }
 
-int
+void
 ether_detach_inet6(
 	struct ifnet	*ifp,
-	u_long			protocol_family)
+	protocol_family_t protocol_family)
 {
-    errno_t         error;
+	errno_t         error;
 
 	error = ifnet_detach_protocol(ifp, protocol_family);
 	if (error && error != ENOENT) {
 		printf("WARNING: ether_detach_inet6 can't detach ipv6 from %s%d\n",
 			ifp->if_name, ifp->if_unit);
 	}
-
-    return error;
 }
 

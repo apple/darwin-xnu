@@ -103,14 +103,8 @@
 #include <netinet6/ipsec.h>
 #include <netinet6/ipsec6.h>
 extern int ipsec_bypass;
-extern lck_mtx_t *sadb_mutex;
-extern lck_mtx_t *nd6_mutex;
 #endif /*IPSEC*/
-
-#include "faith.h"
-#if defined(NFAITH) && NFAITH > 0
-#include <net/if_faith.h>
-#endif
+extern lck_mtx_t *nd6_mutex;
 
 /*
  * UDP protocol inplementation.
@@ -120,18 +114,22 @@ extern lck_mtx_t *nd6_mutex;
 extern	struct protosw inetsw[];
 static	int in6_mcmatch(struct inpcb *, struct in6_addr *, struct ifnet *);
 static	int udp6_detach(struct socket *so);
+static void udp6_append(struct inpcb *, struct ip6_hdr *,
+    struct sockaddr_in6 *, struct mbuf *, int);
 
-
-extern  void    ipfwsyslog( int level, char *format,...);
+extern  void    ipfwsyslog( int level, const char *format,...);
 extern int fw_verbose;
 
+#if IPFIREWALL
 #define log_in_vain_log( a ) {            \
         if ( (log_in_vain == 3 ) && (fw_verbose == 2)) {        /* Apple logging, log to ipfw.log */ \
                 ipfwsyslog a ;  \
         }                       \
         else log a ;            \
 }
-
+#else
+#define log_in_vain_log( a ) { log a; }
+#endif
 
 static int
 in6_mcmatch(
@@ -158,6 +156,33 @@ in6_mcmatch(
 	}
 	lck_mtx_unlock(nd6_mutex);
 	return 0;
+}
+
+/*
+ * subroutine of udp6_input(), mainly for source code readability.
+ */
+static void
+udp6_append(struct inpcb *last, struct ip6_hdr *ip6,
+    struct sockaddr_in6 *udp_in6, struct mbuf *n, int off)
+{
+	struct  mbuf *opts = NULL;
+
+#if CONFIG_MACF_NET
+	if (mac_inpcb_check_deliver(last, n, AF_INET6, SOCK_DGRAM) != 0) {
+		m_freem(n);
+		return;
+	}
+#endif
+	if (last->in6p_flags & IN6P_CONTROLOPTS ||
+	    last->in6p_socket->so_options & SO_TIMESTAMP)
+		ip6_savecontrol(last, &opts, ip6, n);
+
+	m_adj(n, off);
+	if (sbappendaddr(&last->in6p_socket->so_rcv,
+	    (struct sockaddr *)udp_in6, n, opts, NULL) == 0)
+		udpstat.udps_fullsock++;
+	else
+		sorwakeup(last->in6p_socket);
 }
 
 int
@@ -211,7 +236,8 @@ udp6_input(
 	}
 
 	if (IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst)) {
-		struct	inpcb *last;
+		int reuse_sock = 0, mcast_delivered = 0;
+		struct mbuf *n = NULL;
 
 		/*
 		 * Deliver a multicast datagram to all sockets
@@ -253,7 +279,6 @@ udp6_input(
 		 * Locate pcb(s) for datagram.
 		 * (Algorithm copied from raw_intr().)
 		 */
-		last = NULL;
 		lck_rw_lock_shared(pcbinfo->mtx);
 
 		LIST_FOREACH(in6p, &udb, inp_list) {
@@ -292,47 +317,38 @@ udp6_input(
 				}
 			}
 
-			if (last != NULL) {
-				struct	mbuf *n;
+			reuse_sock = in6p->inp_socket->so_options &
+			    (SO_REUSEPORT | SO_REUSEADDR);
 
+			{
 #if IPSEC
-				/*
-				 * Check AH/ESP integrity.
-				 */
+				int skipit = 0;
+				/* Check AH/ESP integrity. */
 				if (ipsec_bypass == 0) {
-					lck_mtx_lock(sadb_mutex);
-					if (ipsec6_in_reject_so(m, last->inp_socket))
-						ipsec6stat.in_polvio++;
-					/* do not inject data into pcb */
-					lck_mtx_unlock(sadb_mutex);
+					if (ipsec6_in_reject_so(m, in6p->inp_socket)) {
+						IPSEC_STAT_INCREMENT(ipsec6stat.in_polvio);
+						/* do not inject data to pcb */
+						skipit = 1;
+					}
 				}
-				else
+				if (skipit == 0)
 #endif /*IPSEC*/
-				if ((n = m_copy(m, 0, M_COPYALL)) != NULL) {
+				{
 					/*
 					 * KAME NOTE: do not
-					 * m_copy(m, offset, ...) above.
+					 * m_copy(m, offset, ...) below.
 					 * sbappendaddr() expects M_PKTHDR,
 					 * and m_copy() will copy M_PKTHDR
 					 * only if offset is 0.
 					 */
-					if (last->in6p_flags & IN6P_CONTROLOPTS
-					    || last->in6p_socket->so_options & SO_TIMESTAMP)
-						ip6_savecontrol(last, &opts,
-								ip6, n);
-								
-					m_adj(n, off + sizeof(struct udphdr));
-					if (sbappendaddr(&last->in6p_socket->so_rcv,
-							(struct sockaddr *)&udp_in6,
-							n, opts, NULL) == 0) {
-						udpstat.udps_fullsock++;
-					} else
-						sorwakeup(last->in6p_socket);
-					opts = NULL;
+					if (reuse_sock)
+						n = m_copy(m, 0, M_COPYALL);
+					udp6_append(in6p, ip6, &udp_in6, m,
+					    off + sizeof (struct udphdr));
+					mcast_delivered++;
 				}
-				udp_unlock(last->in6p_socket, 1, 0);
+				udp_unlock(in6p->in6p_socket, 1, 0);
 			}
-			last = in6p;
 			/*
 			 * Don't look for additional matches if this one does
 			 * not have either the SO_REUSEPORT or SO_REUSEADDR
@@ -341,13 +357,12 @@ udp6_input(
 			 * port.  It assumes that an application will never
 			 * clear these options after setting them.
 			 */
-			if ((last->in6p_socket->so_options &
-			     (SO_REUSEPORT|SO_REUSEADDR)) == 0)
+			if (reuse_sock == 0 || ((m = n) == NULL))
 				break;
 		}
 		lck_rw_done(pcbinfo->mtx);
 
-		if (last == NULL) {
+		if (mcast_delivered == 0) {
 			/*
 			 * No matching pcb found; discard datagram.
 			 * (No need to send an ICMP Port Unreachable
@@ -359,37 +374,9 @@ udp6_input(
 #endif
 			goto bad;
 		}
-#if IPSEC
-		/*
-		 * Check AH/ESP integrity.
-		 */
-		if (ipsec_bypass == 0) {
-			lck_mtx_lock(sadb_mutex);
-			if (ipsec6_in_reject_so(m, last->inp_socket)) {
-				ipsec6stat.in_polvio++;
-				lck_mtx_unlock(sadb_mutex);
-				udp_unlock(last->in6p_socket, 1, 0);
-				goto bad;
-			}
-			lck_mtx_unlock(sadb_mutex);
-		}
-#endif /*IPSEC*/
-		if (last->in6p_flags & IN6P_CONTROLOPTS
-		    || last->in6p_socket->so_options & SO_TIMESTAMP)
-			ip6_savecontrol(last, &opts, ip6, m);
 
-		m_adj(m, off + sizeof(struct udphdr));
-		if (sbappendaddr(&last->in6p_socket->so_rcv,
-				(struct sockaddr *)&udp_in6,
-				m, opts, NULL) == 0) {
-			udpstat.udps_fullsock++;
-			m = NULL;
-			opts = NULL;
-			udp_unlock(last->in6p_socket, 1, 0);
-			goto bad;
-		}
-		sorwakeup(last->in6p_socket);
-		udp_unlock(last->in6p_socket, 1, 0);
+		if (reuse_sock != 0)	/* free the extra copy of mbuf */
+			m_freem(m);
 		return IPPROTO_DONE;
 	}
 	/*
@@ -402,7 +389,7 @@ udp6_input(
 		if (log_in_vain) {
 			char buf[INET6_ADDRSTRLEN];
 
-			strcpy(buf, ip6_sprintf(&ip6->ip6_dst));
+			strlcpy(buf, ip6_sprintf(&ip6->ip6_dst), sizeof(buf));
 			if (log_in_vain != 3)
 				log(LOG_INFO,
 				    "Connection attempt to UDP %s:%d from %s:%d\n",
@@ -431,14 +418,11 @@ udp6_input(
 	 * Check AH/ESP integrity.
 	 */
 	if (ipsec_bypass == 0) {
-		lck_mtx_lock(sadb_mutex);
 		if (ipsec6_in_reject_so(m, in6p->in6p_socket)) {
-			ipsec6stat.in_polvio++;
-			lck_mtx_unlock(sadb_mutex);
+			IPSEC_STAT_INCREMENT(ipsec6stat.in_polvio);
 			in_pcb_checkstate(in6p, WNT_RELEASE, 0);
 			goto bad;
 		}
-		lck_mtx_unlock(sadb_mutex);
 	}
 #endif /*IPSEC*/
 
@@ -552,7 +536,7 @@ udp6_getcred SYSCTL_HANDLER_ARGS
 	struct inpcb *inp;
 	int error, s;
 
-	error = suser(req->p->p_ucred, &req->p->p_acflag);
+	error = proc_suser(req->p);
 	if (error)
 		return (error);
 
@@ -599,7 +583,7 @@ udp6_abort(struct socket *so)
 }
 
 static int
-udp6_attach(struct socket *so, int proto, struct proc *p)
+udp6_attach(struct socket *so, __unused int proto, struct proc *p)
 {
 	struct inpcb *inp;
 	int error;

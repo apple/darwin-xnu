@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -186,6 +192,8 @@ extern	int	kdb_debug;
 extern	int	kdb_active[];
 
 extern	volatile boolean_t mp_kdp_trap;
+extern boolean_t force_immediate_debugger_NMI;
+
 extern	void	mp_kdp_enter(void);
 extern	void	mp_kdp_exit(void);
 
@@ -205,6 +213,42 @@ extern void mp_rendezvous_no_intrs(
 		void (*action_func)(void *),
 		void *arg);
 extern void mp_rendezvous_break_lock(void);
+
+/*
+ * All cpu broadcast.
+ * Called from thread context, this blocks until all active cpus have
+ * run action_func:
+ */
+extern void mp_broadcast(
+		void (*action_func)(void *),
+		void *arg);
+
+typedef uint32_t cpu_t;
+typedef uint32_t cpumask_t;
+static inline cpumask_t
+cpu_to_cpumask(cpu_t cpu)
+{
+	return (cpu < 32) ? (1 << cpu) : 0;
+}
+#define CPUMASK_ALL	0xffffffff
+#define CPUMASK_SELF	cpu_to_cpumask(cpu_number())
+#define CPUMASK_OTHERS	(CPUMASK_ALL & ~CPUMASK_SELF)
+
+/*
+ * Invoke a function (possibly NULL) on a set of cpus specified by a mask.
+ * The mask may include the local cpu.
+ * If the mode is:
+ *	- ASYNC: other cpus make their calls in parallel.
+ * 	- SYNC: the calls are performed serially in logical cpu order.
+ * This call returns when the function has been run on all specified cpus.
+ * The return value is the number of cpus on which the call was made.
+ * The action function is called with interrupts disabled.
+ */
+extern cpu_t mp_cpus_call(
+		cpumask_t	cpus,
+		mp_sync_t	mode,
+		void		(*action_func)(void *),
+		void		*arg);
 
 __END_DECLS
 

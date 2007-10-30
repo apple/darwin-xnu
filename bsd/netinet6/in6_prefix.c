@@ -300,7 +300,7 @@ mark_matched_prefixes(u_long cmd, struct ifnet *ifp, struct in6_rrenumreq *irr)
  * Mark global prefixes as to be deleted.
  */
 static void
-delmark_global_prefixes(struct ifnet *ifp, struct in6_rrenumreq *irr)
+delmark_global_prefixes(struct ifnet *ifp, __unused struct in6_rrenumreq *irr)
 {
 	struct ifprefix *ifpr;
 
@@ -412,7 +412,6 @@ assign_ra_entry(struct rr_prefix *rpp, int iilen, struct in6_ifaddr *ia)
 {
 	int error = 0;
 	struct rp_addr *rap;
-	int s;
 
 	if ((error = create_ra_entry(&rap)) != 0)
 		return error;
@@ -439,7 +438,7 @@ assign_ra_entry(struct rr_prefix *rpp, int iilen, struct in6_ifaddr *ia)
  * (prefix database + new interface id).
  */
 static int
-in6_prefix_add_llifid(int iilen, struct in6_ifaddr *ia)
+in6_prefix_add_llifid(__unused int iilen, struct in6_ifaddr *ia)
 {
 	struct rr_prefix *rpp;
 	struct rp_addr *rap;
@@ -558,7 +557,7 @@ in6_prefix_add_ifid(int iilen, struct in6_ifaddr *ia)
 }
 
 void
-in6_prefix_remove_ifid(int iilen, struct in6_ifaddr *ia)
+in6_prefix_remove_ifid(__unused int iilen, struct in6_ifaddr *ia)
 {
 	struct rp_addr *rap;
 
@@ -694,7 +693,6 @@ rrpr_update(struct socket *so, struct rr_prefix *new)
 	struct rr_prefix *rpp;
 	struct ifprefix *ifpr;
 	struct rp_addr *rap;
-	int s;
 
 	/* search existing prefix */
 	ifnet_lock_exclusive(new->rp_ifp);
@@ -783,7 +781,6 @@ rrpr_update(struct socket *so, struct rr_prefix *new)
 		/* link rr_prefix entry to if_prefixlist */
 		{
 			struct ifnet *ifp = rpp->rp_ifp;
-			struct ifprefix *ifpr;
 
 			if ((ifpr = TAILQ_FIRST(&ifp->if_prefixhead))
 			    != NULL) {
@@ -1012,7 +1009,6 @@ delete_each_prefix(struct rr_prefix *rpp, u_char origin)
 	lck_mtx_lock(prefix6_mutex);
 	while (rpp->rp_addrhead.lh_first != NULL) {
 		struct rp_addr *rap;
-		int s;
 
 		rap = LIST_FIRST(&rpp->rp_addrhead);
 		if (rap == NULL) {
@@ -1228,7 +1224,7 @@ in6_prefix_ioctl(struct socket *so, u_long cmd, caddr_t data,
 }
 
 void
-in6_rr_timer(void *ignored_arg)
+in6_rr_timer(__unused void *ignored_arg)
 {
 	struct rr_prefix *rpp;
 	struct timeval timenow;

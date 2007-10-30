@@ -16,7 +16,6 @@ EXPORT_ONLY_FILES = 		\
 	io_map_entries.h	\
 	lock.h			\
 	locks.h			\
-	pms.h			\
 	proc_reg.h		\
 	machine_routines.h	\
 	mappings.h		\

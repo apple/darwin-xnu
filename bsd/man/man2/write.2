@@ -36,28 +36,40 @@
 .Dt WRITE 2
 .Os
 .Sh NAME
+.Nm pwrite ,
 .Nm write ,
-.Nm writev ,
-.Nm pwrite
+.Nm writev
 .Nd write output
 .Sh LIBRARY
 .Lb libc
 .Sh SYNOPSIS
-.In sys/types.h
-.In sys/uio.h
 .In unistd.h
 .Ft ssize_t
-.Fn write "int d" "const void *buf" "size_t nbytes"
+.Fo pwrite
+.Fa "int fildes"
+.Fa "const void *buf"
+.Fa "size_t nbyte"
+.Fa "off_t offset"
+.Fc
 .Ft ssize_t
-.Fn writev "int d" "const struct iovec *iov" "int iovcnt"
+.Fo write
+.Fa "int fildes"
+.Fa "const void *buf"
+.Fa "size_t nbyte"
+.Fc
+.In sys/uio.h
 .Ft ssize_t
-.Fn pwrite "int d" "const void *buf" "size_t nbytes" "off_t offset"
+.Fo writev
+.Fa "int fildes"
+.Fa "const struct iovec *iov"
+.Fa "int iovcnt"
+.Fc
 .Sh DESCRIPTION
 .Fn Write
 attempts to write
-.Fa nbytes
+.Fa nbyte
 of data to the object referenced by the descriptor
-.Fa d
+.Fa fildes
 from the buffer pointed to by
 .Fa buf .
 .Fn Writev
@@ -96,7 +108,7 @@ On objects capable of seeking, the
 .Fn write
 starts at a position
 given by the pointer associated with
-.Fa d ,
+.Fa fildes ,
 see
 .Xr lseek 2 .
 Upon return from
@@ -116,8 +128,8 @@ by a user who
 a writable set-user-id file
 owned by the super-user.
 .Pp
-When using non-blocking I/O on objects such as sockets that are subject
-to flow control,
+When using non-blocking I/O on objects, such as sockets,
+that are subject to flow control,
 .Fn write
 and
 .Fn writev
@@ -125,80 +137,145 @@ may write fewer bytes than requested;
 the return value must be noted,
 and the remainder of the operation should be retried when possible.
 .Sh RETURN VALUES
-Upon successful completion the number of bytes which were written
-is returned.  Otherwise a -1 is returned and the global variable
+Upon successful completion the number of bytes
+which were written is returned.
+Otherwise, a -1 is returned and the global variable
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
-.Fn Write ,
+The
+.Fn write ,
 .Fn writev ,
 and
 .Fn pwrite
-will fail and the file pointer will remain unchanged if:
+system calls will fail and the file pointer will remain unchanged if:
 .Bl -tag -width Er
-.It Bq Er EBADF
-.Fa D
-is not a valid descriptor open for writing.
-.It Bq Er EPIPE
-An attempt is made to write to a pipe that is not open
-for reading by any process.
-.It Bq Er EPIPE
-An attempt is made to write to a socket of type
-.Dv SOCK_STREAM
-that is not connected to a peer socket.
-.It Bq Er EFBIG
-An attempt was made to write a file that exceeds the process's
-file size limit or the maximum file size.
+.\" ===========
+.It Bq Er EDQUOT
+The user's quota of disk blocks on the file system
+containing the file is exhausted.
+.\" ===========
 .It Bq Er EFAULT
 Part of
 .Fa iov
 or data to be written to the file
 points outside the process's allocated address space.
+.\" ===========
 .It Bq Er EINVAL
 The pointer associated with
-.Fa d
-was negative.
-.It Bq Er ENOSPC
-There is no free space remaining on the file system
-containing the file.
-.It Bq Er EDQUOT
-The user's quota of disk blocks on the file system
-containing the file has been exhausted.
-.It Bq Er EIO
-An I/O error occurred while reading from or writing to the file system.
-.It Bq Er EINTR
-A signal interrupted the write before it could be completed.
+.Fa fildes
+is negative.
+.El
+.Pp
+The
+.Fn write
+and
+.Fn pwrite
+system calls will fail and the file pointer will remain unchanged if:
+.Bl -tag -width Er
+.\" ===========
 .It Bq Er EAGAIN
-The file was marked for non-blocking I/O,
+The file is marked for non-blocking I/O,
 and no data could be written immediately.
+.\" ===========
+.It Bq Er EBADF
+.Fa fildes
+is not a valid file descriptor open for writing.
+.\" ===========
+.It Bq Er ECONNRESET
+A write is attempted on a socket that is not connected.
+.\" ===========
+.It Bq Er EFBIG
+An attempt is made to write a file that exceeds the process's
+file size limit or the maximum file size.
+.\" ===========
+.It Bq Er EFBIG
+The file is a regular file,
+.Fa nbyte
+is greater than 0,
+and the starting position is greater than or equal
+to the offset maximum established in the open file description
+associated with
+.Fa fildes .
+.\" ===========
+.It Bq Er EINTR
+A signal interrupts the write before it could be completed.
+.\" ===========
+.It Bq Er EIO
+An I/O error occurs while reading from or writing to the file system.
+.\" ===========
+.It Bq Er ENETDOWN
+A write is attempted on a socket
+and the local network interface used to reach the destination is down.
+.\" ===========
+.It Bq Er ENETUNREACH
+A write is attempted on a socket and no route to the network is present.
+.\" ===========
+.It Bq Er ENOSPC
+There is no free space remaining on the file system containing the file.
+.\" ===========
+.It Bq Er ENXIO
+A request is made of a nonexistent device,
+or the request is outside the capabilities of the device.
+.\" ===========
+.It Bq Er EPIPE
+An attempt is made to write to a pipe that is not open
+for reading by any process.
+.\" ===========
+.It Bq Er EPIPE
+An attempt is made to write to a socket of type
+.Dv SOCK_STREAM
+that is not connected to a peer socket.
+.El
+.Pp
+The
+.Fn write
+and
+.Fn writev
+calls may also return the following errors:
+.Bl -tag -width Er
+.\" ===========
+.It Bq Er EAGAIN
+See EWOULDBLOCK, below.
+.\" ===========
+.It Bq Er EWOULDBLOCK
+The file descriptor is for a socket, is marked O_NONBLOCK,
+and write would block.
+The exact error code depends on the protocol,
+but EWOULDBLOCK is more common.
 .El
 .Pp
 In addition,
 .Fn writev
 may return one of the following errors:
 .Bl -tag -width Er
+.\" ===========
 .It Bq Er EDESTADDRREQ
 The destination is no longer available when writing to a
 .Ux
 domain datagram socket on which
 .Xr connect 2
 had been used to set a destination address.
+.\" ===========
 .It Bq Er EINVAL
 .Fa Iovcnt
-was less than or equal to 0, or greater than
+is less than or equal to 0, or greater than
 .Dv UIO_MAXIOV .
+.\" ===========
 .It Bq Er EINVAL
 One of the
 .Fa iov_len
 values in the
 .Fa iov
-array was negative.
+array is negative.
+.\" ===========
 .It Bq Er EINVAL
 The sum of the
 .Fa iov_len
 values in the
 .Fa iov
-array overflowed a 32-bit integer.
+array overflows a 32-bit integer.
+.\" ===========
 .It Bq Er ENOBUFS
 The mbuf pool has been completely exhausted when writing to a socket.
 .El
@@ -207,17 +284,26 @@ The
 .Fn pwrite
 call may also return the following errors:
 .Bl -tag -width Er
+.\" ===========
 .It Bq Er EINVAL
 The specified file offset is invalid.
+.\" ===========
 .It Bq Er ESPIPE
 The file descriptor is associated with a pipe, socket, or FIFO.
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/uio.h>
+.Fd #include <unistd.h>
+.Pp
+These include files are needed for all three functions.
 .Sh SEE ALSO
 .Xr fcntl 2 ,
 .Xr lseek 2 ,
 .Xr open 2 ,
 .Xr pipe 2 ,
-.Xr select 2
+.Xr select 2 ,
+.Xr compat 5
 .Sh STANDARDS
 The
 .Fn write

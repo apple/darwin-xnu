@@ -68,6 +68,7 @@
 #include <sys/param.h>
 #include <sys/mbuf.h>
 #include <sys/systm.h>
+#include <kern/debug.h>
 #include <netinet/in.h>
 #include <netinet/ip6.h>
 
@@ -90,20 +91,15 @@
  * (e.g. TCP header + TCP payload)
  */
 
-int
-in6_cksum(m, nxt, off, len)
-	struct mbuf *m;
-	u_int8_t nxt;
-	u_int32_t off, len;
+u_int16_t
+inet6_cksum(struct mbuf *m, unsigned int nxt, unsigned int off,
+    unsigned int len)
 {
 	u_int16_t *w;
 	int sum = 0;
 	int mlen = 0;
 	int byte_swapped = 0;
-#if 0
-	int srcifid = 0, dstifid = 0;
-#endif
-	struct ip6_hdr *ip6;	
+	struct ip6_hdr *ip6;
 	union {
 		u_int16_t phs[4];
 		struct {
@@ -123,52 +119,38 @@ in6_cksum(m, nxt, off, len)
 
 	/* sanity check */
 	if (m->m_pkthdr.len < off + len) {
-		panic("in6_cksum: mbuf len (%d) < off+len (%d+%d)\n",
-			m->m_pkthdr.len, off, len);
+		panic("inet6_cksum: mbuf len (%d) < off+len (%d+%d)\n",
+		    m->m_pkthdr.len, off, len);
 	}
 
-	bzero(&uph, sizeof(uph));
+	if (nxt != 0) {
+		bzero(&uph, sizeof (uph));
 
-	/*
-	 * First create IP6 pseudo header and calculate a summary.
-	 */
-	ip6 = mtod(m, struct ip6_hdr *);
-#if 0
-	if (IN6_IS_SCOPE_LINKLOCAL(&ip6->ip6_src)) {
-		srcifid = ip6->ip6_src.s6_addr16[1];
-		ip6->ip6_src.s6_addr16[1] = 0;
+		/*
+		 * First create IP6 pseudo header and calculate a summary.
+		 */
+		ip6 = mtod(m, struct ip6_hdr *);
+		w = (u_int16_t *)&ip6->ip6_src;
+		uph.ph.ph_len = htonl(len);
+		uph.ph.ph_nxt = nxt;
+
+		/* IPv6 source address */
+		sum += w[0];
+		if (!IN6_IS_SCOPE_LINKLOCAL(&ip6->ip6_src))
+			sum += w[1];
+		sum += w[2]; sum += w[3]; sum += w[4]; sum += w[5];
+		sum += w[6]; sum += w[7];
+		/* IPv6 destination address */
+		sum += w[8];
+		if (!IN6_IS_SCOPE_LINKLOCAL(&ip6->ip6_dst))
+			sum += w[9];
+		sum += w[10]; sum += w[11]; sum += w[12]; sum += w[13];
+		sum += w[14]; sum += w[15];
+		/* Payload length and upper layer identifier */
+		sum += uph.phs[0];  sum += uph.phs[1];
+		sum += uph.phs[2];  sum += uph.phs[3];
 	}
-	if (IN6_IS_SCOPE_LINKLOCAL(&ip6->ip6_dst)) {
-		dstifid = ip6->ip6_dst.s6_addr16[1];
-		ip6->ip6_dst.s6_addr16[1] = 0;
-	}
-#endif
-	w = (u_int16_t *)&ip6->ip6_src;
-	uph.ph.ph_len = htonl(len);
-	uph.ph.ph_nxt = nxt;
 
-	/* IPv6 source address */
-	sum += w[0];
-	if (!IN6_IS_SCOPE_LINKLOCAL(&ip6->ip6_src))
-		sum += w[1];
-	sum += w[2]; sum += w[3]; sum += w[4]; sum += w[5];
-	sum += w[6]; sum += w[7];
-	/* IPv6 destination address */
-	sum += w[8];
-	if (!IN6_IS_SCOPE_LINKLOCAL(&ip6->ip6_dst))
-		sum += w[9];
-	sum += w[10]; sum += w[11]; sum += w[12]; sum += w[13];
-	sum += w[14]; sum += w[15];
-	/* Payload length and upper layer identifier */
-	sum += uph.phs[0];  sum += uph.phs[1];
-	sum += uph.phs[2];  sum += uph.phs[3];
-
-#if 0
-	if (srcifid)
-		ip6->ip6_src.s6_addr16[1] = srcifid;
-	if (dstifid)
-		ip6->ip6_dst.s6_addr16[1] = dstifid;
-#endif
 	/*
 	 * Secondly calculate a summary of the first mbuf excluding offset.
 	 */
@@ -236,7 +218,7 @@ in6_cksum(m, nxt, off, len)
 	/*
 	 * Lastly calculate a summary of the rest of mbufs.
 	 */
-	
+
 	for (;m && len; m = m->m_next) {
 		if (m->m_len == 0)
 			continue;
@@ -308,7 +290,7 @@ in6_cksum(m, nxt, off, len)
 			s_util.c[0] = *(char *)w;
 	}
 	if (len)
-		panic("in6_cksum: out of data\n");
+		printf("inet6_cksum: out of data by %d\n", len);
 	if (mlen == -1) {
 		/* The last mbuf has odd # of bytes. Follow the
 		   standard (the odd byte may be shifted left by 8 bits

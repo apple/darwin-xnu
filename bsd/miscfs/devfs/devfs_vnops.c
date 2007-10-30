@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright 1997,1998 Julian Elischer.  All rights reserved.
@@ -66,6 +72,12 @@
  *  Dieter Siegmund (dieter@apple.com) Fri Sep 17 09:58:38 PDT 1999
  *  - update the mod/access times
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -86,6 +98,10 @@
 #include <sys/vmmeter.h>
 #include <sys/vm.h>
 #include <sys/uio_internal.h>
+
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
 
 #include "devfsdefs.h"
 
@@ -157,8 +173,7 @@ retry:
 
 	*result_vnode = NULL; /* safe not sorry */ /*XXX*/
 
-	//if (dir_vnode->v_usecount == 0)
-	    //printf("devfs_lookup: dir had no refs ");
+	/*  okay to look at directory vnodes ourside devfs lock as they are not aliased */
 	dir_node = VTODN(dir_vnode);
 
 	/*
@@ -328,15 +343,20 @@ devfs_getattr(struct vnop_getattr_args *ap)
 	devnode_t *	file_node;
 	struct timeval now;
 
-	file_node = VTODN(vp);
 
 	DEVFS_LOCK();
+	file_node = VTODN(vp);
 
 	microtime(&now);
 	dn_times(file_node, &now, &now, &now);
 
 	VATTR_RETURN(vap, va_mode, file_node->dn_mode);
 
+	/*
+	 * Note: for DEV_CDEV and DEV_BDEV, we return the device from
+	 * the vp, not the file_node; if we getting information on a
+	 * cloning device, we want the cloned information, not the template.
+	 */
 	switch (file_node->dn_type)
 	{
 	case 	DEV_DIR:
@@ -344,11 +364,11 @@ devfs_getattr(struct vnop_getattr_args *ap)
 		vap->va_mode |= (S_IFDIR);
 		break;
 	case	DEV_CDEV:
-		VATTR_RETURN(vap, va_rdev, file_node->dn_typeinfo.dev);
+		VATTR_RETURN(vap, va_rdev, vp->v_rdev);
 		vap->va_mode |= (S_IFCHR);
 		break;
 	case	DEV_BDEV:
-		VATTR_RETURN(vap, va_rdev, file_node->dn_typeinfo.dev);
+		VATTR_RETURN(vap, va_rdev, vp->v_rdev);
 		vap->va_mode |= (S_IFBLK);
 		break;
 	case	DEV_SLNK:
@@ -405,15 +425,13 @@ devfs_setattr(struct vnop_setattr_args *ap)
 {
   	struct vnode *vp = ap->a_vp;
  	struct vnode_attr *vap = ap->a_vap;
-  	kauth_cred_t cred = vfs_context_ucred(ap->a_context);
-  	struct proc *p = vfs_context_proc(ap->a_context);
   	int error = 0;
   	devnode_t *	file_node;
   	struct timeval atimeval, mtimeval;
   
-  	file_node = VTODN(vp);
-  
  	DEVFS_LOCK();
+
+  	file_node = VTODN(vp);
   	/*
   	 * Go through the fields and update if set.
   	 */
@@ -465,6 +483,29 @@ devfs_setattr(struct vnop_setattr_args *ap)
 	return error;
 }
 
+#if CONFIG_MACF
+static int
+devfs_setlabel(struct vnop_setlabel_args *ap)
+			/* struct vnop_setlabel_args {
+					struct vnodeop_desc *a_desc;
+					struct vnode *a_vp;
+					struct label *a_vl;
+				vfs_context_t a_context;
+				} */
+{
+	struct vnode *vp;
+	struct devnode *de;
+
+	vp = ap->a_vp;
+	de = VTODN(vp);
+
+	mac_vnode_label_update(ap->a_context, vp, ap->a_vl);
+	mac_devfs_label_update(vp->v_mount, de, vp);
+
+	return (0);
+}
+#endif
+
 static int
 devfs_read(struct vnop_read_args *ap)
         /* struct vnop_read_args {
@@ -500,11 +541,12 @@ devfs_close(struct vnop_close_args *ap)
 	} */
 {
     	struct vnode *	    	vp = ap->a_vp;
-	register devnode_t * 	dnp = VTODN(vp);
+	register devnode_t * 	dnp;
 	struct timeval now;
 
 	if (vnode_isinuse(vp, 1)) {
 	    DEVFS_LOCK();
+	    dnp = VTODN(vp);
 	    microtime(&now);
 	    dn_times(dnp, &now, &now, &now);
 	    DEVFS_UNLOCK();
@@ -521,12 +563,13 @@ devfsspec_close(struct vnop_close_args *ap)
 	} */
 {
     	struct vnode *	    	vp = ap->a_vp;
-	register devnode_t * 	dnp = VTODN(vp);
+	register devnode_t * 	dnp;
 	struct timeval now;
 
 	if (vnode_isinuse(vp, 1)) {
 	    DEVFS_LOCK();
 	    microtime(&now);
+	    dnp = VTODN(vp);
 	    dn_times(dnp, &now, &now, &now);
 	    DEVFS_UNLOCK();
 	}
@@ -599,23 +642,22 @@ devfs_remove(struct vnop_remove_args *ap)
 	struct vnode *vp = ap->a_vp;
 	struct vnode *dvp = ap->a_dvp;
 	struct componentname *cnp = ap->a_cnp;
-	vfs_context_t ctx = cnp->cn_context;
 	devnode_t *  tp;
 	devnode_t *  tdp;
 	devdirent_t * tnp;
 	int doingdirectory = 0;
 	int error = 0;
-	uid_t ouruid = kauth_cred_getuid(vfs_context_ucred(ctx));
 
 	/*
 	 * assume that the name is null terminated as they
 	 * are the end of the path. Get pointers to all our
 	 * devfs structures.
 	 */
+	DEVFS_LOCK();
+
 	tp = VTODN(vp);
 	tdp = VTODN(dvp);
 
-	DEVFS_LOCK();
 
 	tnp = dev_findname(tdp, cnp->cn_nameptr);
 
@@ -695,14 +737,15 @@ devfs_link(struct vnop_link_args *ap)
 	 * are the end of the path. Get pointers to all our
 	 * devfs structures.
 	 */
+	/* can lookup dnode safely for tdvp outside of devfs lock as it is not aliased */
 	tdp = VTODN(tdvp);
-	fp = VTODN(vp);
 	
 	if (tdvp->v_mount != vp->v_mount) {
 		return (EXDEV);
 	}
 	DEVFS_LOCK();
 
+	fp = VTODN(vp);
 
 	/***********************************
 	 * Start actually doing things.... *
@@ -882,7 +925,6 @@ devfs_rename(struct vnop_rename_args *ap)
 	 * We could do that as well but won't
  	 */
 	if (tp) {
-		int ouruid = kauth_cred_getuid(vfs_context_ucred(tcnp->cn_context));
 		/*
 		 * Target must be empty if a directory and have no links
 		 * to it. Also, ensure source and target are compatible
@@ -908,6 +950,73 @@ out:
 }
 
 static int
+devfs_mkdir(struct vnop_mkdir_args *ap)
+        /*struct vnop_mkdir_args {
+                struct vnode *a_dvp;
+                struct vnode **a_vpp;
+                struct componentname *a_cnp;
+                struct vnode_attr *a_vap;
+		vfs_context_t a_context;
+        } */
+{
+	struct componentname * cnp = ap->a_cnp;
+	vfs_context_t ctx = cnp->cn_context;
+	struct proc *p = vfs_context_proc(ctx);
+	int error = 0;
+	devnode_t * dir_p;
+	devdirent_t * nm_p;
+	devnode_t * dev_p;
+	struct vnode_attr *	vap = ap->a_vap;
+	struct vnode * * vpp = ap->a_vpp;
+
+	DEVFS_LOCK();
+
+	dir_p = VTODN(ap->a_dvp);
+	error = dev_add_entry(cnp->cn_nameptr, dir_p, DEV_DIR, 
+			      NULL, NULL, NULL, &nm_p);
+	if (error) {
+	    goto failure;
+	}
+	dev_p = nm_p->de_dnp;
+	dev_p->dn_uid = dir_p->dn_uid;
+	dev_p->dn_gid = dir_p->dn_gid;
+	dev_p->dn_mode = vap->va_mode;
+	dn_copy_times(dev_p, dir_p);
+
+	error = devfs_dntovn(dev_p, vpp, p);
+failure:
+	DEVFS_UNLOCK();
+
+	return error;
+}
+
+/*
+ * An rmdir is a special type of remove, which we already support; we wrap
+ * and reexpress the arguments to call devfs_remove directly.  The only
+ * different argument is flags, which we do not set, since it's ignored.
+ */
+static int
+devfs_rmdir(struct vnop_rmdir_args *ap)
+	/* struct vnop_rmdir_args {
+		struct vnode *a_dvp;
+		struct vnode *a_vp;
+		struct componentname *a_cnp;
+		vfs_context_t a_context;
+	} */
+{
+	struct vnop_remove_args ra;
+
+	ra.a_dvp = ap->a_dvp;
+	ra.a_vp = ap->a_vp;
+	ra.a_cnp = ap->a_cnp;
+	ra.a_flags = 0;		/* XXX */
+	ra.a_context = ap->a_context;
+
+	return devfs_remove(&ra);
+}
+
+
+static int
 devfs_symlink(struct vnop_symlink_args *ap)
         /*struct vnop_symlink_args {
                 struct vnode *a_dvp;
@@ -929,11 +1038,13 @@ devfs_symlink(struct vnop_symlink_args *ap)
 	struct vnode_attr *	vap = ap->a_vap;
 	struct vnode * * vpp = ap->a_vpp;
 
-	dir_p = VTODN(ap->a_dvp);
 	typeinfo.Slnk.name = ap->a_target;
 	typeinfo.Slnk.namelen = strlen(ap->a_target);
 
 	DEVFS_LOCK();
+
+	dir_p = VTODN(ap->a_dvp);
+
 	error = dev_add_entry(cnp->cn_nameptr, dir_p, DEV_SLNK, 
 			      &typeinfo, NULL, NULL, &nm_p);
 	if (error) {
@@ -981,10 +1092,12 @@ devfs_mknod(struct vnop_mknod_args *ap)
 	if (!(vap->va_type == VBLK) && !(vap->va_type == VCHR)) {
 	        return (EINVAL); /* only support mknod of special files */
 	}
-	dir_p = VTODN(dvp);
 	typeinfo.dev = vap->va_rdev;
 
 	DEVFS_LOCK();
+
+	dir_p = VTODN(dvp);
+
 	error = dev_add_entry(cnp->cn_nameptr, dir_p, 
 			      (vap->va_type == VBLK) ? DEV_BDEV : DEV_CDEV,
 			      &typeinfo, NULL, NULL, &devent);
@@ -1026,7 +1139,7 @@ devfs_readdir(struct vnop_readdir_args *ap)
 	struct dirent dirent;
 	devnode_t * dir_node;
 	devdirent_t *	name_node;
-	char	*name;
+	const char *name;
 	int error = 0;
 	int reclen;
 	int nodenumber;
@@ -1099,7 +1212,7 @@ devfs_readdir(struct vnop_readdir_args *ap)
 		{
 			if (uio_resid(uio) < reclen) /* will it fit? */
 				break;
-			strcpy( dirent.d_name,name);
+			strlcpy(dirent.d_name, name, DEVMAXNAMESIZE);
 			if ((error = uiomove ((caddr_t)&dirent,
 					dirent.d_reclen, uio)) != 0)
 				break;
@@ -1151,9 +1264,11 @@ devfs_reclaim(struct vnop_reclaim_args *ap)
         } */
 {
     struct vnode *	vp = ap->a_vp;
-    devnode_t * 	dnp = VTODN(vp);
+    devnode_t * 	dnp;
     
     DEVFS_LOCK();
+
+    dnp = VTODN(vp);
 
     if (dnp) {
 	/* 
@@ -1197,7 +1312,7 @@ devs_vnop_pathconf(
 		*ap->a_retval = DEVMAXPATHSIZE - 1;	/* XXX nonconformant */
 		break;
 	case _PC_CHOWN_RESTRICTED:
-		*ap->a_retval = 1;
+		*ap->a_retval = 200112;		/* _POSIX_CHOWN_RESTRICTED */
 		break;
 	case _PC_NO_TRUNC:
 		*ap->a_retval = 0;
@@ -1282,8 +1397,8 @@ static struct vnodeopv_entry_desc devfs_vnodeop_entries[] = {
 	{ &vnop_remove_desc, (VOPFUNC)devfs_remove },		/* remove */
 	{ &vnop_link_desc, (VOPFUNC)devfs_link },		/* link */
 	{ &vnop_rename_desc, (VOPFUNC)devfs_rename },		/* rename */
-	{ &vnop_mkdir_desc, (VOPFUNC)err_mkdir },		/* mkdir */
-	{ &vnop_rmdir_desc, (VOPFUNC)err_rmdir },		/* rmdir */
+	{ &vnop_mkdir_desc, (VOPFUNC)devfs_mkdir },		/* mkdir */
+	{ &vnop_rmdir_desc, (VOPFUNC)devfs_rmdir },		/* rmdir */
 	{ &vnop_symlink_desc, (VOPFUNC)devfs_symlink },		/* symlink */
 	{ &vnop_readdir_desc, (VOPFUNC)devfs_readdir },		/* readdir */
 	{ &vnop_readlink_desc, (VOPFUNC)devfs_readlink },	/* readlink */
@@ -1299,6 +1414,9 @@ static struct vnodeopv_entry_desc devfs_vnodeop_entries[] = {
 	{ &vnop_blktooff_desc, (VOPFUNC)err_blktooff },		/* blktooff */
 	{ &vnop_offtoblk_desc, (VOPFUNC)err_offtoblk },		/* offtoblk */
 	{ &vnop_blockmap_desc, (VOPFUNC)err_blockmap },		/* blockmap */
+#if CONFIG_MACF
+	{ &vnop_setlabel_desc, (VOPFUNC)devfs_setlabel },       /* setlabel */
+#endif
 	{ (struct vnodeop_desc*)NULL, (int(*)())NULL }
 };
 struct vnodeopv_desc devfs_vnodeop_opv_desc =
@@ -1342,8 +1460,10 @@ static struct vnodeopv_entry_desc devfs_spec_vnodeop_entries[] = {
 	{ &vnop_blktooff_desc, (VOPFUNC)spec_blktooff },	/* blktooff */
 	{ &vnop_blktooff_desc, (VOPFUNC)spec_offtoblk  },	/* blkofftoblk */
 	{ &vnop_blockmap_desc, (VOPFUNC)spec_blockmap },	/* blockmap */
+#if CONFIG_MACF
+	{ &vnop_setlabel_desc, (VOPFUNC)devfs_setlabel },	/* setlabel */
+#endif
 	{ (struct vnodeop_desc*)NULL, (int(*)())NULL }
 };
 struct vnodeopv_desc devfs_spec_vnodeop_opv_desc =
 	{ &devfs_spec_vnodeop_p, devfs_spec_vnodeop_entries };
-

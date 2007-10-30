@@ -1,29 +1,37 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <pexpert/pexpert.h>
 
 extern boolean_t isargsep( char c);
 extern int argstrcpy(char *from, char *to);
 extern int getval(char *s, int *val);
+
+int argstrcpy2(char *from,char *to, unsigned maxlen);
 
 #define	NUM	0
 #define	STR	1
@@ -33,7 +41,14 @@ PE_parse_boot_arg(
 	const char  *arg_string,
 	void		*arg_ptr)
 {
-	return PE_parse_boot_argn(arg_string, arg_ptr, -1);
+	int max_len = -1;
+
+#if CONFIG_EMBEDDED
+	/* Limit arg size to 4 byte when no size is given */
+	max_len = 4;
+#endif
+
+	return PE_parse_boot_argn(arg_string, arg_ptr, max_len);
 }
 
 boolean_t
@@ -44,7 +59,7 @@ PE_parse_boot_argn(
 {
 	char *args;
 	char *cp, c;
-	int i;
+	unsigned int i;
 	int val;
 	boolean_t arg_boolean;
 	boolean_t arg_found;
@@ -88,8 +103,8 @@ PE_parse_boot_argn(
 			}
 			if ('_' == *arg_string) /* Force a string copy if the argument name begins with an underscore */
 			{
-				int hacklen = 16 > max_len ? 16 : max_len;
-				argstrcpy2 (++cp, (char *)arg_ptr, hacklen); /* Hack - terminate after 16 characters */
+				int hacklen = 17 > max_len ? 17 : max_len;
+				argstrcpy2 (++cp, (char *)arg_ptr, hacklen - 1); /* Hack - terminate after 16 characters */
 				arg_found = TRUE;
 				break;
 			}
@@ -101,7 +116,7 @@ PE_parse_boot_argn(
 					break;
 				case STR:
 					if(max_len > 0) //max_len of 0 performs no copy at all
-						argstrcpy2(++cp, (char *)arg_ptr, max_len);
+						argstrcpy2(++cp, (char *)arg_ptr, max_len - 1);
 					else if(max_len == -1)
 						argstrcpy(++cp, (char *)arg_ptr);
 					arg_found = TRUE;
@@ -150,7 +165,7 @@ argstrcpy2(
 	char *to,
 	unsigned maxlen)
 {
-	int i = 0;
+	unsigned int i = 0;
 
 	while (!isargsep(*from) && i < maxlen) {
 		i++;
@@ -166,7 +181,7 @@ getval(
 	int *val)
 {
 	unsigned int radix, intval;
-        char c;
+    unsigned char c;
 	int sign = 1;
 
 	if (*s == '=') {

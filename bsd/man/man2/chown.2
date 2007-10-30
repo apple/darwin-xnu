@@ -42,17 +42,29 @@
 .Sh SYNOPSIS
 .In unistd.h
 .Ft int
-.Fn chown "const char *path" "uid_t owner" "gid_t group"
+.Fo chown
+.Fa "const char *path"
+.Fa "uid_t owner"
+.Fa "gid_t group"
+.Fc
 .Ft int
-.Fn fchown "int fd" "uid_t owner" "gid_t group"
+.Fo fchown
+.Fa "int fildes"
+.Fa "uid_t owner"
+.Fa "gid_t group"
+.Fc
 .Ft int
-.Fn lchown "const char *path" "uid_t owner" "gid_t group"
+.Fo lchown
+.Fa "const char *path"
+.Fa "uid_t owner"
+.Fa "gid_t group"
+.Fc
 .Sh DESCRIPTION
 The owner ID and group ID of the file
 named by
 .Fa path
 or referenced by
-.Fa fd
+.Fa fildes
 is changed as specified by the arguments
 .Fa owner
 and
@@ -97,56 +109,72 @@ may be left unchanged by specifying it as -1.
 .Sh RETURN VALUES
 .Rv -std
 .Sh ERRORS
+.Pp
 The
 .Fn chown
 and
 .Fn lchown
-will fail and the file will be unchanged if:
+system calls will fail if:
 .Bl -tag -width Er
-.It Bq Er ENOTDIR
-A component of the path prefix is not a directory.
-.It Bq Er ENAMETOOLONG
-A component of a pathname exceeded 255 characters,
-or an entire path name exceeded 1023 characters.
-.It Bq Er ENOENT
-The named file does not exist.
+.\" ==========
 .It Bq Er EACCES
 Search permission is denied for a component of the path prefix.
-.It Bq Er ELOOP
-Too many symbolic links were encountered in translating the pathname.
-.It Bq Er EPERM
-The effective user ID is not the super-user.
-.It Bq Er EROFS
-The named file resides on a read-only file system.
 .It Bq Er EFAULT
 The
 .Fa path
 argument
 points outside the process's allocated address space.
-.It Bq Er EIO
-An I/O error occurred while reading from or writing to the file system.
+.\" ==========
+.It Bq Er ELOOP
+Too many symbolic links are encountered in translating the pathname.
+This is taken to be indicative of a looping symbolic link.
+.\" ==========
+.It Bq Er ENAMETOOLONG
+A component of a pathname exceeded 255 characters,
+or an entire path name exceeded 1023 characters.
+.\" ==========
+.It Bq Er ENOENT
+A component of
+.Fa path
+does not exist.
+.\" ==========
+.It Bq Er ENOTDIR
+A component of the path prefix is not a directory.
 .El
 .Pp
 The
 .Fn fchown
 system call will fail if:
 .Bl -tag -width Er
+.\" ==========
 .It Bq Er EBADF
 The
-.Fa fd
+.Fa fildes
 argument
 does not refer to a valid descriptor.
+.\" ==========
 .It Bq Er EINVAL
 The
-.Fa fd
+.Fa fildes
 argument
 refers to a socket, not a file.
+.El
+.Pp
+Any of these calls will fail if:
+.Bl -tag -width Er
+.\" ==========
+.It Bq Er EINTR
+Its execution is interrupted by a signal.
+.\" ==========
+.It Bq Er EIO
+An I/O error occurs while reading from or writing to the file system.
+.\" ==========
 .It Bq Er EPERM
-The effective user ID is not the super-user.
+The effective user ID does not match the owner of the file
+and the calling process does not have appropriate (i.e., root) privileges.
+.\" ==========
 .It Bq Er EROFS
 The named file resides on a read-only file system.
-.It Bq Er EIO
-An I/O error occurred while reading from or writing to the file system.
 .El
 .Sh SEE ALSO
 .Xr chgrp 1 ,

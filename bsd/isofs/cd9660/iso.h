@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*	$NetBSD: iso.h,v 1.9 1995/01/18 09:23:19 mycroft Exp $	*/
 
@@ -312,6 +318,7 @@ int cd9660_vget(struct mount *, ino64_t, struct vnode **, vfs_context_t);
 int cd9660_fhtovp(struct mount *, int, unsigned char *, struct vnode **, vfs_context_t);
 int cd9660_vptofh(struct vnode *, int *, unsigned char *, vfs_context_t);
 int cd9660_init(struct vfsconf *);
+int cd9660_hashinit(void);
 int cd9660_mountroot(mount_t, vnode_t, vfs_context_t); 
 int cd9660_sysctl(int *, u_int, user_addr_t, size_t *, user_addr_t, size_t, vfs_context_t);
 
@@ -393,16 +400,6 @@ void isofntrans(u_char *infn, int infnlen, u_char *outfn, u_short *outfnlen,
 		int original, int assoc);
 void ucsfntrans(u_int16_t *, int, u_char *, u_short *, int, int);
 int attrcalcsize(struct attrlist *attrlist);
-struct iso_node;
-void packcommonattr(struct attrlist *alist, struct iso_node *ip,
-		    void **attrbufptrptr, void **varbufptrptr);
-void packdirattr(struct attrlist *alist, struct iso_node *ip,
-		 void **attrbufptrptr, void **varbufptrptr);
-void packfileattr(struct attrlist *alist, struct iso_node *ip,
-		  void **attrbufptrptr, void **varbufptrptr);
-void packattrblk(struct attrlist *alist, struct vnode *vp,
-				  void **attrbufptrptr, void **varbufptrptr);
-
 
 /*
  * Associated files have a leading "._".
@@ -438,19 +435,19 @@ struct riff_header {
 #define APPLEDOUBLE_FINDERINFO   9
 
 /*
- * Note that  68k alignment is needed to make sure that the first
+ * Note that the structures are padded and aligned to 2 bytes;
+ * this is to mimic the "#pragma options align=mac68k" formerly
+ * used.  This is needed to make sure that the first
  * AppleDoubleEntry (after the numEntries below) is *immediately*
  * after the numEntries, and not padded by 2 bytes.
  *
  * Consult RFC 1740 for details on AppleSingle/AppleDouble formats.
  */
-#pragma options align=mac68k
-
 struct apple_double_entry {
 	u_int32_t  entryID;
 	u_int32_t  offset;
 	u_int32_t  length;
-};
+} __attribute__((aligned(2), packed));
 typedef struct apple_double_entry apple_double_entry_t;
 
 struct apple_double_header {
@@ -460,13 +457,11 @@ struct apple_double_header {
 	u_int16_t  count;
 	apple_double_entry_t  entries[2];	/* FinderInfo + ResourceFork */
 	struct finder_info finfo;
-};
+} __attribute__((aligned(2), packed));
 typedef struct apple_double_header apple_double_header_t;
 
 #define ADH_SIZE  4096
 #define ADH_BLKS  2
-
-#pragma options align=reset
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* ! _ISO_H_ */

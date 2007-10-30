@@ -43,7 +43,7 @@ struct secasvar;
 
 extern int ah6_input(struct mbuf **, int *);
 extern int ah6_output(struct mbuf *, u_char *, struct mbuf *,
-	struct ipsecrequest *);
+	struct secasvar *);
 extern int ah6_calccksum(struct mbuf *, caddr_t, size_t,
 	const struct ah_algorithm *, struct secasvar *);
 

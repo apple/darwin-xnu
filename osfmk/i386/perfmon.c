@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <mach/std_types.h>
@@ -38,9 +44,10 @@
 #define	DBG(x...)
 #endif
 
-decl_simple_lock_data(,pmc_lock)
-static task_t	pmc_owner = TASK_NULL;
-static int	pmc_thread_count = 0;
+static decl_simple_lock_data(,pmc_lock)
+static task_t		pmc_owner = TASK_NULL;
+static int		pmc_thread_count = 0;
+static boolean_t	pmc_inited = FALSE;
 
 /* PMC Facility Owner:
  * TASK_NULL - no one owns it
@@ -200,13 +207,28 @@ typedef struct {
 	pmc_machine_t	machine_type;		/* P6 or P4/Xeon */
 	uint32_t	msr_counter_base;	/* First counter MSR */
 	uint32_t	msr_control_base;	/* First control MSR */
-	boolean_t	reserved[18];		/* Max-sized arrays... */
-	pmc_ovf_func_t	*ovf_func[18];
+	union {
+	    struct {
+		boolean_t	reserved[2];
+		pmc_ovf_func_t	*ovf_func[2];
+	    } P6;
+	    struct {
+		boolean_t	reserved[2];
+		pmc_ovf_func_t	*ovf_func[2];
+		uint32_t	msr_global_ctrl;
+		uint32_t	msr_global_ovf_ctrl;
+		uint32_t	msr_global_status;
+	    } Core;
+	    struct {
+		boolean_t	reserved[18];
+		pmc_ovf_func_t	*ovf_func[18];
 #ifdef DEBUG
-	pmc_cccr_t	cccr_shadow[18];	/* Last cccr values set */
-	pmc_counter_t	counter_shadow[18];	/* Last counter values set */
-	uint32_t	ovfs_unexpected[18];	/* Count of unexpected intrs */
+		pmc_cccr_t	cccr_shadow[18];	/* Last cccr set */
+		pmc_counter_t	counter_shadow[18];	/* Last counter set */
+		uint32_t	ovfs_unexpected[18];	/* Unexpected intrs */
 #endif
+	    } P4;
+	};
 } pmc_table_t;
 
 static pmc_machine_t
@@ -222,7 +244,12 @@ _pmc_machine_type(void)
 
 	switch (infop->cpuid_family) {
 	case 0x6:
-		return pmc_P6;
+		switch (infop->cpuid_model) {
+		case 15:
+			return pmc_Core;
+		default:
+			return pmc_P6;
+		}
 	case 0xf:
 		return pmc_P4_Xeon;
 	default:
@@ -233,7 +260,7 @@ _pmc_machine_type(void)
 static void
 pmc_p4_intr(void *state)
 {
-	pmc_table_t	*pmc_table = (pmc_table_t *) cpu_core()->pmc;
+	pmc_table_t	*pmc_table = (pmc_table_t *) x86_core()->pmc;
 	uint32_t	cccr_addr;
 	pmc_cccr_t	cccr;
 	pmc_id_t	id;
@@ -244,28 +271,28 @@ pmc_p4_intr(void *state)
 	 * with a registered overflow function.
 	 */
 	for (id = 0; id <= pmc_table->id_max; id++) {
-		if (!pmc_table->reserved[id])
+		if (!pmc_table->P4.reserved[id])
 			continue;
 		cccr_addr = pmc_table->msr_control_base + id;
 		cccr.u_u64 = rdmsr64(cccr_addr);
 #ifdef DEBUG
-		pmc_table->cccr_shadow[id] = cccr;
-		*((uint64_t *) &pmc_table->counter_shadow[id]) =
+		pmc_table->P4.cccr_shadow[id] = cccr;
+		pmc_table->P4.counter_shadow[id].u64 =
 			rdmsr64(pmc_table->msr_counter_base + id);
 #endif
 		if (cccr.u_htt.ovf == 0)
 			continue;
 		if ((cccr.u_htt.ovf_pmi_t0 == 1 && my_logical_cpu == 0) ||
 		    (cccr.u_htt.ovf_pmi_t1 == 1 && my_logical_cpu == 1)) {
-			if (pmc_table->ovf_func[id]) {
-				(*pmc_table->ovf_func[id])(id, state);
+			if (pmc_table->P4.ovf_func[id]) {
+				(*pmc_table->P4.ovf_func[id])(id, state);
 				/* func expected to clear overflow */
 				continue;
 			}
 		}
 		/* Clear overflow for unexpected interrupt */
 #ifdef DEBUG
-		pmc_table->ovfs_unexpected[id]++;
+		pmc_table->P4.ovfs_unexpected[id]++;
 #endif
 	}
 }
@@ -273,7 +300,7 @@ pmc_p4_intr(void *state)
 static void
 pmc_p6_intr(void *state)
 {
-	pmc_table_t	*pmc_table = (pmc_table_t *) cpu_core()->pmc;
+	pmc_table_t	*pmc_table = (pmc_table_t *) x86_core()->pmc;
 	pmc_id_t	id;
 
 	/*
@@ -281,8 +308,34 @@ pmc_p6_intr(void *state)
 	 * so call all registered functions.
 	 */
 	for (id = 0; id <= pmc_table->id_max; id++)
-		if (pmc_table->reserved[id] && pmc_table->ovf_func[id])
-			(*pmc_table->ovf_func[id])(id, state);
+		if (pmc_table->P6.reserved[id] && pmc_table->P6.ovf_func[id])
+			(*pmc_table->P6.ovf_func[id])(id, state);
+}
+
+static void
+pmc_core_intr(void *state)
+{
+	pmc_table_t	*pmc_table = (pmc_table_t *) x86_core()->pmc;
+	pmc_id_t	id;
+	pmc_global_status_t	ovf_status;
+
+	ovf_status.u64 = rdmsr64(pmc_table->Core.msr_global_status);
+	/*
+	 * Scan through table for reserved counters with overflow and
+	 * with a registered overflow function.
+	 */
+	for (id = 0; id <= pmc_table->id_max; id++) {
+		if (!pmc_table->Core.reserved[id])
+			continue;
+		if ((id == 0 && ovf_status.fld.PMC0_overflow) ||
+		    (id == 1 && ovf_status.fld.PMC1_overflow)) {
+			if (pmc_table->Core.ovf_func[id]) {
+				(*pmc_table->Core.ovf_func[id])(id, state);
+				/* func expected to clear overflow */
+				continue;
+			}
+		}
+	}
 }
 
 void *
@@ -292,34 +345,52 @@ pmc_alloc(void)
 	pmc_table_t	*pmc_table;
 	pmc_machine_t	pmc_type;
 
+	if (!pmc_inited) {
+		simple_lock_init(&pmc_lock, 0);
+		pmc_inited = TRUE;
+	}
+
 	pmc_type = _pmc_machine_type();
 	if (pmc_type == pmc_none) {
 		return NULL;
 	}
 	
-		ret = kmem_alloc(kernel_map,
-			(void *) &pmc_table, sizeof(pmc_table_t));
-		if (ret != KERN_SUCCESS)
-			panic("pmc_init() kmem_alloc returned %d\n", ret);
-		bzero((void *)pmc_table, sizeof(pmc_table_t));
+	ret = kmem_alloc(kernel_map,
+		(void *) &pmc_table, sizeof(pmc_table_t));
+	if (ret != KERN_SUCCESS)
+		panic("pmc_init() kmem_alloc returned %d\n", ret);
+	bzero((void *)pmc_table, sizeof(pmc_table_t));
 
-		pmc_table->machine_type = pmc_type;
-		switch (pmc_type) {
-		case pmc_P4_Xeon:
-			pmc_table->id_max = 17;
-			pmc_table->msr_counter_base = MSR_COUNTER_ADDR(0);
-			pmc_table->msr_control_base = MSR_CCCR_ADDR(0);
-			lapic_set_pmi_func(&pmc_p4_intr);
-			break;
-		case pmc_P6:
-			pmc_table->id_max = 1;
-			pmc_table->msr_counter_base = MSR_P6_COUNTER_ADDR(0);
-			pmc_table->msr_control_base = MSR_P6_PES_ADDR(0);
-			lapic_set_pmi_func(&pmc_p6_intr);
-			break;
-		default:
-			break;
-		}
+	pmc_table->machine_type = pmc_type;
+	switch (pmc_type) {
+	case pmc_P4_Xeon:
+		pmc_table->id_max = 17;
+		pmc_table->msr_counter_base = MSR_COUNTER_ADDR(0);
+		pmc_table->msr_control_base = MSR_CCCR_ADDR(0);
+		lapic_set_pmi_func(&pmc_p4_intr);
+		break;
+	case pmc_Core:
+		pmc_table->id_max = 1;
+		pmc_table->msr_counter_base = MSR_IA32_PMC(0);
+		pmc_table->msr_control_base = MSR_IA32_PERFEVTSEL(0);
+		pmc_table->Core.msr_global_ctrl = MSR_PERF_GLOBAL_CTRL;
+		pmc_table->Core.msr_global_ovf_ctrl = MSR_PERF_GLOBAL_OVF_CTRL;
+		pmc_table->Core.msr_global_status = MSR_PERF_GLOBAL_STATUS;
+		lapic_set_pmi_func(&pmc_core_intr);
+		break;
+	case pmc_P6:
+		pmc_table->id_max = 1;
+		pmc_table->msr_counter_base = MSR_P6_COUNTER_ADDR(0);
+		pmc_table->msr_control_base = MSR_P6_PES_ADDR(0);
+		lapic_set_pmi_func(&pmc_p6_intr);
+		break;
+	default:
+		break;
+	}
+	DBG("pmc_alloc() type=%d msr_counter_base=%p msr_control_base=%p\n",
+		pmc_table->machine_type,
+	(void *) pmc_table->msr_counter_base,
+	(void *) pmc_table->msr_control_base);
 	return (void *) pmc_table;
 }
 
@@ -327,24 +398,28 @@ pmc_alloc(void)
 static inline pmc_table_t *
 pmc_table_valid(pmc_id_t id)
 {
-	cpu_core_t	*my_core = cpu_core();
-	pmc_table_t	*pmc_table;
+	x86_core_t	*my_core = x86_core();
+	pmc_table_t	*pmc;
 
-	assert(my_core);
+	assert(my_core != NULL);
 	
-	pmc_table = (pmc_table_t *) my_core->pmc;
-	return (pmc_table == NULL ||
-		id > pmc_table->id_max ||
-		!pmc_table->reserved[id]) ? NULL : pmc_table;
+	pmc = (pmc_table_t *) my_core->pmc;
+	if ((pmc == NULL) ||
+	    (id > pmc->id_max) ||
+	    (pmc->machine_type == pmc_P4_Xeon && !pmc->P4.reserved[id]) ||
+	    (pmc->machine_type == pmc_P6      && !pmc->P6.reserved[id]) ||
+	    (pmc->machine_type == pmc_Core    && !pmc->Core.reserved[id]))
+		return NULL;
+	return pmc;
 }
 
 int
 pmc_machine_type(pmc_machine_t *type)
 {
-	cpu_core_t	*my_core = cpu_core();
+	x86_core_t	*my_core = x86_core();
 	pmc_table_t	*pmc_table;
 
-	assert(my_core);
+	assert(my_core != NULL);
 
 	pmc_table = (pmc_table_t *) my_core->pmc;
 	if (pmc_table == NULL)
@@ -358,22 +433,42 @@ pmc_machine_type(pmc_machine_t *type)
 int
 pmc_reserve(pmc_id_t id)
 {
-	cpu_core_t	*my_core = cpu_core();
+	x86_core_t	*my_core = x86_core();
 	pmc_table_t	*pmc_table;
 
-	assert(my_core);
+	assert(my_core != NULL);
 
 	pmc_table = (pmc_table_t *) my_core->pmc;
 	if (pmc_table == NULL)
 		return KERN_FAILURE;
 	if (id > pmc_table->id_max)
 		return KERN_INVALID_ARGUMENT;
-	if (pmc_table->reserved[id])
+	switch (pmc_table->machine_type) {
+	case pmc_P4_Xeon:
+		if (pmc_table->P4.reserved[id])
+			return KERN_FAILURE;
+		pmc_table->P4.reserved[id] = TRUE;
+		return KERN_SUCCESS;
+	case pmc_P6:
+		if (pmc_table->P6.reserved[id])
+			return KERN_FAILURE;
+		pmc_table->P6.reserved[id] = TRUE;
+		return KERN_SUCCESS;
+	case pmc_Core:
+		if (pmc_table->Core.reserved[id])
+			return KERN_FAILURE;
+		pmc_table->Core.reserved[id] = TRUE;
+		pmc_global_ctrl_t ctrl;
+		ctrl.u64 = rdmsr64(pmc_table->Core.msr_global_ctrl);
+		if (id == 0)
+			ctrl.fld.PMC0_enable = 1;
+		else
+			ctrl.fld.PMC1_enable = 1;
+		wrmsr64(pmc_table->Core.msr_global_ctrl, ctrl.u64);
+		return KERN_SUCCESS;
+	default:
 		return KERN_FAILURE;
-
-	pmc_table->reserved[id] = TRUE;
-
-	return KERN_SUCCESS;
+	}
 }
 
 boolean_t
@@ -391,8 +486,29 @@ pmc_free(pmc_id_t id)
 		return KERN_INVALID_ARGUMENT;
 
 	pmc_cccr_write(id, 0x0ULL);
-	pmc_table->reserved[id] = FALSE;
-	pmc_table->ovf_func[id] = NULL;
+	switch (pmc_table->machine_type) {
+	case pmc_P4_Xeon:
+		pmc_table->P4.reserved[id] = FALSE;
+		pmc_table->P4.ovf_func[id] = NULL;
+		break;
+	case pmc_P6:
+		pmc_table->P6.reserved[id] = FALSE;
+		pmc_table->P6.ovf_func[id] = NULL;
+		break;
+	case pmc_Core:
+		pmc_table->Core.reserved[id] = FALSE;
+		pmc_table->Core.ovf_func[id] = NULL;
+		pmc_global_ctrl_t ctrl;
+		ctrl.u64 = rdmsr64(pmc_table->Core.msr_global_ctrl);
+		if (id == 0)
+			ctrl.fld.PMC0_enable = 0;
+		else
+			ctrl.fld.PMC1_enable = 0;
+		wrmsr64(pmc_table->Core.msr_global_ctrl, ctrl.u64);
+		break;
+	default:
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	return KERN_SUCCESS;
 }
@@ -463,10 +579,11 @@ pmc_evtsel_read(pmc_id_t id, pmc_evtsel_t *evtsel)
 	if (pmc_table == NULL)
 		return KERN_INVALID_ARGUMENT;
 	
-	if (pmc_table->machine_type != pmc_P6)
+	if (!(pmc_table->machine_type == pmc_P6 ||
+	      pmc_table->machine_type == pmc_Core))
 		return KERN_FAILURE;
 	
-	*(uint64_t *)evtsel = rdmsr64(pmc_table->msr_control_base + id);
+	evtsel->u64 = rdmsr64(pmc_table->msr_control_base + id);
 
 	return KERN_SUCCESS;
 }
@@ -479,10 +596,11 @@ pmc_evtsel_write(pmc_id_t id, pmc_evtsel_t *evtsel)
 	if (pmc_table == NULL)
 		return KERN_INVALID_ARGUMENT;
 
-	if (pmc_table->machine_type != pmc_P4_Xeon)
+	if (!(pmc_table->machine_type == pmc_P6 ||
+	      pmc_table->machine_type == pmc_Core))
 		return KERN_FAILURE;
 	
-	wrmsr64(pmc_table->msr_control_base + id, *(uint64_t *)evtsel);
+	wrmsr64(pmc_table->msr_control_base + id, evtsel->u64);
 
 	return KERN_SUCCESS;
 }
@@ -543,7 +661,19 @@ pmc_set_ovf_func(pmc_id_t id, pmc_ovf_func_t func)
 	if (pmc_table == NULL)
 		return KERN_INVALID_ARGUMENT;
 
-	pmc_table->ovf_func[id] = func;
+	switch (pmc_table->machine_type) {
+	case pmc_P4_Xeon:
+		pmc_table->P4.ovf_func[id] = func;
+		break;
+	case pmc_P6:
+		pmc_table->P6.ovf_func[id] = func;
+		break;
+	case pmc_Core:
+		pmc_table->Core.ovf_func[id] = func;
+		break;
+	default:
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	return KERN_SUCCESS;
 }
@@ -553,6 +683,9 @@ pmc_acquire(task_t task)
 {
 	kern_return_t retval = KERN_SUCCESS;
   
+	if (!pmc_inited)
+		return KERN_FAILURE;
+
 	simple_lock(&pmc_lock);
   
 	if(pmc_owner == task) {
@@ -597,6 +730,9 @@ pmc_release(task_t task)
 	kern_return_t retval = KERN_SUCCESS;
 	task_t old_pmc_owner = pmc_owner;
   
+	if (!pmc_inited)
+		return KERN_FAILURE;
+
 	simple_lock(&pmc_lock);
   
 	if(task != pmc_owner) {

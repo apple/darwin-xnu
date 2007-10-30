@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2003-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
  * Copyright (c) 1999,2000,2001 Jonathan Lemon <jlemon@FreeBSD.org>
@@ -112,6 +118,7 @@ struct user_kevent {
 #define EV_DELETE	0x0002		/* delete event from kq */
 #define EV_ENABLE	0x0004		/* enable event */
 #define EV_DISABLE	0x0008		/* disable event (not reported) */
+#define EV_RECEIPT	0x0040		/* force EV_ERROR on success, data == 0 */
 
 /* flags */
 #define EV_ONESHOT	0x0010		/* only report one occurrence */
@@ -166,12 +173,20 @@ struct user_kevent {
 
 /*
  * data/hint fflags for EVFILT_PROC, shared with userspace
+ *
+ * Please note that EVFILT_PROC and EVFILT_SIGNAL share the same knote list
+ * that hangs off the proc structure. They also both play games with the hint
+ * passed to KNOTE(). If NOTE_SIGNAL is passed as a hint, then the lower bits
+ * of the hint contain the signal. IF NOTE_FORK is passed, then the lower bits
+ * contain the PID of the child.
  */
 #define	NOTE_EXIT	0x80000000		/* process exited */
 #define	NOTE_FORK	0x40000000		/* process forked */
 #define	NOTE_EXEC	0x20000000		/* process exec'd */
-#define	NOTE_PCTRLMASK	0xf0000000		/* mask for hint bits */
-#define	NOTE_PDATAMASK	0x000fffff		/* mask for pid */
+#define	NOTE_REAP	0x10000000		/* process reaped */
+#define	NOTE_SIGNAL	0x08000000		/* shared with EVFILT_SIGNAL */
+#define	NOTE_PDATAMASK	0x000fffff		/* mask for pid/signal */
+#define	NOTE_PCTRLMASK	(~NOTE_PDATAMASK)
 
 /*
  * data/hint fflags for EVFILT_TIMER, shared with userspace.
@@ -186,6 +201,10 @@ struct user_kevent {
 #define NOTE_ABSOLUTE	0x00000008		/* absolute timeout        */
 						/* ... implicit EV_ONESHOT */
  
+/*
+ * DEPRECATED!!!!!!!!!
+ * NOTE_TRACK, NOTE_TRACKERR, and NOTE_CHILD are no longer supported as of 10.5
+ */
 /* additional flags for EVFILT_PROC */
 #define	NOTE_TRACK	0x00000001		/* follow across forks */
 #define	NOTE_TRACKERR	0x00000002		/* could not track child */
@@ -208,12 +227,6 @@ SLIST_HEAD(klist, knote);
 #ifdef MALLOC_DECLARE
 MALLOC_DECLARE(M_KQUEUE);
 #endif
-
-/*
- * Flag indicating hint is a signal.  Used by EVFILT_SIGNAL, and also
- * shared by EVFILT_PROC  (all knotes attached to p->p_klist)
- */
-#define NOTE_SIGNAL	0x08000000
 
 TAILQ_HEAD(kqtailq, knote);	/* a list of "queued" events */
 
@@ -261,6 +274,7 @@ struct filterops {
 struct proc;
 
 SLIST_HEAD(klist, knote);
+extern void	knote_init(void) __attribute__((section("__TEXT, initcode")));
 extern void	klist_init(struct klist *list);
 
 #define KNOTE(list, hint)	knote(list, hint)

@@ -41,15 +41,21 @@
 .Nm setpriority
 .Nd get/set program scheduling priority
 .Sh SYNOPSIS
-.Fd #include <sys/time.h>
 .Fd #include <sys/resource.h>
 .Ft int
-.Fn getpriority "int which" "int who"
+.Fo getpriority
+.Fa "int which"
+.Fa "id_t who"
+.Fc
 .Ft int
-.Fn setpriority "int which" "int who" "int prio"
+.Fo setpriority
+.Fa "int which"
+.Fa "id_t who"
+.Fa "int prio"
+.Fc
 .Sh DESCRIPTION
 The scheduling
-priority of the process, process group, or user, as indicated by
+priority of the process, process group, or user as indicated by
 .Fa which
 and
 .Fa who
@@ -57,13 +63,15 @@ is obtained with the
 .Fn getpriority
 call and set with the
 .Fn setpriority
-call.
+call.  Additionally, the current thread can be set to background
+state.
 .Fa Which
 is one of
 .Dv PRIO_PROCESS ,
 .Dv PRIO_PGRP ,
-or
 .Dv PRIO_USER ,
+or
+.Dv PRIO_DARWIN_THREAD ,
 and 
 .Fa who
 is interpreted relative to 
@@ -77,18 +85,31 @@ and a user ID for
 .Dv PRIO_USER ) .
 A zero value of
 .Fa who
-denotes the current process, process group, or user.
-.Fa Prio
+denotes the current process, process group, user, thread (for PRIO_DARWIN_THREAD).
+.Fa prio
 is a value in the range -20 to 20.  The default priority is 0;
 lower priorities cause more favorable scheduling.
+For PRIO_DARWIN_THREAD,
+.Fa prio
+is either 0 (to remove current thread from background status) or PRIO_DARWIN_BG
+(to set current thread into background state).
 .Pp
 The
 .Fn getpriority
 call returns the highest priority (lowest numerical value)
-enjoyed by any of the specified processes.  The
+enjoyed by any of the specified processes or for PRIO_DARWIN_THREAD
+returns 0 when current thread is not in background state or 1
+when the current thread is in background state.
+The
 .Fn setpriority
 call sets the priorities of all of the specified processes
-to the specified value.  Only the super-user may lower priorities.
+to the specified value.  When setting a thread into background
+state the scheduling priority is set to lowest value, disk and
+network IO are throttled.  Network IO will be throttled for any
+sockets the thread opens after going into background state.  Any
+previously opened sockets are not affected.
+Only the super-user may lower priorities, but any thread can set
+itself into background state.
 .Sh RETURN VALUES
 Since
 .Fn getpriority
@@ -108,34 +129,77 @@ and
 .Fn setpriority
 will fail if:
 .Bl -tag -width Er
+.\" ==========
+.It Bq Er EINVAL
+.Fa Which
+is not one of
+.Dv PRIO_PROCESS ,
+.Dv PRIO_PGRP ,
+.Dv PRIO_USER ,
+or
+.Dv PRIO_DARWIN_THREAD .
+.\" ==========
+.It Bq Er EINVAL
+.Fa Who
+is not a valid process, process group, or user ID.
+.\" ==========
+.It Bq Er EINVAL
+.Fa Who
+is not 0 when
+.Fa which
+is PRIO_DARWIN_THREAD.
+.\" ==========
 .It Bq Er ESRCH
-No process was located using the 
+No process can be located using the 
 .Fa which
 and
 .Fa who
 values specified.
-.It Bq Er EINVAL
-.Fa Which
-was not one of
-.Dv PRIO_PROCESS ,
-.Dv PRIO_PGRP ,
-or
-.Dv PRIO_USER .
 .El
 .Pp
 .Bl -tag -width Er
 In addition to the errors indicated above,
 .Fn setpriority
 will fail if:
-.It Bq Er EPERM
-A process was located, but neither its effective nor real user
-ID matched the effective user ID of the caller.
+.\" ==========
 .It Bq Er EACCES
-A non super-user attempted to lower a process priority.
+A non super-user attempts to lower a process priority.
+.\" ==========
+.It Bq Er EPERM
+A process is located,
+but neither its effective nor real user ID
+matches the effective user ID of the caller.
 .El
+.Sh LEGACY SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/resource.h>
+.Pp
+The include file
+.In sys/types.h
+is necessary.
+.Pp
+.Ft int
+.br
+.Fo getpriority
+.Fa "int which"
+.Fa "int who"
+.Fc ;
+.Pp
+.Ft int
+.br
+.Fo setpriority
+.Fa "int which"
+.Fa "int who"
+.Fa "int value"
+.Fc ;
+.Pp
+The type of
+.Fa who
+has changed.
 .Sh SEE ALSO
 .Xr nice 1 ,
 .Xr fork 2 ,
+.Xr compat 5 ,
 .Xr renice 8
 .Sh HISTORY
 The

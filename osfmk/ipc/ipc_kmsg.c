@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -46,6 +52,13 @@
  * 
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
+ */
+/*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ * Copyright (c) 2005 SPARTA, Inc.
  */
 /*
  */
@@ -96,6 +109,8 @@
 #include <ipc/ipc_right.h>
 #include <ipc/ipc_hash.h>
 #include <ipc/ipc_table.h>
+
+#include <security/mac_mach_internal.h>
 
 #include <string.h>
 
@@ -262,6 +277,7 @@ ipc_kmsg_alloc(
 				    max_expanded_size -
 				    msg_and_trailer_size);
 	}
+
 	return(kmsg);
 }
 
@@ -283,6 +299,13 @@ ipc_kmsg_free(
 {
 	mach_msg_size_t size = kmsg->ikm_size;
 	ipc_port_t port;
+
+#if CONFIG_MACF_MACH
+	if (kmsg->ikm_sender != NULL) {
+		task_deallocate(kmsg->ikm_sender);
+		kmsg->ikm_sender = NULL;
+	}
+#endif
 
 	/*
 	 * Check to see if the message is bound to the port.  If so,
@@ -389,8 +412,8 @@ ipc_kmsg_rmqueue(
 		prev->ikm_next = next;
 	}
 	/* XXX Temporary debug logic */
-	assert(kmsg->ikm_next = IKM_BOGUS);
-	assert(kmsg->ikm_prev = IKM_BOGUS);
+	assert((kmsg->ikm_next = IKM_BOGUS) == IKM_BOGUS);
+	assert((kmsg->ikm_prev = IKM_BOGUS) == IKM_BOGUS);
 }
 
 /*
@@ -644,6 +667,13 @@ ipc_kmsg_clean(
 		ipc_kmsg_clean_body(kmsg, body->msgh_descriptor_count,
 				    (mach_msg_descriptor_t *)(body + 1));
 	}
+
+#if CONFIG_MACF_MACH
+	if (kmsg->ikm_sender != NULL) {
+		task_deallocate(kmsg->ikm_sender);
+		kmsg->ikm_sender = NULL;
+	}
+#endif
 }
 
 /*
@@ -747,6 +777,19 @@ ipc_kmsg_get(
 		(unsigned int)kmsg->ikm_header->msgh_remote_port, 
 		(unsigned int)kmsg->ikm_header->msgh_local_port, 0); 
 #endif
+
+#if CONFIG_MACF_MACH
+	/* XXX - why do we zero sender labels here instead of in mach_msg()? */
+	task_t cur = current_task();
+	if (cur) {
+		task_reference(cur);
+		kmsg->ikm_sender = cur;
+	} else
+		trailer->msgh_labels.sender = 0;
+#else
+	  trailer->msgh_labels.sender = 0;
+#endif
+
 	*kmsgp = kmsg;
 	return MACH_MSG_SUCCESS;
 }
@@ -832,6 +875,11 @@ ipc_kmsg_get_from_kernel(
 	trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
 	trailer->msgh_trailer_size = MACH_MSG_TRAILER_MINIMUM_SIZE;
 
+	trailer->msgh_labels.sender = 0;
+
+#if CONFIG_MACF_MACH
+	kmsg->ikm_sender = NULL;
+#endif
 	*kmsgp = kmsg;
 	return MACH_MSG_SUCCESS;
 }
@@ -863,6 +911,9 @@ ipc_kmsg_send(
 
 	port = (ipc_port_t) kmsg->ikm_header->msgh_remote_port;
 	assert(IP_VALID(port));
+
+	if ((option & ~(MACH_SEND_TIMEOUT|MACH_SEND_ALWAYS)) != 0)
+		printf("ipc_kmsg_send: bad option 0x%x\n", option);
 
 	ip_lock(port);
 
@@ -1036,6 +1087,7 @@ ipc_kmsg_copyin_header(
 	ipc_object_t dest_port, reply_port;
 	ipc_port_t dest_soright, reply_soright;
 	ipc_port_t notify_port;
+	ipc_entry_t entry;
 
 	if ((mbits != msg->msgh_bits) ||
 	    (!MACH_MSG_TYPE_PORT_ANY_SEND(dest_type)) ||
@@ -1053,9 +1105,33 @@ ipc_kmsg_copyin_header(
 	if (!MACH_PORT_VALID(dest_name))
 		goto invalid_dest;
 
-	if (notify != MACH_PORT_NULL) {
-		ipc_entry_t entry;
+#if CONFIG_MACF_MACH
+	/*
+	 * We do the port send check here instead of in ipc_kmsg_send()
+	 * because copying the header involves copying the port rights too
+	 * and we need to do the send check before anything is actually copied.
+	 */
+	entry = ipc_entry_lookup(space, dest_name);
+	if (entry != IE_NULL) {
+		int error = 0;
+		ipc_port_t port = (ipc_port_t) entry->ie_object;
+		if (port == IP_NULL)
+			goto invalid_dest;
+		ip_lock(port);
+		if (ip_active(port)) {
+			task_t self = current_task();
+			tasklabel_lock(self);
+			error = mac_port_check_send(&self->maclabel,
+			    &port->ip_label);
+			tasklabel_unlock(self);
+		}
+		ip_unlock(port);
+		if (error != 0)
+			goto invalid_dest;
+	}
+#endif
 
+	if (notify != MACH_PORT_NULL) {
 		if ((entry = ipc_entry_lookup(space, notify)) == IE_NULL) {
 			is_write_unlock(space);
 			return MACH_SEND_INVALID_NOTIFY;
@@ -1070,7 +1146,6 @@ ipc_kmsg_copyin_header(
 		notify_port = IP_NULL;
 
 	if (dest_name == reply_name) {
-		ipc_entry_t entry;
 		mach_port_name_t name = dest_name;
 
 		/*
@@ -1226,8 +1301,6 @@ ipc_kmsg_copyin_header(
 			}
 		}
 	} else if (!MACH_PORT_VALID(reply_name)) {
-		ipc_entry_t entry;
-
 		/*
 		 *	No reply port!  This is an easy case
 		 *	to make atomic.  Just copyin the destination.
@@ -1433,7 +1506,7 @@ ipc_kmsg_copyin_body(
 	user_desc_sizes = (dsc_count <= DESC_COUNT_SMALL) ?
 	    &desc_size_space : kalloc(dsc_count * sizeof(vm_size_t));
 	if (user_desc_sizes == NULL) {
-	    ipc_kmsg_clean_partial(kmsg,0,0,0,0);
+	    ipc_kmsg_clean_partial(kmsg, 0, NULL, 0, 0);
 	    return KERN_RESOURCE_SHORTAGE;
 	}
     }
@@ -1443,7 +1516,7 @@ ipc_kmsg_copyin_body(
      * physical copies and possible contraction of the descriptors from
      * processes with pointers larger than the kernel's.
      */
-    daddr = 0;
+    daddr = NULL;
     for (i = 0; i < dsc_count; i++) {
 	daddr = naddr;
 
@@ -1467,7 +1540,7 @@ ipc_kmsg_copyin_body(
 
 	if (naddr > (mach_msg_descriptor_t *)
 	    ((vm_offset_t)kmsg->ikm_header + kmsg->ikm_header->msgh_size)) {
-	    ipc_kmsg_clean_partial(kmsg,0,0,0,0);
+	    ipc_kmsg_clean_partial(kmsg, 0, NULL, 0, 0);
 	    mr = MACH_SEND_MSG_TOO_SMALL;
 	    goto out;
 	}
@@ -1486,7 +1559,7 @@ ipc_kmsg_copyin_body(
 		/*
 		 * Invalid copy option
 		 */
-		ipc_kmsg_clean_partial(kmsg,0,0,0,0);
+		ipc_kmsg_clean_partial(kmsg, 0, NULL, 0, 0);
 		mr = MACH_SEND_INVALID_TYPE;
 		goto out;
 	    }
@@ -1505,7 +1578,7 @@ ipc_kmsg_copyin_body(
 		    /*
 		     * Per message kernel memory limit exceeded
 		     */
-		    ipc_kmsg_clean_partial(kmsg,0,0,0,0);
+		    ipc_kmsg_clean_partial(kmsg, 0, NULL, 0, 0);
 		    mr = MACH_MSG_VM_KERNEL;
 		    goto out;
 		}
@@ -1521,7 +1594,7 @@ ipc_kmsg_copyin_body(
     if (space_needed) {
 	if (vm_allocate(ipc_kernel_copy_map, &paddr, space_needed, VM_FLAGS_ANYWHERE) !=
 	    KERN_SUCCESS) {
-	    ipc_kmsg_clean_partial(kmsg,0,0,0,0);
+	    ipc_kmsg_clean_partial(kmsg, 0, NULL, 0, 0);
 		mr = MACH_MSG_VM_KERNEL;
 		goto out;
 	}
@@ -1616,7 +1689,7 @@ ipc_kmsg_copyin_body(
 		dsc->type = dsc_type;
 
 		if (length == 0) {
-		    dsc->address = 0;
+		    dsc->address = NULL;
 		} else if ((length >= MSG_OOL_SIZE_SMALL) &&
 			   (copy_options == MACH_MSG_PHYSICAL_COPY) && !dealloc) {
 
@@ -1714,13 +1787,16 @@ ipc_kmsg_copyin_body(
 		dsc->copy = copy_option;
 		dsc->type = daddr->type.type;
 		dsc->count = count;
+		dsc->address = NULL;  /* for now */
+
+		result_disp = ipc_object_copyin_type(user_disp);
+		dsc->disposition = result_disp;
 
 		/* calculate length of data in bytes, rounding up */
 		length = count * sizeof(mach_port_name_t);
 		
 		if (length == 0) {
 		    complex = TRUE;
-		    dsc->address = (void *) 0;
 		    break;
 		}
 
@@ -1741,12 +1817,8 @@ ipc_kmsg_copyin_body(
 		    (void) mach_vm_deallocate(map, addr, (mach_vm_size_t)length);
 		}
 		
+       		objects = (ipc_object_t *) data;
 		dsc->address = data;
-		
-		result_disp = ipc_object_copyin_type(user_disp);
-		dsc->disposition = result_disp;
-
-		objects = (ipc_object_t *) data;
 		
 		for ( j = 0; j < count; j++) {
 		    mach_port_name_t port = (mach_port_name_t) objects[j];
@@ -1766,6 +1838,7 @@ ipc_kmsg_copyin_body(
 		    	    	ipc_object_destroy(object, result_disp);
 			}
 			kfree(data, length);
+			dsc->address = NULL;
 			mr = MACH_SEND_INVALID_RIGHT;
 			break;
 		    }
@@ -2094,6 +2167,7 @@ ipc_kmsg_copyout_header(
 			ipc_port_request_index_t request;
 
 			if (!space->is_active) {
+				printf("ipc_kmsg_copyout_header: dead space\n");
 				is_write_unlock(space);
 				return (MACH_RCV_HEADER_ERROR|
 					MACH_MSG_IPC_SPACE);
@@ -2103,6 +2177,7 @@ ipc_kmsg_copyout_header(
 				notify_port = ipc_port_lookup_notify(space,
 								     notify);
 				if (notify_port == IP_NULL) {
+					printf("ipc_kmsg_copyout_header: no notify port\n");
 					is_write_unlock(space);
 					return MACH_RCV_INVALID_NOTIFY;
 				}
@@ -2157,12 +2232,15 @@ ipc_kmsg_copyout_header(
 				if (kr != KERN_SUCCESS) {
 					/* space is unlocked */
 
-					if (kr == KERN_RESOURCE_SHORTAGE)
+					if (kr == KERN_RESOURCE_SHORTAGE) {
+						printf("ipc_kmsg_copyout_header: can't grow kernel ipc space\n");
 						return (MACH_RCV_HEADER_ERROR|
 							MACH_MSG_IPC_KERNEL);
-					else
+					} else {
+						printf("ipc_kmsg_copyout_header: can't grow user ipc space\n");
 						return (MACH_RCV_HEADER_ERROR|
 							MACH_MSG_IPC_SPACE);
+					}
 				}
 				/* space is locked again; start over */
 
@@ -2200,9 +2278,11 @@ ipc_kmsg_copyout_header(
 
 				kr = ipc_port_dngrow(reply, ITS_SIZE_NONE);
 				/* port is unlocked */
-				if (kr != KERN_SUCCESS)
+				if (kr != KERN_SUCCESS) {
+					printf("ipc_kmsg_copyout_header: can't grow kernel ipc space2\n");
 					return (MACH_RCV_HEADER_ERROR|
 						MACH_MSG_IPC_KERNEL);
+				}
 
 				is_write_lock(space);
 				continue;
@@ -2239,6 +2319,7 @@ ipc_kmsg_copyout_header(
 
 		is_read_lock(space);
 		if (!space->is_active) {
+			printf("ipc_kmsg_copyout_header: dead space2\n");
 			is_read_unlock(space);
 			return MACH_RCV_HEADER_ERROR|MACH_MSG_IPC_SPACE;
 		}
@@ -2249,11 +2330,13 @@ ipc_kmsg_copyout_header(
 			/* must check notify even though it won't be used */
 
 			if ((entry = ipc_entry_lookup(space, notify)) == IE_NULL) {
+				printf("ipc_kmsg_copyout_header: ipc_entry_lookup failed\n");
 				is_read_unlock(space);
 				return MACH_RCV_INVALID_NOTIFY;
 			}
 	
 			if ((entry->ie_bits & MACH_PORT_TYPE_RECEIVE) == 0) {
+				printf("ipc_kmsg_copyout_header: MACH_PORT_TYPE_RECEIVE not set!\n");
 				is_read_unlock(space);
 				return MACH_RCV_INVALID_NOTIFY;
 			}
@@ -2835,8 +2918,10 @@ ipc_kmsg_copyout(
 	mach_msg_return_t mr;
 
 	mr = ipc_kmsg_copyout_header(kmsg->ikm_header, space, notify);
-	if (mr != MACH_MSG_SUCCESS)
+	if (mr != MACH_MSG_SUCCESS) {
+		printf("ipc_kmsg_copyout: ipc_kmsg_copyout_header failed: %d\n", mr);
 		return mr;
+	}
 
 	if (kmsg->ikm_header->msgh_bits & MACH_MSGH_BITS_COMPLEX) {
 		mr = ipc_kmsg_copyout_body(kmsg, space, map, slist);
@@ -3320,7 +3405,7 @@ ipc_msg_print(
 	}
 
 	if (msgh->msgh_local_port) {
-		printf("%slocal=0x%x(", needs_comma ? "," : "",
+		printf("%slocal=%p(", needs_comma ? "," : "",
 		       msgh->msgh_local_port);
 		ipc_print_type_name(MACH_MSGH_BITS_LOCAL(msgh->msgh_bits));
 		printf(")\n");

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2003-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
- *
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- *
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- *
- * @APPLE_LICENSE_HEADER_END@
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #ifndef _KERN_LOCKS_H_
@@ -34,13 +40,13 @@
 #include	<kern/queue.h>
 
 extern void				lck_mod_init(
-								void);
+								void) __attribute__((section("__TEXT, initcode")));
 
 typedef	unsigned int	lck_type_t;
 
 #define	LCK_TYPE_SPIN	1
 #define	LCK_TYPE_MTX	2
-#define	LCK_TYPE_RW		3
+#define	LCK_TYPE_RW	3
 
 #endif
 
@@ -66,9 +72,11 @@ typedef struct {
 
 typedef struct {
 	uint64_t			lck_grp_mtx_util_cnt;
+	/* On x86, this is used as the "direct wait" count */
 	uint64_t			lck_grp_mtx_held_cnt;
 	uint64_t			lck_grp_mtx_miss_cnt;
 	uint64_t			lck_grp_mtx_wait_cnt;
+	/* Rest currently unused */
 	uint64_t			lck_grp_mtx_held_max;
 	uint64_t			lck_grp_mtx_held_cum;
 	uint64_t			lck_grp_mtx_wait_max;
@@ -101,7 +109,7 @@ typedef	struct _lck_grp_ {
 	unsigned int		lck_grp_mtxcnt;
 	unsigned int		lck_grp_rwcnt;
 	unsigned int		lck_grp_attr;
-	char				lck_grp_name[LCK_GRP_MAX_NAME];
+	char			lck_grp_name[LCK_GRP_MAX_NAME];
 	lck_grp_stat_t		lck_grp_stat;
 } lck_grp_t;
 
@@ -203,6 +211,9 @@ extern	void			lck_attr_setdefault(
 extern	void			lck_attr_setdebug(
 									lck_attr_t		*attr);
 
+extern	void			lck_attr_cleardebug(
+									lck_attr_t		*attr);
+
 #ifdef	XNU_KERNEL_PRIVATE
 extern	void			lck_attr_rw_shared_priority(
 									lck_attr_t		*attr);
@@ -300,6 +311,21 @@ extern wait_result_t	lck_mtx_sleep_deadline(
 extern boolean_t		lck_mtx_try_lock(
 									lck_mtx_t		*lck);
 
+#ifdef i386
+extern boolean_t		lck_mtx_try_lock_spin(
+									lck_mtx_t		*lck);
+
+extern void			lck_mtx_lock_spin(
+									lck_mtx_t		*lck);
+
+extern void			lck_mtx_convert_spin(
+									lck_mtx_t		*lck);
+#else
+#define lck_mtx_try_lock_spin(l)	lck_mtx_try_lock(l)
+#define	lck_mtx_lock_spin(l)		lck_mtx_lock(l)
+#define	lck_mtx_convert_spin(l)		do {} while (0)
+#endif
+
 #endif	/* KERNEL_PRIVATE */
 
 extern void				lck_mtx_assert(
@@ -322,9 +348,15 @@ extern int				lck_mtx_lock_acquire(
 extern void				lck_mtx_unlock_wakeup(
 									lck_mtx_t		*lck,
 									thread_t		holder);
+extern void				lck_mtx_unlockspin_wakeup(
+							                lck_mtx_t		*lck);
 
 extern boolean_t		lck_mtx_ilk_unlock(
 									lck_mtx_t		*lck);
+
+struct _lck_mtx_ext_;
+extern void lck_mtx_init_ext(lck_mtx_t *lck, struct _lck_mtx_ext_ *lck_ext,
+    lck_grp_t *grp, lck_attr_t *attr);
 #endif
 
 #define decl_lck_rw_data(class,name)     class lck_rw_t name;
@@ -333,6 +365,12 @@ typedef unsigned int	 lck_rw_type_t;
 
 #define	LCK_RW_TYPE_SHARED			0x01
 #define	LCK_RW_TYPE_EXCLUSIVE		0x02
+
+#ifdef XNU_KERNEL_PRIVATE
+#define LCK_RW_ASSERT_SHARED	0x01
+#define LCK_RW_ASSERT_EXCLUSIVE	0x02
+#define LCK_RW_ASSERT_HELD	(LCK_RW_ASSERT_SHARED | LCK_RW_ASSERT_EXCLUSIVE)
+#endif
 
 __BEGIN_DECLS
 
@@ -365,6 +403,17 @@ extern void				lck_rw_lock_exclusive(
 extern void				lck_rw_unlock_exclusive(
 									lck_rw_t		*lck);
 
+#ifdef	XNU_KERNEL_PRIVATE
+/*
+ * CAUTION
+ * read-write locks do not have a concept of ownership, so lck_rw_assert()
+ * merely asserts that someone is holding the lock, not necessarily the caller.
+ */
+extern void				lck_rw_assert(
+									lck_rw_t		*lck,
+									unsigned int		type);
+#endif
+
 #ifdef	KERNEL_PRIVATE
 
 extern lck_rw_type_t	lck_rw_done(
@@ -392,8 +441,6 @@ extern wait_result_t	lck_rw_sleep_deadline(
 									wait_interrupt_t	interruptible,
 									uint64_t			deadline);
 
-#ifdef	KERNEL_PRIVATE
-
 extern boolean_t		lck_rw_lock_shared_to_exclusive(
 									lck_rw_t		*lck);
 
@@ -403,6 +450,8 @@ extern void				lck_rw_lock_exclusive_to_shared(
 extern boolean_t		lck_rw_try_lock(
 									lck_rw_t		*lck,
 									lck_rw_type_t	lck_rw_type);
+
+#ifdef	KERNEL_PRIVATE
 
 extern boolean_t		lck_rw_try_lock_shared(
 									lck_rw_t		*lck);

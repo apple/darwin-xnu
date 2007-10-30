@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -94,6 +100,7 @@
 #include <vm/pmap.h>		/* For pmap_clear_modify */
 #include <vm/vm_kern.h>		/* For kernel_map, vm_move */
 #include <vm/vm_map.h>		/* For vm_map_pageable */
+#include <vm/vm_purgeable_internal.h>	/* Needed by some vm_page.h macros */
 
 #if	MACH_PAGEMAP
 #include <vm/vm_external.h>
@@ -103,7 +110,6 @@
 
 
 memory_object_default_t	memory_manager_default = MEMORY_OBJECT_DEFAULT_NULL;
-vm_size_t		memory_manager_default_cluster = 0;
 decl_mutex_data(,	memory_manager_default_lock)
 
 
@@ -199,37 +205,20 @@ memory_object_lock_page(
 
 	assert(!m->fictitious);
 
+	/*
+	 *	If the page is wired, just clean or return the page if needed.
+	 *	Wired pages don't get flushed or disconnected from the pmap.
+	 */
+
 	if (m->wire_count != 0) {
-		/*
-		 *	If no change would take place
-		 *	anyway, return successfully.
-		 *
-		 *	No change means:
-		 *		Not flushing AND
-		 *		No change to page lock [2 checks]  AND
-		 *		Should not return page
-		 *
-		 * XXX	This doesn't handle sending a copy of a wired
-		 * XXX	page to the pager, but that will require some
-		 * XXX	significant surgery.
-		 */
-		if (!should_flush &&
-		    (m->page_lock == prot || prot == VM_PROT_NO_CHANGE) &&
-		    ! memory_object_should_return_page(m, should_return)) {
-
-			/*
-			 *	Restart page unlock requests,
-			 *	even though no change took place.
-			 *	[Memory managers may be expecting
-			 *	to see new requests.]
-			 */
-			m->unlock_request = VM_PROT_NONE;
-			PAGE_WAKEUP(m);
-
-			return(MEMORY_OBJECT_LOCK_RESULT_DONE);
+		if (memory_object_should_return_page(m, should_return)) {
+			if (m->dirty)
+				return(MEMORY_OBJECT_LOCK_RESULT_MUST_CLEAN);
+			else
+				return(MEMORY_OBJECT_LOCK_RESULT_MUST_RETURN);
 		}
 
-		return(MEMORY_OBJECT_LOCK_RESULT_MUST_BLOCK);
+		return(MEMORY_OBJECT_LOCK_RESULT_DONE);
 	}
 
 	/*
@@ -249,36 +238,14 @@ memory_object_lock_page(
 	 */
 
 	if (prot != VM_PROT_NO_CHANGE) {
-		if ((m->page_lock ^ prot) & prot) {
-			pmap_page_protect(m->phys_page, VM_PROT_ALL & ~prot);
-		}
-#if 0
-		/* code associated with the vestigial 
-		 * memory_object_data_unlock
-		 */
-		m->page_lock = prot;
-		m->lock_supplied = TRUE;
-		if (prot != VM_PROT_NONE)
-			m->unusual = TRUE;
-		else
-			m->unusual = FALSE;
+	        pmap_page_protect(m->phys_page, VM_PROT_ALL & ~prot);
 
-		/*
-		 *	Restart any past unlock requests, even if no
-		 *	change resulted.  If the manager explicitly
-		 *	requested no protection change, then it is assumed
-		 *	to be remembering past requests.
-		 */
-
-		m->unlock_request = VM_PROT_NONE;
-#endif /* 0 */
 		PAGE_WAKEUP(m);
 	}
 
 	/*
 	 *	Handle page returning.
 	 */
-
 	if (memory_object_should_return_page(m, should_return)) {
 
 		/*
@@ -290,7 +257,7 @@ memory_object_lock_page(
 		 *	maps now.
 		 */
 		
-		vm_page_lock_queues();
+		vm_page_lockspin_queues();
 		VM_PAGE_QUEUES_REMOVE(m);
 		vm_page_unlock_queues();
 
@@ -306,7 +273,6 @@ memory_object_lock_page(
 	/*
 	 *	Handle flushing
 	 */
-
 	if (should_flush) {
 		VM_PAGE_FREE(m);
 	} else {
@@ -333,24 +299,29 @@ memory_object_lock_page(
 MACRO_BEGIN								\
 									\
         register int            upl_flags;                              \
+	memory_object_t		pager;					\
 				                   			\
-	vm_object_unlock(object);					\
+	if ((pager = (object)->pager) != MEMORY_OBJECT_NULL) {		\
+		vm_object_paging_begin(object);				\
+		vm_object_unlock(object);				\
 									\
-                if (iosync)                                             \
-                        upl_flags = UPL_MSYNC | UPL_IOSYNC;             \
-                else                                                    \
-                        upl_flags = UPL_MSYNC;                          \
+                if (iosync)                                     	\
+                        upl_flags = UPL_MSYNC | UPL_IOSYNC;     	\
+                else                                            	\
+                        upl_flags = UPL_MSYNC;                  	\
 				                   			\
-	   	(void) memory_object_data_return(object->pager,		\
-		po,							\
-		data_cnt,						\
-                ro,                                                     \
-                ioerr,                                                  \
-		(action == MEMORY_OBJECT_LOCK_RESULT_MUST_CLEAN),	\
-		!should_flush,                                          \
-		upl_flags);                                 	        \
+	   	(void) memory_object_data_return(pager,			\
+			po,						\
+			data_cnt,					\
+	                ro,                                             \
+	                ioerr,                                          \
+			(action) == MEMORY_OBJECT_LOCK_RESULT_MUST_CLEAN,\
+			!should_flush,                                  \
+			upl_flags);                                 	\
 									\
-	vm_object_lock(object);						\
+		vm_object_lock(object);					\
+		vm_object_paging_end(object);				\
+	}								\
 MACRO_END
 
 /*
@@ -658,7 +629,7 @@ vm_object_update_extent(
 			    data_cnt += PAGE_SIZE;
 			    last_offset = offset + PAGE_SIZE_64;
 
-			    vm_page_lock_queues();
+			    vm_page_lockspin_queues();
 			    /*
 			     * Clean
 			     */
@@ -713,7 +684,7 @@ vm_object_update(
 	int				flags,
 	vm_prot_t			protection)
 {
-	vm_object_t		copy_object;
+        vm_object_t		copy_object = VM_OBJECT_NULL;
 	boolean_t		data_returned = FALSE;
 	boolean_t		update_cow;
 	boolean_t		should_flush = (flags & MEMORY_OBJECT_DATA_FLUSH) ? TRUE : FALSE;
@@ -751,9 +722,39 @@ vm_object_update(
 					!(flags & MEMORY_OBJECT_DATA_PURGE)))
 				|| (flags & MEMORY_OBJECT_COPY_SYNC);
 			
+	if (update_cow || (flags & (MEMORY_OBJECT_DATA_PURGE | MEMORY_OBJECT_DATA_SYNC))) {
+	        int collisions = 0;
 
-	if((((copy_object = object->copy) != NULL) && update_cow) ||
-					(flags & MEMORY_OBJECT_DATA_SYNC)) {
+	        while ((copy_object = object->copy) != VM_OBJECT_NULL) {
+		        /*
+			 * need to do a try here since we're swimming upstream
+			 * against the normal lock ordering... however, we need
+			 * to hold the object stable until we gain control of the
+			 * copy object so we have to be careful how we approach this
+			 */
+		        if (vm_object_lock_try(copy_object)) {
+			       /*
+				* we 'won' the lock on the copy object...
+				* no need to hold the object lock any longer...
+				* take a real reference on the copy object because
+				* we're going to call vm_fault_page on it which may
+				* under certain conditions drop the lock and the paging
+				* reference we're about to take... the reference
+				* will keep the copy object from going away if that happens
+				*/
+			       vm_object_unlock(object);
+			       vm_object_reference_locked(copy_object);
+			       break;
+			}
+			vm_object_unlock(object);
+
+			collisions++;
+			mutex_pause(collisions);
+
+			vm_object_lock(object);
+		}
+	}
+	if ((copy_object != VM_OBJECT_NULL && update_cow) || (flags & MEMORY_OBJECT_DATA_SYNC)) {
 		vm_map_size_t		i;
 		vm_map_size_t		copy_size;
 		vm_map_offset_t		copy_offset;
@@ -761,81 +762,83 @@ vm_object_update(
 		vm_page_t		page;
 		vm_page_t		top_page;
 		kern_return_t		error = 0;
+		struct vm_object_fault_info fault_info;
 
-		if(copy_object != NULL) {
-		   /* translate offset with respect to shadow's offset */
-		   copy_offset = (offset >= copy_object->shadow_offset)?
-		   	(vm_map_offset_t)(offset - copy_object->shadow_offset) :
-			(vm_map_offset_t) 0;
-		   if(copy_offset > copy_object->size)
-			copy_offset = copy_object->size;
+		if (copy_object != VM_OBJECT_NULL) {
+		        /*
+			 * translate offset with respect to shadow's offset
+			 */
+		        copy_offset = (offset >= copy_object->shadow_offset) ?
+			  (vm_map_offset_t)(offset - copy_object->shadow_offset) :
+			  (vm_map_offset_t) 0;
 
-		   /* clip size with respect to shadow offset */
-		   if (offset >= copy_object->shadow_offset) {
-			   copy_size = size;
-		   } else if (size >= copy_object->shadow_offset - offset) {
-			   copy_size = size -
-				   (copy_object->shadow_offset - offset);
-		   } else {
-			   copy_size = 0;
-		   }
+			if (copy_offset > copy_object->size)
+			        copy_offset = copy_object->size;
 
-		   if (copy_offset + copy_size > copy_object->size) {
-			   if (copy_object->size >= copy_offset) {
-				   copy_size = copy_object->size - copy_offset;
-			   } else {
-				   copy_size = 0;
-			   }
-		   }
+			/*
+			 * clip size with respect to shadow offset
+			 */
+			if (offset >= copy_object->shadow_offset) {
+			        copy_size = size;
+			} else if (size >= copy_object->shadow_offset - offset) {
+			        copy_size = size - (copy_object->shadow_offset - offset);
+			} else {
+			        copy_size = 0;
+			}
+			
+			if (copy_offset + copy_size > copy_object->size) {
+			        if (copy_object->size >= copy_offset) {
+				        copy_size = copy_object->size - copy_offset;
+				} else {
+				        copy_size = 0;
+				}
+			}
+			copy_size+=copy_offset;
 
-		   copy_size+=copy_offset;
-
-		   vm_object_unlock(object);
-		   vm_object_lock(copy_object);
 		} else {
 			copy_object = object;
 
 			copy_size   = offset + size;
 			copy_offset = offset;
 		}
+		fault_info.interruptible = THREAD_UNINT;
+		fault_info.behavior  = VM_BEHAVIOR_SEQUENTIAL;
+		fault_info.user_tag  = 0;
+		fault_info.lo_offset = copy_offset;
+		fault_info.hi_offset = copy_size;
+		fault_info.no_cache   = FALSE;
 
 		vm_object_paging_begin(copy_object);
-		for (i=copy_offset; i<copy_size; i+=PAGE_SIZE) {
+
+		for (i = copy_offset; i < copy_size; i += PAGE_SIZE) {
 	RETRY_COW_OF_LOCK_REQUEST:
+			fault_info.cluster_size = copy_size - i;
+
 			prot = 	VM_PROT_WRITE|VM_PROT_READ;
 			switch (vm_fault_page(copy_object, i, 
 				VM_PROT_WRITE|VM_PROT_READ,
 				FALSE,
-				THREAD_UNINT,
-				copy_offset,
-				copy_offset+copy_size,
-				VM_BEHAVIOR_SEQUENTIAL,
 				&prot,
 				&page,
 				&top_page,
 				(int *)0,
 				&error,
 			        FALSE,
-				FALSE, NULL, 0)) {
+		                FALSE, &fault_info)) {
 
 			case VM_FAULT_SUCCESS:
-				if(top_page) {
+				if (top_page) {
 					vm_fault_cleanup(
 						page->object, top_page);
-					PAGE_WAKEUP_DONE(page);
-					vm_page_lock_queues();
-					if (!page->active && !page->inactive)
-						vm_page_activate(page);
-					vm_page_unlock_queues();
 					vm_object_lock(copy_object);
 					vm_object_paging_begin(copy_object);
-				} else {
-					PAGE_WAKEUP_DONE(page);
-					vm_page_lock_queues();
-					if (!page->active && !page->inactive)
-						vm_page_activate(page);
-					vm_page_unlock_queues();
 				}
+				vm_page_lock_queues();
+				if (!page->active && !page->inactive)
+					vm_page_deactivate(page);
+				vm_page_unlock_queues();
+
+				PAGE_WAKEUP_DONE(page);
 				break;
 			case VM_FAULT_RETRY:
 				prot = 	VM_PROT_WRITE|VM_PROT_READ;
@@ -860,27 +863,36 @@ vm_object_update(
 				vm_object_paging_begin(copy_object);
 				goto RETRY_COW_OF_LOCK_REQUEST;
 			case VM_FAULT_MEMORY_ERROR:
+			        if (object != copy_object)
+				        vm_object_deallocate(copy_object);
 				vm_object_lock(object);
 				goto BYPASS_COW_COPYIN;
 			}
 
 		}
 		vm_object_paging_end(copy_object);
-		if(copy_object != object) {
+	}
+	if ((flags & (MEMORY_OBJECT_DATA_SYNC | MEMORY_OBJECT_COPY_SYNC))) {
+	        if (copy_object != VM_OBJECT_NULL && copy_object != object) {
 			vm_object_unlock(copy_object);
+		        vm_object_deallocate(copy_object);
 			vm_object_lock(object);
 		}
+		return KERN_SUCCESS;
 	}
-	if((flags & (MEMORY_OBJECT_DATA_SYNC | MEMORY_OBJECT_COPY_SYNC))) {
-			return KERN_SUCCESS;
-	}
-	if(((copy_object = object->copy) != NULL) && 
-					(flags & MEMORY_OBJECT_DATA_PURGE)) {
-		copy_object->shadow_severed = TRUE;
-		copy_object->shadowed = FALSE;
-		copy_object->shadow = NULL;
-		/* delete the ref the COW was holding on the target object */
-		vm_object_deallocate(object);
+	if (copy_object != VM_OBJECT_NULL && copy_object != object) {
+	        if ((flags & MEMORY_OBJECT_DATA_PURGE)) {
+		        copy_object->shadow_severed = TRUE;
+			copy_object->shadowed = FALSE;
+			copy_object->shadow = NULL;
+			/*
+			 * delete the ref the COW was holding on the target object
+			 */
+			vm_object_deallocate(object);
+		}
+		vm_object_unlock(copy_object);
+	        vm_object_deallocate(copy_object);
+		vm_object_lock(object);
 	}
 BYPASS_COW_COPYIN:
 
@@ -1076,7 +1088,6 @@ vm_object_set_attributes_common(
 	boolean_t	may_cache,
 	memory_object_copy_strategy_t copy_strategy,
 	boolean_t	temporary,
-	memory_object_cluster_size_t	cluster_size,
         boolean_t	silent_overwrite,
 	boolean_t	advisory_pageout)
 {
@@ -1110,17 +1121,6 @@ vm_object_set_attributes_common(
 		may_cache = TRUE;
 	if (temporary)
 		temporary = TRUE;
-	if (cluster_size != 0) {
-		int	pages_per_cluster;
-		pages_per_cluster = atop_32(cluster_size);
-		/*
-		 * Cluster size must be integral multiple of page size,
-		 * and be a power of 2 number of pages.
-		 */
-		if ((cluster_size & (PAGE_SIZE-1)) ||
-		    ((pages_per_cluster-1) & pages_per_cluster))
-			return KERN_INVALID_ARGUMENT;
-	}
 
 	vm_object_lock(object);
 
@@ -1134,12 +1134,6 @@ vm_object_set_attributes_common(
 	object->temporary = temporary;
 	object->silent_overwrite = silent_overwrite;
 	object->advisory_pageout = advisory_pageout;
-	if (cluster_size == 0)
-		cluster_size = PAGE_SIZE;
-	object->cluster_size = cluster_size;
-
-	assert(cluster_size >= PAGE_SIZE &&
-	       cluster_size % PAGE_SIZE == 0);
 
 	/*
 	 *	Wake up anyone waiting for the ready attribute
@@ -1176,7 +1170,6 @@ memory_object_change_attributes(
 	boolean_t       		temporary;
 	boolean_t       		may_cache;
 	boolean_t       		invalidate;
-	memory_object_cluster_size_t	cluster_size;
 	memory_object_copy_strategy_t	copy_strategy;
 	boolean_t       		silent_overwrite;
 	boolean_t			advisory_pageout;
@@ -1195,7 +1188,6 @@ memory_object_change_attributes(
 #if notyet
 	invalidate = object->invalidate;
 #endif
-	cluster_size = object->cluster_size;
 	vm_object_unlock(object);	
 
 	switch (flavor) {
@@ -1248,7 +1240,6 @@ memory_object_change_attributes(
                 perf = (memory_object_perf_info_t) attributes;
 
 		may_cache = perf->may_cache;
-		cluster_size = round_page_32(perf->cluster_size);
 
 		break;
 	    }
@@ -1266,7 +1257,6 @@ memory_object_change_attributes(
 
                 may_cache = attr->may_cache;
                 copy_strategy = attr->copy_strategy;
-		cluster_size = page_size;
 
 		break;
 	    }
@@ -1284,7 +1274,6 @@ memory_object_change_attributes(
 
 		copy_strategy = attr->copy_strategy;
                 may_cache = attr->may_cache_object;
-		cluster_size = attr->cluster_size;
 		temporary = attr->temporary;
 
 		break;
@@ -1313,7 +1302,6 @@ memory_object_change_attributes(
 						     may_cache,
 						     copy_strategy,
 						     temporary,
-						     cluster_size,
 						     silent_overwrite,
 						     advisory_pageout));
 }
@@ -1390,7 +1378,7 @@ memory_object_get_attributes(
 		}
 
 		perf = (memory_object_perf_info_t) attributes;
-		perf->cluster_size = object->cluster_size;
+		perf->cluster_size = PAGE_SIZE;
 		perf->may_cache = object->can_persist;
 
 		*count = MEMORY_OBJECT_PERF_INFO_COUNT;
@@ -1425,7 +1413,7 @@ memory_object_get_attributes(
 
                 attr = (memory_object_attr_info_t) attributes;
         	attr->copy_strategy = object->copy_strategy;
-		attr->cluster_size = object->cluster_size;
+		attr->cluster_size = PAGE_SIZE;
         	attr->may_cache_object = object->can_persist;
 		attr->temporary = object->temporary;
 
@@ -1651,6 +1639,27 @@ memory_object_super_upl_request(
 					   cntrl_flags);
 }
 
+kern_return_t
+memory_object_cluster_size(memory_object_control_t control, memory_object_offset_t *start,
+			   vm_size_t *length, memory_object_fault_info_t fault_info)
+{
+	vm_object_t		object;
+
+	object = memory_object_control_to_vm_object(control);
+
+	if (object == VM_OBJECT_NULL || object->paging_offset > *start)
+		return (KERN_INVALID_ARGUMENT);
+
+	*start -= object->paging_offset;
+
+	vm_object_cluster_size(object, (vm_object_offset_t *)start, length, (vm_object_fault_info_t)fault_info);
+
+	*start += object->paging_offset;
+
+	return (KERN_SUCCESS);
+}
+
+
 int vm_stat_discard_cleared_reply = 0;
 int vm_stat_discard_cleared_unset = 0;
 int vm_stat_discard_cleared_too_late = 0;
@@ -1669,11 +1678,12 @@ kern_return_t
 host_default_memory_manager(
 	host_priv_t		host_priv,
 	memory_object_default_t	*default_manager,
-	memory_object_cluster_size_t cluster_size)
+	__unused memory_object_cluster_size_t cluster_size)
 {
 	memory_object_default_t current_manager;
 	memory_object_default_t new_manager;
 	memory_object_default_t returned_manager;
+	kern_return_t result = KERN_SUCCESS;
 
 	if (host_priv == HOST_PRIV_NULL)
 		return(KERN_INVALID_HOST);
@@ -1683,14 +1693,26 @@ host_default_memory_manager(
 	new_manager = *default_manager;
 	mutex_lock(&memory_manager_default_lock);
 	current_manager = memory_manager_default;
+	returned_manager = MEMORY_OBJECT_DEFAULT_NULL;
 
 	if (new_manager == MEMORY_OBJECT_DEFAULT_NULL) {
 		/*
 		 *	Retrieve the current value.
 		 */
-		memory_object_default_reference(current_manager);
 		returned_manager = current_manager;
+		memory_object_default_reference(returned_manager);
 	} else {
+
+		/*
+		 *	If this is the first non-null manager, start
+		 *	up the internal pager support.
+		 */
+		if (current_manager == MEMORY_OBJECT_DEFAULT_NULL) {
+			result = vm_pageout_internal_start();
+			if (result != KERN_SUCCESS)
+				goto out;
+		}
+
 		/*
 		 *	Retrieve the current value,
 		 *	and replace it with the supplied value.
@@ -1698,20 +1720,9 @@ host_default_memory_manager(
 		 *	but we have to take a reference on the new
 		 *	one.
 		 */
-
 		returned_manager = current_manager;
 		memory_manager_default = new_manager;
 		memory_object_default_reference(new_manager);
-
-		if (cluster_size % PAGE_SIZE != 0) {
-#if 0
-			mutex_unlock(&memory_manager_default_lock);
-			return KERN_INVALID_ARGUMENT;
-#else
-			cluster_size = round_page_32(cluster_size);
-#endif
-		}
-		memory_manager_default_cluster = cluster_size;
 
 		/*
 		 *	In case anyone's been waiting for a memory
@@ -1720,11 +1731,11 @@ host_default_memory_manager(
 
 		thread_wakeup((event_t) &memory_manager_default);
 	}
-
+ out:
 	mutex_unlock(&memory_manager_default_lock);
 
 	*default_manager = returned_manager;
-	return(KERN_SUCCESS);
+	return(result);
 }
 
 /*
@@ -1736,8 +1747,7 @@ host_default_memory_manager(
  */
 
 __private_extern__ memory_object_default_t
-memory_manager_default_reference(
-	memory_object_cluster_size_t *cluster_size)
+memory_manager_default_reference(void)
 {
 	memory_object_default_t current_manager;
 
@@ -1753,7 +1763,6 @@ memory_manager_default_reference(
 		current_manager = memory_manager_default;
 	}
 	memory_object_default_reference(current_manager);
-	*cluster_size = memory_manager_default_cluster;
 	mutex_unlock(&memory_manager_default_lock);
 
 	return current_manager;
@@ -1872,6 +1881,23 @@ memory_object_pages_resident(
 	return (KERN_SUCCESS);
 }
 
+kern_return_t
+memory_object_signed(
+	memory_object_control_t	control,
+	boolean_t		is_signed)
+{
+	vm_object_t	object;
+
+	object = memory_object_control_to_vm_object(control);
+	if (object == VM_OBJECT_NULL)
+		return KERN_INVALID_ARGUMENT;
+
+	vm_object_lock(object);
+	object->code_signed = is_signed;
+	vm_object_unlock(object);
+
+	return KERN_SUCCESS;
+}
 
 static zone_t mem_obj_control_zone;
 
@@ -2039,14 +2065,16 @@ kern_return_t memory_object_data_request
 	memory_object_t memory_object,
 	memory_object_offset_t offset,
 	memory_object_cluster_size_t length,
-	vm_prot_t desired_access
+	vm_prot_t desired_access,
+	memory_object_fault_info_t fault_info
 )
 {
 	return (memory_object->mo_pager_ops->memory_object_data_request)(
 		memory_object,
 		offset, 
 		length,
-		desired_access);
+		desired_access,
+		fault_info);
 }
 
 /* Routine memory_object_data_return */

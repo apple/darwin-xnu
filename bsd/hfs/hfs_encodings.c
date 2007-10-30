@@ -1,24 +1,31 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+#if HFS
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -26,6 +33,8 @@
 #include <sys/malloc.h>
 #include <sys/queue.h>
 #include <sys/utfconv.h>
+#include <kern/host.h>
+#include <mach/host_priv.h>
 
 #include "hfs.h"
 
@@ -47,21 +56,14 @@ struct	hfs_encoding {
 	SLIST_ENTRY(hfs_encoding)  link;
 	int			refcount;
 	int			kmod_id;
-	UInt32			encoding;
+	u_int32_t	encoding;
 	hfs_to_unicode_func_t	get_unicode_func;
 	unicode_to_hfs_func_t	get_hfsname_func;
 };
 
-/* XXX We should use an "official" interface! */
-extern kern_return_t kmod_destroy(host_priv_t host_priv, kmod_t id);
-extern struct host realhost;
-
 #define MAX_HFS_UNICODE_CHARS	(15*5)
 
-int mac_roman_to_unicode(const Str31 hfs_str, UniChar *uni_str, UInt32 maxCharLen, UInt32 *usedCharLen);
-
-static int unicode_to_mac_roman(UniChar *uni_str, UInt32 unicodeChars, Str31 hfs_str);
-
+static int unicode_to_mac_roman(UniChar *uni_str, u_int32_t unicodeChars, Str31 hfs_str);
 
 void
 hfs_converterinit(void)
@@ -92,7 +94,7 @@ hfs_converterinit(void)
  *
  */
 int
-hfs_addconverter(int id, UInt32 encoding, hfs_to_unicode_func_t get_unicode, unicode_to_hfs_func_t get_hfsname)
+hfs_addconverter(int id, u_int32_t encoding, hfs_to_unicode_func_t get_unicode, unicode_to_hfs_func_t get_hfsname)
 {
 	struct hfs_encoding *encp;
 	
@@ -125,7 +127,7 @@ hfs_addconverter(int id, UInt32 encoding, hfs_to_unicode_func_t get_unicode, uni
  * The call is initiated from within the kernel during the unmounting of an hfs voulume.
  */
 int
-hfs_remconverter(int id, UInt32 encoding)
+hfs_remconverter(int id, u_int32_t encoding)
 {
 	struct hfs_encoding *encp;
 
@@ -159,7 +161,7 @@ hfs_remconverter(int id, UInt32 encoding)
  * Normally called during the mounting of an hfs voulume.
  */
 int
-hfs_getconverter(UInt32 encoding, hfs_to_unicode_func_t *get_unicode, unicode_to_hfs_func_t *get_hfsname)
+hfs_getconverter(u_int32_t encoding, hfs_to_unicode_func_t *get_unicode, unicode_to_hfs_func_t *get_hfsname)
 {
 	struct hfs_encoding *encp;
 	int found = 0;
@@ -192,7 +194,7 @@ hfs_getconverter(UInt32 encoding, hfs_to_unicode_func_t *get_unicode, unicode_to
  * Normally called during the unmounting of an hfs voulume.
  */
 int
-hfs_relconverter(UInt32 encoding)
+hfs_relconverter(u_int32_t encoding)
 {
 	struct hfs_encoding *encp;
 
@@ -229,7 +231,7 @@ hfs_relconverter(UInt32 encoding)
  * '/' chars are converted to ':'
  */
 int
-hfs_to_utf8(ExtendedVCB *vcb, Str31 hfs_str, ByteCount maxDstLen, ByteCount *actualDstLen, unsigned char* dstStr)
+hfs_to_utf8(ExtendedVCB *vcb, const Str31 hfs_str, ByteCount maxDstLen, ByteCount *actualDstLen, unsigned char* dstStr)
 {
 	int error;
 	UniChar uniStr[MAX_HFS_UNICODE_CHARS];
@@ -259,7 +261,7 @@ hfs_to_utf8(ExtendedVCB *vcb, Str31 hfs_str, ByteCount maxDstLen, ByteCount *act
  * volume encoding then MacRoman is used as a fallback.
  */
 int
-mac_roman_to_utf8(Str31 hfs_str, ByteCount maxDstLen, ByteCount *actualDstLen, unsigned char* dstStr)
+mac_roman_to_utf8(const Str31 hfs_str, ByteCount maxDstLen, ByteCount *actualDstLen, unsigned char* dstStr)
 {
 	int error;
 	UniChar uniStr[MAX_HFS_UNICODE_CHARS];
@@ -342,7 +344,7 @@ utf8_to_mac_roman(ByteCount srcLen, const unsigned char* srcStr, Str31 dstStr)
  */
 
 /* 0x00A0 - 0x00FF = Latin 1 Supplement (30 total) */
-static UInt8 gLatin1Table[] = {
+static u_int8_t gLatin1Table[] = {
   /*		  0     1     2     3     4     5     6     7     8     9     A     B     C     D     E     F  */
   /* 0x00A0 */	0xCA, 0xC1, 0xA2, 0xA3, 0xDB, 0xB4,  '?', 0xA4, 0xAC, 0xA9, 0xBB, 0xC7, 0xC2,  '?', 0xA8, 0xF8,
   /* 0x00B0 */	0xA1, 0XB1,  '?',  '?', 0xAB, 0xB5, 0xA6, 0xe1, 0xFC,  '?', 0xBC, 0xC8,  '?',  '?',  '?', 0xC0,
@@ -353,14 +355,14 @@ static UInt8 gLatin1Table[] = {
 };
 
 /* 0x02C0 - 0x02DF = Spacing Modifiers (8 total) */
-static UInt8 gSpaceModsTable[] = {
+static u_int8_t gSpaceModsTable[] = {
   /*		  0     1     2     3     4     5     6     7     8     9     A     B     C     D     E     F  */
   /* 0x02C0 */	 '?',  '?',  '?',  '?',  '?',  '?', 0xF6, 0xFF,  '?',  '?',  '?',  '?',  '?',  '?',  '?',  '?',
   /* 0x02D0 */	 '?',  '?',  '?',  '?',  '?',  '?',  '?',  '?', 0xF9, 0xFA, 0xFB, 0xFE, 0xF7, 0xFD,  '?',  '?'
 };
 
 /* 0x2010 - 0x20AF = General Punctuation (17 total) */
-static UInt8 gPunctTable[] = {
+static u_int8_t gPunctTable[] = {
   /*		  0     1     2     3     4     5     6     7     8     9     A     B     C     D     E     F  */
   /* 0x2010 */	 '?',  '?',  '?', 0xd0, 0xd1,  '?',  '?',  '?', 0xd4, 0xd5, 0xe2,  '?', 0xd2, 0xd3, 0xe3,  '?',
   /* 0x2020 */	0xa0, 0xe0, 0xa5,  '?',  '?',  '?', 0xc9,  '?',  '?',  '?',  '?',  '?',  '?',  '?',  '?',  '?',
@@ -375,7 +377,7 @@ static UInt8 gPunctTable[] = {
 };
 
 /* 0x22xx = Mathematical Operators (11 total) */
-static UInt8 gMathTable[] = {
+static u_int8_t gMathTable[] = {
   /*		  0     1     2     3     4     5     6     7     8     9     A     B     C     D     E     F  */
   /* 0x2200 */	 '?',  '?', 0xb6,  '?',  '?',  '?', 0xc6,  '?',  '?',  '?',  '?',  '?',  '?',  '?',  '?', 0xb8,
   /* 0x2210 */	 '?', 0xb7,  '?',  '?',  '?',  '?',  '?',  '?',  '?',  '?', 0xc3,  '?',  '?',  '?', 0xb0,  '?',
@@ -387,7 +389,7 @@ static UInt8 gMathTable[] = {
 };
 
 /* */
-static UInt8 gReverseCombTable[] = {
+static u_int8_t gReverseCombTable[] = {
   /*		  0     1     2     3     4     5     6     7     8     9     A     B     C     D     E     F  */
   /* 0x40 */	0xDA, 0x40, 0xDA, 0xDA, 0xDA, 0x56, 0xDA, 0xDA, 0xDA, 0x6C, 0xDA, 0xDA, 0xDA, 0xDA, 0x82, 0x98,
   /* 0x50 */	0xDA, 0xDA, 0xDA, 0xDA, 0xDA, 0xAE, 0xDA, 0xDA, 0xDA, 0xC4, 0xDA, 0xDA, 0xDA, 0xDA, 0xDA, 0xDA,
@@ -448,18 +450,18 @@ static UInt8 gReverseCombTable[] = {
  *
  * Assumes Unicode input is fully decomposed
  */
-static int unicode_to_mac_roman(UniChar *uni_str, UInt32 unicodeChars, Str31 hfs_str)
+static int unicode_to_mac_roman(UniChar *uni_str, u_int32_t unicodeChars, Str31 hfs_str)
 {
-	UInt8		*p;
+	u_int8_t	*p;
 	const UniChar	*u;
 	UniChar		c;
 	UniChar		mask;
-	UInt16		inputChars;
-	UInt16		pascalChars;
+	u_int16_t	inputChars;
+	u_int16_t	pascalChars;
 	OSErr		result = noErr;
-	UInt8		lsb;
-	UInt8		prevChar;
-	UInt8		mc;
+	u_int8_t	lsb;
+	u_int8_t	prevChar;
+	u_int8_t	mc;
 
 	mask = (UniChar) 0xFF80;
 	p = &hfs_str[1];
@@ -469,7 +471,7 @@ static int unicode_to_mac_roman(UniChar *uni_str, UInt32 unicodeChars, Str31 hfs
 	
 	while (inputChars) {
 		c = *(u++);
-		lsb = (UInt8) c;
+		lsb = (u_int8_t) c;
 
 		/*
 		 * If its not 7-bit ascii, then we need to map it
@@ -623,12 +625,12 @@ static UniChar gHiBitCombUnicode[128] = {
  */
 int
 mac_roman_to_unicode(const Str31 hfs_str, UniChar *uni_str,
-				UInt32 maxCharLen, UInt32 *unicodeChars)
+				__unused u_int32_t maxCharLen, u_int32_t *unicodeChars)
 {
-	const UInt8  *p;
+	const u_int8_t  *p;
 	UniChar  *u;
-	UInt16  pascalChars;
-	UInt8  c;
+	u_int16_t  pascalChars;
+	u_int8_t  c;
 
 	p = hfs_str;
 	u = uni_str;
@@ -638,7 +640,7 @@ mac_roman_to_unicode(const Str31 hfs_str, UniChar *uni_str,
 	while (pascalChars--) {
 		c = *(p++);
 
-		if ( (SInt8) c >= 0 ) {		/* check if seven bit ascii */
+		if ( (int8_t) c >= 0 ) {		/* check if seven bit ascii */
 			*(u++) = (UniChar) c;	/* just pad high byte with zero */
 		} else { /* its a hi bit character */
 			UniChar uc;
@@ -660,3 +662,38 @@ mac_roman_to_unicode(const Str31 hfs_str, UniChar *uni_str,
 	return noErr;
 }
 
+#else /* not HFS - temp workaround until 4277828 is fixed */
+/* stubs for exported routines that aren't present when we build kernel without HFS */
+
+#include <sys/types.h>
+#include <sys/errno.h>
+
+int hfs_addconverter(int id, u_int32_t encoding, void * get_unicode, void * get_hfsname);
+int hfs_getconverter(u_int32_t encoding, void *get_unicode, void *get_hfsname);
+int hfs_relconverter(u_int32_t encoding);
+int hfs_remconverter(int id, u_int32_t encoding);
+
+int hfs_addconverter( __unused int id, 
+					  __unused u_int32_t encoding, 
+					  __unused void * get_unicode, 
+					  __unused void * get_hfsname )
+{
+	return(0);
+}
+
+int hfs_getconverter(__unused u_int32_t encoding, __unused void *get_unicode, __unused void *get_hfsname)
+{
+	return(EINVAL);
+}
+
+int hfs_relconverter(__unused u_int32_t encoding)
+{
+	return(EINVAL);
+}
+
+int hfs_remconverter(__unused int id, __unused u_int32_t encoding)
+{
+	return(0);
+}
+
+#endif /* HFS */

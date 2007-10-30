@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -61,12 +67,21 @@
 #include <sys/proc_internal.h>
 #include <sys/vnode.h>
 #include <sys/uio.h>
+#include <sys/sysproto.h>
+
+#include <sys/signalvar.h>		/* for psignal() */
+
+
+#ifdef GPROF
+#include <sys/gmon.h>
+#endif
+
 
 /*
  * Unsupported device function (e.g. writing to read-only device).
  */
 int
-enodev()
+enodev(void)
 {
 	return (ENODEV);
 }
@@ -75,7 +90,7 @@ enodev()
  * Unsupported strategy function.
  */
 void
-enodev_strat()
+enodev_strat(void)
 {
 	return;
 }
@@ -84,7 +99,7 @@ enodev_strat()
  * Unconfigured device function; driver not configured.
  */
 int
-enxio()
+enxio(void)
 {
 	return (ENXIO);
 }
@@ -93,7 +108,7 @@ enxio()
  * Unsupported ioctl function.
  */
 int
-enoioctl()
+enoioctl(void)
 {
 	return (ENOTTY);
 }
@@ -105,7 +120,7 @@ enoioctl()
  * that is not supported by the current system binary.
  */
 int
-enosys()
+enosys(void)
 {
 	return (ENOSYS);
 }
@@ -117,7 +132,7 @@ enosys()
  * XXX Name of this routine is wrong.
  */
 int
-eopnotsupp()
+eopnotsupp(void)
 {
 	return (ENOTSUP);
 }
@@ -126,7 +141,7 @@ eopnotsupp()
  * Generic null operation, always returns success.
  */
 int
-nullop()
+nullop(void)
 {
 	return (0);
 }
@@ -137,7 +152,7 @@ nullop()
  * in the bdevsw and cdevsw tables.
  */
 int
-nulldev()
+nulldev(void)
 {
 	return (0);
 }
@@ -146,13 +161,13 @@ nulldev()
  * Null system calls. Not invalid, just not configured.
  */
 int
-errsys()
+errsys(void)
 {
 	return(EINVAL);
 }
 
 void
-nullsys()
+nullsys(void)
 {
 }
 
@@ -163,10 +178,7 @@ nullsys()
  */
 /* ARGSUSED */
 int
-nosys(p, args, retval)
-	struct proc *p;
-	void *args;
-	register_t *retval;
+nosys(struct proc *p, __unused struct nosys_args *args, __unused register_t *retval)
 {
 	psignal(p, SIGSYS);
 	return (ENOSYS);
@@ -177,11 +189,9 @@ nosys(p, args, retval)
  * Stub routine in case it is ever possible to free space.
  */
 void
-cfreemem(cp, size)
-	caddr_t cp;
-	int size;
+cfreemem(caddr_t cp, int size)
 {
-	printf("freeing %x, size %d\n", cp, size);
+	printf("freeing %p, size %d\n", cp, size);
 }
 #endif
 

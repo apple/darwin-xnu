@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -88,7 +94,6 @@ extern void		pmap_set_reference(ppnum_t pn);
 extern void		mapping_set_mod(ppnum_t pa); 
 extern void		mapping_set_ref(ppnum_t pn);
 
-extern void		fillPage(ppnum_t pa, unsigned int fill);
 extern void		ovbcopy(const char	*from,
 				char		*to,
 				vm_size_t	nbytes);
@@ -98,6 +103,13 @@ void machine_callstack(natural_t *buf, vm_size_t callstack_max);
 #define value_64bit(value)  ((value) & 0xFFFFFFFF00000000LL)
 #define low32(x)  ((unsigned int)((x) & 0x00000000FFFFFFFFLL))
 
+void
+bzero_phys_nc(
+	      addr64_t src64,
+	      vm_size_t bytes)
+{
+  bzero_phys(src64,bytes);
+}
 
 void
 bzero_phys(
@@ -105,22 +117,14 @@ bzero_phys(
 	   vm_size_t bytes)
 {
         mapwindow_t *map;
-	pt_entry_t save;
 
         mp_disable_preemption();
-	map = pmap_get_mapwindow((pt_entry_t)(INTEL_PTE_VALID | INTEL_PTE_RW | ((pmap_paddr_t)src64 & PG_FRAME) | INTEL_PTE_REF | INTEL_PTE_MOD));
-	if (map == 0) {
-	        panic("bzero_phys: CMAP busy");
-	}
-	save = *map->prv_CMAP;
 
-	invlpg((uintptr_t)map->prv_CADDR);
+	map = pmap_get_mapwindow((pt_entry_t)(INTEL_PTE_VALID | INTEL_PTE_RW | ((pmap_paddr_t)src64 & PG_FRAME) | INTEL_PTE_REF | INTEL_PTE_MOD));
 
 	bzero((void *)((uintptr_t)map->prv_CADDR | ((uint32_t)src64 & INTEL_OFFMASK)), bytes);
 
-	if (save != *map->prv_CMAP)
-	        panic("bzero_phys: CMAP changed");
-	*map->prv_CMAP = 0;
+	pmap_put_mapwindow(map);
 
 	mp_enable_preemption();
 }
@@ -137,7 +141,6 @@ bcopy_phys(
 	   vm_size_t bytes)
 {
         mapwindow_t *src_map, *dst_map;
-	pt_entry_t save1, save2;
 
 	/* ensure we stay within a page */
 	if ( ((((uint32_t)src64 & (NBPG-1)) + bytes) > NBPG) || ((((uint32_t)dst64 & (NBPG-1)) + bytes) > NBPG) ) {
@@ -149,23 +152,11 @@ bcopy_phys(
 	dst_map = pmap_get_mapwindow((pt_entry_t)(INTEL_PTE_VALID | INTEL_PTE_RW | ((pmap_paddr_t)dst64 & PG_FRAME) |
 						  INTEL_PTE_REF | INTEL_PTE_MOD));
 
-	if (src_map == 0 || dst_map == 0) {
-	        panic("bcopy_phys: CMAP busy");
-	}
-	save1 = *src_map->prv_CMAP;
-	save2 = *dst_map->prv_CMAP;
-
-	invlpg((uintptr_t)src_map->prv_CADDR);
-	invlpg((uintptr_t)dst_map->prv_CADDR);
-
 	bcopy((void *) ((uintptr_t)src_map->prv_CADDR | ((uint32_t)src64 & INTEL_OFFMASK)),
 	      (void *) ((uintptr_t)dst_map->prv_CADDR | ((uint32_t)dst64 & INTEL_OFFMASK)), bytes);
 
-	if ( (save1 != *src_map->prv_CMAP) || (save2 != *dst_map->prv_CMAP))
-	        panic("bcopy_phys CMAP changed");
-
-	*src_map->prv_CMAP = 0;
-	*dst_map->prv_CMAP = 0;
+	pmap_put_mapwindow(src_map);
+	pmap_put_mapwindow(dst_map);
 
 	mp_enable_preemption();
 }
@@ -206,16 +197,10 @@ ml_phys_read_data(pmap_paddr_t paddr, int size )
 {
         mapwindow_t *map;
 	unsigned int result;
-	pt_entry_t save;
 
 	mp_disable_preemption();
-	map = pmap_get_mapwindow((pt_entry_t)(INTEL_PTE_VALID | (paddr & PG_FRAME) | INTEL_PTE_REF));
-	if (map == 0) {
-		panic("ml_phys_read_data: CMAP busy");
-	}
 
-	save = *map->prv_CMAP;
-	invlpg((uintptr_t)map->prv_CADDR);
+	map = pmap_get_mapwindow((pt_entry_t)(INTEL_PTE_VALID | (paddr & PG_FRAME) | INTEL_PTE_REF));
 
         switch (size) {
             unsigned char s1;
@@ -233,10 +218,8 @@ ml_phys_read_data(pmap_paddr_t paddr, int size )
             result = *(unsigned int *)((uintptr_t)map->prv_CADDR | ((uint32_t)paddr & INTEL_OFFMASK));
             break;
         }
+        pmap_put_mapwindow(map);
 
-	if (save != *map->prv_CMAP)
-	        panic("ml_phys_read_data CMAP changed");
-        *map->prv_CMAP = 0;
 	mp_enable_preemption();
 
         return result;
@@ -247,31 +230,23 @@ ml_phys_read_long_long(pmap_paddr_t paddr )
 {
         mapwindow_t *map;
 	unsigned long long result;
-	pt_entry_t save;
 
 	mp_disable_preemption();
+
 	map = pmap_get_mapwindow((pt_entry_t)(INTEL_PTE_VALID | (paddr & PG_FRAME) | INTEL_PTE_REF));
-
-	if (map == 0) {
-		panic("ml_phys_read_long_long: CMAP busy");
-	}
-
-	save = *map->prv_CMAP;
-	invlpg((uintptr_t)map->prv_CADDR);
 
 	result = *(unsigned long long *)((uintptr_t)map->prv_CADDR | ((uint32_t)paddr & INTEL_OFFMASK));
 
-	if (save != *map->prv_CMAP)
-	        panic("ml_phys_read_long_long CMAP changed");
-	*map->prv_CMAP = 0;
+        pmap_put_mapwindow(map);
+
 	mp_enable_preemption();
 
-	return result;
+        return result;
 }
 
 
 
-unsigned int ml_phys_read(vm_offset_t paddr)
+unsigned int ml_phys_read( vm_offset_t paddr)
 {
         return ml_phys_read_data((pmap_paddr_t)paddr, 4);
 }
@@ -331,18 +306,11 @@ static void
 ml_phys_write_data(pmap_paddr_t paddr, unsigned long data, int size)
 {
         mapwindow_t *map;
-	pt_entry_t save;
 
 	mp_disable_preemption();
+
 	map = pmap_get_mapwindow((pt_entry_t)(INTEL_PTE_VALID | INTEL_PTE_RW | (paddr & PG_FRAME) | 
 					  INTEL_PTE_REF | INTEL_PTE_MOD));
-
-	if (map == 0) {
-		panic("ml_phys_write_data: CMAP busy");
-	}
-
-	save = *map->prv_CMAP;
-	invlpg((uintptr_t)map->prv_CADDR);
 
         switch (size) {
         case 1:
@@ -356,10 +324,7 @@ ml_phys_write_data(pmap_paddr_t paddr, unsigned long data, int size)
 	    *(unsigned int *)((uintptr_t)map->prv_CADDR | ((uint32_t)paddr & INTEL_OFFMASK)) = data;
             break;
         }
-
-	if (save != *map->prv_CMAP)
-	        panic("ml_phys_write_data CMAP changed");
-	*map->prv_CMAP = 0;
+        pmap_put_mapwindow(map);
 
 	mp_enable_preemption();
 }
@@ -368,23 +333,16 @@ static void
 ml_phys_write_long_long(pmap_paddr_t paddr, unsigned long long data)
 {
         mapwindow_t *map;
-	pt_entry_t save;
 
 	mp_disable_preemption();
+
 	map = pmap_get_mapwindow((pt_entry_t)(INTEL_PTE_VALID | INTEL_PTE_RW | (paddr & PG_FRAME) | 
 					      INTEL_PTE_REF | INTEL_PTE_MOD));
-	if (map == 0) {
-		panic("ml_phys_write_data: CMAP busy");
-	}
-
-	save = *map->prv_CMAP;
-	invlpg((uintptr_t)map->prv_CADDR);
 
 	*(unsigned long long *)((uintptr_t)map->prv_CADDR | ((uint32_t)paddr & INTEL_OFFMASK)) = data;
 
-	if (save != *map->prv_CMAP)
-	        panic("ml_phys_write_data CMAP changed");
-	*map->prv_CMAP = 0;
+        pmap_put_mapwindow(map);
+
 	mp_enable_preemption();
 }
 
@@ -453,9 +411,12 @@ void ml_phys_write_double_64(addr64_t paddr64, unsigned long long data)
 boolean_t
 ml_probe_read(vm_offset_t paddr, unsigned int *val)
 {
-        *val = ml_phys_read((pmap_paddr_t)paddr);
+    if ((PAGE_SIZE - (paddr & PAGE_MASK)) < 4)
+        return FALSE;
 
-	return TRUE;
+    *val = ml_phys_read((pmap_paddr_t)paddr);
+
+    return TRUE;
 }
 
 /*
@@ -467,9 +428,11 @@ ml_probe_read(vm_offset_t paddr, unsigned int *val)
 boolean_t 
 ml_probe_read_64(addr64_t paddr64, unsigned int *val)
 {
-        *val = ml_phys_read_64((pmap_paddr_t)paddr64);
+    if ((PAGE_SIZE - (paddr64 & PAGE_MASK)) < 4)
+        return FALSE;
 
-	return TRUE;
+    *val = ml_phys_read_64((pmap_paddr_t)paddr64);
+    return TRUE;
 }
 
 
@@ -493,9 +456,7 @@ int bcmp(
 }
 
 int
-memcmp(s1, s2, n)
-	const void *s1, *s2;
-	size_t n;
+memcmp(const void *s1, const void *s2, size_t n)
 {
 	if (n != 0) {
 		const unsigned char *p1 = s1, *p2 = s2;
@@ -526,80 +487,11 @@ strlen(
 }
 
 uint32_t
-hw_atomic_add(
-	uint32_t	*dest,
-	uint32_t	delt)
+hw_compare_and_store(uint32_t oldval, uint32_t newval, volatile uint32_t *dest)
 {
-	uint32_t	oldValue;
-	uint32_t	newValue;
-	
-	do {
-		oldValue = *dest;
-		newValue = (oldValue + delt);
-	} while (!OSCompareAndSwap((UInt32)oldValue,
-									(UInt32)newValue, (UInt32 *)dest));
-	
-	return newValue;
-}
-
-uint32_t
-hw_atomic_sub(
-	uint32_t	*dest,
-	uint32_t	delt)
-{
-	uint32_t	oldValue;
-	uint32_t	newValue;
-	
-	do {
-		oldValue = *dest;
-		newValue = (oldValue - delt);
-	} while (!OSCompareAndSwap((UInt32)oldValue,
-									(UInt32)newValue, (UInt32 *)dest));
-	
-	return newValue;
-}
-
-uint32_t
-hw_atomic_or(
-	uint32_t	*dest,
-	uint32_t	mask)
-{
-	uint32_t	oldValue;
-	uint32_t	newValue;
-	
-	do {
-		oldValue = *dest;
-		newValue = (oldValue | mask);
-	} while (!OSCompareAndSwap((UInt32)oldValue,
-									(UInt32)newValue, (UInt32 *)dest));
-	
-	return newValue;
-}
-
-uint32_t
-hw_atomic_and(
-	uint32_t	*dest,
-	uint32_t	mask)
-{
-	uint32_t	oldValue;
-	uint32_t	newValue;
-	
-	do {
-		oldValue = *dest;
-		newValue = (oldValue & mask);
-	} while (!OSCompareAndSwap((UInt32)oldValue,
-									(UInt32)newValue, (UInt32 *)dest));
-	
-	return newValue;
-}
-
-uint32_t
-hw_compare_and_store(
-	uint32_t	oldval,
-	uint32_t	newval,
-	uint32_t	*dest)
-{
-	return OSCompareAndSwap((UInt32)oldval, (UInt32)newval, (UInt32 *)dest);
+	return OSCompareAndSwap((UInt32)oldval,
+				(UInt32)newval,
+				(volatile UInt32 *)dest);
 }
 
 #if	MACH_ASSERT
@@ -616,31 +508,26 @@ void machine_callstack(
 
 #endif	/* MACH_ASSERT */
 
-
-
-
 void fillPage(ppnum_t pa, unsigned int fill)
 {
-    mapwindow_t *map;
-    pmap_paddr_t src;
-    int i;
-    int cnt = PAGE_SIZE/sizeof(unsigned int);
-    unsigned int *addr;
+        mapwindow_t *map;
+	pmap_paddr_t src;
+	int i;
+	int cnt = PAGE_SIZE/sizeof(unsigned int);
+	unsigned int *addr;
 
-    mp_disable_preemption();
-    src = i386_ptob(pa);
-    map = pmap_get_mapwindow((pt_entry_t)(INTEL_PTE_VALID | INTEL_PTE_RW | (src & PG_FRAME) | 
-					  INTEL_PTE_REF | INTEL_PTE_MOD));
-    if (map == 0) {
-        panic("fillPage: CMAP busy");
-    }
-    invlpg((uintptr_t)map->prv_CADDR);
+	mp_disable_preemption();
 
-    for (i = 0, addr = (unsigned int *)map->prv_CADDR; i < cnt ; i++ )
-        *addr++ = fill;
+	src = i386_ptob(pa);
+	map = pmap_get_mapwindow((pt_entry_t)(INTEL_PTE_VALID | INTEL_PTE_RW | (src & PG_FRAME) | 
+					      INTEL_PTE_REF | INTEL_PTE_MOD));
 
-    *map->prv_CMAP = 0;
-    mp_enable_preemption();
+	for (i = 0, addr = (unsigned int *)map->prv_CADDR; i < cnt ; i++ )
+	        *addr++ = fill;
+
+	pmap_put_mapwindow(map);
+
+	mp_enable_preemption();
 }
 
 static inline void __sfence(void)
@@ -676,9 +563,6 @@ void dcache_incoherent_io_store64(addr64_t pa, unsigned int count)
         addr   = pa - offset;
 
         map = pmap_get_mapwindow((pt_entry_t)(i386_ptob(atop_64(addr)) | INTEL_PTE_VALID));
-        if (map == 0) {
-                panic("cache_flush_page_phys: CMAP busy");
-        }
 
         count += offset;
         offset = addr & ((addr64_t) (page_size - 1));
@@ -688,9 +572,6 @@ void dcache_incoherent_io_store64(addr64_t pa, unsigned int count)
         {
             if (chunk > count)
                 chunk = count;
-
-            *map->prv_CMAP = (pt_entry_t)(i386_ptob(atop_64(addr)) | INTEL_PTE_VALID);
-            invlpg((uintptr_t)map->prv_CADDR);
     
             for (; offset < chunk; offset += linesize)
                 __clflush((void *)(((uintptr_t)map->prv_CADDR) + offset));
@@ -699,10 +580,15 @@ void dcache_incoherent_io_store64(addr64_t pa, unsigned int count)
             addr  += chunk;
             chunk  = page_size;
             offset = 0;
+
+	    if (count) {
+	        pmap_store_pte(map->prv_CMAP, (pt_entry_t)(i386_ptob(atop_64(addr)) | INTEL_PTE_VALID));
+		invlpg((uintptr_t)map->prv_CADDR);
+	    }
         }
         while (count);
 
-        *map->prv_CMAP = 0;
+        pmap_put_mapwindow(map);
 
         (void) ml_set_interrupts_enabled(istate);
 
@@ -758,36 +644,18 @@ cache_flush_page_phys(ppnum_t pa)
 	istate = ml_set_interrupts_enabled(FALSE);
 
         map = pmap_get_mapwindow((pt_entry_t)(i386_ptob(pa) | INTEL_PTE_VALID));
-	if (map == 0) {
-		panic("cache_flush_page_phys: CMAP busy");
-        }
-
-	invlpg((uintptr_t)map->prv_CADDR);
 
 	for (i = 0, cacheline_addr = (unsigned char *)map->prv_CADDR;
 	     i < cachelines_in_page;
 	     i++, cacheline_addr += cacheline_size) {
 		__clflush((void *) cacheline_addr);
 	}
-
-        *map->prv_CMAP = 0;
+        pmap_put_mapwindow(map);
 
 	(void) ml_set_interrupts_enabled(istate);
 
 	__mfence();
 }
-
-
-void exit_funnel_section(void)
-{
-        thread_t thread;
-
-	thread = current_thread();
-
-        if (thread->funnel_lock)
-	        (void) thread_funnel_set(thread->funnel_lock, FALSE);
-}
-
 
 
 /*
@@ -883,7 +751,8 @@ void inval_copy_windows(thread_t thread)
 
 
 static int
-copyio(int copy_type, user_addr_t user_addr, char *kernel_addr, vm_size_t nbytes, vm_size_t *lencopied, int use_kernel_map)
+copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
+       vm_size_t nbytes, vm_size_t *lencopied, int use_kernel_map)
 {
         thread_t	thread;
 	pmap_t		pmap;
@@ -905,13 +774,19 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr, vm_size_t nbytes
 
 	thread = current_thread();
 
-	KERNEL_DEBUG(debug_type | DBG_FUNC_START, (int)(user_addr >> 32), (int)user_addr, (int)nbytes, thread->machine.copyio_state, 0);
+	KERNEL_DEBUG(debug_type | DBG_FUNC_START, (int)(user_addr >> 32), (int)user_addr,
+		     (int)nbytes, thread->machine.copyio_state, 0);
 
 	if (nbytes == 0) {
-	        KERNEL_DEBUG(debug_type | DBG_FUNC_END, (int)user_addr, (int)kernel_addr, (int)nbytes, 0, 0);
+	        KERNEL_DEBUG(debug_type | DBG_FUNC_END, (unsigned)user_addr,
+			     (unsigned)kernel_addr, (unsigned)nbytes, 0, 0);
 	        return (0);
 	}
         pmap = thread->map->pmap;
+
+#if CONFIG_DTRACE
+	thread->machine.specFlags |= CopyIOActive;
+#endif /* CONFIG_DTRACE */
 
         if (pmap == kernel_pmap || use_kernel_map) {
 
@@ -939,14 +814,21 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr, vm_size_t nbytes
 		        error = copyoutphys_kern(kernel_addr, kern_vaddr, nbytes);
 			break;
 		}
-		KERNEL_DEBUG(debug_type | DBG_FUNC_END, (int)kern_vaddr, (int)kernel_addr, (int)nbytes, error | 0x80000000, 0);
+		KERNEL_DEBUG(debug_type | DBG_FUNC_END, (unsigned)kern_vaddr,
+			     (unsigned)kernel_addr, (unsigned)nbytes,
+			     error | 0x80000000, 0);
+
+#if CONFIG_DTRACE
+	thread->machine.specFlags &= ~CopyIOActive;
+#endif /* CONFIG_DTRACE */
 
 		return (error);
 	}
 	user_base = user_addr & ~((user_addr_t)(NBPDE - 1));
 	user_offset = user_addr & (NBPDE - 1);
 
-	KERNEL_DEBUG(debug_type | DBG_FUNC_NONE, (int)(user_base >> 32), (int)user_base, (int)user_offset, 0, 0);
+	KERNEL_DEBUG(debug_type | DBG_FUNC_NONE, (int)(user_base >> 32), (int)user_base,
+		     (int)user_offset, 0, 0);
 
 	cnt = NBPDE - user_offset;
 
@@ -994,7 +876,9 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr, vm_size_t nbytes
 
 		        copyio_state = WINDOWS_DIRTY;
 
-			KERNEL_DEBUG(0xeff70040 | DBG_FUNC_NONE, window_index, (int)user_base, (int)updp, (int)kpdp, 0);
+			KERNEL_DEBUG(0xeff70040 | DBG_FUNC_NONE, window_index,
+				     (unsigned)user_base, (unsigned)updp,
+				     (unsigned)kpdp, 0);
 
 		}
 #if JOE_DEBUG
@@ -1022,7 +906,8 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr, vm_size_t nbytes
 		}
 		user_offset += (window_index * NBPDE);
 
-		KERNEL_DEBUG(0xeff70044 | DBG_FUNC_NONE, (int)user_offset, (int)kernel_addr, cnt, 0, 0);
+		KERNEL_DEBUG(0xeff70044 | DBG_FUNC_NONE, (unsigned)user_offset,
+			     (unsigned)kernel_addr, cnt, 0, 0);
 
 	        switch (copy_type) {
 
@@ -1107,7 +992,12 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr, vm_size_t nbytes
 done:
 	thread->machine.copyio_state = WINDOWS_CLOSED;
 
-	KERNEL_DEBUG(debug_type | DBG_FUNC_END, (int)user_addr, (int)kernel_addr, (int)nbytes, error, 0);
+	KERNEL_DEBUG(debug_type | DBG_FUNC_END, (unsigned)user_addr,
+		     (unsigned)kernel_addr, (unsigned)nbytes, error, 0);
+
+#if CONFIG_DTRACE
+	thread->machine.specFlags &= ~CopyIOActive;
+#endif /* CONFIG_DTRACE */
 
 	return (error);
 }
@@ -1117,7 +1007,7 @@ static int
 copyio_phys(addr64_t source, addr64_t sink, vm_size_t csize, int which)
 {
         pmap_paddr_t paddr;
-	user_addr_t  vaddr;
+	user_addr_t vaddr;
 	char        *window_offset;
 	pt_entry_t  pentry;
 	int         ctype;
@@ -1189,7 +1079,7 @@ copyio_phys(addr64_t source, addr64_t sink, vm_size_t csize, int which)
 			 * flushing the tlb after it reloaded the page table from machine.physwindow_pte
 			 */
 			istate = ml_set_interrupts_enabled(FALSE);
-			*(current_cpu_datap()->cpu_physwindow_ptep) = pentry;
+			pmap_store_pte((current_cpu_datap()->cpu_physwindow_ptep), pentry);
 			(void) ml_set_interrupts_enabled(istate);
 
 			invlpg((uintptr_t)current_cpu_datap()->cpu_physwindow_base);
@@ -1207,8 +1097,6 @@ copyio_phys(addr64_t source, addr64_t sink, vm_size_t csize, int which)
 	}
 	return (retval);
 }
-
-
 
 int
 copyinmsg(const user_addr_t user_addr, char *kernel_addr, vm_size_t nbytes)
@@ -1233,23 +1121,24 @@ copyinstr(const user_addr_t user_addr,  char *kernel_addr, vm_size_t nbytes, vm_
 int
 copyoutmsg(const char *kernel_addr, user_addr_t user_addr, vm_size_t nbytes)
 {
-        return (copyio(COPYOUT, user_addr, (char *)kernel_addr, nbytes, NULL, 0));
+        return (copyio(COPYOUT, user_addr, kernel_addr, nbytes, NULL, 0));
 }
 
 int
-copyout(const char *kernel_addr, user_addr_t user_addr, vm_size_t nbytes)
+copyout(const void *kernel_addr, user_addr_t user_addr, vm_size_t nbytes)
 {
-        return (copyio(COPYOUT, user_addr, (char *)kernel_addr, nbytes, NULL, 0));
+        return (copyio(COPYOUT, user_addr, kernel_addr, nbytes, NULL, 0));
 }
 
 
-kern_return_t copypv(addr64_t src64, addr64_t snk64, unsigned int size, int which)
+kern_return_t
+copypv(addr64_t src64, addr64_t snk64, unsigned int size, int which)
 {
 	unsigned int lop, csize;
 	int bothphys = 0;
 	
-
-	KERNEL_DEBUG(0xeff7004c | DBG_FUNC_START, (int)src64, (int)snk64, size, which, 0);
+	KERNEL_DEBUG(0xeff7004c | DBG_FUNC_START, (unsigned)src64,
+		     (unsigned)snk64, size, which, 0);
 
 	if ((which & (cppvPsrc | cppvPsnk)) == 0 )				/* Make sure that only one is virtual */
 		panic("copypv: no more than 1 parameter may be virtual\n");	/* Not allowed */
@@ -1303,11 +1192,19 @@ kern_return_t copypv(addr64_t src64, addr64_t snk64, unsigned int size, int whic
 		if (which & cppvFsnk)
 		        flush_dcache64(snk64, csize, 1);	/* If requested, flush sink after move */
 #endif
-		size  -= csize;					/* Calculate what is left */
+		size   -= csize;					/* Calculate what is left */
 		snk64 += csize;					/* Bump sink to next physical address */
 		src64 += csize;					/* Bump source to next physical address */
 	}
-	KERNEL_DEBUG(0xeff7004c | DBG_FUNC_END, (int)src64, (int)snk64, size, which, 0);
+	KERNEL_DEBUG(0xeff7004c | DBG_FUNC_END, (unsigned)src64,
+		     (unsigned)snk64, size, which, 0);
 
 	return KERN_SUCCESS;
 }
+
+#if !MACH_KDP
+void
+kdp_register_callout(void)
+{
+}
+#endif

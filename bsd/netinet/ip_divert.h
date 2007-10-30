@@ -79,7 +79,7 @@ divert_find_info(struct mbuf *m)
 	return mtag ? divert_info(mtag) : 0;
 }
 
-extern	void div_init(void);
+extern	void div_init(void) __attribute__((section("__TEXT, initcode")));
 extern	void div_input(struct mbuf *, int);
 lck_mtx_t * 
         div_getlock(struct socket *,  int );

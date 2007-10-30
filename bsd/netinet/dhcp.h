@@ -4,25 +4,31 @@
 #include <sys/appleapiopts.h>
 
 /*
- * Copyright (c) 1999 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * dhcp.h
@@ -58,8 +64,9 @@ struct dhcp_packet {
     struct dhcp 	dhcp;
 };
 
-#define DHCP_PACKET_OPTIONS_MIN	312
-#define DHCP_PACKET_MIN		(sizeof(struct dhcp) + DHCP_PACKET_OPTIONS_MIN)
+#define DHCP_OPTIONS_MIN	312
+#define DHCP_PACKET_MIN		(sizeof(struct dhcp_packet) + DHCP_OPTIONS_MIN)
+#define DHCP_PAYLOAD_MIN	(sizeof(struct dhcp) + DHCP_OPTIONS_MIN)
 
 /* dhcp message types */
 #define DHCPDISCOVER	1
@@ -70,6 +77,20 @@ struct dhcp_packet {
 #define DHCPNAK		6
 #define DHCPRELEASE	7
 #define DHCPINFORM	8
+
+enum {
+    dhcp_msgtype_none_e		= 0,
+    dhcp_msgtype_discover_e 	= DHCPDISCOVER,
+    dhcp_msgtype_offer_e	= DHCPOFFER,
+    dhcp_msgtype_request_e	= DHCPREQUEST,
+    dhcp_msgtype_decline_e	= DHCPDECLINE,
+    dhcp_msgtype_ack_e		= DHCPACK,
+    dhcp_msgtype_nak_e		= DHCPNAK,
+    dhcp_msgtype_release_e	= DHCPRELEASE,
+    dhcp_msgtype_inform_e	= DHCPINFORM,
+};
+
+typedef uint8_t dhcp_msgtype_t;
 
 typedef int32_t			dhcp_time_secs_t; /* absolute time */
 typedef int32_t			dhcp_lease_t;     /* relative time */

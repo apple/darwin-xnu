@@ -188,6 +188,24 @@ struct	in6_ndifreq {
 #define ND6_INFINITE_LIFETIME		0xffffffff
 
 #ifdef KERNEL_PRIVATE
+#define ND_IFINFO(ifp) \
+	(&nd_ifinfo[(ifp)->if_index])
+/*
+ * In a more readable form, we derive linkmtu based on:
+ *
+ * if (ND_IFINFO(ifp)->linkmtu && ND_IFINFO(ifp)->linkmtu < ifp->if_mtu)
+ *         linkmtu = ND_IFINFO(ifp)->linkmtu;
+ * else if ((ND_IFINFO(ifp)->maxmtu && ND_IFINFO(ifp)->maxmtu < ifp->if_mtu))
+ *         linkmtu = ND_IFINFO(ifp)->maxmtu;
+ * else
+ *         linkmtu = ifp->if_mtu;
+ */
+#define IN6_LINKMTU(ifp)						      \
+	((ND_IFINFO(ifp)->linkmtu &&					      \
+	ND_IFINFO(ifp)->linkmtu < (ifp)->if_mtu) ? ND_IFINFO(ifp)->linkmtu :  \
+	((ND_IFINFO(ifp)->maxmtu && ND_IFINFO(ifp)->maxmtu < (ifp)->if_mtu) ? \
+	ND_IFINFO(ifp)->maxmtu : (ifp)->if_mtu))
+
 /* node constants */
 #define MAX_REACHABLE_TIME		3600000	/* msec */
 #define REACHABLE_TIME			30000	/* msec */
@@ -230,7 +248,8 @@ struct nd_prefix {
 	/* list of routers that advertise the prefix: */
 	LIST_HEAD(pr_rtrhead, nd_pfxrouter) ndpr_advrtrs;
 	u_char	ndpr_plen;
-	int	ndpr_refcnt;	/* reference couter from addresses */
+	int	ndpr_refcnt;	/* reference counter from addresses */
+	int	ndpr_usecnt;	/* actual use count; prevents free */
 };
 
 #define ndpr_next		ndpr_entry.le_next
@@ -398,6 +417,8 @@ int in6_init_prefix_ltimes(struct nd_prefix *ndpr);
 void rt6_flush(struct in6_addr *, struct ifnet *);
 int nd6_setdefaultiface(int);
 int in6_tmpifadd(const struct in6_ifaddr *, int);
+void ndpr_hold(struct nd_prefix *, boolean_t);
+void ndpr_rele(struct nd_prefix *, boolean_t);
 #endif /* KERNEL_PRIVATE */
 
 #ifdef KERNEL

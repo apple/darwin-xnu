@@ -88,10 +88,12 @@
 #define DBG_FNC_ENCRYPT		NETDBG_CODE(DBG_NETIPSEC, (5 << 8))
 
 static int esp_output(struct mbuf *, u_char *, struct mbuf *,
-	struct ipsecrequest *, int);
+	int, struct secasvar *sav);
 
 extern int	esp_udp_encap_port;
 extern u_int32_t natt_now;
+
+extern lck_mtx_t *sadb_mutex;
 
 /*
  * compute ESP header size.
@@ -100,65 +102,74 @@ size_t
 esp_hdrsiz(isr)
 	struct ipsecrequest *isr;
 {
-	struct secasvar *sav;
-	const struct esp_algorithm *algo;
-	const struct ah_algorithm *aalgo;
-	size_t ivlen;
-	size_t authlen;
-	size_t hdrsiz;
-	size_t maxpad;
 
 	/* sanity check */
 	if (isr == NULL)
 		panic("esp_hdrsiz: NULL was passed.\n");
 
-	sav = isr->sav;
 
-	if (isr->saidx.proto != IPPROTO_ESP)
-		panic("unsupported mode passed to esp_hdrsiz");
-
-	if (sav == NULL)
-		goto estimate;
-	if (sav->state != SADB_SASTATE_MATURE
-	 && sav->state != SADB_SASTATE_DYING)
-		goto estimate;
-
-	/* we need transport mode ESP. */
-	algo = esp_algorithm_lookup(sav->alg_enc);
-	if (!algo)
-		goto estimate;
-	ivlen = sav->ivlen;
-	if (ivlen < 0)
-		goto estimate;
-
-	if (algo->padbound)
-		maxpad = algo->padbound;
-	else
-		maxpad = 4;
-	maxpad += 1; /* maximum 'extendsiz' is padbound + 1, see esp_output */
+#if 0
+	lck_mtx_lock(sadb_mutex);
+	{
+		struct secasvar *sav;
+		const struct esp_algorithm *algo;
+		const struct ah_algorithm *aalgo;
+		size_t ivlen;
+		size_t authlen;
+		size_t hdrsiz;
+		size_t maxpad;
 	
-	if (sav->flags & SADB_X_EXT_OLD) {
-		/* RFC 1827 */
-		hdrsiz = sizeof(struct esp) + ivlen + maxpad;
-	} else {
-		/* RFC 2406 */
-		aalgo = ah_algorithm_lookup(sav->alg_auth);
-		if (aalgo && sav->replay && sav->key_auth)
-			authlen = (aalgo->sumsiz)(sav);
+		/*%%%% this needs to change - no sav in ipsecrequest any more */
+		sav = isr->sav;
+	
+		if (isr->saidx.proto != IPPROTO_ESP)
+			panic("unsupported mode passed to esp_hdrsiz");
+	
+		if (sav == NULL)
+			goto estimate;
+		if (sav->state != SADB_SASTATE_MATURE
+		 && sav->state != SADB_SASTATE_DYING)
+			goto estimate;
+	
+		/* we need transport mode ESP. */
+		algo = esp_algorithm_lookup(sav->alg_enc);
+		if (!algo)
+			goto estimate;
+		ivlen = sav->ivlen;
+		if (ivlen < 0)
+			goto estimate;
+	
+		if (algo->padbound)
+			maxpad = algo->padbound;
 		else
-			authlen = 0;
-		hdrsiz = sizeof(struct newesp) + ivlen + maxpad + authlen;
-	}
+			maxpad = 4;
+		maxpad += 1; /* maximum 'extendsiz' is padbound + 1, see esp_output */
+		
+		if (sav->flags & SADB_X_EXT_OLD) {
+			/* RFC 1827 */
+			hdrsiz = sizeof(struct esp) + ivlen + maxpad;
+		} else {
+			/* RFC 2406 */
+			aalgo = ah_algorithm_lookup(sav->alg_auth);
+			if (aalgo && sav->replay && sav->key_auth)
+				authlen = (aalgo->sumsiz)(sav);
+			else
+				authlen = 0;
+			hdrsiz = sizeof(struct newesp) + ivlen + maxpad + authlen;
+		}
+		
+		/*
+		 * If the security association indicates that NATT is required,
+		 * add the size of the NATT encapsulation header:
+		 */
+		if ((sav->flags & SADB_X_EXT_NATT) != 0) hdrsiz += sizeof(struct udphdr) + 4;
 	
-	/*
-	 * If the security association indicates that NATT is required,
-	 * add the size of the NATT encapsulation header:
-	 */
-	if ((sav->flags & SADB_X_EXT_NATT) != 0) hdrsiz += sizeof(struct udphdr) + 4;
-
-	return hdrsiz;
-
-   estimate:
+		lck_mtx_unlock(sadb_mutex);
+		return hdrsiz;
+	}
+estimate:
+   lck_mtx_unlock(sadb_mutex);
+#endif
 	/*
 	 * ASSUMING:
 	 *	sizeof(struct newesp) > sizeof(struct esp). (8)
@@ -192,18 +203,17 @@ esp_hdrsiz(isr)
  *	<-----------------> espoff
  */
 static int
-esp_output(m, nexthdrp, md, isr, af)
+esp_output(m, nexthdrp, md, af, sav)
 	struct mbuf *m;
 	u_char *nexthdrp;
 	struct mbuf *md;
-	struct ipsecrequest *isr;
 	int af;
+	struct secasvar *sav;
 {
 	struct mbuf *n;
 	struct mbuf *mprev;
 	struct esp *esp;
 	struct esptail *esptail;
-	struct secasvar *sav = isr->sav;
 	const struct esp_algorithm *algo;
 	u_int32_t spi;
 	u_int8_t nxt = 0;
@@ -252,7 +262,7 @@ esp_output(m, nexthdrp, md, isr, af)
 				(u_int32_t)ntohl(ip->ip_src.s_addr),
 				(u_int32_t)ntohl(ip->ip_dst.s_addr),
 				(u_int32_t)ntohl(sav->spi)));
-			ipsecstat.out_inval++;
+			IPSEC_STAT_INCREMENT(ipsecstat.out_inval);
 			break;
 		    }
 #endif /*INET*/
@@ -261,7 +271,7 @@ esp_output(m, nexthdrp, md, isr, af)
 			ipseclog((LOG_DEBUG, "esp6_output: internal error: "
 				"sav->replay is null: SPI=%u\n",
 				(u_int32_t)ntohl(sav->spi)));
-			ipsec6stat.out_inval++;
+			IPSEC_STAT_INCREMENT(ipsec6stat.out_inval);
 			break;
 #endif /*INET6*/
 		default:
@@ -357,6 +367,42 @@ esp_output(m, nexthdrp, md, isr, af)
 		goto fail;
 	}
 	mprev->m_next = md;
+	
+	/* 
+	 * Translate UDP source port back to its original value.
+	 * SADB_X_EXT_NATT_MULTIPLEUSERS is only set for transort mode.
+	 */
+	if ((sav->flags & SADB_X_EXT_NATT_MULTIPLEUSERS) != 0) {
+		/* if not UDP - drop it */
+		if (ip->ip_p != IPPROTO_UDP)	{
+			IPSEC_STAT_INCREMENT(ipsecstat.out_inval);
+			m_freem(m);
+			error = EINVAL;
+			goto fail;
+		}			
+		
+		udp = mtod(md, struct udphdr *);
+
+		/* if src port not set in sav - find it */
+		if (sav->natt_encapsulated_src_port == 0)
+			if (key_natt_get_translated_port(sav) == 0) {
+				m_freem(m);
+				error = EINVAL;
+				goto fail;
+			}
+		if (sav->remote_ike_port == htons(udp->uh_dport)) {
+			/* translate UDP port */
+			udp->uh_dport = sav->natt_encapsulated_src_port;
+			udp->uh_sum = 0;	/* don't need checksum with ESP auth */
+		} else {
+			/* drop the packet - can't translate the port */
+			IPSEC_STAT_INCREMENT(ipsecstat.out_inval);
+			m_freem(m);
+			error = EINVAL;
+			goto fail;
+		}
+	}
+		
 
 	espoff = m->m_pkthdr.len - plen;
 	
@@ -408,7 +454,7 @@ esp_output(m, nexthdrp, md, isr, af)
 		else {
 			ipseclog((LOG_ERR,
 			    "IPv4 ESP output: size exceeds limit\n"));
-			ipsecstat.out_inval++;
+			IPSEC_STAT_INCREMENT(ipsecstat.out_inval);
 			m_freem(m);
 			error = EMSGSIZE;
 			goto fail;
@@ -434,13 +480,15 @@ esp_output(m, nexthdrp, md, isr, af)
 				ipseclog((LOG_WARNING,
 				    "replay counter overflowed. %s\n",
 				    ipsec_logsastr(sav)));
-				stat->out_inval++;
+				IPSEC_STAT_INCREMENT(stat->out_inval);
 				m_freem(m);
 				KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 5,0,0,0,0);
 				return EINVAL;
 			}
 		}
+		lck_mtx_lock(sadb_mutex);
 		sav->replay->count++;
+		lck_mtx_unlock(sadb_mutex);
 		/*
 		 * XXX sequence number must not be cycled, if the SA is
 		 * installed by IKE daemon.
@@ -491,16 +539,16 @@ esp_output(m, nexthdrp, md, isr, af)
 	if (randpadmax < 0 || plen + extendsiz >= randpadmax)
 		;
 	else {
-		int n;
+		int pad;
 
 		/* round */
 		randpadmax = (randpadmax / padbound) * padbound;
-		n = (randpadmax - plen + extendsiz) / padbound;
+		pad = (randpadmax - plen + extendsiz) / padbound;
 
-		if (n > 0)
-			n = (random() % n) * padbound;
+		if (pad > 0)
+			pad = (random() % pad) * padbound;
 		else
-			n = 0;
+			pad = 0;
 
 		/*
 		 * make sure we do not pad too much.
@@ -511,8 +559,8 @@ esp_output(m, nexthdrp, md, isr, af)
 		 * limitation (but is less strict than sequential padding
 		 * as length field do not count the last 2 octets).
 		 */
-		if (extendsiz + n <= MLEN && extendsiz + n < 256)
-			extendsiz += n;
+		if (extendsiz + pad <= MLEN && extendsiz + pad < 256)
+			extendsiz += pad;
 	}
 
 #if DIAGNOSTIC
@@ -596,7 +644,7 @@ esp_output(m, nexthdrp, md, isr, af)
 		else {
 			ipseclog((LOG_ERR,
 			    "IPv4 ESP output: size exceeds limit\n"));
-			ipsecstat.out_inval++;
+			IPSEC_STAT_INCREMENT(ipsecstat.out_inval);
 			m_freem(m);
 			error = EMSGSIZE;
 			goto fail;
@@ -617,7 +665,7 @@ esp_output(m, nexthdrp, md, isr, af)
 	error = esp_schedule(algo, sav);
 	if (error) {
 		m_freem(m);
-		stat->out_inval++;
+		IPSEC_STAT_INCREMENT(stat->out_inval);
 		goto fail;
 	}
 
@@ -631,7 +679,7 @@ esp_output(m, nexthdrp, md, isr, af)
 	if ((*algo->encrypt)(m, espoff, plen + extendsiz, sav, algo, ivlen)) {
 		/* m is already freed */
 		ipseclog((LOG_ERR, "packet encryption failure\n"));
-		stat->out_inval++;
+		IPSEC_STAT_INCREMENT(stat->out_inval);
 		error = EINVAL;
 		KERNEL_DEBUG(DBG_FNC_ENCRYPT | DBG_FUNC_END, 1,error,0,0,0);
 		goto fail;
@@ -649,81 +697,80 @@ esp_output(m, nexthdrp, md, isr, af)
 		goto noantireplay;
 
     {
-	const struct ah_algorithm *aalgo;
-	u_char authbuf[AH_MAXSUMSIZE];
-	struct mbuf *n;
-	u_char *p;
-	size_t siz;
-#if INET
-	struct ip *ip;
-#endif
-
-	aalgo = ah_algorithm_lookup(sav->alg_auth);
-	if (!aalgo)
-		goto noantireplay;
-	siz = ((aalgo->sumsiz)(sav) + 3) & ~(4 - 1);
-	if (AH_MAXSUMSIZE < siz)
-		panic("assertion failed for AH_MAXSUMSIZE");
-
-	if (esp_auth(m, espoff, m->m_pkthdr.len - espoff, sav, authbuf)) {
-		ipseclog((LOG_ERR, "ESP checksum generation failure\n"));
-		m_freem(m);
-		error = EINVAL;
-		stat->out_inval++;
-		goto fail;
-	}
-
-	n = m;
-	while (n->m_next)
-		n = n->m_next;
-
-	if (!(n->m_flags & M_EXT) && siz < M_TRAILINGSPACE(n)) { /* XXX */
-		n->m_len += siz;
-		m->m_pkthdr.len += siz;
-		p = mtod(n, u_char *) + n->m_len - siz;
-	} else {
-		struct mbuf *nn;
-
-		MGET(nn, M_DONTWAIT, MT_DATA);
-		if (!nn) {
-			ipseclog((LOG_DEBUG, "can't alloc mbuf in esp%d_output",
-			    afnumber));
+		const struct ah_algorithm *aalgo;
+		u_char authbuf[AH_MAXSUMSIZE];
+		u_char *p;
+		size_t siz;
+	#if INET
+		struct ip *ip;
+	#endif
+	
+		aalgo = ah_algorithm_lookup(sav->alg_auth);
+		if (!aalgo)
+			goto noantireplay;
+		siz = ((aalgo->sumsiz)(sav) + 3) & ~(4 - 1);
+		if (AH_MAXSUMSIZE < siz)
+			panic("assertion failed for AH_MAXSUMSIZE");
+	
+		if (esp_auth(m, espoff, m->m_pkthdr.len - espoff, sav, authbuf)) {
+			ipseclog((LOG_ERR, "ESP checksum generation failure\n"));
 			m_freem(m);
-			error = ENOBUFS;
+			error = EINVAL;
+			IPSEC_STAT_INCREMENT(stat->out_inval);
 			goto fail;
 		}
-		nn->m_len = siz;
-		nn->m_next = NULL;
-		n->m_next = nn;
-		n = nn;
-		m->m_pkthdr.len += siz;
-		p = mtod(nn, u_char *);
-	}
-	bcopy(authbuf, p, siz);
-
-	/* modify IP header (for ESP header part only) */
-	switch (af) {
-#if INET
-	case AF_INET:
-		ip = mtod(m, struct ip *);
-		if (siz < (IP_MAXPACKET - ntohs(ip->ip_len)))
-			ip->ip_len = htons(ntohs(ip->ip_len) + siz);
-		else {
-			ipseclog((LOG_ERR,
-			    "IPv4 ESP output: size exceeds limit\n"));
-			ipsecstat.out_inval++;
-			m_freem(m);
-			error = EMSGSIZE;
-			goto fail;
+	
+		n = m;
+		while (n->m_next)
+			n = n->m_next;
+	
+		if (!(n->m_flags & M_EXT) && siz < M_TRAILINGSPACE(n)) { /* XXX */
+			n->m_len += siz;
+			m->m_pkthdr.len += siz;
+			p = mtod(n, u_char *) + n->m_len - siz;
+		} else {
+			struct mbuf *nn;
+	
+			MGET(nn, M_DONTWAIT, MT_DATA);
+			if (!nn) {
+				ipseclog((LOG_DEBUG, "can't alloc mbuf in esp%d_output",
+					afnumber));
+				m_freem(m);
+				error = ENOBUFS;
+				goto fail;
+			}
+			nn->m_len = siz;
+			nn->m_next = NULL;
+			n->m_next = nn;
+			n = nn;
+			m->m_pkthdr.len += siz;
+			p = mtod(nn, u_char *);
 		}
-		break;
-#endif
-#if INET6
-	case AF_INET6:
-		/* total packet length will be computed in ip6_output() */
-		break;
-#endif
-	}
+		bcopy(authbuf, p, siz);
+	
+		/* modify IP header (for ESP header part only) */
+		switch (af) {
+	#if INET
+		case AF_INET:
+			ip = mtod(m, struct ip *);
+			if (siz < (IP_MAXPACKET - ntohs(ip->ip_len)))
+				ip->ip_len = htons(ntohs(ip->ip_len) + siz);
+			else {
+				ipseclog((LOG_ERR,
+					"IPv4 ESP output: size exceeds limit\n"));
+				IPSEC_STAT_INCREMENT(ipsecstat.out_inval);
+				m_freem(m);
+				error = EMSGSIZE;
+				goto fail;
+			}
+			break;
+	#endif
+	#if INET6
+		case AF_INET6:
+			/* total packet length will be computed in ip6_output() */
+			break;
+	#endif
+		}
     }
     
 	if (udp_encapsulate) {
@@ -734,12 +781,14 @@ esp_output(m, nexthdrp, md, isr, af)
 
 
 noantireplay:
+	lck_mtx_lock(sadb_mutex);
 	if (!m) {
 		ipseclog((LOG_ERR,
 		    "NULL mbuf after encryption in esp%d_output", afnumber));
 	} else
 		stat->out_success++;
 	stat->out_esphist[sav->alg_enc]++;
+	lck_mtx_unlock(sadb_mutex);
 	key_sa_recordxfer(sav, m);
 	KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 6,0,0,0,0);
 	return 0;
@@ -755,35 +804,35 @@ fail:
 
 #if INET
 int
-esp4_output(m, isr)
+esp4_output(m, sav)
 	struct mbuf *m;
-	struct ipsecrequest *isr;
+	struct secasvar *sav;
 {
 	struct ip *ip;
 	if (m->m_len < sizeof(struct ip)) {
 		ipseclog((LOG_DEBUG, "esp4_output: first mbuf too short\n"));
 		m_freem(m);
-		return 0;
+		return EINVAL;
 	}
 	ip = mtod(m, struct ip *);
 	/* XXX assumes that m->m_next points to payload */
-	return esp_output(m, &ip->ip_p, m->m_next, isr, AF_INET);
+	return esp_output(m, &ip->ip_p, m->m_next, AF_INET, sav);
 }
 #endif /*INET*/
 
 #if INET6
 int
-esp6_output(m, nexthdrp, md, isr)
+esp6_output(m, nexthdrp, md, sav)
 	struct mbuf *m;
 	u_char *nexthdrp;
 	struct mbuf *md;
-	struct ipsecrequest *isr;
+	struct secasvar *sav;
 {
 	if (m->m_len < sizeof(struct ip6_hdr)) {
 		ipseclog((LOG_DEBUG, "esp6_output: first mbuf too short\n"));
 		m_freem(m);
-		return 0;
+		return EINVAL;
 	}
-	return esp_output(m, nexthdrp, md, isr, AF_INET6);
+	return esp_output(m, nexthdrp, md, AF_INET6, sav);
 }
 #endif /*INET6*/

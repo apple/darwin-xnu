@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -101,19 +107,19 @@ void db_clear_task_single_step(
 extern jmp_buf_t *db_recover;
 boolean_t db_step_again(void);
 
+static db_addr_t db_stop_pc;
 boolean_t
 db_stop_at_pc(
 	boolean_t	*is_breakpoint,
 	task_t		task,
 	task_t		space)
 {
-	register  db_addr_t	pc;
 	register  db_thread_breakpoint_t bkpt;
 
 	db_clear_task_single_step(DDB_REGS, space);
 	db_clear_breakpoints();
 	db_clear_watchpoints();
-	pc = PC_REGS(DDB_REGS);
+	db_stop_pc = PC_REGS(DDB_REGS);
 
 #ifdef	FIXUP_PC_AFTER_BREAK
 	if (*is_breakpoint) {
@@ -122,14 +128,14 @@ db_stop_at_pc(
 	     * machine requires it.
 	     */
 	    FIXUP_PC_AFTER_BREAK
-	    pc = PC_REGS(DDB_REGS);
+	    db_stop_pc = PC_REGS(DDB_REGS);
 	}
 #endif
 
 	/*
 	 * Now check for a breakpoint at this address.
 	 */
-	bkpt = db_find_thread_breakpoint_here(space, pc);
+	bkpt = db_find_thread_breakpoint_here(space, db_stop_pc);
 	if (bkpt) {
 	    if (db_cond_check(bkpt)) {
 		*is_breakpoint = TRUE;
@@ -148,7 +154,7 @@ db_stop_at_pc(
 	if (db_run_mode == STEP_ONCE) {
 	    if (--db_loop_count > 0) {
 		if (db_sstep_print) {
-		    db_print_loc_and_inst(pc, task);
+		    db_print_loc_and_inst(db_stop_pc, task);
 		}
 		return (FALSE);	/* continue */
 	    }
@@ -157,7 +163,9 @@ db_stop_at_pc(
 	    jmp_buf_t *prev;
 	    jmp_buf_t db_jmpbuf;
 	    /* WARNING: the following assumes an instruction fits an int */
-	    db_expr_t ins = db_get_task_value(pc, sizeof(int), FALSE, space);
+		db_expr_t ins;
+	   
+		ins = db_get_task_value(db_stop_pc, sizeof(int), FALSE, space);
 
 	    /* continue until matching return */
 
@@ -175,7 +183,7 @@ db_stop_at_pc(
 				db_last_inst_count = db_inst_count;
 				for (i = db_call_depth; --i > 0; )
 				    db_printf("  ");
-				db_print_loc_and_inst(pc, task);
+				db_print_loc_and_inst(db_stop_pc, task);
 				db_printf("\n");
 		    	    }
 		        }
@@ -190,7 +198,8 @@ db_stop_at_pc(
 	}
 	if (db_run_mode == STEP_CALLT) {
 	    /* WARNING: the following assumes an instruction fits an int */
-	    db_expr_t ins = db_get_task_value(pc, sizeof(int), FALSE, space);
+		db_expr_t ins;
+		ins = db_get_task_value(db_stop_pc, sizeof(int), FALSE, space);
 
 	    /* continue until call or return */
 
@@ -201,7 +210,7 @@ db_stop_at_pc(
 				return (FALSE);	/* continue */
 	    }
 	}
-	if (db_find_breakpoint_here(space, pc))
+	if (db_find_breakpoint_here(space, db_stop_pc))
 		return(FALSE);
 	db_run_mode = STEP_NONE;
 	return (TRUE);
@@ -212,7 +221,11 @@ db_restart_at_pc(
 	boolean_t	watchpt,
 	task_t	  	task)
 {
-	register db_addr_t pc = PC_REGS(DDB_REGS), brpc;
+	db_addr_t pc = PC_REGS(DDB_REGS);
+#ifdef	SOFTWARE_SSTEP
+	db_addr_t brpc;
+#endif
+
 
 	if ((db_run_mode == STEP_COUNT) ||
 	    (db_run_mode == STEP_RETURN) ||
@@ -278,9 +291,7 @@ db_step_again(void)
 }
 
 void
-db_single_step(
-	db_regs_t	*regs,
-	task_t	  	task)
+db_single_step(db_regs_t *regs, __unused task_t task)
 {
 	if (db_run_mode == STEP_CONTINUE) {
 	    db_run_mode = STEP_INVISIBLE;
@@ -405,15 +416,12 @@ extern int	db_cmd_loop_done;
 
 /* single-step */
 void
-db_single_step_cmd(
-	db_expr_t	addr,
-	int		have_addr,
-	db_expr_t	count,
-	char *		modif)
+db_single_step_cmd(__unused db_expr_t addr, __unused boolean_t have_addr,
+		   db_expr_t count, char *modif)
 {
 	boolean_t	print = FALSE;
 
-	if (count == -1)
+	if (count == (db_expr_t)-1)
 	    count = 1;
 
 	if (modif[0] == 'p')
@@ -432,11 +440,8 @@ db_single_step_cmd(
 
 /* trace and print until call/return */
 void
-db_trace_until_call_cmd(
-	db_expr_t	addr,
-	int		have_addr,
-	db_expr_t	count,
-	char *		modif)
+db_trace_until_call_cmd(__unused db_expr_t addr, __unused boolean_t have_addr,
+			__unused db_expr_t count, char *modif)
 {
 	boolean_t	print = FALSE;
 
@@ -454,11 +459,10 @@ db_trace_until_call_cmd(
 }
 
 void
-db_trace_until_matching_cmd(
-	db_expr_t	addr,
-	int		have_addr,
-	db_expr_t	count,
-	char *		modif)
+db_trace_until_matching_cmd(__unused db_expr_t addr,
+			    __unused boolean_t have_addr,
+			    __unused db_expr_t count,
+			    char *modif)
 {
 	boolean_t	print = FALSE;
 
@@ -478,11 +482,8 @@ db_trace_until_matching_cmd(
 
 /* continue */
 void
-db_continue_cmd(
-	db_expr_t	addr,
-	int		have_addr,
-	db_expr_t	count,
-	char *		modif)
+db_continue_cmd(__unused db_expr_t addr, __unused boolean_t have_addr,
+		__unused db_expr_t count, __unused char *modif)
 {
 	/*
 	 * Though "cont/c" works fairly well, it's not really robust
@@ -510,22 +511,16 @@ db_continue_cmd(
 /*
  * Switch to gdb
  */
-void
-db_to_gdb(
-	void)
+static void
+db_to_gdb(void)
 {
-	extern unsigned int switch_debugger;
-
-	switch_debugger=1;
+	switch_debugger = 1;
 }
 
 /* gdb */
 void    
-db_continue_gdb(
-	db_expr_t	addr, 
-	int		have_addr,
-	db_expr_t	count,   
-	char *		modif)
+db_continue_gdb(__unused db_expr_t addr, __unused boolean_t have_addr,
+		__unused db_expr_t count, __unused char *modif)
 {
 	db_to_gdb();
 	db_run_mode = STEP_CONTINUE;

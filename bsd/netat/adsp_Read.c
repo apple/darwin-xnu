@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *
@@ -74,7 +80,7 @@ int CheckReadQueue(sp)		/* (CCBPtr sp) */
 
     while (sp->rData && (pb = sp->rpb)) {		/* have data */
         dPrintf(D_M_ADSP, D_L_TRACE, 
-		 (" pb=0x%x, gref=0x%x, ioc=0x%x, reqCount=%d (have data)\n", 
+		 (" pb=0x%p, gref=0x%p, ioc=0x%p, reqCount=%d (have data)\n", 
 		  pb, pb->gref, pb->ioc, pb->u.ioParams.reqCount));
     	KERNEL_DEBUG(DBG_ADSP_READ, 1, pb, pb->gref, pb->ioc, pb->u.ioParams.reqCount);
 	if (pb->u.ioParams.reqCount == 0) {
@@ -82,7 +88,7 @@ int CheckReadQueue(sp)		/* (CCBPtr sp) */
 	    sp->rpb = pb->qLink;
 	    if (pb->ioc) {
     		KERNEL_DEBUG(DBG_ADSP_READ, 2, pb, pb->gref, pb->ioc, 0); 
-		adspioc_ack(0, pb->ioc, pb->gref);
+		adspioc_ack(0, (gbuf_t *)pb->ioc, pb->gref);
 	    } else {
     		KERNEL_DEBUG(DBG_ADSP_READ, 3, pb, pb->gref, 0, 0);
 		completepb(sp, pb);
@@ -91,12 +97,12 @@ int CheckReadQueue(sp)		/* (CCBPtr sp) */
 	}
 	    
 	/* take the first packet off of sp->rbuf_mb or sp->crbuf_mb */
-	if (mp = sp->rbuf_mb) {	/* Get header for oldest data */
+	if ((mp = sp->rbuf_mb)) {	/* Get header for oldest data */
     	    KERNEL_DEBUG(DBG_ADSP_READ, 4, pb, mp, gbuf_msgsize(mp), gbuf_next(mp));
 	    sp->rbuf_mb = gbuf_next(mp);
 	    gbuf_next(mp) = 0;
 	    eom = 1;
-	} else if (mp = sp->crbuf_mb) {
+	} else if ((mp = sp->crbuf_mb)) {
     	    KERNEL_DEBUG(DBG_ADSP_READ, 5, pb, mp, gbuf_msgsize(mp), gbuf_next(mp));
 	    sp->crbuf_mb = 0;
 	    eom = 0;
@@ -150,8 +156,8 @@ int CheckReadQueue(sp)		/* (CCBPtr sp) */
 		mp = gbuf_cont(pb->mp); /* ioctl call */
 		gbuf_cont(pb->mp) = 0;
 		gref = (gref_t *)pb->gref;
-		adspioc_ack(0, pb->ioc, pb->gref);
-		dPrintf(D_M_ADSP, D_L_TRACE, ("    (pb->ioc) mp=%x\n", mp));
+		adspioc_ack(0, (gbuf_t *)pb->ioc, pb->gref);
+		dPrintf(D_M_ADSP, D_L_TRACE, ("    (pb->ioc) mp=%p\n", mp));
     		KERNEL_DEBUG(DBG_ADSP_READ, 0x0A, pb,  mp, 
 			     gbuf_next(mp), gbuf_cont(mp));
 		SndMsgUp(gref, mp);
@@ -167,9 +173,9 @@ int CheckReadQueue(sp)		/* (CCBPtr sp) */
 	}
     }	/* while */
 
-    if (pb = sp->rpb) {		/* if there is an outstanding request */
+    if ((pb = sp->rpb)) {		/* if there is an outstanding request */
         dPrintf(D_M_ADSP, D_L_TRACE, 
-		 (" pb=0x%x, ioc=0x%x, reqCount=%d (no more data)\n", 
+		 (" pb=0x%p, ioc=0x%p, reqCount=%d (no more data)\n", 
 		  pb, pb->ioc, pb->u.ioParams.reqCount));
     	KERNEL_DEBUG(DBG_ADSP_READ, 0x0D, pb, pb->ioc, 
 		     pb->u.ioParams.reqCount, pb->u.ioParams.actCount);
@@ -182,7 +188,7 @@ int CheckReadQueue(sp)		/* (CCBPtr sp) */
 		    pb->u.ioParams.eom = 0;
 		    sp->rpb = pb->qLink;
 		    if (pb->ioc) {
-			    adspioc_ack(0, pb->ioc, pb->gref);
+			    adspioc_ack(0, (gbuf_t *)pb->ioc, pb->gref);
 		    } else {
 			    completepb(sp, pb);
 		    }
@@ -194,9 +200,9 @@ int CheckReadQueue(sp)		/* (CCBPtr sp) */
 	    pb->ioResult = 1;
 	    tmp = gbuf_cont(pb->mp); /* detatch perhaps delayed data */
 	    gbuf_cont(pb->mp) = 0;
-	    if (mp = gbuf_copym(pb->mp)) { /* otherwise, duplicate user request */
+	    if ((mp = gbuf_copym(pb->mp))) { /* otherwise, duplicate user request */
     		    KERNEL_DEBUG(DBG_ADSP_READ, 0x0F, pb, sp, pb->mp, 0);
-		    adspioc_ack(0, pb->ioc, pb->gref); 	/* release user */
+		    adspioc_ack(0, (gbuf_t *)pb->ioc, pb->gref); 	/* release user */
 		    pb = (struct adspcmd *)gbuf_rptr(mp); /* get new parameter block */
 		    pb->ioc = 0;
 		    pb->mp = mp;
@@ -215,7 +221,7 @@ int CheckReadQueue(sp)		/* (CCBPtr sp) */
 			    sp->rData = 1;
 		    }
 		    pb->ioResult = errDSPQueueSize;
-		    adspioc_ack(ENOBUFS, pb->ioc, pb->gref);
+		    adspioc_ack(ENOBUFS, (gbuf_t *)pb->ioc, pb->gref);
 	    }
 	} 
     }
@@ -250,17 +256,19 @@ int CheckReadQueue(sp)		/* (CCBPtr sp) */
  * OUTPUTS:
  * 	
  */
+int CheckAttn(CCBPtr, struct adspcmd *); 
+
 int CheckAttn(sp, pb)		/* (CCBPtr sp) */
     register CCBPtr sp;
     register struct adspcmd *pb;
 {
     gbuf_t *mp;
-    gref_t *gref;
+    gref_t *gref = 0;
 	
     dPrintf(D_M_ADSP, D_L_TRACE, 
 	    ("CheckAttn: sp=0x%x, pb=0x%x\n", (unsigned)sp, (unsigned)pb));
 
-    if (mp = sp->attn_mb) {
+    if ((mp = sp->attn_mb)) {
 
 	/*
 	 * Deliver the attention data to the user. 
@@ -287,7 +295,7 @@ int CheckAttn(sp, pb)		/* (CCBPtr sp) */
 	pb->u.attnParams.attnCode = 0;
 	pb->ioResult = 1;	/* not done */
     }
-    adspioc_ack(0, pb->ioc, pb->gref);
+    adspioc_ack(0, (gbuf_t *)pb->ioc, pb->gref);
     if (mp) {
 	SndMsgUp(gref, mp);
 	}
@@ -335,21 +343,21 @@ int adspRead(sp, pb)		/* (DSPPBPtr pb) */
 	return EINVAL;
     }
     if (sp->rData && (sp->rpb == 0)) { /* if data, and no queue of pbs */
-	qAddToEnd(&sp->rpb, pb); /* deliver data to user directly */
+	qAddToEnd((struct qlink **)&sp->rpb, (struct qlink *)pb); /* deliver data to user directly */
 	CheckReadQueue(sp);
     } else if ((pb->u.ioParams.reqCount == 0) && (sp->rpb == 0)) {
 	    /* empty read */
 	    pb->ioResult = 0;
-	    adspioc_ack(0, pb->ioc, pb->gref);
+	    adspioc_ack(0, (gbuf_t *)pb->ioc, pb->gref);
 	    return 0;
     } else {
 	pb->ioResult = 1;
-	if (mp = gbuf_copym(pb->mp)) { /* otherwise, duplicate user request */
-		adspioc_ack(0, pb->ioc, pb->gref); 	/* release user */
+	if ((mp = gbuf_copym(pb->mp))) { /* otherwise, duplicate user request */
+		adspioc_ack(0, (gbuf_t *)pb->ioc, pb->gref); 	/* release user */
 		pb = (struct adspcmd *)gbuf_rptr(mp); 	/* get new parameter block */
 		pb->ioc = 0;
 		pb->mp = mp;
-		qAddToEnd(&sp->rpb, pb); /* and queue it for later */
+		qAddToEnd((struct qlink **)&sp->rpb, (struct qlink *)pb); /* and queue it for later */
 	} else {
 		pb->ioResult = errDSPQueueSize;
 		return ENOBUFS;

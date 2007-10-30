@@ -1,0 +1,236 @@
+.\" Copyright (c) 2003, David G. Lawrence
+.\" All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice unmodified, this list of conditions, and the following
+.\"    disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\"
+.Dd March 31, 2006
+.Dt SENDFILE 2
+.Os "Mac OS X"
+.Sh NAME
+.Nm sendfile
+.Nd send a file to a socket
+.Sh SYNOPSIS
+.In sys/types.h
+.In sys/socket.h
+.In sys/uio.h
+.Ft int
+.Fo sendfile
+.Fa "int fd" "int s" "off_t offset" "off_t *len" 
+.Fa "struct sf_hdtr *hdtr" "int flags"
+.Fc
+.Sh DESCRIPTION
+The
+.Fn sendfile
+system call
+sends a regular file specified by descriptor
+.Fa fd
+out a stream socket specified by descriptor
+.Fa s .
+.Pp
+The
+.Fa offset
+argument specifies where to begin in the file.
+Should
+.Fa offset
+fall beyond the end of file, the system will return
+success and report 0 bytes sent as described below.
+.Pp
+The
+.Fa len
+argument is a value-result parameter, that specifies how many bytes 
+of the file should be sent and/or how many bytes have been sent.
+Initially the value pointed to by the 
+.Fa len
+argument specifies how many bytes should be sent with 0 having the special
+meaning to send until the end of file has been reached.
+On return the value pointed to by the 
+.Fa len
+argument indicates how many bytes have been sent.
+The 
+.Fa len
+pointer may not be NULL.
+.Pp
+An optional header and/or trailer can be sent before and after the file data by 
+specifying a pointer to a
+.Vt "struct sf_hdtr" ,
+which has the following structure:
+.Pp
+.Bd -literal -offset indent -compact
+struct sf_hdtr {
+	struct iovec *headers;	/* pointer to header iovecs */
+	int hdr_cnt;		/* number of header iovecs */
+	struct iovec *trailers;	/* pointer to trailer iovecs */
+	int trl_cnt;		/* number of trailer iovecs */
+};
+.Ed
+.Pp
+The
+.Fa headers
+and
+.Fa trailers
+pointers, if
+.Pf non- Dv NULL ,
+point to arrays of
+.Vt "struct iovec"
+structures.
+See the
+.Fn writev
+system call for information on the iovec structure.
+The number of iovecs in these
+arrays is specified by
+.Fa hdr_cnt
+and
+.Fa trl_cnt .
+.Pp
+The
+.Fa flags
+parameter is reserved for future expansion and must be set to 0. Any other value 
+will cause
+.Fn sendfile
+to return
+.Er EINVAL .
+.Pp
+When using a socket marked for non-blocking I/O,
+.Fn sendfile
+may send fewer bytes than requested.
+In this case, the number of bytes successfully
+sent is returned in the via the 
+.Fa len
+parameters and the error
+.Er EAGAIN
+is returned.
+.Pp
+When a signal causes 
+.Fn sendfile
+to return the error 
+.Er EINTR ,
+the 
+.Fa len 
+argument may return 0 without necessarily meaning the end of file has been reached
+as the signal may have been caught before any data was sent.
+.Sh IMPLEMENTATION NOTES
+The
+Mac OS X 
+implementation of 
+.Fn sendfile
+uses 64 bits types for size and offset parameters so there is no need for 
+a 64 bits version 
+.Fn sendfile64
+as found on some other operating systems.
+.Sh RETURN VALUES
+.Rv -std sendfile
+.Pp
+The number of bytes sent is returned via the parameter
+.Fa len .
+A value of 0 means the end of the file specified by descriptor 
+.Fa fd
+has been reached or that the value passed in 
+.Fa offset 
+falls beyond the end of file.
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er EAGAIN
+The socket is marked for non-blocking I/O and not all data was sent due to
+the socket buffer being full.
+If specified, the number of bytes successfully sent will be returned in
+.Fa *len .
+.It Bq Er EBADF
+The
+.Fa fd
+argument
+is not a valid file descriptor.
+.It Bq Er ENOTSUP
+The
+.Fa fd
+argument
+does not refer to a regular file.
+.It Bq Er EBADF
+The
+.Fa s
+argument
+is not a valid socket descriptor.
+.It Bq Er ENOTSOCK
+The
+.Fa s
+argument
+does not refer stream oriented socket.
+.It Bq Er EFAULT
+An invalid address was specified for an argument.
+.It Bq Er EINTR
+A signal interrupted
+.Fn sendfile
+before it could be completed.
+If specified, the number
+of bytes successfully sent will be returned in
+.Fa *len .
+.It Bq Er EINVAL
+The
+.Fa offset
+argument
+is negative.
+.It Bq Er EINVAL
+The
+.Fa len
+argument
+is NULL.
+.It Bq Er EINVAL
+The
+.Fa flags
+argument
+is not set to 0.
+.It Bq Er EIO
+An error occurred while reading from
+.Fa fd .
+.It Bq Er ENOTCONN
+The
+.Fa s
+argument
+points to an unconnected socket.
+.It Bq Er ENOTSOCK
+The
+.Fa s
+argument
+is not a socket.
+.It Bq Er EOPNOTSUPP
+The file system for descriptor
+.Fa fd
+does not support
+.Fn sendfile .
+.It Bq Er EPIPE
+The socket peer has closed the connection.
+.El
+.Sh SEE ALSO
+.Xr open 2 ,
+.Xr send 2 ,
+.Xr socket 2 ,
+.Xr writev 2
+.Sh HISTORY
+The
+.Fn sendfile
+system call
+first appeared in
+Darwin 9.0 (Mac OS X version 10.5) .
+.Sh AUTHORS
+This manual page is based on the FreeBSD version written by
+.An David G. Lawrence Aq dg@dglawrence.com 

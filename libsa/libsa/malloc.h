@@ -2,7 +2,6 @@
 #define _LIBSA_MALLOC_H_
 
 #include <sys/cdefs.h>
-#include "stdlib.h"
 
 __BEGIN_DECLS
 

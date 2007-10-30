@@ -1,24 +1,38 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
+
 #include <libkern/c++/OSContainers.h>
 #include <IOKit/IOCatalogue.h>
 #include <IOKit/IOLib.h>
@@ -60,9 +74,13 @@ kmod_start_or_stop(
 extern kern_return_t kmod_retain(kmod_t id);
 extern kern_return_t kmod_release(kmod_t id);
 
-extern void flush_dcache(vm_offset_t addr, unsigned cnt, int phys);
-extern void invalidate_icache(vm_offset_t addr, unsigned cnt, int phys);
+extern Boolean kmod_load_request(const char * moduleName, Boolean make_request);
 };
+
+extern kmod_args_t
+get_module_data(OSDictionary * kextPlist, mach_msg_type_number_t * datalen);
+
+extern struct mac_module_data *osdict_encode(OSDictionary *dict);
 
 #define DEBUG
 #ifdef DEBUG
@@ -74,6 +92,11 @@ extern void invalidate_icache(vm_offset_t addr, unsigned cnt, int phys);
 #define VTYELLOW
 #define VTRESET
 #endif /* DEBUG */
+
+
+#define KERNEL_PREFIX  "com.apple.kernel"
+#define KPI_PREFIX     "com.apple.kpi"
+
 
 /*********************************************************************
 *
@@ -144,7 +167,7 @@ bool getKext(
         *caller_owns_code = false;
     
         *code = (unsigned char *)kld_file_getaddr(bundleid,
-            (long *)&code_size_local);
+            (unsigned long *)&code_size_local);
         if (*code) {
             if (code_size) {
                 *code_size = code_size_local;
@@ -266,7 +289,7 @@ bool kextIsDependency(const char * kext_name, char * is_kernel) {
     OSData * compressedCode = 0;          // don't release
 
     if (is_kernel) {
-        *is_kernel = false;
+        *is_kernel = 0;
     }
 
    /* Get the dictionary of startup extensions.
@@ -307,7 +330,7 @@ bool kextIsDependency(const char * kext_name, char * is_kernel) {
         extPlist->getObject("OSKernelResource"));
     if (isKernelResourceObj && isKernelResourceObj->isTrue()) {
         if (is_kernel) {
-            *is_kernel = true;
+            *is_kernel = 1;
         }
     }
 
@@ -315,6 +338,8 @@ bool kextIsDependency(const char * kext_name, char * is_kernel) {
     compressedCode = OSDynamicCast(OSData,
         extDict->getObject("compressedCode"));
 
+   /* A kernel component that has code represents a KPI.
+    */
     if ((driverCode || compressedCode) && is_kernel && *is_kernel) {
         *is_kernel = 2;
     }
@@ -339,6 +364,8 @@ addDependenciesForKext(OSDictionary * kextPlist,
 {
     bool result = true;
     bool hasDirectKernelDependency = false;
+    bool hasKernelStyleDependency = false;
+    bool hasKPIStyleDependency = false;
     OSString * kextName = 0;  // don't release
     OSDictionary * libraries = 0;  // don't release
     OSCollectionIterator * keyIterator = 0; // must release
@@ -388,7 +415,7 @@ addDependenciesForKext(OSDictionary * kextPlist,
             if (!kextIsDependency(libraryName->getCStringNoCopy(),
                 &is_kernel_component)) {
 
-                is_kernel_component = false;
+                is_kernel_component = 0;
             }
 
             if (!skipKernelDependencies || !is_kernel_component) {
@@ -398,8 +425,25 @@ addDependenciesForKext(OSDictionary * kextPlist,
             if (!hasDirectKernelDependency && is_kernel_component) {
                 hasDirectKernelDependency = true;
             }
+
+           /* We already know from the kextIsDependency() call whether
+            * the dependency *itself* is kernel- or KPI-style, but since
+            * the declaration semantic is by bundle ID, we check that here
+            * instead.
+            */
+            if (strncmp(libraryName->getCStringNoCopy(),
+                KERNEL_PREFIX, strlen(KERNEL_PREFIX)) == 0) {
+
+                hasKernelStyleDependency = true;
+
+            } else if (strncmp(libraryName->getCStringNoCopy(),
+                KPI_PREFIX, strlen(KPI_PREFIX)) == 0) {
+
+                hasKPIStyleDependency = true;
+            }
         }
     }
+
     if (!hasDirectKernelDependency) {
         const OSSymbol * kernelName = 0;
 
@@ -415,7 +459,12 @@ addDependenciesForKext(OSDictionary * kextPlist,
         dependencyList->setObject(kernelName);
         kernelName->release();
 
-        IOLog("Extension \"%s\" has no kernel dependency.\n",
+        IOLog("Extension \"%s\" has no explicit kernel dependency; using version 6.0.\n",
+            kextName->getCStringNoCopy());
+
+    } else if (hasKernelStyleDependency && hasKPIStyleDependency) {
+        IOLog("Extension \"%s\" has immediate dependencies "
+            "on both com.apple.kernel and com.apple.kpi components; use only one style.\n",
             kextName->getCStringNoCopy());
     }
 
@@ -468,10 +517,15 @@ bool add_dependencies_for_kmod(const char * kmod_name, dgraph_t * dgraph)
     unsigned long code_length = 0;
     bool code_is_kmem = false;
     char * kmod_vers = 0; // from plist, don't free
-    char is_kernel_component = false;
+    char is_kernel_component = 0;
     dgraph_entry_t * dgraph_entry = 0; // don't free
     dgraph_entry_t * dgraph_dependency = 0; // don't free
     bool kext_is_dependency = true;
+
+#if CONFIG_MACF_KEXT
+    kmod_args_t user_data = 0;
+    mach_msg_type_number_t user_data_length;
+#endif
 
    /*****
     * Set up the root kmod.
@@ -495,8 +549,16 @@ bool add_dependencies_for_kmod(const char * kmod_name, dgraph_t * dgraph)
         goto finish;
     }
 
+#if CONFIG_MACF_KEXT
+    // check kext for module data in the plist
+    user_data = get_module_data(kextPlist, &user_data_length);
+#endif
+
     dgraph_entry = dgraph_add_dependent(dgraph, kmod_name,
         code, code_length, code_is_kmem,
+#if CONFIG_MACF_KEXT
+        user_data, user_data_length,
+#endif
         kmod_name, kmod_vers,
         0 /* load_address not yet known */, is_kernel_component);
     if (!dgraph_entry) {
@@ -616,8 +678,16 @@ bool add_dependencies_for_kmod(const char * kmod_name, dgraph_t * dgraph)
                     goto finish;
                 }
 
+#if CONFIG_MACF_KEXT
+                // check kext for module data in the plist
+                // XXX - is this really needed?
+                user_data = get_module_data(kextPlist, &user_data_length);
+#endif
                 dgraph_dependency = dgraph_add_dependency(dgraph, dgraph_entry,
                     library_name, code, code_length, code_is_kmem,
+#if CONFIG_MACF_KEXT
+                    user_data, user_data_length,
+#endif
                     library_name, kmod_vers,
                     0 /* load_address not yet known */, is_kernel_component);
 
@@ -661,6 +731,12 @@ finish:
         kmem_free(kernel_map, (unsigned int)code, code_length);
     }
     if (dependencyList)  dependencyList->release();
+
+#if CONFIG_MACF_KEXT
+    if (user_data && !result) {
+        vm_map_copy_discard((vm_map_copy_t)user_data);
+    }
+#endif
 
     return result;
 }
@@ -742,4 +818,72 @@ finish:
         dgraph_free(&dgraph, 0 /* don't free dgraph itself */);
     }
     return result;
+}
+
+#define COM_APPLE  "com.apple."
+
+__private_extern__ void
+load_security_extensions (void)
+{
+    OSDictionary        * extensionsDict = NULL;  // don't release
+    OSCollectionIterator* keyIterator = NULL;     // must release
+    OSString            * key = NULL;             // don't release
+    OSDictionary        * extDict;                // don't release
+    OSDictionary        * extPlist;               // don't release
+    OSBoolean           * isSec = 0;              // don't release
+    Boolean             ret;
+
+    extensionsDict = getStartupExtensions();
+    if (!extensionsDict) {
+        IOLog("startup extensions dictionary is missing\n");
+        LOG_DELAY(1);
+        return;
+    }
+
+    keyIterator = OSCollectionIterator::withCollection(extensionsDict);
+    if (!keyIterator) {
+        IOLog("Error: Failed to allocate iterator for extensions.\n");
+        LOG_DELAY(1);
+        return;
+    }
+
+    while ((key = OSDynamicCast(OSString, keyIterator->getNextObject()))) {
+
+        const char * bundle_id = key->getCStringNoCopy();
+        
+       /* Skip extensions whose bundle IDs don't start with "com.apple.".
+        */
+        if (!bundle_id || (strncmp(bundle_id, COM_APPLE, strlen(COM_APPLE)) != 0)) {
+            continue;
+        }
+
+        extDict = OSDynamicCast(OSDictionary, extensionsDict->getObject(key));
+        if (!extDict) {
+            IOLog("extension \"%s\" cannot be found\n",
+                  key->getCStringNoCopy());
+            continue;
+        }
+
+        extPlist = OSDynamicCast(OSDictionary, extDict->getObject("plist"));
+        if (!extPlist) {
+            IOLog("extension \"%s\" has no info dictionary\n",
+                  key->getCStringNoCopy());
+            continue;
+        }
+
+        isSec = OSDynamicCast(OSBoolean,
+                             extPlist->getObject("AppleSecurityExtension"));
+        if (isSec && isSec->isTrue()) {
+            printf("Loading security extension %s\n", key->getCStringNoCopy());
+            ret = kmod_load_request(key->getCStringNoCopy(), false);
+            if (!ret) {
+                load_kernel_extension((char *)key->getCStringNoCopy());
+            }
+        }
+    }
+
+    if (keyIterator)
+        keyIterator->release();
+
+    return;
 }

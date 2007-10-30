@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 enum PMLogEnum {
     kPMLogSetParent = 1,		//  1	0x05100004
@@ -25,9 +31,9 @@ enum PMLogEnum {
     kPMLogRemoveChild,			//  3	0x0510000c
     kPMLogControllingDriver,		//  4	0x05100010
     kPMLogControllingDriverErr1,	//  5	0x05100014 - bad power state array version
-    kPMLogControllingDriverErr2,	//  6	0x05100018 - too many power states
-    kPMLogControllingDriverErr3,	//  7	0x0510001c - not a real IOPMDriver
-    kPMLogControllingDriverErr4,	//  8	0x05100020 - power state change in progress
+    kPMLogControllingDriverErr2,	//  6	0x05100018 - power states already registered
+    kPMLogControllingDriverErr3,	//  7	0x0510001c
+    kPMLogControllingDriverErr4,	//  8	0x05100020 - power driver is invalid
     kPMLogInterestedDriver,		//  9	0x05100024
     kPMLogAcknowledgeErr1,		// 10	0x05100028 - unknown entity called acknowledgePowerChange
     kPMLogChildAcknowledge,		// 11	0x0510002c
@@ -56,7 +62,7 @@ enum PMLogEnum {
     kPMLogAmendParentChange,		// 34	0x05100088
     kPMLogStartDeviceChange,		// 35	0x0510008c
     kPMLogRequestDenied,		// 36	0x05100090 - parent denied domain state change request
-    kPMLogControllingDriverErr5,	// 37	0x05100094 - zero power states or we already have a driver with more power states
+    kPMLogControllingDriverErr5,	// 37	0x05100094 - too few power states
     kPMLogProgramHardware,		// 38	0x05100098
     kPMLogInformDriverPreChange,	// 39	0x0510009c
     kPMLogInformDriverPostChange,	// 40	0x051000a0
@@ -69,6 +75,9 @@ enum PMLogEnum {
     kPMLogClientCancel,			// 47	0x051000bc
     kPMLogClientNotify,			// 48	0x051000c0 - client sent a notification
     kPMLogAppNotify,			// 49	0x051000c4 - application sent a notification
+    kPMLogSetClockGating,		// 50	0x051000c8 - platform device specific clock control
+    kPMLogSetPowerGating,		// 51	0x051000cc - platform device specific power control
+    kPMLogSetPinGroup,			// 52	0x051000d0 - platform device specific gpio control
     kIOPMlogLastEvent
 };
 

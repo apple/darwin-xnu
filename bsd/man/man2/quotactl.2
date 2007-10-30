@@ -43,6 +43,7 @@
 .Nm quotactl
 .Nd manipulate filesystem quotas
 .Sh SYNOPSIS
+.Fd #include <sys/types.h>	/* types needed by quota.h */
 .Fd #include <sys/quota.h>	/* for disk quotas */
 .Ft int
 .Fn quotactl "const char *path" "int cmd" "int id" "char *addr"

@@ -1,30 +1,36 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1989, 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
  * sendfile(2) and related extensions:
- * Copyright (c) 1998, David Greenman. All rights reserved. 
+ * Copyright (c) 1998, David Greenman. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -56,14 +62,19 @@
  *
  *	@(#)uipc_syscalls.c	8.4 (Berkeley) 2/21/94
  */
-
-
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/filedesc.h>
 #include <sys/proc_internal.h>
 #include <sys/file_internal.h>
+#include <sys/vnode_internal.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <kern/lock.h>
@@ -72,104 +83,67 @@
 #include <sys/signalvar.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
-#if KTRACE
-#include <sys/ktrace.h>
-#endif
 #include <sys/kernel.h>
 #include <sys/uio_internal.h>
+#include <sys/kauth.h>
 
 #include <bsm/audit_kernel.h>
 
 #include <sys/kdebug.h>
 #include <sys/sysproto.h>
+#include <netinet/in.h>
+#include <net/route.h>
+#include <netinet/in_pcb.h>
 
-#define f_flag f_fglob->fg_flag
-#define f_type f_fglob->fg_type
-#define f_msgcount f_fglob->fg_msgcount
-#define f_cred f_fglob->fg_cred
-#define f_ops f_fglob->fg_ops
-#define f_offset f_fglob->fg_offset
-#define f_data f_fglob->fg_data
-#if KDEBUG
+#if CONFIG_MACF_SOCKET_SUBSET
+#include <security/mac_framework.h>
+#endif /* MAC_SOCKET_SUBSET */
 
-#define DBG_LAYER_IN_BEG	NETDBG_CODE(DBG_NETSOCK, 0)
-#define DBG_LAYER_IN_END	NETDBG_CODE(DBG_NETSOCK, 2)
-#define DBG_LAYER_OUT_BEG	NETDBG_CODE(DBG_NETSOCK, 1)
-#define DBG_LAYER_OUT_END	NETDBG_CODE(DBG_NETSOCK, 3)
-#define DBG_FNC_SENDMSG		NETDBG_CODE(DBG_NETSOCK, (1 << 8) | 1)
-#define DBG_FNC_SENDTO		NETDBG_CODE(DBG_NETSOCK, (2 << 8) | 1)
-#define DBG_FNC_SENDIT		NETDBG_CODE(DBG_NETSOCK, (3 << 8) | 1)
-#define DBG_FNC_RECVFROM	NETDBG_CODE(DBG_NETSOCK, (5 << 8))
-#define DBG_FNC_RECVMSG		NETDBG_CODE(DBG_NETSOCK, (6 << 8))
-#define DBG_FNC_RECVIT		NETDBG_CODE(DBG_NETSOCK, (7 << 8))
-
-#endif
+#define	f_flag f_fglob->fg_flag
+#define	f_type f_fglob->fg_type
+#define	f_msgcount f_fglob->fg_msgcount
+#define	f_cred f_fglob->fg_cred
+#define	f_ops f_fglob->fg_ops
+#define	f_offset f_fglob->fg_offset
+#define	f_data f_fglob->fg_data
 
 
-#define HACK_FOR_4056224 1
+#define	DBG_LAYER_IN_BEG	NETDBG_CODE(DBG_NETSOCK, 0)
+#define	DBG_LAYER_IN_END	NETDBG_CODE(DBG_NETSOCK, 2)
+#define	DBG_LAYER_OUT_BEG	NETDBG_CODE(DBG_NETSOCK, 1)
+#define	DBG_LAYER_OUT_END	NETDBG_CODE(DBG_NETSOCK, 3)
+#define	DBG_FNC_SENDMSG		NETDBG_CODE(DBG_NETSOCK, (1 << 8) | 1)
+#define	DBG_FNC_SENDTO		NETDBG_CODE(DBG_NETSOCK, (2 << 8) | 1)
+#define	DBG_FNC_SENDIT		NETDBG_CODE(DBG_NETSOCK, (3 << 8) | 1)
+#define	DBG_FNC_RECVFROM	NETDBG_CODE(DBG_NETSOCK, (5 << 8))
+#define	DBG_FNC_RECVMSG		NETDBG_CODE(DBG_NETSOCK, (6 << 8))
+#define	DBG_FNC_RECVIT		NETDBG_CODE(DBG_NETSOCK, (7 << 8))
+#define	DBG_FNC_SENDFILE	NETDBG_CODE(DBG_NETSOCK, (10 << 8))
+#define	DBG_FNC_SENDFILE_WAIT	NETDBG_CODE(DBG_NETSOCK, ((10 << 8) | 1))
+#define	DBG_FNC_SENDFILE_READ	NETDBG_CODE(DBG_NETSOCK, ((10 << 8) | 2))
+#define	DBG_FNC_SENDFILE_SEND	NETDBG_CODE(DBG_NETSOCK, ((10 << 8) | 3))
+
+
+#define	HACK_FOR_4056224 1
 #if HACK_FOR_4056224
 static pid_t last_pid_4056224 = 0;
 #endif /* HACK_FOR_4056224 */
 
+/* TODO: should be in header file */
+int falloc_locked(proc_t, struct fileproc **, int *, vfs_context_t, int);
 
+static int sendit(struct proc *, int, struct user_msghdr *, uio_t, int,
+    register_t *);
+static int recvit(struct proc *, int, struct user_msghdr *, uio_t, user_addr_t,
+    register_t *);
+static int getsockaddr(struct socket *, struct sockaddr **, user_addr_t,
+    size_t);
+static int getsockaddr_s(struct socket *, struct sockaddr_storage *,
+    user_addr_t, size_t);
 #if SENDFILE
-static void sf_buf_init(void *arg);
-SYSINIT(sock_sf, SI_SUB_MBUF, SI_ORDER_ANY, sf_buf_init, NULL)
-static struct sf_buf *sf_buf_alloc(void);
-static void sf_buf_ref(caddr_t addr, u_int size);
-static void sf_buf_free(caddr_t addr, u_int size);
-
-static SLIST_HEAD(, sf_buf) sf_freelist;
-static vm_offset_t sf_base;
-static struct sf_buf *sf_bufs;
-static int sf_buf_alloc_want;
-#endif
-
-static int sendit(struct proc *p, int s, struct user_msghdr *mp, uio_t uiop, 
-					int flags, register_t *retval);
-static int recvit(struct proc *p, int s, struct user_msghdr *mp, uio_t uiop,
-					user_addr_t namelenp, register_t *retval);
-  
-static int accept1(struct proc *p, struct accept_args *uap, register_t *retval, int compat);
-static int getsockname1(struct proc *p, struct getsockname_args *uap,
-			     register_t *retval, int compat);
-static int getpeername1(struct proc *p, struct getpeername_args *uap,
-			     register_t *retval, int compat);
-
-
-#if COMPAT_43_SOCKET
-struct orecvmsg_args  {
-	int	s;
-	struct	omsghdr *msg;
-	int	flags;
-};
-struct osendmsg_args {
-	int s;
-	caddr_t msg;
-	int flags;
-};
-struct osend_args {
-	int s;
-	caddr_t buf;
-	int len;
-	int flags;
-};
-struct	orecv_args {
-	int	s;
-	caddr_t	buf;
-	int	len;
-	int	flags;
-};
-
-int oaccept(struct proc *p, struct accept_args *uap, register_t *retval);
-int ogetpeername(struct proc *p, struct getpeername_args *uap, register_t *retval);
-int ogetsockname(struct proc *p, struct getsockname_args *uap, register_t *retval);
-int orecv(struct proc *p, struct orecv_args	*uap, register_t *retval);
-int orecvfrom(struct proc *p, struct recvfrom_args *uap, register_t *retval);
-int orecvmsg(struct proc *p, struct orecvmsg_args *uap, register_t *retval);
-int	osend(struct proc *p, struct osend_args *uap, register_t *retval);
-int osendmsg(struct proc *p, struct osendmsg_args *uap, register_t *retval);
-#endif // COMPAT_43_SOCKET
+static void alloc_sendpkt(int, size_t, unsigned int *, struct mbuf **,
+    boolean_t);
+#endif /* SENDFILE */
 
 /*
  * System call interface to the socket abstraction.
@@ -177,19 +151,35 @@ int osendmsg(struct proc *p, struct osendmsg_args *uap, register_t *retval);
 
 extern	struct fileops socketops;
 
+/*
+ * Returns:	0			Success
+ *		EACCES			Mandatory Access Control failure
+ *	falloc:ENFILE
+ *	falloc:EMFILE
+ *	falloc:ENOMEM
+ *	socreate:EAFNOSUPPORT
+ *	socreate:EPROTOTYPE
+ *	socreate:EPROTONOSUPPORT
+ *	socreate:ENOBUFS
+ *	socreate:ENOMEM
+ *	socreate:EISCONN
+ *	socreate:???			[other protocol families, IPSEC]
+ */
 int
-socket(p, uap, retval)
-	struct proc *p;
-	register struct socket_args *uap;
-	register_t *retval;
+socket(struct proc *p, struct socket_args *uap, register_t *retval)
 {
 	struct socket *so;
 	struct fileproc *fp;
 	int fd, error;
 
 	AUDIT_ARG(socket, uap->domain, uap->type, uap->protocol);
+#if CONFIG_MACF_SOCKET_SUBSET
+	if ((error = mac_socket_check_create(kauth_cred_get(), uap->domain,
+	    uap->type, uap->protocol)) != 0)
+		return (error);
+#endif /* MAC_SOCKET_SUBSET */
 
-	error = falloc(p, &fp, &fd);
+	error = falloc(p, &fp, &fd, vfs_context_current());
 	if (error) {
 		return (error);
 	}
@@ -201,11 +191,22 @@ socket(p, uap, retval)
 	if (error) {
 		fp_free(p, fd, fp);
 	} else {
+		thread_t			thread;
+		struct uthread		*ut;
+		
+		thread = current_thread();
+		ut = get_bsdthread_info(thread);
+			
+		/* if this is a backgrounded thread then throttle all new sockets */
+		if ( (ut->uu_flag & UT_BACKGROUND) != 0 ) {
+			so->so_traffic_mgt_flags |= TRAFFIC_MGT_SO_BACKGROUND;
+			so->so_background_thread = thread;
+		}
 		fp->f_data = (caddr_t)so;
 
 		proc_fdlock(p);
 		procfdtbl_releasefd(p, fd, NULL);
-		
+
 		fp_drop(p, fd, fp, 1);
 		proc_fdunlock(p);
 
@@ -214,77 +215,144 @@ socket(p, uap, retval)
 	return (error);
 }
 
+/*
+ * Returns:	0			Success
+ *		EDESTADDRREQ		Destination address required
+ *		EBADF			Bad file descriptor
+ *		EACCES			Mandatory Access Control failure
+ *	file_socket:ENOTSOCK
+ *	file_socket:EBADF
+ *	getsockaddr:ENAMETOOLONG	Filename too long
+ *	getsockaddr:EINVAL		Invalid argument
+ *	getsockaddr:ENOMEM		Not enough space
+ *	getsockaddr:EFAULT		Bad address
+ *	sobind:???
+ */
 /* ARGSUSED */
 int
-bind(struct proc *p, struct bind_args *uap, __unused register_t *retval)
+bind(__unused proc_t p, struct bind_args *uap, __unused register_t *retval)
 {
-	struct sockaddr *sa;
+	struct sockaddr_storage ss;
+	struct sockaddr *sa = NULL;
 	struct socket *so;
+	boolean_t want_free = TRUE;
 	int error;
 
 	AUDIT_ARG(fd, uap->s);
 	error = file_socket(uap->s, &so);
-	if (error)
+	if (error != 0)
 		return (error);
-	error = getsockaddr(&sa, uap->name, uap->namelen);
-	if (error) 
-		goto out;
-	AUDIT_ARG(sockaddr, p, sa);
-	if (so != NULL)	
-		error = sobind(so, sa);
-	else
+	if (so == NULL) {
 		error = EBADF;
-	FREE(sa, M_SONAME);
+		goto out;
+	}
+	if (uap->name == USER_ADDR_NULL) {
+		error = EDESTADDRREQ;
+		goto out;
+	}
+	if (uap->namelen > sizeof (ss)) {
+		error = getsockaddr(so, &sa, uap->name, uap->namelen);
+	} else {
+		error = getsockaddr_s(so, &ss, uap->name, uap->namelen);
+		if (error == 0) {
+			sa = (struct sockaddr *)&ss;
+			want_free = FALSE;
+		}
+	}
+	if (error != 0)
+		goto out;
+	AUDIT_ARG(sockaddr, vfs_context_cwd(vfs_context_current()), sa);
+#if CONFIG_MACF_SOCKET_SUBSET
+	if ((error = mac_socket_check_bind(kauth_cred_get(), so, sa)) == 0)
+		error = sobind(so, sa);
+#else
+		error = sobind(so, sa);
+#endif /* MAC_SOCKET_SUBSET */
+	if (want_free)
+		FREE(sa, M_SONAME);
 out:
 	file_drop(uap->s);
 	return (error);
 }
 
-
+/*
+ * Returns:	0			Success
+ *		EBADF
+ *		EACCES			Mandatory Access Control failure
+ *	file_socket:ENOTSOCK
+ *	file_socket:EBADF
+ *	solisten:EINVAL
+ *	solisten:EOPNOTSUPP
+ *	solisten:???
+ */
 int
-listen(__unused struct proc *p, register struct listen_args *uap, 
-		__unused register_t *retval)
+listen(__unused struct proc *p, struct listen_args *uap,
+    __unused register_t *retval)
 {
 	int error;
-	struct socket * so;
+	struct socket *so;
 
 	AUDIT_ARG(fd, uap->s);
 	error = file_socket(uap->s, &so);
 	if (error)
 		return (error);
 	if (so != NULL)
+#if CONFIG_MACF_SOCKET_SUBSET
+	{
+		error = mac_socket_check_listen(kauth_cred_get(), so);
+		if (error == 0)
+			error = solisten(so, uap->backlog);
+	}
+#else
 		error =  solisten(so, uap->backlog);
+#endif /* MAC_SOCKET_SUBSET */
 	else
 		error = EBADF;
+
 	file_drop(uap->s);
 	return (error);
 }
 
-#if !COMPAT_43_SOCKET
-#define	accept1	accept
-#endif
-
-
-
+/*
+ * Returns:	fp_getfsock:EBADF	Bad file descriptor
+ *		fp_getfsock:EOPNOTSUPP	...
+ *		xlate => :ENOTSOCK	Socket operation on non-socket
+ *		:EFAULT			Bad address on copyin/copyout
+ *		:EBADF			Bad file descriptor
+ *		:EOPNOTSUPP		Operation not supported on socket
+ *		:EINVAL			Invalid argument
+ *		:EWOULDBLOCK		Operation would block
+ *		:ECONNABORTED		Connection aborted
+ *		:EINTR			Interrupted function
+ *		:EACCES			Mandatory Access Control failure
+ *		falloc_locked:ENFILE	Too many files open in system
+ *		falloc_locked::EMFILE	Too many open files
+ *		falloc_locked::ENOMEM	Not enough space
+ *		0			Success
+ */
 int
-accept1(struct proc *p, struct accept_args *uap, register_t *retval, int compat)
+accept_nocancel(struct proc *p, struct accept_nocancel_args *uap,
+    register_t *retval)
 {
 	struct fileproc *fp;
-	struct sockaddr *sa;
+	struct sockaddr *sa = NULL;
 	socklen_t namelen;
 	int error;
 	struct socket *head, *so = NULL;
 	lck_mtx_t *mutex_held;
 	int fd = uap->s;
-	int newfd;;
+	int newfd;
 	short fflag;		/* type must match fp->f_flag */
 	int dosocklock = 0;
 
+	*retval = -1;
+
 	AUDIT_ARG(fd, uap->s);
+
 	if (uap->name) {
 		error = copyin(uap->anamelen, (caddr_t)&namelen,
-			sizeof(socklen_t));
-		if(error)
+		    sizeof (socklen_t));
+		if (error)
 			return (error);
 	}
 	error = fp_getfsock(p, fd, &fp, &head);
@@ -297,22 +365,29 @@ accept1(struct proc *p, struct accept_args *uap, register_t *retval, int compat)
 		error = EBADF;
 		goto out;
 	}
+#if CONFIG_MACF_SOCKET_SUBSET
+	if ((error = mac_socket_check_accept(kauth_cred_get(), head)) != 0)
+		goto out;
+#endif /* MAC_SOCKET_SUBSET */
 
 	socket_lock(head, 1);
 
 	if (head->so_proto->pr_getlock != NULL)  {
 		mutex_held = (*head->so_proto->pr_getlock)(head, 0);
 		dosocklock = 1;
-	}
-	else {
+	} else {
 		mutex_held = head->so_proto->pr_domain->dom_mtx;
 		dosocklock = 0;
 	}
 
-
 	if ((head->so_options & SO_ACCEPTCONN) == 0) {
+		if ((head->so_proto->pr_flags & PR_CONNREQUIRED) == 0) {
+			error = EOPNOTSUPP;
+		} else {
+			/* POSIX: The socket is not accepting connections */
+			error = EINVAL;
+		}
 		socket_unlock(head, 1);
-		error = EINVAL;
 		goto out;
 	}
 	if ((head->so_state & SS_NBIO) && head->so_comp.tqh_first == NULL) {
@@ -320,17 +395,19 @@ accept1(struct proc *p, struct accept_args *uap, register_t *retval, int compat)
 		error = EWOULDBLOCK;
 		goto out;
 	}
-        while (TAILQ_EMPTY(&head->so_comp) && head->so_error == 0) {
+	while (TAILQ_EMPTY(&head->so_comp) && head->so_error == 0) {
 		if (head->so_state & SS_CANTRCVMORE) {
 			head->so_error = ECONNABORTED;
 			break;
 		}
 		if (head->so_usecount < 1)
-			panic("accept1: head=%x refcount=%d\n", head, head->so_usecount);
-		error = msleep((caddr_t)&head->so_timeo, mutex_held, PSOCK | PCATCH,
-		    "accept", 0);
+			panic("accept: head=%p refcount=%d\n", head,
+			    head->so_usecount);
+		error = msleep((caddr_t)&head->so_timeo, mutex_held,
+		    PSOCK | PCATCH, "accept", 0);
 		if (head->so_usecount < 1)
-			panic("accept1: 2 head=%x refcount=%d\n", head, head->so_usecount);
+			panic("accept: 2 head=%p refcount=%d\n", head,
+			    head->so_usecount);
 		if ((head->so_state & SS_DRAINING)) {
 			error = ECONNABORTED;
 		}
@@ -358,10 +435,39 @@ accept1(struct proc *p, struct accept_args *uap, register_t *retval, int compat)
 	so = TAILQ_FIRST(&head->so_comp);
 	TAILQ_REMOVE(&head->so_comp, so, so_list);
 	head->so_qlen--;
-	socket_unlock(head, 0); /* unlock head to avoid deadlock with select, keep a ref on head */
+	/* unlock head to avoid deadlock with select, keep a ref on head */
+	socket_unlock(head, 0);
+
+#if CONFIG_MACF_SOCKET_SUBSET
+	/*
+	 * Pass the pre-accepted socket to the MAC framework. This is
+	 * cheaper than allocating a file descriptor for the socket,
+	 * calling the protocol accept callback, and possibly freeing
+	 * the file descriptor should the MAC check fails.
+	 */
+	if ((error = mac_socket_check_accepted(kauth_cred_get(), so)) != 0) {
+		so->so_state &= ~(SS_NOFDREF | SS_COMP);
+		so->so_head = NULL;
+		soclose(so);
+		/* Drop reference on listening socket */
+		sodereference(head);
+		goto out;
+	}
+#endif /* MAC_SOCKET_SUBSET */
+
+	/*
+	 * Pass the pre-accepted socket to any interested socket filter(s).
+	 * Upon failure, the socket would have been closed by the callee.
+	 */
+	if (so->so_filt != NULL && (error = soacceptfilter(so)) != 0) {
+		/* Drop reference on listening socket */
+		sodereference(head);
+		/* Propagate socket filter's error code to the caller */
+		goto out;
+	}
+
 	fflag = fp->f_flag;
-	proc_fdlock(p);
-	error = falloc_locked(p, &fp, &newfd, 1);
+	error = falloc(p, &fp, &newfd, vfs_context_current());
 	if (error) {
 		/*
 		 * Probably ran out of file descriptors. Put the
@@ -369,58 +475,74 @@ accept1(struct proc *p, struct accept_args *uap, register_t *retval, int compat)
 		 * do another wakeup so some other process might
 		 * have a chance at it.
 		 */
-		proc_fdunlock(p);
 		socket_lock(head, 0);
 		TAILQ_INSERT_HEAD(&head->so_comp, so, so_list);
 		head->so_qlen++;
 		wakeup_one((caddr_t)&head->so_timeo);
 		socket_unlock(head, 1);
 		goto out;
-	} 
-	procfdtbl_releasefd(p, newfd, NULL);
+	}
 	*retval = newfd;
 	fp->f_type = DTYPE_SOCKET;
 	fp->f_flag = fflag;
 	fp->f_ops = &socketops;
 	fp->f_data = (caddr_t)so;
-	fp_drop(p, newfd, fp, 1);
-	proc_fdunlock(p);
 	socket_lock(head, 0);
 	if (dosocklock)
 		socket_lock(so, 1);
 	so->so_state &= ~SS_COMP;
 	so->so_head = NULL;
-	sa = 0;
 	(void) soacceptlock(so, &sa, 0);
 	socket_unlock(head, 1);
-	if (sa == 0) {
+	if (sa == NULL) {
 		namelen = 0;
 		if (uap->name)
 			goto gotnoname;
 		if (dosocklock)
 			socket_unlock(so, 1);
 		error = 0;
-		goto out;
+		goto releasefd;
 	}
-	AUDIT_ARG(sockaddr, p, sa);
+	AUDIT_ARG(sockaddr, vfs_context_cwd(vfs_context_current()), sa);
+
 	if (uap->name) {
-		/* check sa_len before it is destroyed */
-		if (namelen > sa->sa_len)
-			namelen = sa->sa_len;
-#if COMPAT_43_SOCKET
-		if (compat)
-			((struct osockaddr *)sa)->sa_family =
-			    sa->sa_family;
-#endif
+		socklen_t	sa_len;
+
+		/* save sa_len before it is destroyed */
+		sa_len = sa->sa_len;
+		namelen = MIN(namelen, sa_len);
 		error = copyout(sa, uap->name, namelen);
 		if (!error)
+			/* return the actual, untruncated address length */
+			namelen = sa_len;
 gotnoname:
-			error = copyout((caddr_t)&namelen, uap->anamelen, 
-			    			sizeof(socklen_t));
+		error = copyout((caddr_t)&namelen, uap->anamelen,
+		    sizeof (socklen_t));
 	}
 	FREE(sa, M_SONAME);
+
+	/*
+	 * If the socket has been marked as inactive by soacceptfilter(),
+	 * disallow further operations on it.  We explicitly call shutdown
+	 * on both data directions to ensure that SS_CANT{RCV,SEND}MORE
+	 * states are set for the socket.  This would also flush out data
+	 * hanging off the receive list of this socket.
+	 */
+	if (so->so_flags & SOF_DEFUNCT) {
+		(void) soshutdownlock(so, SHUT_RD);
+		(void) soshutdownlock(so, SHUT_WR);
+		(void) sodisconnectlocked(so);
+	}
+
 	if (dosocklock)
 		socket_unlock(so, 1);
+
+releasefd:
+	proc_fdlock(p);
+	procfdtbl_releasefd(p, newfd, NULL);
+	fp_drop(p, newfd, fp, 1);
+	proc_fdunlock(p);
+
 out:
 	file_drop(fd);
 	return (error);
@@ -429,67 +551,107 @@ out:
 int
 accept(struct proc *p, struct accept_args *uap, register_t *retval)
 {
-
-	return (accept1(p, uap, retval, 0));
+	__pthread_testcancel(1);
+	return(accept_nocancel(p, (struct accept_nocancel_args *)uap, retval));
 }
 
-#if COMPAT_43_SOCKET
-int
-oaccept(struct proc *p, struct accept_args *uap, register_t *retval)
-{
-
-	return (accept1(p, uap, retval, 1));
-}
-#endif /* COMPAT_43_SOCKET */
-
+/*
+ * Returns:	0			Success
+ *		EBADF			Bad file descriptor
+ *		EALREADY		Connection already in progress
+ *		EINPROGRESS		Operation in progress
+ *		ECONNABORTED		Connection aborted
+ *		EINTR			Interrupted function
+ *		EACCES			Mandatory Access Control failure
+ *	file_socket:ENOTSOCK
+ *	file_socket:EBADF
+ *	getsockaddr:ENAMETOOLONG	Filename too long
+ *	getsockaddr:EINVAL		Invalid argument
+ *	getsockaddr:ENOMEM		Not enough space
+ *	getsockaddr:EFAULT		Bad address
+ *	soconnectlock:EOPNOTSUPP
+ *	soconnectlock:EISCONN
+ *	soconnectlock:???		[depends on protocol, filters]
+ *	msleep:EINTR
+ *
+ * Imputed:	so_error		error may be set from so_error, which
+ *					may have been set by soconnectlock.
+ */
 /* ARGSUSED */
 int
-connect(struct proc *p, struct connect_args *uap, __unused register_t *retval)
+connect(struct proc *p, struct connect_args *uap, register_t *retval)
+{
+	__pthread_testcancel(1);
+	return(connect_nocancel(p, (struct connect_nocancel_args *)uap, retval));
+}
+
+int
+connect_nocancel(__unused proc_t p, struct connect_nocancel_args *uap, __unused register_t *retval)
 {
 	struct socket *so;
-	struct sockaddr *sa;
+	struct sockaddr_storage ss;
+	struct sockaddr *sa = NULL;
 	lck_mtx_t *mutex_held;
+	boolean_t want_free = TRUE;
 	int error;
 	int fd = uap->s;
 
 	AUDIT_ARG(fd, uap->s);
-	error = file_socket( fd, &so);
-	if (error)
+	error = file_socket(fd, &so);
+	if (error != 0)
 		return (error);
 	if (so == NULL) {
 		error = EBADF;
 		goto out;
 	}
 
+	/* Get socket address now before we obtain socket lock */
+	if (uap->namelen > sizeof (ss)) {
+		error = getsockaddr(so, &sa, uap->name, uap->namelen);
+	} else {
+		error = getsockaddr_s(so, &ss, uap->name, uap->namelen);
+		if (error == 0) {
+			sa = (struct sockaddr *)&ss;
+			want_free = FALSE;
+		}
+	}
+	if (error != 0)
+		goto out;
+
+	AUDIT_ARG(sockaddr, vfs_context_cwd(vfs_context_current()), sa);
+#if CONFIG_MACF_SOCKET_SUBSET
+	if ((error = mac_socket_check_connect(kauth_cred_get(), so, sa)) != 0) {
+		if (want_free)
+			FREE(sa, M_SONAME);
+		goto out;
+	}
+#endif /* MAC_SOCKET_SUBSET */
 	socket_lock(so, 1);
 
 	if ((so->so_state & SS_NBIO) && (so->so_state & SS_ISCONNECTING)) {
+		if (want_free)
+			FREE(sa, M_SONAME);
 		socket_unlock(so, 1);
 		error = EALREADY;
 		goto out;
 	}
-	error = getsockaddr(&sa, uap->name, uap->namelen);
-	if (error)  {
-		socket_unlock(so, 1);
-		goto out;
-	}
-	AUDIT_ARG(sockaddr, p, sa);
 	error = soconnectlock(so, sa, 0);
 	if (error)
 		goto bad;
 	if ((so->so_state & SS_NBIO) && (so->so_state & SS_ISCONNECTING)) {
-		FREE(sa, M_SONAME);
+		if (want_free)
+			FREE(sa, M_SONAME);
 		socket_unlock(so, 1);
 		error = EINPROGRESS;
 		goto out;
 	}
 	while ((so->so_state & SS_ISCONNECTING) && so->so_error == 0) {
-		if (so->so_proto->pr_getlock != NULL) 
+		if (so->so_proto->pr_getlock != NULL)
 			mutex_held = (*so->so_proto->pr_getlock)(so, 0);
-		else 
+		else
 			mutex_held = so->so_proto->pr_domain->dom_mtx;
-		error = msleep((caddr_t)&so->so_timeo, mutex_held, PSOCK | PCATCH,
-		    "connec", 0);
+		error = msleep((caddr_t)&so->so_timeo, mutex_held,
+		    PSOCK | PCATCH, "connect", 0);
 		if ((so->so_state & SS_DRAINING)) {
 			error = ECONNABORTED;
 		}
@@ -503,7 +665,8 @@ connect(struct proc *p, struct connect_args *uap, __unused register_t *retval)
 bad:
 	so->so_state &= ~SS_ISCONNECTING;
 	socket_unlock(so, 1);
-	FREE(sa, M_SONAME);
+	if (want_free)
+		FREE(sa, M_SONAME);
 	if (error == ERESTART)
 		error = EINTR;
 out:
@@ -511,8 +674,26 @@ out:
 	return (error);
 }
 
+/*
+ * Returns:	0			Success
+ *	socreate:EAFNOSUPPORT
+ *	socreate:EPROTOTYPE
+ *	socreate:EPROTONOSUPPORT
+ *	socreate:ENOBUFS
+ *	socreate:ENOMEM
+ *	socreate:EISCONN
+ *	socreate:???			[other protocol families, IPSEC]
+ *	falloc:ENFILE
+ *	falloc:EMFILE
+ *	falloc:ENOMEM
+ *	copyout:EFAULT
+ *	soconnect2:EINVAL
+ *	soconnect2:EPROTOTYPE
+ *	soconnect2:???			[other protocol families[
+ */
 int
-socketpair(struct proc *p, struct socketpair_args *uap, __unused register_t *retval)
+socketpair(struct proc *p, struct socketpair_args *uap,
+    __unused register_t *retval)
 {
 	struct fileproc *fp1, *fp2;
 	struct socket *so1, *so2;
@@ -526,7 +707,7 @@ socketpair(struct proc *p, struct socketpair_args *uap, __unused register_t *ret
 	if (error)
 		goto free1;
 
-	error = falloc(p, &fp1, &fd);
+	error = falloc(p, &fp1, &fd, vfs_context_current());
 	if (error) {
 		goto free2;
 	}
@@ -536,7 +717,7 @@ socketpair(struct proc *p, struct socketpair_args *uap, __unused register_t *ret
 	fp1->f_data = (caddr_t)so1;
 	sv[0] = fd;
 
-	error = falloc(p, &fp2, &fd);
+	error = falloc(p, &fp2, &fd, vfs_context_current());
 	if (error) {
 		goto free3;
 	}
@@ -554,10 +735,10 @@ socketpair(struct proc *p, struct socketpair_args *uap, __unused register_t *ret
 		/*
 		 * Datagram socket connection is asymmetric.
 		 */
-		 error = soconnect2(so2, so1);
-		 if (error) {
-			 goto free4;
-		 }
+		error = soconnect2(so2, so1);
+		if (error) {
+			goto free4;
+		}
 	}
 
 	proc_fdlock(p);
@@ -567,142 +748,168 @@ socketpair(struct proc *p, struct socketpair_args *uap, __unused register_t *ret
 	fp_drop(p, sv[1], fp2, 1);
 	proc_fdunlock(p);
 
-	error = copyout((caddr_t)sv, uap->rsv, 2 * sizeof(int));
-#if 0   /* old pipe(2) syscall compatability, unused these days */
-	retval[0] = sv[0];		/* XXX ??? */
-	retval[1] = sv[1];		/* XXX ??? */
-#endif /* 0 */
+	error = copyout((caddr_t)sv, uap->rsv, 2 * sizeof (int));
 	return (error);
 free4:
 	fp_free(p, sv[1], fp2);
 free3:
 	fp_free(p, sv[0], fp1);
 free2:
-	(void)soclose(so2);
+	(void) soclose(so2);
 free1:
-	(void)soclose(so1);
+	(void) soclose(so1);
 	return (error);
 }
 
+/*
+ * Returns:	0			Success
+ *		EINVAL
+ *		ENOBUFS
+ *		EBADF
+ *		EPIPE
+ *		EACCES			Mandatory Access Control failure
+ *	file_socket:ENOTSOCK
+ *	file_socket:EBADF
+ *	getsockaddr:ENAMETOOLONG	Filename too long
+ *	getsockaddr:EINVAL		Invalid argument
+ *	getsockaddr:ENOMEM		Not enough space
+ *	getsockaddr:EFAULT		Bad address
+ *	<pru_sosend>:EACCES[TCP]
+ *	<pru_sosend>:EADDRINUSE[TCP]
+ *	<pru_sosend>:EADDRNOTAVAIL[TCP]
+ *	<pru_sosend>:EAFNOSUPPORT[TCP]
+ *	<pru_sosend>:EAGAIN[TCP]
+ *	<pru_sosend>:EBADF
+ *	<pru_sosend>:ECONNRESET[TCP]
+ *	<pru_sosend>:EFAULT
+ *	<pru_sosend>:EHOSTUNREACH[TCP]
+ *	<pru_sosend>:EINTR
+ *	<pru_sosend>:EINVAL
+ *	<pru_sosend>:EISCONN[AF_INET]
+ *	<pru_sosend>:EMSGSIZE[TCP]
+ *	<pru_sosend>:ENETDOWN[TCP]
+ *	<pru_sosend>:ENETUNREACH[TCP]
+ *	<pru_sosend>:ENOBUFS
+ *	<pru_sosend>:ENOMEM[TCP]
+ *	<pru_sosend>:ENOTCONN[AF_INET]
+ *	<pru_sosend>:EOPNOTSUPP
+ *	<pru_sosend>:EPERM[TCP]
+ *	<pru_sosend>:EPIPE
+ *	<pru_sosend>:EWOULDBLOCK
+ *	<pru_sosend>:???[TCP]		[ignorable: mostly IPSEC/firewall/DLIL]
+ *	<pru_sosend>:???[AF_INET]	[whatever a filter author chooses]
+ *	<pru_sosend>:???		[value from so_error]
+ *	sockargs:???
+ */
 static int
-sendit(struct proc *p, int s, struct user_msghdr *mp, uio_t uiop, 
-		int flags, register_t *retval)
+sendit(struct proc *p, int s, struct user_msghdr *mp, uio_t uiop,
+    int flags, register_t *retval)
 {
-	struct mbuf *control;
-	struct sockaddr *to;
+	struct mbuf *control = NULL;
+	struct sockaddr_storage ss;
+	struct sockaddr *to = NULL;
+	boolean_t want_free = TRUE;
 	int error;
 	struct socket *so;
 	user_ssize_t len;
-#if KTRACE
-	uio_t ktruio = NULL;
-#endif
-	
-	KERNEL_DEBUG(DBG_FNC_SENDIT | DBG_FUNC_START, 0,0,0,0,0);
+
+	KERNEL_DEBUG(DBG_FNC_SENDIT | DBG_FUNC_START, 0, 0, 0, 0, 0);
 
 	error = file_socket(s, &so);
-	if (error )
-	{
-	    KERNEL_DEBUG(DBG_FNC_SENDIT | DBG_FUNC_END, error,0,0,0,0);
-	    return (error);
+	if (error) {
+		KERNEL_DEBUG(DBG_FNC_SENDIT | DBG_FUNC_END, error, 0, 0, 0, 0);
+		return (error);
 	}
-	
-	if (mp->msg_name) {
-		error = getsockaddr(&to, mp->msg_name, mp->msg_namelen);
-		if (error) {
-		    KERNEL_DEBUG(DBG_FNC_SENDIT | DBG_FUNC_END, error,0,0,0,0);
-			goto out;
+	if (so == NULL) {
+		error = EBADF;
+		goto out;
+	}
+	if (mp->msg_name != USER_ADDR_NULL) {
+		if (mp->msg_namelen > sizeof (ss)) {
+			error = getsockaddr(so, &to, mp->msg_name,
+			    mp->msg_namelen);
+		} else {
+			error = getsockaddr_s(so, &ss, mp->msg_name,
+			    mp->msg_namelen);
+			if (error == 0) {
+				to = (struct sockaddr *)&ss;
+				want_free = FALSE;
+			}
 		}
-		AUDIT_ARG(sockaddr, p, to);
-	} else {
-		to = 0;
+		if (error != 0)
+			goto out;
+		AUDIT_ARG(sockaddr, vfs_context_cwd(vfs_context_current()), to);
 	}
-	if (mp->msg_control) {
-		if (mp->msg_controllen < ((socklen_t)sizeof(struct cmsghdr))
-#if COMPAT_43_SOCKET
-		    && !(mp->msg_flags & MSG_COMPAT)
-#endif
-		) {
+	if (mp->msg_control != USER_ADDR_NULL) {
+		if (mp->msg_controllen < sizeof (struct cmsghdr)) {
 			error = EINVAL;
 			goto bad;
 		}
 		error = sockargs(&control, mp->msg_control,
 		    mp->msg_controllen, MT_CONTROL);
-		if (error)
+		if (error != 0)
 			goto bad;
-#if COMPAT_43_SOCKET
-		if (mp->msg_flags & MSG_COMPAT) {
-			register struct cmsghdr *cm;
-
-			M_PREPEND(control, sizeof(*cm), M_WAIT);
-			if (control == 0) {
-				error = ENOBUFS;
-				goto bad;
-			} else {
-				cm = mtod(control, struct cmsghdr *);
-				cm->cmsg_len = control->m_len;
-				cm->cmsg_level = SOL_SOCKET;
-				cm->cmsg_type = SCM_RIGHTS;
-			}
-		}
-#endif
-	} else {
-		control = 0;
 	}
 
-#if KTRACE    
-	if (KTRPOINT(p, KTR_GENIO)) {
-		ktruio = uio_duplicate(uiop);
-	}
-#endif
+#if CONFIG_MACF_SOCKET_SUBSET
+	/*
+	 * We check the state without holding the socket lock;
+	 * if a race condition occurs, it would simply result
+	 * in an extra call to the MAC check function.
+	 */
+	if (!(so->so_state & SS_ISCONNECTED) &&
+	    (error = mac_socket_check_send(kauth_cred_get(), so, to)) != 0)
+		goto bad;
+#endif /* MAC_SOCKET_SUBSET */
 
 	len = uio_resid(uiop);
-	if (so == NULL)
-		error = EBADF;
-	else
-		error = so->so_proto->pr_usrreqs->pru_sosend(so, to, uiop, 0, control,
-							     flags);
-	if (error) {
+	error = so->so_proto->pr_usrreqs->pru_sosend(so, to, uiop, 0, control,
+	    flags);
+	if (error != 0) {
 		if (uio_resid(uiop) != len && (error == ERESTART ||
 		    error == EINTR || error == EWOULDBLOCK))
 			error = 0;
-                /* Generation of SIGPIPE can be controlled per socket */
+		/* Generation of SIGPIPE can be controlled per socket */
 		if (error == EPIPE && !(so->so_flags & SOF_NOSIGPIPE))
 			psignal(p, SIGPIPE);
 	}
 	if (error == 0)
 		*retval = (int)(len - uio_resid(uiop));
 bad:
-#if KTRACE
-	if (ktruio != NULL) {
-		if (error == 0) {
-			uio_setresid(ktruio, retval[0]);
-			ktrgenio(p->p_tracep, s, UIO_WRITE, ktruio, error);
-		}
-		uio_free(ktruio);
-	}
-#endif
-	if (to)
+	if (to != NULL && want_free)
 		FREE(to, M_SONAME);
-	KERNEL_DEBUG(DBG_FNC_SENDIT | DBG_FUNC_END, error,0,0,0,0);
 out:
+	KERNEL_DEBUG(DBG_FNC_SENDIT | DBG_FUNC_END, error, 0, 0, 0, 0);
 	file_drop(s);
 	return (error);
 }
 
-
+/*
+ * Returns:	0			Success
+ *		ENOMEM
+ *	sendit:???			[see sendit definition in this file]
+ *	write:???			[4056224: applicable for pipes]
+ */
 int
 sendto(struct proc *p, struct sendto_args *uap, register_t *retval)
+{
+	__pthread_testcancel(1);
+	return(sendto_nocancel(p, (struct sendto_nocancel_args *)uap, retval));
+}
+
+int
+sendto_nocancel(struct proc *p, struct sendto_nocancel_args *uap, register_t *retval)
 {
 	struct user_msghdr msg;
 	int error;
 	uio_t auio = NULL;
 
-	KERNEL_DEBUG(DBG_FNC_SENDTO | DBG_FUNC_START, 0,0,0,0,0);
+	KERNEL_DEBUG(DBG_FNC_SENDTO | DBG_FUNC_START, 0, 0, 0, 0, 0);
 	AUDIT_ARG(fd, uap->s);
 
 	auio = uio_create(1, 0,
-				  (IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32),
-				  UIO_WRITE);
+	    (IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32),
+	    UIO_WRITE);
 	if (auio == NULL) {
 		return (ENOMEM);
 	}
@@ -717,39 +924,40 @@ sendto(struct proc *p, struct sendto_args *uap, register_t *retval)
 	msg.msg_flags = 0;
 
 	error = sendit(p, uap->s, &msg, auio, uap->flags, retval);
-	
+
 	if (auio != NULL) {
 		uio_free(auio);
 	}
-	
+
 #if HACK_FOR_4056224
-	/* 
-	 * Radar 4056224 
-	 * Temporary workaround to let send() and recv() work over a pipe for binary compatibility
+	/*
+	 * Radar 4056224
+	 * Temporary workaround to let send() and recv() work over
+	 * a pipe for binary compatibility
 	 * This will be removed in the release following Tiger
 	 */
 	if (error == ENOTSOCK) {
 		struct fileproc *fp;
-		
-        if (fp_lookup(p, uap->s, &fp, 0) == 0) {
-			(void) fp_drop(p, uap->s, fp,0);
-			
+
+		if (fp_lookup(p, uap->s, &fp, 0) == 0) {
+			(void) fp_drop(p, uap->s, fp, 0);
+
 			if (fp->f_type == DTYPE_PIPE) {
 				struct write_args write_uap;
 				user_ssize_t write_retval;
-				
+
 				if (p->p_pid > last_pid_4056224) {
 					last_pid_4056224 = p->p_pid;
 
-					printf("%s[%d] uses send/recv on a pipe\n", 
-						p->p_comm, p->p_pid);
+					printf("%s[%d] uses send/recv "
+					    "on a pipe\n", p->p_comm, p->p_pid);
 				}
-				
-				bzero(&write_uap, sizeof(struct write_args));
+
+				bzero(&write_uap, sizeof (struct write_args));
 				write_uap.fd = uap->s;
 				write_uap.cbuf = uap->buf;
 				write_uap.nbyte = uap->len;
-	
+
 				error = write(p, &write_uap, &write_retval);
 				*retval = (int)write_retval;
 			}
@@ -757,40 +965,26 @@ sendto(struct proc *p, struct sendto_args *uap, register_t *retval)
 	}
 #endif /* HACK_FOR_4056224 */
 
-	KERNEL_DEBUG(DBG_FNC_SENDTO | DBG_FUNC_END, error, *retval,0,0,0);
-	
-	return(error);
+	KERNEL_DEBUG(DBG_FNC_SENDTO | DBG_FUNC_END, error, *retval, 0, 0, 0);
+
+	return (error);
 }
 
-#if COMPAT_43_SOCKET
+/*
+ * Returns:	0			Success
+ *		ENOBUFS
+ *	copyin:EFAULT
+ *	sendit:???			[see sendit definition in this file]
+ */
 int
-osend(__unused struct proc *p, 
-	  __unused struct osend_args *uap, 
-	  __unused register_t *retval)
+sendmsg(struct proc *p, struct sendmsg_args *uap, register_t *retval)
 {
-	/* these are no longer supported and in fact 
-	 * there is no way to call it directly.
-	 * LP64todo - remove this once we're sure there are no clients 
-	 */
-	return (ENOTSUP);
+	__pthread_testcancel(1);
+	return(sendmsg_nocancel(p, (struct sendmsg_nocancel_args *)uap, retval));
 }
 
 int
-osendmsg(__unused struct proc *p, 
-	  	 __unused struct osendmsg_args *uap, 
-		 __unused register_t *retval)
-{
-	/* these are no longer supported and in fact 
-	 * there is no way to call it directly.
-	 * LP64todo - remove this once we're sure there are no clients 
-	 */
-	return (ENOTSUP);
-}
-#endif
-
-
-int
-sendmsg(struct proc *p, register struct sendmsg_args *uap, register_t *retval)
+sendmsg_nocancel(struct proc *p, struct sendmsg_nocancel_args *uap, register_t *retval)
 {
 	struct msghdr msg;
 	struct user_msghdr user_msg;
@@ -801,23 +995,21 @@ sendmsg(struct proc *p, register struct sendmsg_args *uap, register_t *retval)
 	uio_t auio = NULL;
 	struct user_iovec *iovp;
 
-	KERNEL_DEBUG(DBG_FNC_SENDMSG | DBG_FUNC_START, 0,0,0,0,0);
+	KERNEL_DEBUG(DBG_FNC_SENDMSG | DBG_FUNC_START, 0, 0, 0, 0, 0);
 	AUDIT_ARG(fd, uap->s);
 	if (IS_64BIT_PROCESS(p)) {
-		msghdrp = (caddr_t) &user_msg;
-		size_of_msghdr = sizeof(user_msg);
-		size_of_iovec = sizeof(struct user_iovec);
-	}
-	else {
-		msghdrp = (caddr_t) &msg;
-		size_of_msghdr = sizeof(msg);
-		size_of_iovec = sizeof(struct iovec);
+		msghdrp = (caddr_t)&user_msg;
+		size_of_msghdr = sizeof (user_msg);
+		size_of_iovec = sizeof (struct user_iovec);
+	} else {
+		msghdrp = (caddr_t)&msg;
+		size_of_msghdr = sizeof (msg);
+		size_of_iovec = sizeof (struct iovec);
 	}
 	error = copyin(uap->msg, msghdrp, size_of_msghdr);
-	if (error)
-	{
-	    KERNEL_DEBUG(DBG_FNC_SENDMSG | DBG_FUNC_END, error,0,0,0,0);
-	    return (error);
+	if (error) {
+		KERNEL_DEBUG(DBG_FNC_SENDMSG | DBG_FUNC_END, error, 0, 0, 0, 0);
+		return (error);
 	}
 
 	/* only need to copy if user process is not 64-bit */
@@ -832,61 +1024,80 @@ sendmsg(struct proc *p, register struct sendmsg_args *uap, register_t *retval)
 	}
 
 	if (user_msg.msg_iovlen <= 0 || user_msg.msg_iovlen > UIO_MAXIOV) {
-		KERNEL_DEBUG(DBG_FNC_SENDMSG | DBG_FUNC_END, EMSGSIZE,0,0,0,0);
+		KERNEL_DEBUG(DBG_FNC_SENDMSG | DBG_FUNC_END, EMSGSIZE,
+		    0, 0, 0, 0);
 		return (EMSGSIZE);
 	}
 
 	/* allocate a uio large enough to hold the number of iovecs passed */
 	auio = uio_create(user_msg.msg_iovlen, 0,
-				  (IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32),
-				  UIO_WRITE);
+	    (IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32),
+	    UIO_WRITE);
 	if (auio == NULL) {
 		error = ENOBUFS;
 		goto done;
 	}
-		
+
 	if (user_msg.msg_iovlen) {
-		/* get location of iovecs within the uio.  then copyin the iovecs from
-		 * user space.
+		/*
+		 * get location of iovecs within the uio.
+		 * then copyin the iovecs from user space.
 		 */
 		iovp = uio_iovsaddr(auio);
 		if (iovp == NULL) {
 			error = ENOBUFS;
 			goto done;
 		}
-		error = copyin(user_msg.msg_iov, (caddr_t)iovp, (user_msg.msg_iovlen * size_of_iovec));
+		error = copyin(user_msg.msg_iov, (caddr_t)iovp,
+		    (user_msg.msg_iovlen * size_of_iovec));
 		if (error)
 			goto done;
 		user_msg.msg_iov = CAST_USER_ADDR_T(iovp);
-	
-		/* finish setup of uio_t */ 
+
+		/* finish setup of uio_t */
 		uio_calculateresid(auio);
-	}
-	else {
+	} else {
 		user_msg.msg_iov = 0;
 	}
-	
-#if COMPAT_43_SOCKET
+
+	/* msg_flags is ignored for send */
 	user_msg.msg_flags = 0;
-#endif
+
 	error = sendit(p, uap->s, &user_msg, auio, uap->flags, retval);
 done:
 	if (auio != NULL) {
 		uio_free(auio);
 	}
-	KERNEL_DEBUG(DBG_FNC_SENDMSG | DBG_FUNC_END, error,0,0,0,0);
+	KERNEL_DEBUG(DBG_FNC_SENDMSG | DBG_FUNC_END, error, 0, 0, 0, 0);
 
 	return (error);
 }
 
+/*
+ * Returns:	0			Success
+ *		ENOTSOCK
+ *		EINVAL
+ *		EBADF
+ *		EACCES			Mandatory Access Control failure
+ *	copyout:EFAULT
+ *	fp_lookup:EBADF
+ *	<pru_soreceive>:ENOBUFS
+ *	<pru_soreceive>:ENOTCONN
+ *	<pru_soreceive>:EWOULDBLOCK
+ *	<pru_soreceive>:EFAULT
+ *	<pru_soreceive>:EINTR
+ *	<pru_soreceive>:EBADF
+ *	<pru_soreceive>:EINVAL
+ *	<pru_soreceive>:EMSGSIZE
+ *	<pru_soreceive>:???
+ *
+ * Notes:	Additional return values from calls through <pru_soreceive>
+ *		depend on protocols other than TCP or AF_UNIX, which are
+ *		documented above.
+ */
 static int
-recvit(p, s, mp, uiop, namelenp, retval)
-	register struct proc *p;
-	int s;
-	register struct user_msghdr *mp;
-	uio_t uiop;
-	user_addr_t namelenp;
-	register_t *retval;
+recvit(struct proc *p, int s, struct user_msghdr *mp, uio_t uiop,
+    user_addr_t namelenp, register_t *retval)
 {
 	int len, error;
 	struct mbuf *m, *control = 0;
@@ -894,114 +1105,85 @@ recvit(p, s, mp, uiop, namelenp, retval)
 	struct socket *so;
 	struct sockaddr *fromsa = 0;
 	struct fileproc *fp;
-#if KTRACE
-	uio_t ktruio = NULL;
-#endif
 
-	KERNEL_DEBUG(DBG_FNC_RECVIT | DBG_FUNC_START, 0,0,0,0,0);
+	KERNEL_DEBUG(DBG_FNC_RECVIT | DBG_FUNC_START, 0, 0, 0, 0, 0);
 	proc_fdlock(p);
-	if ( (error = fp_lookup(p, s, &fp, 1)) ) {
-	    KERNEL_DEBUG(DBG_FNC_RECVIT | DBG_FUNC_END, error,0,0,0,0);
+	if ((error = fp_lookup(p, s, &fp, 1))) {
+		KERNEL_DEBUG(DBG_FNC_RECVIT | DBG_FUNC_END, error, 0, 0, 0, 0);
 		proc_fdunlock(p);
-	    return (error);
+		return (error);
 	}
 	if (fp->f_type != DTYPE_SOCKET) {
-		fp_drop(p, s, fp,1);
+		fp_drop(p, s, fp, 1);
 		proc_fdunlock(p);
-		return(ENOTSOCK);
+		return (ENOTSOCK);
 	}
 
-	so = (struct socket *)fp->f_data;	
+	so = (struct socket *)fp->f_data;
+	if (so == NULL) {
+		fp_drop(p, s, fp, 1);
+		proc_fdunlock(p);
+		return (EBADF);
+	}
 
 	proc_fdunlock(p);
+
+#if CONFIG_MACF_SOCKET_SUBSET
+	/*
+	 * We check the state without holding the socket lock;
+	 * if a race condition occurs, it would simply result
+	 * in an extra call to the MAC check function.
+	 */
+	if (!(so->so_state & SS_ISCONNECTED) &&
+	    (error = mac_socket_check_receive(kauth_cred_get(), so)) != 0)
+		goto out1;
+#endif /* MAC_SOCKET_SUBSET */
 	if (uio_resid(uiop) < 0) {
-		KERNEL_DEBUG(DBG_FNC_RECVIT | DBG_FUNC_END, EINVAL,0,0,0,0);
+		KERNEL_DEBUG(DBG_FNC_RECVIT | DBG_FUNC_END, EINVAL, 0, 0, 0, 0);
 		error = EINVAL;
 		goto out1;
 	}
-#if KTRACE
-	if (KTRPOINT(p, KTR_GENIO)) {
-		ktruio = uio_duplicate(uiop);
-	}
-#endif
 
 	len = uio_resid(uiop);
-	if (so == NULL)
-		error = EBADF;
-	else {
-		error = so->so_proto->pr_usrreqs->pru_soreceive(so, &fromsa, uiop,
-			(struct mbuf **)0, mp->msg_control ? &control : (struct mbuf **)0,
-			&mp->msg_flags);
-	}
-	AUDIT_ARG(sockaddr, p, fromsa);
+	error = so->so_proto->pr_usrreqs->pru_soreceive(so, &fromsa, uiop,
+	    (struct mbuf **)0, mp->msg_control ? &control : (struct mbuf **)0,
+	    &mp->msg_flags);
+	AUDIT_ARG(sockaddr, vfs_context_cwd(vfs_context_current()), fromsa);
 	if (error) {
 		if (uio_resid(uiop) != len && (error == ERESTART ||
 		    error == EINTR || error == EWOULDBLOCK))
 			error = 0;
 	}
-#if KTRACE
-	if (ktruio != NULL) {
-		if (error == 0) {
-			uio_setresid(ktruio, len - uio_resid(uiop));
-			ktrgenio(p->p_tracep, s, UIO_WRITE, ktruio, error);
-		}
-		uio_free(ktruio);
-	}
-#endif
+
 	if (error)
 		goto out;
+
 	*retval = len - uio_resid(uiop);
 	if (mp->msg_name) {
+		socklen_t sa_len = 0;
+
 		len = mp->msg_namelen;
-		if (len <= 0 || fromsa == 0)
+		if (len <= 0 || fromsa == 0) {
 			len = 0;
-		else {
+		} else {
 #ifndef MIN
-#define MIN(a,b) ((a)>(b)?(b):(a))
+#define	MIN(a, b) ((a) > (b) ? (b) : (a))
 #endif
-			/* save sa_len before it is destroyed by MSG_COMPAT */
-			len = MIN(len, fromsa->sa_len);
-#if COMPAT_43_SOCKET
-			if (mp->msg_flags & MSG_COMPAT)
-				((struct osockaddr *)fromsa)->sa_family =
-				    fromsa->sa_family;
-#endif
+			sa_len = fromsa->sa_len;
+			len = MIN((unsigned int)len, sa_len);
 			error = copyout(fromsa, mp->msg_name, (unsigned)len);
 			if (error)
 				goto out;
 		}
-		mp->msg_namelen = len;
+		mp->msg_namelen = sa_len;
+		/* return the actual, untruncated address length */
 		if (namelenp &&
-		    (error = copyout((caddr_t)&len, namelenp, sizeof (int)))) {
-#if COMPAT_43_SOCKET
-			if (mp->msg_flags & MSG_COMPAT)
-				error = 0;	/* old recvfrom didn't check */
-			else
-#endif
+		    (error = copyout((caddr_t)&sa_len, namelenp,
+		    sizeof (int)))) {
 			goto out;
 		}
 	}
 	if (mp->msg_control) {
-#if COMPAT_43_SOCKET
-		/*
-		 * We assume that old recvmsg calls won't receive access
-		 * rights and other control info, esp. as control info
-		 * is always optional and those options didn't exist in 4.3.
-		 * If we receive rights, trim the cmsghdr; anything else
-		 * is tossed.
-		 */
-		if (control && mp->msg_flags & MSG_COMPAT) {
-			if (mtod(control, struct cmsghdr *)->cmsg_level !=
-			    SOL_SOCKET ||
-			    mtod(control, struct cmsghdr *)->cmsg_type !=
-			    SCM_RIGHTS) {
-				mp->msg_controllen = 0;
-				goto out;
-			}
-			control->m_len -= sizeof (struct cmsghdr);
-			control->m_data += sizeof (struct cmsghdr);
-		}
-#endif
 		len = mp->msg_controllen;
 		m = control;
 		mp->msg_controllen = 0;
@@ -1010,14 +1192,15 @@ recvit(p, s, mp, uiop, namelenp, retval)
 		while (m && len > 0) {
 			unsigned int tocopy;
 
-			if (len >= m->m_len) 
+			if (len >= m->m_len) {
 				tocopy = m->m_len;
-			else {
+			} else {
 				mp->msg_flags |= MSG_CTRUNC;
 				tocopy = len;
 			}
-		
-			error = copyout((caddr_t)mtod(m, caddr_t), ctlbuf, tocopy);
+
+			error = copyout((caddr_t)mtod(m, caddr_t), ctlbuf,
+			    tocopy);
 			if (error)
 				goto out;
 
@@ -1032,31 +1215,43 @@ out:
 		FREE(fromsa, M_SONAME);
 	if (control)
 		m_freem(control);
-	KERNEL_DEBUG(DBG_FNC_RECVIT | DBG_FUNC_END, error,0,0,0,0);
+	KERNEL_DEBUG(DBG_FNC_RECVIT | DBG_FUNC_END, error, 0, 0, 0, 0);
 out1:
 	fp_drop(p, s, fp, 0);
 	return (error);
 }
 
 
+/*
+ * Returns:	0			Success
+ *		ENOMEM
+ *	copyin:EFAULT
+ *	recvit:???
+ *	read:???			[4056224: applicable for pipes]
+ *
+ * Notes:	The read entry point is only called as part of support for
+ *		binary backward compatability; new code should use read
+ *		instead of recv or recvfrom when attempting to read data
+ *		from pipes.
+ *
+ *		For full documentation of the return codes from recvit, see
+ *		the block header for the recvit function.
+ */
 int
-recvfrom(p, uap, retval)
-	struct proc *p;
-	register struct recvfrom_args /* {
-		int	s;
-		caddr_t	buf;
-		size_t	len;
-		int	flags;
-		caddr_t	from;
-		int	*fromlenaddr;
-	} */ *uap;
-	register_t *retval;
+recvfrom(struct proc *p, struct recvfrom_args *uap, register_t *retval)
+{
+	__pthread_testcancel(1);
+	return(recvfrom_nocancel(p, (struct recvfrom_nocancel_args *)uap, retval));
+}
+
+int
+recvfrom_nocancel(struct proc *p, struct recvfrom_nocancel_args *uap, register_t *retval)
 {
 	struct user_msghdr msg;
 	int error;
 	uio_t auio = NULL;
 
-	KERNEL_DEBUG(DBG_FNC_RECVFROM | DBG_FUNC_START, 0,0,0,0,0);
+	KERNEL_DEBUG(DBG_FNC_RECVFROM | DBG_FUNC_START, 0, 0, 0, 0, 0);
 	AUDIT_ARG(fd, uap->s);
 
 	if (uap->fromlenaddr) {
@@ -1064,16 +1259,17 @@ recvfrom(p, uap, retval)
 		    (caddr_t)&msg.msg_namelen, sizeof (msg.msg_namelen));
 		if (error)
 			return (error);
-	} else
+	} else {
 		msg.msg_namelen = 0;
+	}
 	msg.msg_name = uap->from;
 	auio = uio_create(1, 0,
-				  (IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32),
-				  UIO_READ);
+	    (IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32),
+	    UIO_READ);
 	if (auio == NULL) {
 		return (ENOMEM);
 	}
-	
+
 	uio_addiov(auio, uap->buf, uap->len);
 	/* no need to set up msg_iov.  recvit uses uio_t we send it */
 	msg.msg_iov = 0;
@@ -1085,35 +1281,36 @@ recvfrom(p, uap, retval)
 	if (auio != NULL) {
 		uio_free(auio);
 	}
-	
+
 #if HACK_FOR_4056224
-	/* 
-	 * Radar 4056224 
-	 * Temporary workaround to let send() and recv() work over a pipe for binary compatibility
+	/*
+	 * Radar 4056224
+	 * Temporary workaround to let send() and recv() work over
+	 * a pipe for binary compatibility
 	 * This will be removed in the release following Tiger
 	 */
 	if (error == ENOTSOCK && proc_is64bit(p) == 0) {
 		struct fileproc *fp;
-		
-        if (fp_lookup(p, uap->s, &fp, 0) == 0) {
-			(void) fp_drop(p, uap->s, fp,0);
-			
+
+		if (fp_lookup(p, uap->s, &fp, 0) == 0) {
+			(void) fp_drop(p, uap->s, fp, 0);
+
 			if (fp->f_type == DTYPE_PIPE) {
 				struct read_args read_uap;
 				user_ssize_t read_retval;
-				
+
 				if (p->p_pid > last_pid_4056224) {
 					last_pid_4056224 = p->p_pid;
 
-					printf("%s[%d] uses send/recv on a pipe\n", 
-						p->p_comm, p->p_pid);
+					printf("%s[%d] uses send/recv on "
+					    "a pipe\n", p->p_comm, p->p_pid);
 				}
-				
-				bzero(&read_uap, sizeof(struct read_args));
+
+				bzero(&read_uap, sizeof (struct read_args));
 				read_uap.fd = uap->s;
 				read_uap.cbuf = uap->buf;
 				read_uap.nbyte = uap->len;
-	
+
 				error = read(p, &read_uap, &read_retval);
 				*retval = (int)read_retval;
 			}
@@ -1121,86 +1318,56 @@ recvfrom(p, uap, retval)
 	}
 #endif /* HACK_FOR_4056224 */
 
-	KERNEL_DEBUG(DBG_FNC_RECVFROM | DBG_FUNC_END, error,0,0,0,0);
-	
+	KERNEL_DEBUG(DBG_FNC_RECVFROM | DBG_FUNC_END, error, 0, 0, 0, 0);
+
 	return (error);
 }
 
-#if COMPAT_43_SOCKET
-int
-orecvfrom(struct proc *p, struct recvfrom_args *uap, register_t *retval)
-{
-
-	uap->flags |= MSG_COMPAT;
-	return (recvfrom(p, uap, retval));
-}
-#endif
-
-
-#if COMPAT_43_SOCKET
-int
-orecv(__unused struct proc *p, __unused struct orecv_args	*uap, 
-		__unused register_t *retval)
-{
-	/* these are no longer supported and in fact 
-	 * there is no way to call it directly.
-	 * LP64todo - remove this once we're sure there are no clients 
-	 */
-
-	return (ENOTSUP);
-}
-
 /*
- * Old recvmsg.  This code takes advantage of the fact that the old msghdr
- * overlays the new one, missing only the flags, and with the (old) access
- * rights where the control fields are now.
+ * Returns:	0			Success
+ *		EMSGSIZE
+ *		ENOMEM
+ *	copyin:EFAULT
+ *	copyout:EFAULT
+ *	recvit:???
+ *
+ * Notes:	For full documentation of the return codes from recvit, see
+ *		the block header for the recvit function.
  */
 int
-orecvmsg(__unused struct proc *p, __unused struct orecvmsg_args *uap, 
-		__unused register_t *retval)
+recvmsg(struct proc *p, struct recvmsg_args *uap, register_t *retval)
 {
-	/* these are no longer supported and in fact 
-	 * there is no way to call it directly.
-	 * LP64todo - remove this once we're sure there are no clients 
-	 */
-
-	return (ENOTSUP);
-
+	__pthread_testcancel(1);
+	return(recvmsg_nocancel(p, (struct recvmsg_nocancel_args *)uap, retval));
 }
-#endif
 
 int
-recvmsg(p, uap, retval)
-	struct proc *p;
-	struct recvmsg_args *uap;
-	register_t *retval;
+recvmsg_nocancel(struct proc *p, struct recvmsg_nocancel_args *uap, register_t *retval)
 {
 	struct msghdr msg;
 	struct user_msghdr user_msg;
 	caddr_t msghdrp;
 	int	size_of_msghdr;
 	user_addr_t uiov;
-	register int error;
+	int error;
 	int size_of_iovec;
 	uio_t auio = NULL;
 	struct user_iovec *iovp;
 
-	KERNEL_DEBUG(DBG_FNC_RECVMSG | DBG_FUNC_START, 0,0,0,0,0);
+	KERNEL_DEBUG(DBG_FNC_RECVMSG | DBG_FUNC_START, 0, 0, 0, 0, 0);
 	AUDIT_ARG(fd, uap->s);
 	if (IS_64BIT_PROCESS(p)) {
-		msghdrp = (caddr_t) &user_msg;
-		size_of_msghdr = sizeof(user_msg);
-		size_of_iovec = sizeof(struct user_iovec);
-	}
-	else {
-		msghdrp = (caddr_t) &msg;
-		size_of_msghdr = sizeof(msg);
-		size_of_iovec = sizeof(struct iovec);
+		msghdrp = (caddr_t)&user_msg;
+		size_of_msghdr = sizeof (user_msg);
+		size_of_iovec = sizeof (struct user_iovec);
+	} else {
+		msghdrp = (caddr_t)&msg;
+		size_of_msghdr = sizeof (msg);
+		size_of_iovec = sizeof (struct iovec);
 	}
 	error = copyin(uap->msg, msghdrp, size_of_msghdr);
-	if (error)
-	{
-	    	KERNEL_DEBUG(DBG_FNC_RECVMSG | DBG_FUNC_END, error,0,0,0,0);
+	if (error) {
+		KERNEL_DEBUG(DBG_FNC_RECVMSG | DBG_FUNC_END, error, 0, 0, 0, 0);
 		return (error);
 	}
 
@@ -1216,26 +1383,24 @@ recvmsg(p, uap, retval)
 	}
 
 	if (user_msg.msg_iovlen <= 0 || user_msg.msg_iovlen > UIO_MAXIOV) {
-		KERNEL_DEBUG(DBG_FNC_RECVMSG | DBG_FUNC_END, EMSGSIZE,0,0,0,0);
+		KERNEL_DEBUG(DBG_FNC_RECVMSG | DBG_FUNC_END, EMSGSIZE,
+		    0, 0, 0, 0);
 		return (EMSGSIZE);
 	}
 
-#if COMPAT_43_SOCKET
-	user_msg.msg_flags = uap->flags &~ MSG_COMPAT;
-#else
 	user_msg.msg_flags = uap->flags;
-#endif
 
 	/* allocate a uio large enough to hold the number of iovecs passed */
 	auio = uio_create(user_msg.msg_iovlen, 0,
-				  (IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32),
-				  UIO_READ);
+	    (IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32),
+	    UIO_READ);
 	if (auio == NULL) {
 		error = ENOMEM;
 		goto done;
 	}
 
-	/* get location of iovecs within the uio.  then copyin the iovecs from
+	/*
+	 * get location of iovecs within the uio.  then copyin the iovecs from
 	 * user space.
 	 */
 	iovp = uio_iovsaddr(auio);
@@ -1245,13 +1410,14 @@ recvmsg(p, uap, retval)
 	}
 	uiov = user_msg.msg_iov;
 	user_msg.msg_iov = CAST_USER_ADDR_T(iovp);
-	error = copyin(uiov, (caddr_t)iovp, (user_msg.msg_iovlen * size_of_iovec));
+	error = copyin(uiov, (caddr_t)iovp,
+	    (user_msg.msg_iovlen * size_of_iovec));
 	if (error)
 		goto done;
 
-	/* finish setup of uio_t */ 
+	/* finish setup of uio_t */
 	uio_calculateresid(auio);
-		
+
 	error = recvit(p, uap->s, &user_msg, auio, 0, retval);
 	if (!error) {
 		user_msg.msg_iov = uiov;
@@ -1260,9 +1426,11 @@ recvmsg(p, uap, retval)
 			// LP64todo - do all these change?  if not, then no need to copy all of them!
 			msg.msg_flags = user_msg.msg_flags;
 			msg.msg_controllen = user_msg.msg_controllen;
-			msg.msg_control = CAST_DOWN(caddr_t, user_msg.msg_control);
+			msg.msg_control =
+			    CAST_DOWN(caddr_t, user_msg.msg_control);
 			msg.msg_iovlen = user_msg.msg_iovlen;
-			msg.msg_iov = (struct iovec *) CAST_DOWN(caddr_t, user_msg.msg_iov);
+			msg.msg_iov = (struct iovec *)
+			    CAST_DOWN(caddr_t, user_msg.msg_iov);
 			msg.msg_namelen = user_msg.msg_namelen;
 			msg.msg_name = CAST_DOWN(caddr_t, user_msg.msg_name);
 		}
@@ -1272,15 +1440,36 @@ done:
 	if (auio != NULL) {
 		uio_free(auio);
 	}
-	KERNEL_DEBUG(DBG_FNC_RECVMSG | DBG_FUNC_END, error,0,0,0,0);
+	KERNEL_DEBUG(DBG_FNC_RECVMSG | DBG_FUNC_END, error, 0, 0, 0, 0);
 	return (error);
 }
 
+/*
+ * Returns:	0			Success
+ *		EBADF
+ *	file_socket:ENOTSOCK
+ *	file_socket:EBADF
+ *	soshutdown:EINVAL
+ *	soshutdown:ENOTCONN
+ *	soshutdown:EADDRNOTAVAIL[TCP]
+ *	soshutdown:ENOBUFS[TCP]
+ *	soshutdown:EMSGSIZE[TCP]
+ *	soshutdown:EHOSTUNREACH[TCP]
+ *	soshutdown:ENETUNREACH[TCP]
+ *	soshutdown:ENETDOWN[TCP]
+ *	soshutdown:ENOMEM[TCP]
+ *	soshutdown:EACCES[TCP]
+ *	soshutdown:EMSGSIZE[TCP]
+ *	soshutdown:ENOBUFS[TCP]
+ *	soshutdown:???[TCP]		[ignorable: mostly IPSEC/firewall/DLIL]
+ *	soshutdown:???			[other protocol families]
+ */
 /* ARGSUSED */
 int
-shutdown(__unused struct proc *p, struct shutdown_args *uap, __unused register_t *retval)
+shutdown(__unused struct proc *p, struct shutdown_args *uap,
+    __unused register_t *retval)
 {
-	struct socket * so;
+	struct socket *so;
 	int error;
 
 	AUDIT_ARG(fd, uap->s);
@@ -1294,26 +1483,37 @@ shutdown(__unused struct proc *p, struct shutdown_args *uap, __unused register_t
 	error =  soshutdown((struct socket *)so, uap->how);
 out:
 	file_drop(uap->s);
-	return(error);
+	return (error);
 }
 
-
-
-
-
+/*
+ * Returns:	0			Success
+ *		EFAULT
+ *		EINVAL
+ *		EACCES			Mandatory Access Control failure
+ *	file_socket:ENOTSOCK
+ *	file_socket:EBADF
+ *	sosetopt:EINVAL
+ *	sosetopt:ENOPROTOOPT
+ *	sosetopt:ENOBUFS
+ *	sosetopt:EDOM
+ *	sosetopt:EFAULT
+ *	sosetopt:EOPNOTSUPP[AF_UNIX]
+ *	sosetopt:???
+ */
 /* ARGSUSED */
 int
-setsockopt(struct proc *p, struct setsockopt_args *uap, __unused register_t *retval)
+setsockopt(struct proc *p, struct setsockopt_args *uap,
+    __unused register_t *retval)
 {
-	struct socket * so;
+	struct socket *so;
 	struct sockopt sopt;
 	int error;
 
 	AUDIT_ARG(fd, uap->s);
 	if (uap->val == 0 && uap->valsize != 0)
 		return (EFAULT);
-	if (uap->valsize < 0)
-		return (EINVAL);
+	/* No bounds checking on size (it's unsigned) */
 
 	error = file_socket(uap->s, &so);
 	if (error)
@@ -1330,36 +1530,51 @@ setsockopt(struct proc *p, struct setsockopt_args *uap, __unused register_t *ret
 		error = EINVAL;
 		goto out;
 	}
+#if CONFIG_MACF_SOCKET_SUBSET
+	if ((error = mac_socket_check_setsockopt(kauth_cred_get(), so,
+	    &sopt)) != 0)
+		goto out;
+#endif /* MAC_SOCKET_SUBSET */
 	error = sosetopt(so, &sopt);
 out:
 	file_drop(uap->s);
-	return(error);
+	return (error);
 }
 
 
 
+/*
+ * Returns:	0			Success
+ *		EINVAL
+ *		EBADF
+ *		EACCES			Mandatory Access Control failure
+ *	copyin:EFAULT
+ *	copyout:EFAULT
+ *	file_socket:ENOTSOCK
+ *	file_socket:EBADF
+ *	sogetopt:???
+ */
 int
-getsockopt(struct proc *p, struct getsockopt_args  *uap, __unused register_t *retval)
+getsockopt(struct proc *p, struct getsockopt_args  *uap,
+    __unused register_t *retval)
 {
 	int		error;
 	socklen_t	valsize;
 	struct sockopt	sopt;
-	struct socket *	so;
+	struct socket *so;
 
 	error = file_socket(uap->s, &so);
 	if (error)
 		return (error);
 	if (uap->val) {
-		error = copyin(uap->avalsize, (caddr_t)&valsize, sizeof (valsize));
+		error = copyin(uap->avalsize, (caddr_t)&valsize,
+		    sizeof (valsize));
 		if (error)
 			goto out;
-		if (valsize < 0) {
-			error = EINVAL;
-			goto out;
-		}
-	} else
+		/* No bounds checking on size (it's unsigned) */
+	} else {
 		valsize = 0;
-
+	}
 	sopt.sopt_dir = SOPT_GET;
 	sopt.sopt_level = uap->level;
 	sopt.sopt_name = uap->name;
@@ -1371,10 +1586,16 @@ getsockopt(struct proc *p, struct getsockopt_args  *uap, __unused register_t *re
 		error = EBADF;
 		goto out;
 	}
+#if CONFIG_MACF_SOCKET_SUBSET
+	if ((error = mac_socket_check_getsockopt(kauth_cred_get(), so,
+	    &sopt)) != 0)
+		goto out;
+#endif /* MAC_SOCKET_SUBSET */
 	error = sogetopt((struct socket *)so, &sopt);
 	if (error == 0) {
 		valsize = sopt.sopt_valsize;
-		error = copyout((caddr_t)&valsize, uap->avalsize, sizeof (valsize));
+		error = copyout((caddr_t)&valsize, uap->avalsize,
+		    sizeof (valsize));
 	}
 out:
 	file_drop(uap->s);
@@ -1384,21 +1605,33 @@ out:
 
 /*
  * Get socket name.
+ *
+ * Returns:	0			Success
+ *		EBADF
+ *	file_socket:ENOTSOCK
+ *	file_socket:EBADF
+ *	copyin:EFAULT
+ *	copyout:EFAULT
+ *	<pru_sockaddr>:ENOBUFS[TCP]
+ *	<pru_sockaddr>:ECONNRESET[TCP]
+ *	<pru_sockaddr>:EINVAL[AF_UNIX]
+ *	<sf_getsockname>:???
  */
 /* ARGSUSED */
-static int
-getsockname1(__unused struct proc *p, struct getsockname_args *uap, __unused register_t *retval,
-	int compat)
+int
+getsockname(__unused struct proc *p, struct getsockname_args *uap,
+    __unused register_t *retval)
 {
 	struct socket *so;
 	struct sockaddr *sa;
 	socklen_t len;
+	socklen_t sa_len;
 	int error;
 
 	error = file_socket(uap->fdes, &so);
 	if (error)
 		return (error);
-	error = copyin(uap->alen, (caddr_t)&len, sizeof(socklen_t));
+	error = copyin(uap->alen, (caddr_t)&len, sizeof (socklen_t));
 	if (error)
 		goto out;
 	if (so == NULL) {
@@ -1408,26 +1641,25 @@ getsockname1(__unused struct proc *p, struct getsockname_args *uap, __unused reg
 	sa = 0;
 	socket_lock(so, 1);
 	error = (*so->so_proto->pr_usrreqs->pru_sockaddr)(so, &sa);
-	if (error == 0)
-	{
+	if (error == 0) {
 		struct socket_filter_entry *filter;
 		int	filtered = 0;
 		for (filter = so->so_filt; filter && error == 0;
-			 filter = filter->sfe_next_onsocket) {
+		    filter = filter->sfe_next_onsocket) {
 			if (filter->sfe_filter->sf_filter.sf_getsockname) {
 				if (!filtered) {
 					filtered = 1;
 					sflt_use(so);
 					socket_unlock(so, 0);
 				}
-				error = filter->sfe_filter->sf_filter.sf_getsockname(filter->sfe_cookie,
-							so, &sa);
+				error = filter->sfe_filter->sf_filter.
+				    sf_getsockname(filter->sfe_cookie, so, &sa);
 			}
 		}
-		
+
 		if (error == EJUSTRETURN)
 			error = 0;
-		
+
 		if (filtered) {
 			socket_lock(so, 0);
 			sflt_unuse(so);
@@ -1441,15 +1673,15 @@ getsockname1(__unused struct proc *p, struct getsockname_args *uap, __unused reg
 		goto gotnothing;
 	}
 
-	len = MIN(len, sa->sa_len);
-#if COMPAT_43_SOCKET
-	if (compat)
-		((struct osockaddr *)sa)->sa_family = sa->sa_family;
-#endif
+	sa_len = sa->sa_len;
+	len = MIN(len, sa_len);
 	error = copyout((caddr_t)sa, uap->asa, len);
-	if (error == 0)
+	if (error)
+		goto bad;
+	/* return the actual, untruncated address length */
+	len = sa_len;
 gotnothing:
-		error = copyout((caddr_t)&len, uap->alen, sizeof(socklen_t));
+		error = copyout((caddr_t)&len, uap->alen, sizeof (socklen_t));
 bad:
 	if (sa)
 		FREE(sa, M_SONAME);
@@ -1458,31 +1690,29 @@ out:
 	return (error);
 }
 
-int
-getsockname(struct proc *p, struct getsockname_args *uap, register_t *retval)
-{
-	return (getsockname1(p, uap, retval, 0));
-}
-
-#if COMPAT_43_SOCKET
-int
-ogetsockname(struct proc *p, struct getsockname_args *uap, register_t *retval)
-{
-	return (getsockname1(p, uap, retval, 1));
-}
-#endif /* COMPAT_43_SOCKET */
-
 /*
  * Get name of peer for connected socket.
+ *
+ * Returns:	0			Success
+ *		EBADF
+ *		EINVAL
+ *		ENOTCONN
+ *	file_socket:ENOTSOCK
+ *	file_socket:EBADF
+ *	copyin:EFAULT
+ *	copyout:EFAULT
+ *	<pru_peeraddr>:???
+ *	<sf_getpeername>:???
  */
 /* ARGSUSED */
 int
-getpeername1(__unused struct proc *p, struct getpeername_args *uap, __unused register_t *retval,
-	int compat)
+getpeername(__unused struct proc *p, struct getpeername_args *uap,
+    __unused register_t *retval)
 {
 	struct socket *so;
 	struct sockaddr *sa;
 	socklen_t len;
+	socklen_t sa_len;
 	int error;
 
 	error = file_socket(uap->fdes, &so);
@@ -1495,38 +1725,45 @@ getpeername1(__unused struct proc *p, struct getpeername_args *uap, __unused reg
 
 	socket_lock(so, 1);
 
+	if ((so->so_state & (SS_CANTRCVMORE | SS_CANTSENDMORE)) ==
+	    (SS_CANTRCVMORE | SS_CANTSENDMORE)) {
+		/* the socket has been shutdown, no more getpeername's */
+		socket_unlock(so, 1);
+		error = EINVAL;
+		goto out;
+	}
+
 	if ((so->so_state & (SS_ISCONNECTED|SS_ISCONFIRMING)) == 0) {
 		socket_unlock(so, 1);
 		error = ENOTCONN;
 		goto out;
 	}
-	error = copyin(uap->alen, (caddr_t)&len, sizeof(socklen_t));
+	error = copyin(uap->alen, (caddr_t)&len, sizeof (socklen_t));
 	if (error) {
 		socket_unlock(so, 1);
 		goto out;
 	}
 	sa = 0;
 	error = (*so->so_proto->pr_usrreqs->pru_peeraddr)(so, &sa);
-	if (error == 0)
-	{
+	if (error == 0) {
 		struct socket_filter_entry *filter;
 		int	filtered = 0;
 		for (filter = so->so_filt; filter && error == 0;
-			 filter = filter->sfe_next_onsocket) {
+		    filter = filter->sfe_next_onsocket) {
 			if (filter->sfe_filter->sf_filter.sf_getpeername) {
 				if (!filtered) {
 					filtered = 1;
 					sflt_use(so);
 					socket_unlock(so, 0);
 				}
-				error = filter->sfe_filter->sf_filter.sf_getpeername(filter->sfe_cookie,
-							so, &sa);
+				error = filter->sfe_filter->sf_filter.
+				    sf_getpeername(filter->sfe_cookie, so, &sa);
 			}
 		}
-		
+
 		if (error == EJUSTRETURN)
 			error = 0;
-		
+
 		if (filtered) {
 			socket_lock(so, 0);
 			sflt_unuse(so);
@@ -1539,17 +1776,15 @@ getpeername1(__unused struct proc *p, struct getpeername_args *uap, __unused reg
 		len = 0;
 		goto gotnothing;
 	}
-	len = MIN(len, sa->sa_len);
-#if COMPAT_43_SOCKET
-	if (compat)
-		((struct osockaddr *)sa)->sa_family =
-		    sa->sa_family;
-#endif
+	sa_len = sa->sa_len;
+	len = MIN(len, sa_len);
 	error = copyout(sa, uap->asa, len);
 	if (error)
 		goto bad;
+	/* return the actual, untruncated address length */
+	len = sa_len;
 gotnothing:
-	error = copyout((caddr_t)&len, uap->alen, sizeof(socklen_t));
+	error = copyout((caddr_t)&len, uap->alen, sizeof (socklen_t));
 bad:
 	if (sa) FREE(sa, M_SONAME);
 out:
@@ -1558,38 +1793,16 @@ out:
 }
 
 int
-getpeername(struct proc *p, struct getpeername_args *uap, register_t *retval)
+sockargs(struct mbuf **mp, user_addr_t data, int buflen, int type)
 {
-
-	return (getpeername1(p, uap, retval, 0));
-}
-
-#if COMPAT_43_SOCKET
-int
-ogetpeername(struct proc *p, struct getpeername_args *uap, register_t *retval)
-{
-
-	return (getpeername1(p, uap, retval, 1));
-}
-#endif /* COMPAT_43_SOCKET */
-
-int
-sockargs(mp, data, buflen, type)
-	struct mbuf **mp;
-	user_addr_t data;
-	int buflen, type;
-{
-	register struct sockaddr *sa;
-	register struct mbuf *m;
+	struct sockaddr *sa;
+	struct mbuf *m;
 	int error;
 
 	if ((u_int)buflen > MLEN) {
-#if COMPAT_43_SOCKET
 		if (type == MT_SONAME && (u_int)buflen <= 112)
 			buflen = MLEN;		/* unix domain compat. hack */
-		else
-#endif
-		if ((u_int)buflen > MCLBYTES)
+		else if ((u_int)buflen > MCLBYTES)
 			return (EINVAL);
 	}
 	m = m_get(M_WAIT, type);
@@ -1599,22 +1812,17 @@ sockargs(mp, data, buflen, type)
 		MCLGET(m, M_WAIT);
 		if ((m->m_flags & M_EXT) == 0) {
 			m_free(m);
-			return ENOBUFS;
+			return (ENOBUFS);
 		}
 	}
 	m->m_len = buflen;
 	error = copyin(data, mtod(m, caddr_t), (u_int)buflen);
-	if (error)
+	if (error) {
 		(void) m_free(m);
-	else {
+	} else {
 		*mp = m;
 		if (type == MT_SONAME) {
 			sa = mtod(m, struct sockaddr *);
-
-#if COMPAT_43_SOCKET && BYTE_ORDER != BIG_ENDIAN
-			if (sa->sa_family == 0 && sa->sa_len < AF_MAX)
-				sa->sa_family = sa->sa_len;
-#endif
 			sa->sa_len = buflen;
 		}
 	}
@@ -1623,372 +1831,440 @@ sockargs(mp, data, buflen, type)
 
 /*
  * Given a user_addr_t of length len, allocate and fill out a *sa.
+ *
+ * Returns:	0			Success
+ *		ENAMETOOLONG		Filename too long
+ *		EINVAL			Invalid argument
+ *		ENOMEM			Not enough space
+ *		copyin:EFAULT		Bad address
  */
-int
-getsockaddr(struct sockaddr **namp, user_addr_t uaddr, size_t len)
+static int
+getsockaddr(struct socket *so, struct sockaddr **namp, user_addr_t uaddr,
+    size_t len)
 {
 	struct sockaddr *sa;
 	int error;
 
 	if (len > SOCK_MAXADDRLEN)
-		return ENAMETOOLONG;
+		return (ENAMETOOLONG);
 
-	if (len == 0)
-	     return EINVAL;
+	if (len < offsetof(struct sockaddr, sa_data[0]))
+		return (EINVAL);
 
-	MALLOC(sa, struct sockaddr *, len, M_SONAME, M_WAITOK);
+	MALLOC(sa, struct sockaddr *, len, M_SONAME, M_WAITOK | M_ZERO);
 	if (sa == NULL) {
-		return ENOMEM;
+		return (ENOMEM);
 	}
 	error = copyin(uaddr, (caddr_t)sa, len);
 	if (error) {
 		FREE(sa, M_SONAME);
 	} else {
-#if COMPAT_43_SOCKET && BYTE_ORDER != BIG_ENDIAN
-		if (sa->sa_family == 0 && sa->sa_len < AF_MAX)
-			sa->sa_family = sa->sa_len;
-#endif
+		/*
+		 * Force sa_family to AF_INET on AF_INET sockets to handle
+		 * legacy applications that use AF_UNSPEC (0).  On all other
+		 * sockets we leave it unchanged and let the lower layer
+		 * handle it.
+		 */
+		if (sa->sa_family == AF_UNSPEC &&
+		    INP_CHECK_SOCKAF(so, AF_INET) &&
+		    len == sizeof (struct sockaddr_in))
+			sa->sa_family = AF_INET;
+
 		sa->sa_len = len;
 		*namp = sa;
 	}
-	return error;
+	return (error);
 }
 
+static int
+getsockaddr_s(struct socket *so, struct sockaddr_storage *ss,
+    user_addr_t uaddr, size_t len)
+{
+	int error;
+
+	if (ss == NULL || uaddr == USER_ADDR_NULL ||
+	    len < offsetof(struct sockaddr, sa_data[0]))
+		return (EINVAL);
+
+	/*
+	 * sockaddr_storage size is less than SOCK_MAXADDRLEN,
+	 * so the check here is inclusive.
+	 */
+	if (len > sizeof (*ss))
+		return (ENAMETOOLONG);
+
+	bzero(ss, sizeof (*ss));
+	error = copyin(uaddr, (caddr_t)ss, len);
+	if (error == 0) {
+		/*
+		 * Force sa_family to AF_INET on AF_INET sockets to handle
+		 * legacy applications that use AF_UNSPEC (0).  On all other
+		 * sockets we leave it unchanged and let the lower layer
+		 * handle it.
+		 */
+		if (ss->ss_family == AF_UNSPEC &&
+		    INP_CHECK_SOCKAF(so, AF_INET) &&
+		    len == sizeof (struct sockaddr_in))
+			ss->ss_family = AF_INET;
+
+		ss->ss_len = len;
+	}
+	return (error);
+}
 
 #if SENDFILE
-/*
- * Allocate a pool of sf_bufs (sendfile(2) or "super-fast" if you prefer. :-))
- * XXX - The sf_buf functions are currently private to sendfile(2), so have
- * been made static, but may be useful in the future for doing zero-copy in
- * other parts of the networking code. 
- */
-static void
-sf_buf_init(void *arg)
+
+SYSCTL_DECL(_kern_ipc);
+
+#define	SFUIOBUFS 64
+static int sendfileuiobufs = SFUIOBUFS;
+SYSCTL_INT(_kern_ipc, OID_AUTO, sendfileuiobufs, CTLFLAG_RW, &sendfileuiobufs,
+    0, "");
+
+/* Macros to compute the number of mbufs needed depending on cluster size */
+#define	HOWMANY_16K(n)	((((unsigned int)(n) - 1) >> (PGSHIFT + 2)) + 1)
+#define	HOWMANY_4K(n)	((((unsigned int)(n) - 1) >> PGSHIFT) + 1)
+
+/* Upper send limit in bytes (sendfileuiobufs * PAGESIZE) */
+#define SENDFILE_MAX_BYTES	(sendfileuiobufs << PGSHIFT)
+
+/* Upper send limit in the number of mbuf clusters */
+#define	SENDFILE_MAX_16K	HOWMANY_16K(SENDFILE_MAX_BYTES)
+#define	SENDFILE_MAX_4K		HOWMANY_4K(SENDFILE_MAX_BYTES)
+
+size_t mbuf_pkt_maxlen(mbuf_t m);
+
+__private_extern__ size_t
+mbuf_pkt_maxlen(mbuf_t m)
 {
-	int i;
+	size_t maxlen = 0;
 
-	SLIST_INIT(&sf_freelist);
-	kmem_alloc_pageable(kernel_map, &sf_base, nsfbufs * PAGE_SIZE);
-	MALLOC(sf_bufs, struct sf_buf *, nsfbufs * sizeof(struct sf_buf), M_TEMP, M_NOWAIT|M_ZERO);
-	if (sf_bufs == NULL)
-		return;		/* XXX silently fail leaving sf_bufs NULL */
-
-	for (i = 0; i < nsfbufs; i++) {
-		sf_bufs[i].kva = sf_base + i * PAGE_SIZE;
-		SLIST_INSERT_HEAD(&sf_freelist, &sf_bufs[i], free_list);
+	while (m) {
+		maxlen += mbuf_maxlen(m);
+		m = mbuf_next(m);
 	}
+	return (maxlen);
 }
 
-/*
- * Get an sf_buf from the freelist. Will block if none are available.
- */
-static struct sf_buf *
-sf_buf_alloc()
-{
-	struct sf_buf *sf;
-
-	while ((sf = SLIST_FIRST(&sf_freelist)) == NULL) {
-		sf_buf_alloc_want = 1;
-		tsleep(&sf_freelist, PVM, "sfbufa", 0);
-	}
-	SLIST_REMOVE_HEAD(&sf_freelist, free_list);
-	sf->refcnt = 1;
-	return (sf);
-}
-
-#define dtosf(x)	(&sf_bufs[((uintptr_t)(x) - (uintptr_t)sf_base) >> PAGE_SHIFT])
 static void
-sf_buf_ref(caddr_t addr, u_int size)
+alloc_sendpkt(int how, size_t pktlen, unsigned int *maxchunks,
+    struct mbuf **m, boolean_t jumbocl)
 {
-	struct sf_buf *sf;
+	unsigned int needed;
 
-	sf = dtosf(addr);
-	if (sf->refcnt == 0)
-		panic("sf_buf_ref: referencing a free sf_buf");
-	sf->refcnt++;
-}
+	if (pktlen == 0)
+		panic("%s: pktlen (%ld) must be non-zero\n", __func__, pktlen);
 
-/*
- * Lose a reference to an sf_buf. When none left, detach mapped page
- * and release resources back to the system.
- *
- * Must be called at splimp.
- */
-static void
-sf_buf_free(caddr_t addr, u_int size)
-{
-	struct sf_buf *sf;
-	struct vm_page *m;
-
-	sf = dtosf(addr);
-	if (sf->refcnt == 0)
-		panic("sf_buf_free: freeing free sf_buf");
-	sf->refcnt--;
-	if (sf->refcnt == 0) {
-		pmap_qremove((vm_offset_t)addr, 1);
-		m = sf->m;
-		vm_page_unwire(m, 0);
-		/*
-		 * Check for the object going away on us. This can
-		 * happen since we don't hold a reference to it.
-		 * If so, we're responsible for freeing the page.
-		 */
-		if (m->wire_count == 0 && m->object == NULL)
-			vm_page_lock_queues();
-			vm_page_free(m);
-			vm_page_unlock_queues();
-		sf->m = NULL;
-		SLIST_INSERT_HEAD(&sf_freelist, sf, free_list);
-		if (sf_buf_alloc_want) {
-			sf_buf_alloc_want = 0;
-			wakeup(&sf_freelist);
-		}
+	/*
+	 * Try to allocate for the whole thing.  Since we want full control
+	 * over the buffer size and be able to accept partial result, we can't
+	 * use mbuf_allocpacket().  The logic below is similar to sosend().
+	 */
+	*m = NULL;
+	if (pktlen > NBPG && jumbocl) {
+		needed = MIN(SENDFILE_MAX_16K, HOWMANY_16K(pktlen));
+		*m = m_getpackets_internal(&needed, 1, how, 0, M16KCLBYTES);
 	}
+	if (*m == NULL) {
+		needed = MIN(SENDFILE_MAX_4K, HOWMANY_4K(pktlen));
+		*m = m_getpackets_internal(&needed, 1, how, 0, NBPG);
+	}
+
+	/*
+	 * Our previous attempt(s) at allocation had failed; the system
+	 * may be short on mbufs, and we want to block until they are
+	 * available.  This time, ask just for 1 mbuf and don't return
+	 * until we get it.
+	 */
+	if (*m == NULL) {
+		needed = 1;
+		*m = m_getpackets_internal(&needed, 1, M_WAIT, 1, NBPG);
+	}
+	if (*m == NULL)
+		panic("%s: blocking allocation returned NULL\n", __func__);
+
+	*maxchunks = needed;
 }
 
 /*
  * sendfile(2).
- * int sendfile(int fd, int s, off_t offset, size_t nbytes,
- *	 struct sf_hdtr *hdtr, off_t *sbytes, int flags)
+ * int sendfile(int fd, int s, off_t offset, off_t *nbytes,
+ *	 struct sf_hdtr *hdtr, int flags)
  *
  * Send a file specified by 'fd' and starting at 'offset' to a socket
- * specified by 's'. Send only 'nbytes' of the file or until EOF if
- * nbytes == 0. Optionally add a header and/or trailer to the socket
- * output. If specified, write the total number of bytes sent into *sbytes.
+ * specified by 's'. Send only '*nbytes' of the file or until EOF if
+ * *nbytes == 0. Optionally add a header and/or trailer to the socket
+ * output. If specified, write the total number of bytes sent into *nbytes.
  */
 int
-sendfile(struct proc *p, struct sendfile_args *uap)
+sendfile(struct proc *p, struct sendfile_args *uap, __unused int *retval)
 {
 	struct fileproc *fp;
 	struct vnode *vp;
-	struct vm_object *obj;
 	struct socket *so;
-	struct mbuf *m;
-	struct sf_buf *sf;
-	struct vm_page *pg;
-	struct writev_args nuap;
+	struct writev_nocancel_args nuap;
+	user_ssize_t writev_retval;
 	struct sf_hdtr hdtr;
-	off_t off, xfsize, sbytes = 0;
-	int error = 0, s;
-	kauth_cred_t safecred;
+	struct user_sf_hdtr user_hdtr;
+	off_t off, xfsize;
+	off_t nbytes = 0, sbytes = 0;
+	int error = 0;
+	size_t sizeof_hdtr;
+	size_t size_of_iovec;
+	off_t file_size;
+	struct vfs_context context = *vfs_context_current();
 
-	if (sf_bufs == NULL) {
-		/* Fail if initialization failed */
-		return ENOSYS;
-	}
-
+	KERNEL_DEBUG_CONSTANT((DBG_FNC_SENDFILE | DBG_FUNC_START), uap->s,
+	    0, 0, 0, 0);
 	/*
 	 * Do argument checking. Must be a regular file in, stream
 	 * type and connected socket out, positive offset.
 	 */
-	if (error = fp_getfvp(p, uap->fd, &fp, &vp))
+	if ((error = fp_getfvp(p, uap->fd, &fp, &vp))) {
 		goto done;
-	if (fp->f_flag & FREAD) == 0) {
+	}
+	if ((fp->f_flag & FREAD) == 0) {
 		error = EBADF;
 		goto done1;
 	}
-	obj = vp->v_object;
-	if (vp->v_type != VREG || obj == NULL) {
-		error = EINVAL;
+	if (vnode_isreg(vp) == 0) {
+		error = ENOTSUP;
 		goto done1;
 	}
 	error = file_socket(uap->s, &so);
-	if (error)
+	if (error) {
 		goto done1;
+	}
 	if (so == NULL) {
 		error = EBADF;
 		goto done2;
 	}
-
-	socket_lock(so, 1);
-
 	if (so->so_type != SOCK_STREAM) {
 		error = EINVAL;
-		goto done3;
+		goto done2;
 	}
 	if ((so->so_state & SS_ISCONNECTED) == 0) {
 		error = ENOTCONN;
-		goto done3;
+		goto done2;
 	}
 	if (uap->offset < 0) {
 		error = EINVAL;
-		goto done3;
+		goto done2;
 	}
+	if (uap->nbytes == USER_ADDR_NULL) {
+		error = EINVAL;
+		goto done2;
+	}
+	if (uap->flags != 0) {
+		error = EINVAL;
+		goto done2;
+	}
+
+	context.vc_ucred = fp->f_fglob->fg_cred;
+
+#if CONFIG_MACF_SOCKET_SUBSET
+	/* JMM - fetch connected sockaddr? */
+	error = mac_socket_check_send(context.vc_ucred, so, NULL);
+	if (error)
+		goto done2;
+#endif
+
+	/*
+	 * Get number of bytes to send
+	 * Should it applies to size of header and trailer?
+	 * JMM - error handling?
+	 */
+	copyin(uap->nbytes, &nbytes, sizeof (off_t));
 
 	/*
 	 * If specified, get the pointer to the sf_hdtr struct for
 	 * any headers/trailers.
 	 */
-	if (uap->hdtr != NULL) {
-		error = copyin(CAST_USER_ADDR_T(uap->hdtr), &hdtr, sizeof(hdtr));
+	if (uap->hdtr != USER_ADDR_NULL) {
+		caddr_t hdtrp;
+
+		bzero(&user_hdtr, sizeof (user_hdtr));
+		if (IS_64BIT_PROCESS(p)) {
+			hdtrp = (caddr_t)&user_hdtr;
+			sizeof_hdtr = sizeof (user_hdtr);
+			size_of_iovec = sizeof (struct user_iovec);
+		} else {
+			hdtrp = (caddr_t)&hdtr;
+			sizeof_hdtr = sizeof (hdtr);
+			size_of_iovec = sizeof (struct iovec);
+		}
+		error = copyin(uap->hdtr, hdtrp, sizeof_hdtr);
 		if (error)
-			goto done3;
+			goto done2;
+		/*  need to copy if user process is not 64-bit */
+		if (!IS_64BIT_PROCESS(p)) {
+			user_hdtr.headers = CAST_USER_ADDR_T(hdtr.headers);
+			user_hdtr.hdr_cnt = hdtr.hdr_cnt;
+			user_hdtr.trailers = CAST_USER_ADDR_T(hdtr.trailers);
+			user_hdtr.trl_cnt = hdtr.trl_cnt;
+		}
+
 		/*
 		 * Send any headers. Wimp out and use writev(2).
 		 */
-		if (hdtr.headers != NULL) {
+		if (user_hdtr.headers != USER_ADDR_NULL) {
+			bzero(&nuap, sizeof (struct writev_args));
 			nuap.fd = uap->s;
-			nuap.iovp = hdtr.headers;
-			nuap.iovcnt = hdtr.hdr_cnt;
-			error = writev(p, &nuap);
+			nuap.iovp = user_hdtr.headers;
+			nuap.iovcnt = user_hdtr.hdr_cnt;
+			error = writev_nocancel(p, &nuap, &writev_retval);
 			if (error)
-				goto done3;
-			sbytes += p->p_retval[0];
+				goto done2;
+			sbytes += writev_retval;
 		}
 	}
 
 	/*
-	 * Protect against multiple writers to the socket.
+	 * Get the file size for 2 reasons:
+	 *  1. We don't want to allocate more mbufs than necessary
+	 *  2. We don't want to read past the end of file
 	 */
-	(void) sblock(&so->so_snd, M_WAIT);
+	if ((error = vnode_size(vp, &file_size, vfs_context_current())) != 0)
+		goto done2;
 
 	/*
-	 * Loop through the pages in the file, starting with the requested
-	 * offset. Get a file page (do I/O if necessary), map the file page
-	 * into an sf_buf, attach an mbuf header to the sf_buf, and queue
-	 * it on the socket.
+	 * Simply read file data into a chain of mbufs that used with scatter
+	 * gather reads. We're not (yet?) setup to use zero copy external
+	 * mbufs that point to the file pages.
 	 */
+	socket_lock(so, 1);
+	error = sblock(&so->so_snd, M_WAIT);
+	if (error) {
+		socket_unlock(so, 1);
+		goto done2;
+	}
 	for (off = uap->offset; ; off += xfsize, sbytes += xfsize) {
-		vm_object_offset_t pindex;
-		vm_object_offset_t pgoff;
+		mbuf_t	m0 = NULL, m;
+		unsigned int	nbufs = sendfileuiobufs, i;
+		uio_t	auio;
+		char	uio_buf[UIO_SIZEOF(sendfileuiobufs)]; /* 1 KB !!! */
+		size_t	uiolen;
+		user_ssize_t	rlen;
+		off_t	pgoff;
+		size_t	pktlen;
+		boolean_t jumbocl;
 
-		pindex = OFF_TO_IDX(off);
-retry_lookup:
 		/*
-		 * Calculate the amount to transfer. Not to exceed a page,
+		 * Calculate the amount to transfer.
+		 * Align to round number of pages.
+		 * Not to exceed send socket buffer,
 		 * the EOF, or the passed in nbytes.
 		 */
-		xfsize = obj->un_pager.vnp.vnp_size - off;
-		if (xfsize > PAGE_SIZE_64)
-			xfsize = PAGE_SIZE;
-		pgoff = (vm_object_offset_t)(off & PAGE_MASK_64);
-		if (PAGE_SIZE - pgoff < xfsize)
+		xfsize = sbspace(&so->so_snd);
+
+		if (xfsize <= 0) {
+			if (so->so_state & SS_CANTSENDMORE) {
+				error = EPIPE;
+				goto done3;
+			} else if ((so->so_state & SS_NBIO)) {
+				error = EAGAIN;
+				goto done3;
+			} else {
+				xfsize = PAGE_SIZE;
+			}
+		}
+
+		if (xfsize > SENDFILE_MAX_BYTES)
+			xfsize = SENDFILE_MAX_BYTES;
+		else if (xfsize > PAGE_SIZE)
+			xfsize = trunc_page(xfsize);
+		pgoff = off & PAGE_MASK_64;
+		if (pgoff > 0 && PAGE_SIZE - pgoff < xfsize)
 			xfsize = PAGE_SIZE_64 - pgoff;
-		if (uap->nbytes && xfsize > (uap->nbytes - sbytes))
-			xfsize = uap->nbytes - sbytes;
+		if (nbytes && xfsize > (nbytes - sbytes))
+			xfsize = nbytes - sbytes;
 		if (xfsize <= 0)
 			break;
-		/*
-		 * Optimize the non-blocking case by looking at the socket space
-		 * before going to the extra work of constituting the sf_buf.
-		 */
-		if ((so->so_state & SS_NBIO) && sbspace(&so->so_snd) <= 0) {
-			if (so->so_state & SS_CANTSENDMORE)
-				error = EPIPE;
-			else
-				error = EAGAIN;
-			sbunlock(&so->so_snd, 0); /* will release lock */
-			goto done2;
-		}
-		/*
-		 * Attempt to look up the page. If the page doesn't exist or the
-		 * part we're interested in isn't valid, then read it from disk.
-		 * If some other part of the kernel has this page (i.e. it's busy),
-		 * then disk I/O may be occuring on it, so wait and retry.
-		 */
-		pg = vm_page_lookup(obj, pindex);
-		if (pg == NULL || (!(pg->flags & PG_BUSY) && !pg->busy &&
-		    !vm_page_is_valid(pg, pgoff, xfsize))) {
-			struct uio auio;
-			struct iovec aiov;
-			int bsize;
+		if (off + xfsize > file_size)
+			xfsize = file_size - off;
+		if (xfsize <= 0)
+			break;
 
-			if (pg == NULL) {
-				pg = vm_page_alloc(obj, pindex, VM_ALLOC_NORMAL);
-				if (pg == NULL) {
-					VM_WAIT;
-					goto retry_lookup;
-				}
-				/*
-				 * don't just clear PG_BUSY manually -
-				 * vm_page_alloc() should be considered opaque,
-				 * use the VM routine provided to clear
-				 * PG_BUSY.
-				 */
-				vm_page_wakeup(pg);
+		/*
+		 * Attempt to use larger than system page-size clusters for
+		 * large writes only if there is a jumbo cluster pool and
+		 * if the socket is marked accordingly.
+		 */
+		jumbocl = sosendjcl && njcl > 0 &&
+		    ((so->so_flags & SOF_MULTIPAGES) || sosendjcl_ignore_capab);
 
-			}
-			/*
-			 * Ensure that our page is still around when the I/O completes.
-			 */
-			vm_page_io_start(pg);
-			vm_page_wire(pg);
-			/*
-			 * Get the page from backing store.
-			 */
-			bsize = vp->v_mount->mnt_vfsstat.f_iosize;
-			auio.uio_iov = &aiov;
-			auio.uio_iovcnt = 1;
-			aiov.iov_base = 0;
-			aiov.iov_len = MAXBSIZE;
-			auio.uio_offset = trunc_page(off);
-			auio.uio_segflg = UIO_NOCOPY;
-			auio.uio_rw = UIO_READ;
-			uio_setresid(&auio, MAXBSIZE);
-			safecred = kauth_cred_proc_ref(p);
-			error = VOP_READ(vp, &auio, IO_VMIO | ((MAXBSIZE / bsize) << 16),
-			        safecred);
-			kauth_cred_unref(&safecred);
-			vm_page_flag_clear(pg, PG_ZERO);
-			vm_page_io_finish(pg);
-			if (error) {
-				vm_page_unwire(pg, 0);
-				/*
-				 * See if anyone else might know about this page.
-				 * If not and it is not valid, then free it.
-				 */
-				if (pg->wire_count == 0 && pg->valid == 0 &&
-				    pg->busy == 0 && !(pg->flags & PG_BUSY) &&
-				    pg->hold_count == 0)
-					vm_page_lock_queues();
-					vm_page_free(pg);
-					vm_page_unlock_queues();
-				sbunlock(&so->so_snd, 0); /* will release socket lock */
-				goto done2;
-			}
-		} else {
-			if ((pg->flags & PG_BUSY) || pg->busy)  {
-				s = splvm();
-				if ((pg->flags & PG_BUSY) || pg->busy) {
-					/*
-					 * Page is busy. Wait and retry.
-					 */
-					vm_page_flag_set(pg, PG_WANTED);
-					tsleep(pg, PVM, "sfpbsy", 0);
-					goto retry_lookup;
-				}
-			}
-			/*
-			 * Protect from having the page ripped out from beneath us.
-			 */
-			vm_page_wire(pg);
+		socket_unlock(so, 0);
+		alloc_sendpkt(M_WAIT, xfsize, &nbufs, &m0, jumbocl);
+		pktlen = mbuf_pkt_maxlen(m0);
+		if (pktlen < xfsize)
+			xfsize = pktlen;
+
+		auio = uio_createwithbuffer(nbufs, off, UIO_SYSSPACE,
+		    UIO_READ, &uio_buf[0], sizeof (uio_buf));
+		if (auio == NULL) {
+			//printf("sendfile: uio_createwithbuffer failed\n");
+			mbuf_freem(m0);
+			error = ENXIO;
+			socket_lock(so, 0);
+			goto done3;
 		}
-		/*
-		 * Allocate a kernel virtual page and insert the physical page
-		 * into it.
-		 */
-		sf = sf_buf_alloc();
-		sf->m = pg;
-		pmap_qenter(sf->kva, &pg, 1);
-		/*
-		 * Get an mbuf header and set it up as having external storage.
-		 */
-		MGETHDR(m, M_WAIT, MT_DATA);
-		if (m == NULL) {
-			error = ENOBUFS;
-			sbunlock(&so->so_snd, 0); /* will release socket lock */
-			goto done2;
+
+		for (i = 0, m = m0, uiolen = 0;
+		    i < nbufs && m != NULL && uiolen < xfsize;
+		    i++, m = mbuf_next(m)) {
+			size_t mlen = mbuf_maxlen(m);
+
+			if (mlen + uiolen > xfsize)
+				mlen = xfsize - uiolen;
+			mbuf_setlen(m, mlen);
+			uio_addiov(auio, CAST_USER_ADDR_T(mbuf_datastart(m)),
+			    mlen);
+			uiolen += mlen;
 		}
-		m->m_ext.ext_free = sf_buf_free;
-		m->m_ext.ext_ref = sf_buf_ref;
-		m->m_ext.ext_buf = (void *)sf->kva;
-		m->m_ext.ext_size = PAGE_SIZE;
-		m->m_data = (char *) sf->kva + pgoff;
-		m->m_flags |= M_EXT;
-		m->m_pkthdr.len = m->m_len = xfsize;
-		/*
-		 * Add the buffer to the socket buffer chain.
-		 */
+
+		if (xfsize != uio_resid(auio))
+			printf("sendfile: xfsize: %lld != uio_resid(auio): "
+			    "%lld\n", xfsize, uio_resid(auio));
+
+		KERNEL_DEBUG_CONSTANT((DBG_FNC_SENDFILE_READ | DBG_FUNC_START),
+		    uap->s, (unsigned int)((xfsize >> 32) & 0x0ffffffff),
+		    (unsigned int)(xfsize & 0x0ffffffff), 0, 0);
+		error = fo_read(fp, auio, FOF_OFFSET, &context);
+		socket_lock(so, 0);
+		if (error != 0) {
+			if (uio_resid(auio) != xfsize && (error == ERESTART ||
+			    error == EINTR || error == EWOULDBLOCK)) {
+				error = 0;
+			} else {
+				mbuf_freem(m0);
+				goto done3;
+			}
+		}
+		xfsize -= uio_resid(auio);
+		KERNEL_DEBUG_CONSTANT((DBG_FNC_SENDFILE_READ | DBG_FUNC_END),
+		    uap->s, (unsigned int)((xfsize >> 32) & 0x0ffffffff),
+		    (unsigned int)(xfsize & 0x0ffffffff), 0, 0);
+
+		if (xfsize == 0) {
+			//printf("sendfile: fo_read 0 bytes, EOF\n");
+			break;
+		}
+		if (xfsize + off > file_size)
+			printf("sendfile: xfsize: %lld + off: %lld > file_size:"
+			    "%lld\n", xfsize, off, file_size);
+		for (i = 0, m = m0, rlen = 0;
+		    i < nbufs && m != NULL && rlen < xfsize;
+		    i++, m = mbuf_next(m)) {
+			size_t mlen = mbuf_maxlen(m);
+
+			if (rlen + mlen > xfsize)
+				mlen = xfsize - rlen;
+			mbuf_setlen(m, mlen);
+
+			rlen += mlen;
+		}
+		mbuf_pkthdr_setlen(m0, xfsize);
+
 retry_space:
 		/*
 		 * Make sure that the socket is still able to take more data.
@@ -2008,69 +2284,130 @@ retry_space:
 				error = so->so_error;
 				so->so_error = 0;
 			}
-			m_freem(m);
-			sbunlock(&so->so_snd, 0); /* will release socket lock */
-			goto done2;
+			m_freem(m0);
+			goto done3;
 		}
 		/*
 		 * Wait for socket space to become available. We do this just
 		 * after checking the connection state above in order to avoid
 		 * a race condition with sbwait().
 		 */
-		if (sbspace(&so->so_snd) < so->so_snd.sb_lowat) {
+		if (sbspace(&so->so_snd) < (long)so->so_snd.sb_lowat) {
 			if (so->so_state & SS_NBIO) {
-				m_freem(m);
-				sbunlock(&so->so_snd, 0); /* will release socket lock */
+				m_freem(m0);
 				error = EAGAIN;
-				goto done2;
+				goto done3;
 			}
+			KERNEL_DEBUG_CONSTANT((DBG_FNC_SENDFILE_WAIT |
+			    DBG_FUNC_START), uap->s, 0, 0, 0, 0);
 			error = sbwait(&so->so_snd);
+			KERNEL_DEBUG_CONSTANT((DBG_FNC_SENDFILE_WAIT|
+			    DBG_FUNC_END), uap->s, 0, 0, 0, 0);
 			/*
 			 * An error from sbwait usually indicates that we've
 			 * been interrupted by a signal. If we've sent anything
 			 * then return bytes sent, otherwise return the error.
 			 */
 			if (error) {
-				m_freem(m);
-				sbunlock(&so->so_snd, 0);
-				goto done2;
+				m_freem(m0);
+				goto done3;
 			}
 			goto retry_space;
 		}
-		error = (*so->so_proto->pr_usrreqs->pru_send)(so, 0, m, 0, 0, p);
-		splx(s);
+		{
+			/*
+			 * Socket filter processing
+			 */
+			struct socket_filter_entry *filter;
+			int filtered = 0;
+			struct mbuf *control = NULL;
+			boolean_t recursive = (so->so_send_filt_thread != NULL);
+
+			error = 0;
+			for (filter = so->so_filt; filter && (error == 0);
+			    filter = filter->sfe_next_onsocket) {
+				if (filter->sfe_filter->sf_filter.sf_data_out) {
+					if (filtered == 0) {
+						filtered = 1;
+						so->so_send_filt_thread =
+						    current_thread();
+						sflt_use(so);
+						socket_unlock(so, 0);
+					}
+					error = filter->sfe_filter->sf_filter.
+					    sf_data_out(filter->sfe_cookie, so,
+					    NULL, &m0, &control, 0);
+				}
+			}
+
+			if (filtered) {
+				/*
+				 * At this point, we've run at least one filter.
+				 * The socket is unlocked as is the socket
+				 * buffer.  Clear the recorded filter thread
+				 * only when we are outside of a filter's
+				 * context.  This allows for a filter to issue
+				 * multiple inject calls from its sf_data_out
+				 * callback routine.
+				 */
+				socket_lock(so, 0);
+				sflt_unuse(so);
+				if (!recursive)
+					so->so_send_filt_thread = 0;
+				if (error) {
+					if (error == EJUSTRETURN) {
+						error = 0;
+						continue;
+					}
+					goto done3;
+				}
+			}
+			/*
+			 * End Socket filter processing
+			 */
+		}
+		KERNEL_DEBUG_CONSTANT((DBG_FNC_SENDFILE_SEND | DBG_FUNC_START),
+		    uap->s, 0, 0, 0, 0);
+		error = (*so->so_proto->pr_usrreqs->pru_send)(so, 0, m0,
+		    0, 0, p);
+		KERNEL_DEBUG_CONSTANT((DBG_FNC_SENDFILE_SEND | DBG_FUNC_START),
+		    uap->s, 0, 0, 0, 0);
 		if (error) {
-			sbunlock(&so->so_snd, 0); /* will release socket lock */
-			goto done2;
+			goto done3;
 		}
 	}
-	sbunlock(&so->so_snd, 0); /* will release socket lock */
-
+	sbunlock(&so->so_snd, 0);	/* will unlock socket */
 	/*
 	 * Send trailers. Wimp out and use writev(2).
 	 */
-	if (uap->hdtr != NULL && hdtr.trailers != NULL) {
-			nuap.fd = uap->s;
-			nuap.iovp = hdtr.trailers;
-			nuap.iovcnt = hdtr.trl_cnt;
-			error = writev(p, &nuap);
-			if (error)
-				goto done2;
-			sbytes += p->p_retval[0];
+	if (uap->hdtr != USER_ADDR_NULL &&
+	    user_hdtr.trailers != USER_ADDR_NULL) {
+		bzero(&nuap, sizeof (struct writev_args));
+		nuap.fd = uap->s;
+		nuap.iovp = user_hdtr.trailers;
+		nuap.iovcnt = user_hdtr.trl_cnt;
+		error = writev_nocancel(p, &nuap, &writev_retval);
+		if (error)
+			goto done2;
+		sbytes += writev_retval;
 	}
 done2:
 	file_drop(uap->s);
 done1:
 	file_drop(uap->fd);
 done:
-	if (uap->sbytes != NULL) {
+	if (uap->nbytes != USER_ADDR_NULL) {
 		/* XXX this appears bogus for some early failure conditions */
-		copyout(&sbytes, CAST_USER_ADDR_T(uap->sbytes), sizeof(off_t));
+		copyout(&sbytes, uap->nbytes, sizeof (off_t));
 	}
+	KERNEL_DEBUG_CONSTANT((DBG_FNC_SENDFILE | DBG_FUNC_END), uap->s,
+	    (unsigned int)((sbytes >> 32) & 0x0ffffffff),
+	    (unsigned int)(sbytes & 0x0ffffffff), error, 0);
 	return (error);
 done3:
-	socket_unlock(so, 1);
+	sbunlock(&so->so_snd, 0);	/* will unlock socket */
 	goto done2;
 }
 
-#endif
+
+#endif /* SENDFILE */

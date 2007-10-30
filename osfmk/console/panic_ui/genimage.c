@@ -1518,7 +1518,7 @@ WriteQTRawFile( FILE * ostream, unsigned char * data, int height, int width, int
 	image_header.vRes =  72 << 16;
 	image_header.dataSize = csize;
 	image_header.frameCount = 1;
-	strcpy(image_header.name, " None"); 
+	strlcpy(image_header.name, " None", sizeof(image_header.name)); 
 	image_header.name[0] = 4;
 	image_header.depth = depth*8;
 	image_header.clutID = (depth==1) ? 8 : -1;

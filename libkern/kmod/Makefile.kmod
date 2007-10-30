@@ -18,9 +18,16 @@ LIB_INSTALL_FLAGS = 	-p -m 444
 
 CFLAGS += -Wall -Wno-four-char-constants
 CFLAGS_PPC += -mlong-branch
+CFLAGS_ARM += -mlong-calls
 
+ifneq ($(MACHINE_CONFIG), DEFAULT)
+COMPOBJROOT = $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)_$(MACHINE_CONFIG)/$(COMPONENT)/kmod
+INSTOBJROOT = $(OBJROOT)/$(INSTALL_TYPE)_$(ARCH_CONFIG)_$(MACHINE_CONFIG)/$(COMPONENT)/kmod
+else
 COMPOBJROOT = $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/kmod
 INSTOBJROOT = $(OBJROOT)/$(INSTALL_TYPE)_$(ARCH_CONFIG)/$(COMPONENT)/kmod
+endif
+
 
 KMOD_CFILES    = c_start.c c_stop.c
 KMODCPP_CFILES = cplus_start.c cplus_stop.c
@@ -44,14 +51,18 @@ do_build_all: $(COMPOBJROOT)/$(KMOD_NAME).a $(COMPOBJROOT)/$(KMODCPP_NAME).a
 $(INSTALL_DIR)/%.a: $(INSTOBJROOT)/%.a
 	@allarchs="";							\
 	for onearch in $(INSTALL_ARCHS); do				\
-            archdir=$(OBJROOT)/$(KERNEL_CONFIG)_$$onearch/$(COMPONENT);	\
-	    if [ -e $$archdir/kmod/$(*F).a ]; then			\
-		allarchs="$$allarchs $$archdir/kmod/$(*F).a";		\
+		if [ $(MACHINE_CONFIG) = DEFAULT ] ; then	\
+			archdir=$(OBJROOT)/$(KERNEL_CONFIG)_$${onearch}/$(COMPONENT);	\
+		else		\
+			archdir=$(OBJROOT)/$(KERNEL_CONFIG)_$${onearch}_$(MACHINE_CONFIG)/$(COMPONENT);	\
+		fi;		\
+	    if [ -e $${archdir}/kmod/$(*F).a ]; then			\
+		allarchs="$${allarchs} $${archdir}/kmod/$(*F).a";		\
 	    fi;								\
 	done;								\
 	$(RM) $@ || true;						\
 	${MKDIR} $(INSTALL_DIR) $(SYMROOT);				\
-        cmd="lipo $$allarchs -create -output $(SYMROOT)/$(*F).a";	\
+        cmd="lipo $${allarchs} -create -output $(SYMROOT)/$(*F).a";	\
 	echo $$cmd; eval $$cmd;						\
 	cmd="install $(LIB_INSTALL_FLAGS) $(SYMROOT)/$(*F).a $@";	\
 	echo $$cmd; eval $$cmd
