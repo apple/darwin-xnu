@@ -191,7 +191,7 @@ ether_pre_output(
 	eh = (struct ether_header *)dst_netaddr->sa_data;
 	bcopy((caddr_t)eh->ether_dhost, (caddr_t)edst, 6);
 		
-	*(u_short *)type = m->m_pkthdr.len;
+	*(u_short *)type = htons(m->m_pkthdr.len);
     }
     break;
 

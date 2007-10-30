@@ -102,6 +102,6 @@ extern size_t esp_hdrsiz(struct ipsecrequest *);
 extern int esp_schedule(const struct esp_algorithm *, struct secasvar *);
 extern int esp_auth(struct mbuf *, size_t, size_t,
 	struct secasvar *, u_char *);
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
-#endif _NETINET6_ESP_H_
+#endif /* _NETINET6_ESP_H_ */

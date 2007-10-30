@@ -104,6 +104,14 @@ type task_t = mach_port_t
 #endif	/* KERNEL_SERVER */
 		;
 
+type task_name_t = mach_port_t
+#if	KERNEL_SERVER
+		intran: task_name_t convert_port_to_task_name(mach_port_t)
+		outtran: mach_port_t convert_task_name_to_port(task_name_t)
+		destructor: task_name_deallocate(task_name_t)
+#endif	/* KERNEL_SERVER */
+		;
+
 type thread_t = mach_port_t
 #if	KERNEL_SERVER
 		intran: thread_t convert_port_to_thread(mach_port_t)

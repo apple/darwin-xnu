@@ -75,8 +75,8 @@
 #define DB_MAX_THREADID	0x10000		/* max # of threads in a task */
 #define DB_MAX_PSETS	0x10000		/* max # of processor sets */
 
-task_t		db_default_task;	/* default target task */
-thread_t	db_default_act;		/* default target thr_act */
+task_t		db_default_task = TASK_NULL;	/* default target task */
+thread_t	db_default_act = THREAD_NULL;		/* default target thr_act */
 
 
 

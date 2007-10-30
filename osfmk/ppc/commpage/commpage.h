@@ -81,7 +81,7 @@ extern	char	*commPagePtr32;				// virt address of 32-bit commpage in kernel map
 extern	char	*commPagePtr64;				// virt address of 64-bit commpage in kernel map
 
 
-extern	void	commpage_set_timestamp(uint64_t tbr,uint32_t secs,uint32_t usecs,uint32_t ticks_per_sec);
+extern	void	commpage_set_timestamp(uint64_t tbr, uint64_t secs, uint32_t ticks_per_sec);
 extern	int		commpage_time_dcba( void );
 
 #endif	/* __ASSEMBLER__ */

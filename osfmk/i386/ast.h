@@ -62,13 +62,6 @@
 /*
  * Machine-dependent AST file for machines with no hardware AST support.
  *
- * For the I386, we define AST_I386_FP to handle delayed
- * floating-point exceptions.  The FPU may interrupt on errors
- * while the user is not running (in kernel or other thread running).
  */
-
-#define	AST_I386_FP	0x80000000
-#define MACHINE_AST_PER_THREAD  AST_I386_FP
-
 
 #endif	/* _I386_AST_H_ */

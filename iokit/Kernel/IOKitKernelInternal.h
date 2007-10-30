@@ -46,17 +46,52 @@ kern_return_t IOIteratePageableMaps(vm_size_t size,
 vm_map_t IOPageableMapForAddress( vm_address_t address );
 SInt32 OSKernelStackRemaining( void );
 
+mach_vm_address_t
+IOKernelAllocateContiguous(mach_vm_size_t size, mach_vm_size_t alignment);
+void
+IOKernelFreeContiguous(mach_vm_address_t address, mach_vm_size_t size);
+
 extern vm_size_t debug_iomallocpageable_size;
 
 // osfmk/device/iokit_rpc.c
 // LP64todo - these need to expand 
-extern kern_return_t IOMapPages( vm_map_t map, vm_offset_t va, vm_offset_t pa,
-                                 vm_size_t length, unsigned int mapFlags);
-extern kern_return_t IOUnmapPages(vm_map_t map, vm_offset_t va, vm_size_t length);
+extern kern_return_t IOMapPages(vm_map_t map, mach_vm_address_t va, mach_vm_address_t pa,
+			mach_vm_size_t length, unsigned int options);
+extern kern_return_t IOUnmapPages(vm_map_t map, mach_vm_address_t va, mach_vm_size_t length);
+
+extern kern_return_t IOProtectCacheMode(vm_map_t map, mach_vm_address_t va,
+					mach_vm_size_t length, unsigned int mapFlags);
+
+extern ppnum_t IOGetLastPageNumber(void);
+
+extern ppnum_t gIOLastPage;
 
 /* Physical to physical copy (ints must be disabled) */
 extern void bcopy_phys(addr64_t from, addr64_t to, int size);
 
 __END_DECLS
+
+// Used for dedicated communications for IODMACommand
+enum  {
+    kIOMDWalkSegments         = 0x00000001,
+    kIOMDFirstSegment	      = 0x00000002 | kIOMDWalkSegments,
+    kIOMDGetCharacteristics   = 0x00000004,
+    kIOMDLastDMACommandOperation
+};
+struct IOMDDMACharacteristics {
+    UInt64 fLength;
+    UInt32 fSGCount;
+    UInt32 fPages;
+    UInt32 fPageAlign;
+    ppnum_t fHighestPage;
+    IODirection fDirection;
+    UInt8 fIsMapped, fIsPrepared;
+};
+struct IOMDDMAWalkSegmentArgs {
+    UInt64 fOffset;			// Input/Output offset
+    UInt64 fIOVMAddr, fLength;		// Output variables
+    UInt8 fMapped;			// Input Variable, Require mapped IOVMA
+};
+typedef UInt8 IOMDDMAWalkSegmentState[128];
 
 #endif /* ! _IOKIT_KERNELINTERNAL_H */

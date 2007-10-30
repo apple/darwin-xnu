@@ -261,6 +261,7 @@ extern Boolean	OSTestAndSet(UInt32 bit, UInt8 * startAddress);
 
 extern Boolean	OSTestAndClear(UInt32 bit, UInt8 * startAddress);
 
+#ifdef __ppc__
 /*! @function OSEnqueueAtomic
     @abstract Singly linked list head insertion, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
     @discussion The OSEnqueueAtomic function places an element at the head of a single linked list, which is specified with the address of a head pointer, listHead. The element structure has a next field whose offset is specified.
@@ -284,6 +285,7 @@ extern void	OSEnqueueAtomic(void ** listHead, void * element,
 
 extern void *	OSDequeueAtomic(void ** listHead,
 				SInt32 elementNextFieldOffset);
+#endif /* __ppc__ */
 
 /*! @function OSSynchronizeIO
     @abstract The OSSynchronizeIO routine ensures orderly load and store operations to noncached memory mapped I/O devices.

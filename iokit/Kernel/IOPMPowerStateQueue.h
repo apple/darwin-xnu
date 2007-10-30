@@ -55,6 +55,9 @@ private:
     };
 
     void                        *changes;
+#ifdef __i386__
+    IOLock                      *tmpLock;
+#endif
 
 protected:
     virtual bool checkForWork(void);

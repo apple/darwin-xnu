@@ -300,6 +300,14 @@ extern vm_offset_t	vm_page_fictitious_addr;
 
 extern boolean_t	vm_page_deactivate_hint;
 
+// 0 = all pages avail, 1 = disable high mem, 2 = prefer himem
+extern int		vm_himemory_mode;
+
+extern ppnum_t		vm_lopage_poolend;
+extern int		vm_lopage_poolsize;
+extern uint64_t		max_valid_dma_address;
+
+
 /*
  * Prototypes for functions exported by this module.
  */
@@ -331,6 +339,8 @@ extern int		vm_pool_low(void);
 
 extern vm_page_t	vm_page_grab(void);
 
+extern vm_page_t	vm_page_grablo(void);
+
 extern void		vm_page_release(
 					vm_page_t	page);
 
@@ -338,6 +348,10 @@ extern boolean_t	vm_page_wait(
 					int		interruptible );
 
 extern vm_page_t	vm_page_alloc(
+					vm_object_t		object,
+					vm_object_offset_t	offset);
+
+extern vm_page_t	vm_page_alloclo(
 					vm_object_t		object,
 					vm_object_offset_t	offset);
 

@@ -40,6 +40,7 @@
 #include <machine/machparam.h>		/* spl definitions */
 #include <types.h>
 #include <console/video_console.h>
+#include <console/serial_protos.h>
 #include <kern/kalloc.h>
 #include <kern/thread.h>
 #include <ppc/misc_protos.h>
@@ -62,29 +63,9 @@
  */
 
 const int console_unit = 0;
-const int console_chan_default = CONSOLE_PORT;
+const uint32_t console_chan_default = CONSOLE_PORT;
 #define console_chan (console_chan_default) /* ^ cpu_number()) */
 
-#define OPS(putc, getc, nosplputc, nosplgetc) putc, getc
-
-const struct console_ops {
-	int	(*putc)(int, int, int);
-	int	(*getc)(int, int, boolean_t, boolean_t);
-} cons_ops[] = {
-#define SCC_CONS_OPS 0
-	{OPS(scc_putc, scc_getc, no_spl_scputc, no_spl_scgetc)},
-#define VC_CONS_OPS 1
-	{OPS(vcputc, vcgetc, no_spl_vcputc, no_spl_vcgetc)},
-};
-#define NCONSOPS (sizeof cons_ops / sizeof cons_ops[0])
-
-#if SERIAL_CONSOLE_DEFAULT
-#define CONS_OPS SCC_CONS_OPS
-#define CONS_NAME "com"
-#else
-#define CONS_OPS VC_CONS_OPS
-#define CONS_NAME "vc"
-#endif
 
 #define MP_SAFE_CONSOLE 1	/* Set this to 1 to allow more than 1 processor to print at once */
 #if MP_SAFE_CONSOLE
@@ -103,8 +84,17 @@ volatile unsigned int sconowner=-1;								/* Mark who's actually writing */
 
 #endif
 
+#define OPS(putc, getc, nosplputc, nosplgetc) putc, getc
 
-unsigned int cons_ops_index = CONS_OPS;
+console_ops_t cons_ops[] = {
+	{OPS(scc_putc, scc_getc, no_spl_scputc, no_spl_scgetc)},
+	{OPS(vcputc, vcgetc, no_spl_vcputc, no_spl_vcgetc)},
+};
+
+uint32_t nconsops = (sizeof cons_ops / sizeof cons_ops[0]);
+
+uint32_t cons_ops_index = VC_CONS_OPS;
+
 unsigned int killprint = 0;
 unsigned int debcnputc = 0;
 extern unsigned int	mappingdeb0;
@@ -317,43 +307,6 @@ cnmaygetc()
 {
 	return cons_ops[cons_ops_index].getc(console_unit, console_chan,
 					     FALSE, FALSE);
-}
-
-boolean_t console_is_serial()
-{
-	return cons_ops_index == SCC_CONS_OPS;
-}
-
-int
-switch_to_video_console()
-{
-	int old_cons_ops = cons_ops_index;
-	cons_ops_index = VC_CONS_OPS;
-	return old_cons_ops;
-}
-
-int
-switch_to_serial_console()
-{
-	int old_cons_ops = cons_ops_index;
-	cons_ops_index = SCC_CONS_OPS;
-	return old_cons_ops;
-}
-
-/* The switch_to_{video,serial,kgdb}_console functions return a cookie that
-   can be used to restore the console to whatever it was before, in the
-   same way that splwhatever() and splx() work.  */
-void
-switch_to_old_console(int old_console)
-{
-	static boolean_t squawked;
-	unsigned int ops = old_console;
-
-	if (ops >= NCONSOPS && !squawked) {
-		squawked = TRUE;
-		printf("switch_to_old_console: unknown ops %d\n", ops);
-	} else
-		cons_ops_index = ops;
 }
 
 

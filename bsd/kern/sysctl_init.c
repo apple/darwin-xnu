@@ -56,9 +56,12 @@ extern struct sysctl_oid sysctl__hw_logicalcpu_max;
 extern struct sysctl_oid sysctl__hw_byteorder;
 extern struct sysctl_oid sysctl__hw_cputype;
 extern struct sysctl_oid sysctl__hw_cpusubtype;
+extern struct sysctl_oid sysctl__hw_cpufamily;
+extern struct sysctl_oid sysctl__hw_cacheconfig;
 extern struct sysctl_oid sysctl__hw_physmem;
 extern struct sysctl_oid sysctl__hw_usermem;
 extern struct sysctl_oid sysctl__hw_pagesize;
+extern struct sysctl_oid sysctl__hw_pms;
 extern struct sysctl_oid sysctl__hw_epoch;
 extern struct sysctl_oid sysctl__hw_vectorunit;
 extern struct sysctl_oid sysctl__hw_busfrequency;
@@ -90,6 +93,12 @@ extern struct sysctl_oid sysctl__hw_l2cachesize_compat;
 extern struct sysctl_oid sysctl__hw_l3cachesize_compat;
 extern struct sysctl_oid sysctl__hw_tbfrequency_compat;
 
+#if __i386__
+extern struct sysctl_oid sysctl__sysctl_proc_exec_affinity;
+#endif
+extern struct sysctl_oid sysctl__sysctl_proc_cputype;
+extern struct sysctl_oid sysctl__sysctl_proc_native;
+
 extern struct sysctl_oid sysctl__kern_sysv_shmmax;
 extern struct sysctl_oid sysctl__kern_sysv_shmmin;
 extern struct sysctl_oid sysctl__kern_sysv_shmmni;
@@ -106,6 +115,10 @@ extern struct sysctl_oid sysctl__kern_sysv_semmnu;
 extern struct sysctl_oid sysctl__kern_sysv_semmsl;
 extern struct sysctl_oid sysctl__kern_sysv_semume;
 
+extern struct sysctl_oid sysctl__kern_tfp_policy;
+extern struct sysctl_oid sysctl__kern_tfp_read_group;
+extern struct sysctl_oid sysctl__kern_tfp_rw_group;
+
 extern struct sysctl_oid sysctl__kern_dummy;
 extern struct sysctl_oid sysctl__kern_ipc_maxsockbuf;
 extern struct sysctl_oid sysctl__kern_ipc_mbstat;
@@ -119,8 +132,13 @@ extern struct sysctl_oid sysctl__kern_posix;
 extern struct sysctl_oid sysctl__kern_posix_sem;
 extern struct sysctl_oid sysctl__kern_posix_sem_max;
 extern struct sysctl_oid sysctl__kern_sugid_scripts;
+extern struct sysctl_oid sysctl__kern_nbuf;
+extern struct sysctl_oid sysctl__kern_maxnbuf;
 extern struct sysctl_oid sysctl__kern_always_do_fullfsync;
 extern struct sysctl_oid sysctl__kern_flush_cache_on_write;
+extern struct sysctl_oid sysctl__kern_exec;
+extern struct sysctl_oid sysctl__kern_exec_archhandler;
+extern struct sysctl_oid sysctl__kern_exec_archhandler_powerpc;
 extern struct sysctl_oid sysctl__net_inet_icmp_icmplim;
 extern struct sysctl_oid sysctl__net_inet_icmp_maskrepl;
 extern struct sysctl_oid sysctl__net_inet_icmp_timestamp;
@@ -326,6 +344,7 @@ extern struct sysctl_oid sysctl__vfs_generic_noremotehang;
 
 extern struct sysctl_oid sysctl__kern_ipc;
 extern struct sysctl_oid sysctl__kern_sysv;
+extern struct sysctl_oid sysctl__kern_tfp;
 
 extern struct sysctl_oid sysctl__net_inet;
 
@@ -382,6 +401,7 @@ extern struct sysctl_oid sysctl__machdep;
 extern struct sysctl_oid sysctl__net;
 extern struct sysctl_oid sysctl__debug;
 extern struct sysctl_oid sysctl__vfs;
+extern struct sysctl_oid sysctl__vm;
 extern struct sysctl_oid sysctl__sysctl;
 
 #if INET6
@@ -481,6 +501,7 @@ extern struct sysctl_oid sysctl__net_key_natt_keepalive_interval;
 extern struct sysctl_oid sysctl__net_key_pfkeystat;
 #endif
 
+extern struct sysctl_oid sysctl__vm_shared_region_trace_level;
 
 struct sysctl_oid *newsysctl_list[] =
 {
@@ -490,6 +511,7 @@ struct sysctl_oid *newsysctl_list[] =
     &sysctl__net,
     &sysctl__debug,
     &sysctl__vfs,
+    &sysctl__vm,
     &sysctl__sysctl,
     &sysctl__debug_bpf_bufsize,
     &sysctl__debug_bpf_maxbufsize,
@@ -509,6 +531,12 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__kern_posix_sem
     ,&sysctl__kern_posix_sem_max
 
+#if __i386__
+    ,&sysctl__sysctl_proc_exec_affinity
+#endif
+    ,&sysctl__sysctl_proc_cputype
+    ,&sysctl__sysctl_proc_native
+	
     ,&sysctl__kern_sysv_shmmax
     ,&sysctl__kern_sysv_shmmin
     ,&sysctl__kern_sysv_shmmni
@@ -525,6 +553,11 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__kern_sysv_semume
     ,&sysctl__kern_dummy
 
+    ,&sysctl__kern_tfp
+    ,&sysctl__kern_tfp_policy
+    ,&sysctl__kern_tfp_read_group
+    ,&sysctl__kern_tfp_rw_group
+
     ,&sysctl__kern_ipc_maxsockbuf
     ,&sysctl__kern_ipc_mbstat
     ,&sysctl__kern_ipc_nmbclusters
@@ -537,6 +570,11 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__kern_sugid_scripts
     ,&sysctl__kern_always_do_fullfsync
     ,&sysctl__kern_flush_cache_on_write
+    ,&sysctl__kern_exec
+    ,&sysctl__kern_exec_archhandler
+    ,&sysctl__kern_exec_archhandler_powerpc
+    ,&sysctl__kern_nbuf
+    ,&sysctl__kern_maxnbuf
 
     ,&sysctl__hw_machine
     ,&sysctl__hw_model
@@ -549,6 +587,8 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__hw_byteorder
     ,&sysctl__hw_cputype
     ,&sysctl__hw_cpusubtype
+    ,&sysctl__hw_cpufamily
+    ,&sysctl__hw_cacheconfig
     ,&sysctl__hw_physmem
     ,&sysctl__hw_usermem
     ,&sysctl__hw_pagesize
@@ -573,6 +613,7 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__hw_optional_floatingpoint
 
     ,&sysctl__hw_pagesize_compat
+    ,&sysctl__hw_pms    
     ,&sysctl__hw_busfrequency_compat
     ,&sysctl__hw_cpufrequency_compat
     ,&sysctl__hw_cachelinesize_compat
@@ -918,6 +959,9 @@ struct sysctl_oid *newsysctl_list[] =
    ,&sysctl__net_inet_ipsec_bypass
    ,&sysctl__net_inet_ipsec_esp_port
 #endif
+
+    ,&sysctl__vm_shared_region_trace_level
+
     ,(struct sysctl_oid *) 0
 };
 

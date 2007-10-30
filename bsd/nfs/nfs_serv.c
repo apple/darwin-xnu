@@ -1171,11 +1171,7 @@ nfsrv_write(nfsd, slp, procp, mrq)
 			*tl++ = txdr_unsigned(stable);
 		else
 			*tl++ = txdr_unsigned(NFSV3WRITE_FILESYNC);
-		/*
-		 * Actually, there is no need to txdr these fields,
-		 * but it may make the values more human readable,
-		 * for debugging purposes.
-		 */
+		/* write verifier */
 		*tl++ = txdr_unsigned(boottime_sec());
 		*tl = txdr_unsigned(0);
 	} else {
@@ -1475,11 +1471,7 @@ loop1:
 			    nfsm_build(tl, u_long *, 4 * NFSX_UNSIGNED);
 			    *tl++ = txdr_unsigned(nfsd->nd_len);
 			    *tl++ = txdr_unsigned(swp->nd_stable);
-			    /*
-			     * Actually, there is no need to txdr these fields,
-			     * but it may make the values more human readable,
-			     * for debugging purposes.
-			     */
+			    /* write verifier */
 			    *tl++ = txdr_unsigned(boottime_sec());
 			    *tl = txdr_unsigned(0);
 			} else {
@@ -1605,7 +1597,10 @@ nfsrvw_sort(list, num)
 /*
  * copy credentials making sure that the result can be compared with bcmp().
  *
- * XXX ILLEGAL
+ * NOTE:	This function is only intended to operate on a real input
+ *		credential and a template output credential; the template
+ *		ouptut credential is intended to then be used as an argument
+ *		to kauth_cred_create() - AND NEVER REFERENCED OTHERWISE.
  */
 void
 nfsrv_setcred(kauth_cred_t incred, kauth_cred_t outcred)
@@ -1613,7 +1608,6 @@ nfsrv_setcred(kauth_cred_t incred, kauth_cred_t outcred)
 	int i;
 
 	bzero((caddr_t)outcred, sizeof (*outcred));
-	outcred->cr_ref = 1;
 	outcred->cr_uid = kauth_cred_getuid(incred);
 	outcred->cr_ngroups = incred->cr_ngroups;
 	for (i = 0; i < incred->cr_ngroups; i++)
@@ -1981,8 +1975,6 @@ nfsrv_mknod(nfsd, slp, procp, mrq)
 
 	context.vc_proc = procp;
 	context.vc_ucred = nfsd->nd_cr;
-	hacked_context.vc_proc = procp;
-	hacked_context.vc_ucred = proc_ucred(procp);
 
 	/*
 	 * Save the original credential UID in case they are
@@ -2103,6 +2095,9 @@ nfsrv_mknod(nfsd, slp, procp, mrq)
 			vnode_put(vp);
 			vp = NULL;
 		}
+		hacked_context.vc_proc = procp;
+		hacked_context.vc_ucred = kauth_cred_proc_ref(procp);
+
 		nd.ni_cnd.cn_nameiop = LOOKUP;
 		nd.ni_cnd.cn_flags &= ~LOCKPARENT;
 		nd.ni_cnd.cn_context = &hacked_context;
@@ -2114,6 +2109,7 @@ nfsrv_mknod(nfsd, slp, procp, mrq)
 			if (nd.ni_cnd.cn_flags & ISSYMLINK)
 			        error = EINVAL;
 		}
+		kauth_cred_unref(&hacked_context.vc_ucred);
 	}
 out1:
 	if (xacl != NULL)
@@ -2361,9 +2357,9 @@ retry:
 
 	/* reset credential if it was remapped */
 	if (nfsd->nd_cr != saved_cred) {
-		kauth_cred_rele(nfsd->nd_cr);
+		kauth_cred_ref(saved_cred);
+		kauth_cred_unref(&nfsd->nd_cr);
 		nfsd->nd_cr = saved_cred;
-		kauth_cred_ref(nfsd->nd_cr);
 	}
 
 	tond.ni_cnd.cn_nameiop = RENAME;
@@ -2727,7 +2723,7 @@ out:
 	if (topath)
 		FREE_ZONE(topath, MAXPATHLEN, M_NAMEI);
 	if (saved_cred)
-		kauth_cred_rele(saved_cred);
+		kauth_cred_unref(&saved_cred);
 	return (0);
 
 nfsmout:
@@ -2766,7 +2762,7 @@ nfsmout:
 	if (topath)
 		FREE_ZONE(topath, MAXPATHLEN, M_NAMEI);
 	if (saved_cred)
-		kauth_cred_rele(saved_cred);
+		kauth_cred_unref(&saved_cred);
 	return (error);
 }
 
@@ -3733,6 +3729,7 @@ nfsrv_readdirplus(nfsd, slp, procp, mrq)
 	vnode_t vp, nvp;
 	struct flrep fl;
 	struct nfs_filehandle dnfh, *nfhp = (struct nfs_filehandle *)&fl.fl_fhsize;
+	u_long fhsize;
 	struct nfs_export *nx;
 	struct nfs_export_options *nxo;
 	uio_t auio;
@@ -3944,7 +3941,8 @@ again:
 			 */
 			fp = (struct nfs_fattr *)&fl.fl_fattr;
 			nfsm_srvfillattr(vap, fp);
-			fl.fl_fhsize = txdr_unsigned(nfhp->nfh_len);
+			fhsize = nfhp->nfh_len;
+			fl.fl_fhsize = txdr_unsigned(fhsize);
 			fl.fl_fhok = nfs_true;
 			fl.fl_postopok = nfs_true;
 			if (vnopflag & VNODE_READDIR_SEEKOFF32)
@@ -3989,7 +3987,7 @@ again:
 			/*
 			 * Now copy the flrep structure out.
 			 */
-			xfer = sizeof(struct flrep) - sizeof(fl.fl_nfh) + fl.fl_fhsize;
+			xfer = sizeof(struct flrep) - sizeof(fl.fl_nfh) + fhsize;
 			cp = (caddr_t)&fl;
 			while (xfer > 0) {
 				nfsm_clget;

@@ -52,7 +52,8 @@ extern int PEGetPlatformEpoch( void );
 enum {
   kPEHaltCPU,
   kPERestartCPU,
-  kPEHangCPU
+  kPEHangCPU,
+  kPEUPSDelayHaltCPU
 };
 extern int (*PE_halt_restart)(unsigned int type);
 extern int PEHaltRestart(unsigned int type);
@@ -272,6 +273,9 @@ public:
     virtual IOWorkLoop *getWorkLoop() const;
 
     virtual void free();
+
+    virtual bool attachToChild( IORegistryEntry * child,
+                                const IORegistryPlane * plane );
 
     OSMetaClassDeclareReservedUnused(IOPlatformExpertDevice,  0);
     OSMetaClassDeclareReservedUnused(IOPlatformExpertDevice,  1);

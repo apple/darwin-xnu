@@ -55,7 +55,7 @@ PPCcallEnt	PPCcalls[] = {
 	PPCcall(bb_settaskenv),			/* 0x6007 Set the BlueBox per thread task environment data */
 	PPCcall(vmm_stop_vm),			/* 0x6008 Stop a running VM */
 
-	PPCcall(dis),					/* 0x6009 CHUD Interface hook */
+	PPCcall(dis),					/* 0x6009 disabled */
 	
 	PPCcall(ppcNull),				/* 0x600A Null PPC syscall */
 	PPCcall(perfmon_control),		/* 0x600B performance monitor */

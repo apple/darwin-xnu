@@ -99,7 +99,7 @@ stack_init(void)
 		panic("stack_init: kmem_suballoc");
 
 	map_addr = vm_map_min(stack_map);
-	if (vm_map_enter(stack_map, &map_addr, vm_map_round_page(PAGE_SIZE), 0, VM_FLAGS_FIXED,
+	if (vm_map_enter(stack_map, &map_addr, vm_map_round_page(PAGE_SIZE), 0, (VM_MAKE_TAG(VM_MEMORY_STACK) | VM_FLAGS_FIXED),
 						VM_OBJECT_NULL, 0, FALSE, VM_PROT_NONE, VM_PROT_NONE, VM_INHERIT_DEFAULT) != KERN_SUCCESS)
 		panic("stack_init: vm_map_enter");
 }

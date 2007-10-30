@@ -151,5 +151,5 @@ lck_mtx_t *	udp_getlock (struct socket *, int);
 void *	udp_getlock (struct socket *, int);
 #endif
 
-#endif KERNEL_PRIVATE
-#endif _NETINET_UDP_VAR_H_
+#endif /* KERNEL_PRIVATE */
+#endif /* _NETINET_UDP_VAR_H_ */

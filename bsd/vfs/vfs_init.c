@@ -288,14 +288,12 @@ vfsinit()
 	struct mount * mp;
 	
 	/* Allocate vnode list lock group attribute and group */
-	vnode_list_lck_grp_attr= lck_grp_attr_alloc_init();
-	lck_grp_attr_setstat(vnode_list_lck_grp_attr);
+	vnode_list_lck_grp_attr = lck_grp_attr_alloc_init();
 
 	vnode_list_lck_grp = lck_grp_alloc_init("vnode list",  vnode_list_lck_grp_attr);
 	
 	/* Allocate vnode list lock attribute */
 	vnode_list_lck_attr = lck_attr_alloc_init();
-	//lck_attr_setdebug(vnode_list_lck_attr);
 
 	/* Allocate vnode list lock */
 	vnode_list_mtx_lock = lck_mtx_alloc_init(vnode_list_lck_grp, vnode_list_lck_attr);
@@ -305,36 +303,29 @@ vfsinit()
 
 	/* allocate vnode lock group attribute and group */
 	vnode_lck_grp_attr= lck_grp_attr_alloc_init();
-	lck_grp_attr_setstat(vnode_lck_grp_attr);
 
 	vnode_lck_grp = lck_grp_alloc_init("vnode",  vnode_lck_grp_attr);
 
 	/* Allocate vnode lock attribute */
 	vnode_lck_attr = lck_attr_alloc_init();
-	//lck_attr_setdebug(vnode_lck_attr);
 
 	/* Allocate fs config lock group attribute and group */
 	fsconf_lck_grp_attr= lck_grp_attr_alloc_init();
-	lck_grp_attr_setstat(fsconf_lck_grp_attr);
 
 	fsconf_lck_grp = lck_grp_alloc_init("fs conf",  fsconf_lck_grp_attr);
 	
 	/* Allocate fs config lock attribute */
 	fsconf_lck_attr = lck_attr_alloc_init();
-	//lck_attr_setdebug(fsconf_lck_attr);
-
 
 	/* Allocate mount point related lock structures  */
 
 	/* Allocate mount list lock group attribute and group */
 	mnt_list_lck_grp_attr= lck_grp_attr_alloc_init();
-	lck_grp_attr_setstat(mnt_list_lck_grp_attr);
 
 	mnt_list_lck_grp = lck_grp_alloc_init("mount list",  mnt_list_lck_grp_attr);
 	
 	/* Allocate mount list lock attribute */
 	mnt_list_lck_attr = lck_attr_alloc_init();
-	//lck_attr_setdebug(mnt_list_lck_attr);
 
 	/* Allocate mount list lock */
 	mnt_list_mtx_lock = lck_mtx_alloc_init(mnt_list_lck_grp, mnt_list_lck_attr);
@@ -342,13 +333,11 @@ vfsinit()
 
 	/* allocate mount lock group attribute and group */
 	mnt_lck_grp_attr= lck_grp_attr_alloc_init();
-	lck_grp_attr_setstat(mnt_lck_grp_attr);
 
 	mnt_lck_grp = lck_grp_alloc_init("mount",  mnt_lck_grp_attr);
 
 	/* Allocate mount lock attribute */
 	mnt_lck_attr = lck_attr_alloc_init();
-	//lck_attr_setdebug(mnt_lck_attr);
 
 	/*
 	 * Initialize the "console user" for access purposes:

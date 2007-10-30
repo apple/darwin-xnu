@@ -23,6 +23,7 @@ INSTINC_SUBDIRS_I386 =	\
 EXPORT_FILES = \
 	ar.h		\
 	stdarg.h	\
+	stdbool.h	\
 	stdint.h
 
 INSTALL_MI_LIST = 

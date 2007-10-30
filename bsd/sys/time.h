@@ -171,17 +171,33 @@ struct timespec {
 // LP64todo - should this move?
 #include <machine/types.h>	/* user_time_t */
 
-/* LP64 version of struct timeval.  time_t is a long and must grow when 
+/* LP64 version of struct timespec.  time_t is a long and must grow when 
+ * we're dealing with a 64-bit process.
+ * WARNING - keep in sync with struct timespec
+ */
+struct user_timespec {
+	user_time_t	tv_sec;		/* seconds */
+	int32_t	tv_nsec __attribute((aligned(8)));	/* and nanoseconds */
+};
+
+#endif
+#endif
+
+
+#ifdef KERNEL
+#ifndef _USERTIMEVAL
+#define _USERTIMEVAL
+
+#include <machine/types.h>	/* user_time_t */
+/*
+ * LP64 version of struct timeval.  time_t is a long and must grow when 
  * we're dealing with a 64-bit process.
  * WARNING - keep in sync with struct timeval
  */
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
 
 struct user_timeval {
 	user_time_t	tv_sec;		/* seconds */
-	suseconds_t	tv_usec;	/* and microseconds */
+	suseconds_t	tv_usec __attribute((aligned(8)));	/* and microseconds */
 };	
 
 struct	user_itimerval {
@@ -189,21 +205,9 @@ struct	user_itimerval {
 	struct	user_timeval it_value;		/* current value */
 };
 
-/* LP64 version of struct timespec.  time_t is a long and must grow when 
- * we're dealing with a 64-bit process.
- * WARNING - keep in sync with struct timespec
- */
-struct user_timespec {
-	user_time_t	tv_sec;		/* seconds */
-	int32_t	tv_nsec;	/* and nanoseconds */
-};
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
 #endif
-
 #endif // KERNEL
-#endif
+
 
 #define	TIMEVAL_TO_TIMESPEC(tv, ts) {					\
 	(ts)->tv_sec = (tv)->tv_sec;					\

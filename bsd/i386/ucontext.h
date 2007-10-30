@@ -33,20 +33,29 @@
 #include <sys/appleapiopts.h>
 #include <mach/thread_status.h>
 
-#ifdef __APPLE_API_UNSTABLE
-/* WARNING: THIS WILL CHANGE;  DO NOT COUNT ON THIS */
-/* Needs to be finalized as to what it should contain */
 #ifndef _POSIX_C_SOURCE
 struct mcontext
 #else /* _POSIX_C_SOURCE */
 struct __darwin_mcontext
 #endif /* _POSIX_C_SOURCE */
 {
-	struct sigcontext sc;
+#if __LP64__
+	x86_exception_state64_t	es;
+	x86_thread_state64_t 	ss;	
+	x86_float_state64_t	fs;
+#else
+	x86_exception_state32_t	es;
+	x86_thread_state32_t 	ss;	
+	x86_float_state32_t	fs;
+#endif
 };
 
 #ifndef _POSIX_C_SOURCE
-#define I386_MCONTEXT_SIZE	sizeof(struct mcontext)	
+#if __LP64__
+#define I386_MCONTEXT_SIZE	(x86_THREAD_STATE64_COUNT + x86_FLOAT_STATE64_COUNT + x86_EXCEPTION_STATE64_COUNT) * sizeof(int)
+#else
+#define I386_MCONTEXT_SIZE	(x86_THREAD_STATE32_COUNT + x86_FLOAT_STATE32_COUNT + x86_EXCEPTION_STATE32_COUNT) * sizeof(int)
+#endif
 #endif /* _POSIX_C_SOURCE */
 
 #ifndef _MCONTEXT_T
@@ -54,21 +63,20 @@ struct __darwin_mcontext
 typedef __darwin_mcontext_t	mcontext_t;
 #endif
 
-#ifndef _POSIX_C_SOURCE
 
-struct mcontext64
-{
-	struct sigcontext sc;
+#ifdef XNU_KERNEL_PRIVATE
+struct mcontext64 {
+	x86_exception_state64_t	es;
+	x86_thread_state64_t 	ss;	
+	x86_float_state64_t	fs;
 };
-#define I386_MCONTEXT64_SIZE	sizeof(struct mcontext64)	
 
-#ifndef _MCONTEXT64_T
-#define _MCONTEXT64_T
-typedef struct mcontext64 * mcontext64_t;
+struct mcontext32 {
+	x86_exception_state32_t	es;
+	x86_thread_state32_t 	ss;	
+	x86_float_state32_t	fs;
+};
 #endif
 
-#endif /* _POSIX_C_SOURCE */
-
-#endif /* __APPLE_API_UNSTABLE */
 
 #endif /* _I386_UCONTEXT_H_ */

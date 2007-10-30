@@ -333,34 +333,12 @@
 #   define	__DARWIN_LDBL_COMPAT2(x) /* nothing */
 #   define	__DARWIN_LONG_DOUBLE_IS_DOUBLE	1
 #  endif
-#elif defined(__i386__) || defined(__ppc64__)
+#elif defined(__i386__) || defined(__ppc64__) || defined(__x86_64__)
 #  define	__DARWIN_LDBL_COMPAT(x)	/* nothing */
 #  define	__DARWIN_LDBL_COMPAT2(x) /* nothing */
 #  define	__DARWIN_LONG_DOUBLE_IS_DOUBLE	0
 #else
 #  error Unknown architecture
 #endif
-
-/*
- * Structure alignment control macros.  These specify how certain
- * shared structures should be aligned.  Some may need backward
- * compatible legacy (POWER) alignment, while others may need
- * forward compatible (NATURAL) alignment.
- */
-#if !defined(__DARWIN_ALIGN_POWER)
-#if defined(__ppc64__)
-#define __DARWIN_ALIGN_POWER 1
-#else
-#define __DARWIN_ALIGN_POWER 0
-#endif
-#endif /* __DARWIN_ALIGN_POWER */
-
-#if !defined(__DARWIN_ALIGN_NATURAL)
-#if defined(__ppc__) && defined(KERNEL)
-#define __DARWIN_ALIGN_NATURAL 1
-#else
-#define __DARWIN_ALIGN_NATURAL 0
-#endif
-#endif /* __DARWIN_ALIGN_NATURAL */
 
 #endif /* !_CDEFS_H_ */

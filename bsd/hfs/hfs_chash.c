@@ -102,11 +102,8 @@ hfs_chashinit()
 	cnodehashtbl = hashinit(desiredvnodes, M_HFSMNT, &cnodehash);
 
 	chash_lck_grp_attr= lck_grp_attr_alloc_init();
-	lck_grp_attr_setstat(chash_lck_grp_attr);
 	chash_lck_grp  = lck_grp_alloc_init("cnode_hash", chash_lck_grp_attr);
-
 	chash_lck_attr = lck_attr_alloc_init();
-	//lck_attr_setdebug(chash_lck_attr);
 
 	lck_mtx_init(&hfs_chash_mutex, chash_lck_grp, chash_lck_attr);
 }

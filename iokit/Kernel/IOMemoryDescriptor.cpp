@@ -44,6 +44,7 @@
 #include <IOKit/IOKitDebug.h>
 
 #include "IOKitKernelInternal.h"
+#include "IOCopyMapper.h"
 
 #include <libkern/c++/OSContainers.h>
 #include <libkern/c++/OSDictionary.h>
@@ -60,11 +61,8 @@ __BEGIN_DECLS
 #include <mach/memory_object_types.h>
 #include <device/device_port.h>
 
-#ifndef i386
 #include <mach/vm_prot.h>
 #include <vm/vm_fault.h>
-struct phys_entry      *pmap_find_physentry(ppnum_t pa);
-#endif
 
 extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
 void ipc_port_release_send(ipc_port_t port);
@@ -103,8 +101,13 @@ __END_DECLS
 
 #define kIOMaximumMappedIOByteCount	(512*1024*1024)
 
-static IOMapper * gIOSystemMapper;
+static IOMapper * gIOSystemMapper = NULL;
+
+IOCopyMapper *	  gIOCopyMapper = NULL;
+
 static ppnum_t	  gIOMaximumMappedIOPageCount = atop_32(kIOMaximumMappedIOByteCount);
+
+ppnum_t		  gIOLastPage;
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -123,6 +126,12 @@ static IORecursiveLock * gIOMemoryLock;
 #define SLEEP	IORecursiveLockSleep( gIOMemoryLock, (void *)this, THREAD_UNINT)
 #define WAKEUP	\
     IORecursiveLockWakeup( gIOMemoryLock, (void *)this, /* one-thread */ false)
+
+#if 0
+#define DEBG(fmt, args...)  	{ kprintf(fmt, ## args); }
+#else
+#define DEBG(fmt, args...)  	{}
+#endif
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -294,14 +303,20 @@ kern_return_t device_close(
 // This means that pointers are not passed and NULLs don't have to be
 // checked for as a NULL reference is illegal.
 static inline void
-getAddrLenForInd(user_addr_t &addr, IOPhysicalLength &len, // Output variables
+getAddrLenForInd(addr64_t &addr, IOPhysicalLength &len, // Output variables
      UInt32 type, IOGeneralMemoryDescriptor::Ranges r, UInt32 ind)
 {
-    assert(kIOMemoryTypePhysical == type || kIOMemoryTypeUIO == type
-	|| kIOMemoryTypeVirtual  == type);
+    assert(kIOMemoryTypeUIO       == type
+	|| kIOMemoryTypeVirtual   == type || kIOMemoryTypeVirtual64 == type
+	|| kIOMemoryTypePhysical  == type || kIOMemoryTypePhysical64 == type);
     if (kIOMemoryTypeUIO == type) {
 	user_size_t us;
 	uio_getiov((uio_t) r.uio, ind, &addr, &us); len = us;
+    }
+    else if ((kIOMemoryTypeVirtual64 == type) || (kIOMemoryTypePhysical64 == type)) {
+	IOAddressRange cur = r.v64[ind];
+	addr = cur.address;
+	len  = cur.length;
     }
     else {
 	IOVirtualRange cur = r.v[ind];
@@ -334,6 +349,15 @@ IOMemoryDescriptor::withAddress(vm_address_t address,
                                 IODirection  direction,
                                 task_t       task)
 {
+#if TEST_V64
+    if (task)
+    {
+	IOOptionBits options = (IOOptionBits) direction;
+	if (task == kernel_task)
+	    options |= kIOMemoryAutoPrepare;
+	return (IOMemoryDescriptor::withAddressRange(address, length, options, task));
+    }
+#endif
     IOGeneralMemoryDescriptor * that = new IOGeneralMemoryDescriptor;
     if (that)
     {
@@ -351,6 +375,9 @@ IOMemoryDescriptor::withPhysicalAddress(
 				IOByteCount		length,
 				IODirection      	direction )
 {
+#if TEST_P64
+    return (IOMemoryDescriptor::withAddressRange(address, length, (IOOptionBits) direction, NULL));
+#endif
     IOGeneralMemoryDescriptor *self = new IOGeneralMemoryDescriptor;
     if (self
     && !self->initWithPhysicalAddress(address, length, direction)) {
@@ -376,6 +403,39 @@ IOMemoryDescriptor::withRanges(	IOVirtualRange * ranges,
 
         that->release();
     }
+    return 0;
+}
+
+IOMemoryDescriptor *
+IOMemoryDescriptor::withAddressRange(mach_vm_address_t address,
+                                       mach_vm_size_t length,
+                                       IOOptionBits   options,
+                                       task_t         task)
+{
+    IOAddressRange range = { address, length };
+    return (IOMemoryDescriptor::withAddressRanges(&range, 1, options, task));
+}
+
+IOMemoryDescriptor *
+IOMemoryDescriptor::withAddressRanges(IOAddressRange *   ranges,
+                                       UInt32           rangeCount,
+                                       IOOptionBits     options,
+                                       task_t           task)
+{
+    IOGeneralMemoryDescriptor * that = new IOGeneralMemoryDescriptor;
+    if (that)
+    {
+	if (task)
+	    options |= kIOMemoryTypeVirtual64;
+	else
+	    options |= kIOMemoryTypePhysical64;
+
+       if (that->initWithOptions(ranges, rangeCount, 0, task, options, /* mapper */ 0))
+           return that;
+
+       that->release();
+    }
+
     return 0;
 }
 
@@ -453,8 +513,8 @@ IOMemoryDescriptor::withSubRange(IOMemoryDescriptor *	of,
     return self;
 }
 
-IOMemoryDescriptor * IOMemoryDescriptor::
-    withPersistentMemoryDescriptor(IOMemoryDescriptor *originalMD)
+IOMemoryDescriptor *
+IOMemoryDescriptor::withPersistentMemoryDescriptor(IOMemoryDescriptor *originalMD)
 {
     IOGeneralMemoryDescriptor *origGenMD = 
 	OSDynamicCast(IOGeneralMemoryDescriptor, originalMD);
@@ -466,8 +526,8 @@ IOMemoryDescriptor * IOMemoryDescriptor::
 	return 0;
 }
 
-IOMemoryDescriptor * IOGeneralMemoryDescriptor::
-    withPersistentMemoryDescriptor(IOGeneralMemoryDescriptor *originalMD)
+IOMemoryDescriptor *
+IOGeneralMemoryDescriptor::withPersistentMemoryDescriptor(IOGeneralMemoryDescriptor *originalMD)
 {
     ipc_port_t sharedMem = (ipc_port_t) originalMD->createNamedEntry();
 
@@ -677,6 +737,7 @@ IOGeneralMemoryDescriptor::initWithOptions(void *	buffers,
     switch (type) {
     case kIOMemoryTypeUIO:
     case kIOMemoryTypeVirtual:
+    case kIOMemoryTypeVirtual64:
         assert(task);
         if (!task)
             return false;
@@ -684,6 +745,7 @@ IOGeneralMemoryDescriptor::initWithOptions(void *	buffers,
             break;
 
     case kIOMemoryTypePhysical:		// Neither Physical nor UPL should have a task
+    case kIOMemoryTypePhysical64:
 	mapper = kIOMapperNone;
 
     case kIOMemoryTypeUPL:
@@ -710,10 +772,15 @@ IOGeneralMemoryDescriptor::initWithOptions(void *	buffers,
 
         while (_wireCount)
             complete();
-        if (_kernPtrAligned)
-            unmapFromKernel();
         if (_ranges.v && _rangesIsAllocated)
-            IODelete(_ranges.v, IOVirtualRange, _rangesCount);
+	{
+	    if (kIOMemoryTypeUIO == type)
+		uio_free((uio_t) _ranges.v);
+	    else if ((kIOMemoryTypeVirtual64 == type) || (kIOMemoryTypePhysical64 == type))
+		IODelete(_ranges.v64, IOAddressRange, _rangesCount);
+	    else
+		IODelete(_ranges.v, IOVirtualRange, _rangesCount);
+	}
 	if (_memEntry)
 	    { ipc_port_release_send((ipc_port_t) _memEntry); _memEntry = 0; }
     }
@@ -726,7 +793,7 @@ IOGeneralMemoryDescriptor::initWithOptions(void *	buffers,
     // Grab the appropriate mapper
     if (mapper == kIOMapperNone)
         mapper = 0;	// No Mapper
-    else if (!mapper) {
+    else if (mapper == kIOMapperSystem) {
         IOMapper::checkForSystemMapper();
         gIOSystemMapper = mapper = IOMapper::gSystem;
     }
@@ -738,10 +805,12 @@ IOGeneralMemoryDescriptor::initWithOptions(void *	buffers,
 
     // DEPRECATED variable initialisation
     _direction             = (IODirection) (_flags & kIOMemoryDirectionMask);
-    _position              = 0;
-    _kernPtrAligned        = 0;
-    _cachedPhysicalAddress = 0;
-    _cachedVirtualAddress  = 0;
+
+    __iomd_reservedA = 0;
+    __iomd_reservedB = 0;
+    __iomd_reservedC = 0;
+
+    _highestPage = 0;
 
     if (kIOMemoryTypeUPL == type) {
 
@@ -761,7 +830,7 @@ IOGeneralMemoryDescriptor::initWithOptions(void *	buffers,
         dataP->fMapper = mapper;
         dataP->fPageCnt = 0;
 
-        _wireCount++;	// UPLs start out life wired
+ //       _wireCount++;	// UPLs start out life wired
 
         _length    = count;
         _pages    += atop_32(offset + count + PAGE_MASK) - atop_32(offset);
@@ -773,6 +842,9 @@ IOGeneralMemoryDescriptor::initWithOptions(void *	buffers,
         // Set the flag kIOPLOnDevice convieniently equal to 1
         iopl.fFlags  = pageList->device | kIOPLExternUPL;
         iopl.fIOMDOffset = 0;
+
+        _highestPage = upl_get_highest_page(iopl.fIOPL);
+
         if (!pageList->device) {
             // Pre-compute the offset into the UPL's page list
             pageList = &pageList[atop_32(offset)];
@@ -792,7 +864,8 @@ IOGeneralMemoryDescriptor::initWithOptions(void *	buffers,
         _memoryEntries->appendBytes(&iopl, sizeof(iopl));
     }
     else {
-	// kIOMemoryTypeVirtual | kIOMemoryTypeUIO | kIOMemoryTypePhysical
+	// kIOMemoryTypeVirtual  | kIOMemoryTypeVirtual64 | kIOMemoryTypeUIO 
+	// kIOMemoryTypePhysical | kIOMemoryTypePhysical64
 	
 	// Initialize the memory descriptor
 	if (options & kIOMemoryAsReference) {
@@ -805,13 +878,27 @@ IOGeneralMemoryDescriptor::initWithOptions(void *	buffers,
 	    _ranges.v = (IOVirtualRange *) buffers;
 	}
 	else {
-	    assert(kIOMemoryTypeUIO != type);
-
 	    _rangesIsAllocated = true;
-	    _ranges.v = IONew(IOVirtualRange, count);
-	    if (!_ranges.v)
-                return false;
-	    bcopy(buffers, _ranges.v, count * sizeof(IOVirtualRange));
+	    switch (_flags & kIOMemoryTypeMask)
+	    {
+	      case kIOMemoryTypeUIO:
+		_ranges.v = (IOVirtualRange *) uio_duplicate((uio_t) buffers);
+		break;
+
+	      case kIOMemoryTypeVirtual64:
+	      case kIOMemoryTypePhysical64:
+		_ranges.v64 = IONew(IOAddressRange, count);
+		if (!_ranges.v64)
+		    return false;
+		bcopy(buffers, _ranges.v, count * sizeof(IOAddressRange));
+		break;
+	      case kIOMemoryTypeVirtual:
+		_ranges.v = IONew(IOVirtualRange, count);
+		if (!_ranges.v)
+		    return false;
+		bcopy(buffers, _ranges.v, count * sizeof(IOVirtualRange));
+		break;
+	    }
 	} 
 
 	// Find starting address within the vector of ranges
@@ -826,8 +913,15 @@ IOGeneralMemoryDescriptor::initWithOptions(void *	buffers,
 	    getAddrLenForInd(addr, len, type, vec, ind);
 	    pages += (atop_64(addr + len + PAGE_MASK) - atop_64(addr));
 	    len += length;
-	    assert(len > length);	// Check for 32 bit wrap around
+	    assert(len >= length);	// Check for 32 bit wrap around
 	    length = len;
+
+	    if ((kIOMemoryTypePhysical == type) || (kIOMemoryTypePhysical64 == type))
+	    {
+		ppnum_t highPage = atop_64(addr + len - 1);
+		if (highPage > _highestPage)
+		    _highestPage = highPage;
+	    }
 	} 
 	_length      = length;
 	_pages       = pages;
@@ -835,9 +929,9 @@ IOGeneralMemoryDescriptor::initWithOptions(void *	buffers,
 
         // Auto-prepare memory at creation time.
         // Implied completion when descriptor is free-ed
-        if (kIOMemoryTypePhysical == type)
+        if ((kIOMemoryTypePhysical == type) || (kIOMemoryTypePhysical64 == type))
             _wireCount++;	// Physical MDs are, by definition, wired
-        else { /* kIOMemoryTypeVirtual | kIOMemoryTypeUIO */
+        else { /* kIOMemoryTypeVirtual | kIOMemoryTypeVirtual64 | kIOMemoryTypeUIO */
             ioGMDData *dataP;
             unsigned dataSize = computeDataSize(_pages, /* upls */ count * 2);
 
@@ -883,10 +977,16 @@ void IOGeneralMemoryDescriptor::free()
     if (_memoryEntries)
         _memoryEntries->release();
 
-    if (_kernPtrAligned)
-        unmapFromKernel();
     if (_ranges.v && _rangesIsAllocated)
-        IODelete(_ranges.v, IOVirtualRange, _rangesCount);
+    {
+	IOOptionBits type = _flags & kIOMemoryTypeMask;
+	if (kIOMemoryTypeUIO == type)
+	    uio_free((uio_t) _ranges.v);
+	else if ((kIOMemoryTypeVirtual64 == type) || (kIOMemoryTypePhysical64 == type))
+	    IODelete(_ranges.v64, IOAddressRange, _rangesCount);
+	else
+	    IODelete(_ranges.v, IOVirtualRange, _rangesCount);
+    }
 
     if (reserved && reserved->devicePager)
 	device_pager_deallocate( (memory_object_t) reserved->devicePager );
@@ -940,17 +1040,17 @@ IOOptionBits IOMemoryDescriptor::getTag( void )
 }
 
 // @@@ gvdl: who is using this API?  Seems like a wierd thing to implement.
-IOPhysicalAddress IOMemoryDescriptor::getSourceSegment( IOByteCount   offset,
-                                                        IOByteCount * length )
+IOPhysicalAddress
+IOMemoryDescriptor::getSourceSegment( IOByteCount   offset, IOByteCount * length )
 {
-    IOPhysicalAddress physAddr = 0;
+    addr64_t physAddr = 0;
 
     if( prepare() == kIOReturnSuccess) {
-        physAddr = getPhysicalSegment( offset, length );
+        physAddr = getPhysicalSegment64( offset, length );
         complete();
     }
 
-    return( physAddr );
+    return( (IOPhysicalAddress) physAddr ); // truncated but only page offset is used
 }
 
 IOByteCount IOMemoryDescriptor::readBytes
@@ -1044,137 +1144,247 @@ extern "C" unsigned int IODefaultCacheBits(addr64_t pa);
                     panic("IOGMD::setPosition deprecated");
 /* DEPRECATED */ }
 
-IOPhysicalAddress IOGeneralMemoryDescriptor::getPhysicalSegment
-                        (IOByteCount offset, IOByteCount *lengthOfSegment)
+IOReturn IOGeneralMemoryDescriptor::dmaCommandOperation(DMACommandOps op, void *vData, UInt dataSize) const
 {
-    IOPhysicalAddress address = 0;
-    IOPhysicalLength  length  = 0;
+    if (kIOMDGetCharacteristics == op) {
 
-//  assert(offset <= _length);
+	if (dataSize < sizeof(IOMDDMACharacteristics))
+	    return kIOReturnUnderrun;
+
+	IOMDDMACharacteristics *data = (IOMDDMACharacteristics *) vData;
+	data->fLength = _length;
+	data->fSGCount = _rangesCount;
+	data->fPages = _pages;
+	data->fDirection = _direction;
+	if (!_wireCount)
+	    data->fIsPrepared = false;
+	else {
+	    data->fIsPrepared = true;
+	    data->fHighestPage = _highestPage;
+	    if (_memoryEntries) {
+		ioGMDData *gmdData = getDataP(_memoryEntries);
+		ioPLBlock *ioplList = getIOPLList(gmdData);
+		UInt count = getNumIOPL(_memoryEntries, gmdData);
+
+		data->fIsMapped = (gmdData->fMapper && _pages && (count > 0)
+			       && ioplList[0].fMappedBase);
+		if (count == 1)
+		    data->fPageAlign = (ioplList[0].fPageOffset & PAGE_MASK) | ~PAGE_MASK;
+	    }
+	    else
+		data->fIsMapped = false;
+	}
+
+	return kIOReturnSuccess;
+    }
+    else if (!(kIOMDWalkSegments & op))
+	return kIOReturnBadArgument;
+
+    // Get the next segment
+    struct InternalState {
+	IOMDDMAWalkSegmentArgs fIO;
+	UInt fOffset2Index;
+	UInt fIndex;
+	UInt fNextOffset;
+    } *isP;
+
+    // Find the next segment
+    if (dataSize < sizeof(*isP))
+	return kIOReturnUnderrun;
+
+    isP = (InternalState *) vData;
+    UInt offset = isP->fIO.fOffset;
+    bool mapped = isP->fIO.fMapped;
+
+    if (offset >= _length)
+	return (offset == _length)? kIOReturnOverrun : kIOReturnInternalError;
+
+    // Validate the previous offset
+    UInt ind, off2Ind = isP->fOffset2Index;
+    if ((kIOMDFirstSegment != op) 
+	&& offset 
+	&& (offset == isP->fNextOffset || off2Ind <= offset))
+	ind = isP->fIndex;
+    else
+	ind = off2Ind = 0;	// Start from beginning
+
+    UInt length;
+    UInt64 address;
+    if ( (_flags & kIOMemoryTypeMask) == kIOMemoryTypePhysical) {
+
+	// Physical address based memory descriptor
+	const IOPhysicalRange *physP = (IOPhysicalRange *) &_ranges.p[0];
+
+	// Find the range after the one that contains the offset
+	UInt len;
+	for (len = 0; off2Ind <= offset; ind++) {
+	    len = physP[ind].length;
+	    off2Ind += len;
+	}
+
+	// Calculate length within range and starting address
+	length   = off2Ind - offset;
+	address  = physP[ind - 1].address + len - length;
+
+	// see how far we can coalesce ranges
+	while (ind < _rangesCount && address + length == physP[ind].address) {
+	    len = physP[ind].length;
+	    length += len;
+	    off2Ind += len;
+	    ind++;
+	}
+
+	// correct contiguous check overshoot
+	ind--;
+	off2Ind -= len;
+    }
+    else if ( (_flags & kIOMemoryTypeMask) == kIOMemoryTypePhysical64) {
+
+	// Physical address based memory descriptor
+	const IOAddressRange *physP = (IOAddressRange *) &_ranges.v64[0];
+
+	// Find the range after the one that contains the offset
+	mach_vm_size_t len;
+	for (len = 0; off2Ind <= offset; ind++) {
+	    len = physP[ind].length;
+	    off2Ind += len;
+	}
+
+	// Calculate length within range and starting address
+	length   = off2Ind - offset;
+	address  = physP[ind - 1].address + len - length;
+
+	// see how far we can coalesce ranges
+	while (ind < _rangesCount && address + length == physP[ind].address) {
+	    len = physP[ind].length;
+	    length += len;
+	    off2Ind += len;
+	    ind++;
+	}
+
+	// correct contiguous check overshoot
+	ind--;
+	off2Ind -= len;
+    }
+    else do {
+	if (!_wireCount)
+	    panic("IOGMD: not wired for the IODMACommand");
+
+	assert(_memoryEntries);
+
+	ioGMDData * dataP = getDataP(_memoryEntries);
+	const ioPLBlock *ioplList = getIOPLList(dataP);
+	UInt numIOPLs = getNumIOPL(_memoryEntries, dataP);
+	upl_page_info_t *pageList = getPageList(dataP);
+
+	assert(numIOPLs > 0);
+
+	// Scan through iopl info blocks looking for block containing offset
+	while (ind < numIOPLs && offset >= ioplList[ind].fIOMDOffset)
+	    ind++;
+
+	// Go back to actual range as search goes past it
+	ioPLBlock ioplInfo = ioplList[ind - 1];
+	off2Ind = ioplInfo.fIOMDOffset;
+
+	if (ind < numIOPLs)
+	    length = ioplList[ind].fIOMDOffset;
+	else
+	    length = _length;
+	length -= offset;			// Remainder within iopl
+
+	// Subtract offset till this iopl in total list
+	offset -= off2Ind;
+
+	// If a mapped address is requested and this is a pre-mapped IOPL
+	// then just need to compute an offset relative to the mapped base.
+	if (mapped && ioplInfo.fMappedBase) {
+	    offset += (ioplInfo.fPageOffset & PAGE_MASK);
+	    address = ptoa_64(ioplInfo.fMappedBase) + offset;
+	    continue;	// Done leave do/while(false) now
+	}
+
+	// The offset is rebased into the current iopl.
+	// Now add the iopl 1st page offset.
+	offset += ioplInfo.fPageOffset;
+
+	// For external UPLs the fPageInfo field points directly to
+	// the upl's upl_page_info_t array.
+	if (ioplInfo.fFlags & kIOPLExternUPL)
+	    pageList = (upl_page_info_t *) ioplInfo.fPageInfo;
+	else
+	    pageList = &pageList[ioplInfo.fPageInfo];
+
+	// Check for direct device non-paged memory
+	if ( ioplInfo.fFlags & kIOPLOnDevice ) {
+	    address = ptoa_64(pageList->phys_addr) + offset;
+	    continue;	// Done leave do/while(false) now
+	}
+
+	// Now we need compute the index into the pageList
+	UInt pageInd = atop_32(offset);
+	offset &= PAGE_MASK;
+
+	// Compute the starting address of this segment
+	IOPhysicalAddress pageAddr = pageList[pageInd].phys_addr;
+	address = ptoa_64(pageAddr) + offset;
+
+	// length is currently set to the length of the remainider of the iopl.
+	// We need to check that the remainder of the iopl is contiguous.
+	// This is indicated by pageList[ind].phys_addr being sequential.
+	IOByteCount contigLength = PAGE_SIZE - offset;
+	while (contigLength < length
+		&& ++pageAddr == pageList[++pageInd].phys_addr)
+	{
+	    contigLength += PAGE_SIZE;
+	}
+
+	if (contigLength < length)
+	    length = contigLength;
+	
+
+	assert(address);
+	assert(length);
+
+    } while (false);
+
+    // Update return values and state
+    isP->fIO.fIOVMAddr = address;
+    isP->fIO.fLength   = length;
+    isP->fIndex        = ind;
+    isP->fOffset2Index = off2Ind;
+    isP->fNextOffset   = isP->fIO.fOffset + length;
+
+    return kIOReturnSuccess;
+}
+
+addr64_t
+IOGeneralMemoryDescriptor::getPhysicalSegment64(IOByteCount offset, IOByteCount *lengthOfSegment)
+{
+    IOReturn    ret;
+    IOByteCount length  = 0;
+    addr64_t    address = 0;
+
     if (offset < _length) // (within bounds?)
     {
-        if ( (_flags & kIOMemoryTypeMask) == kIOMemoryTypePhysical) {
-            unsigned int ind;
+	IOMDDMAWalkSegmentState _state;
+	IOMDDMAWalkSegmentArgs * state = (IOMDDMAWalkSegmentArgs *) &_state;
 
-            // Physical address based memory descriptor
+	state->fOffset = offset;
+	state->fLength = _length - offset;
+	state->fMapped = false;
 
-            // Find offset within descriptor and make it relative
-            // to the current _range.
-            for (ind = 0 ; offset >= _ranges.p[ind].length; ind++ )
-                offset -= _ranges.p[ind].length;
-    
-            IOPhysicalRange cur = _ranges.p[ind];
-            address = cur.address + offset;
-            length  = cur.length  - offset;
+	ret = dmaCommandOperation(kIOMDFirstSegment, _state, sizeof(_state));
 
-            // see how far we can coalesce ranges
-            for (++ind; ind < _rangesCount; ind++) {
-                cur =  _ranges.p[ind];
-        
-                if (address + length != cur.address)
-                    break;
-    
-                length += cur.length;
-            }
-
-            // @@@ gvdl: should be assert(address);
-            // but can't as NVidia GeForce creates a bogus physical mem
-	    assert(address
-		|| /* nvidia */ (!_ranges.p[0].address && 1 == _rangesCount));
-            assert(length);
-        }
-        else do {
-            // We need wiring & we are wired.
-            assert(_wireCount);
-
-            if (!_wireCount)
-	    {
-		panic("IOGMD: not wired for getPhysicalSegment()");
-                continue;
-	    }
-
-            assert(_memoryEntries);
-
-            ioGMDData * dataP = getDataP(_memoryEntries);
-            const ioPLBlock *ioplList = getIOPLList(dataP);
-            UInt ind, numIOPLs = getNumIOPL(_memoryEntries, dataP);
-            upl_page_info_t *pageList = getPageList(dataP);
-
-            assert(numIOPLs > 0);
-
-            // Scan through iopl info blocks looking for block containing offset
-            for (ind = 1; ind < numIOPLs; ind++) {
-                if (offset < ioplList[ind].fIOMDOffset)
-                    break;
-            }
-
-            // Go back to actual range as search goes past it
-            ioPLBlock ioplInfo = ioplList[ind - 1];
-
-            if (ind < numIOPLs)
-                length = ioplList[ind].fIOMDOffset;
-            else
-                length = _length;
-            length -= offset;			// Remainder within iopl
-
-            // Subtract offset till this iopl in total list
-            offset -= ioplInfo.fIOMDOffset;
-
-            // This is a mapped IOPL so we just need to compute an offset
-            // relative to the mapped base.
-            if (ioplInfo.fMappedBase) {
-                offset += (ioplInfo.fPageOffset & PAGE_MASK);
-                address = ptoa_32(ioplInfo.fMappedBase) + offset;
-                continue;
-            }
-
-            // Currently the offset is rebased into the current iopl.
-            // Now add the iopl 1st page offset.
-            offset += ioplInfo.fPageOffset;
-
-            // For external UPLs the fPageInfo field points directly to
-            // the upl's upl_page_info_t array.
-            if (ioplInfo.fFlags & kIOPLExternUPL)
-                pageList = (upl_page_info_t *) ioplInfo.fPageInfo;
-            else
-                pageList = &pageList[ioplInfo.fPageInfo];
-
-            // Check for direct device non-paged memory
-            if ( ioplInfo.fFlags & kIOPLOnDevice ) {
-                address = ptoa_32(pageList->phys_addr) + offset;
-                continue;
-            }
-
-            // Now we need compute the index into the pageList
-            ind = atop_32(offset);
-            offset &= PAGE_MASK;
-
-            IOPhysicalAddress pageAddr = pageList[ind].phys_addr;
-            address = ptoa_32(pageAddr) + offset;
-
-            // Check for the remaining data in this upl being longer than the
-            // remainder on the current page.  This should be checked for
-            // contiguous pages
-            if (length > PAGE_SIZE - offset) {
-                // See if the next page is contiguous.  Stop looking when we hit
-                // the end of this upl, which is indicated by the
-                // contigLength >= length.
-                IOByteCount contigLength = PAGE_SIZE - offset;
-
-                // Look for contiguous segment
-                while (contigLength < length
-                &&     ++pageAddr == pageList[++ind].phys_addr) {
-                    contigLength += PAGE_SIZE;
-                }
-                if (length > contigLength)
-                    length = contigLength;
-            }
-    
-            assert(address);
-            assert(length);
-
-        } while (0);
-
+	if ((kIOReturnSuccess != ret) && (kIOReturnOverrun != ret))
+		DEBG("getPhysicalSegment64 dmaCommandOperation(%lx), %p, offset %qx, addr %qx, len %qx\n", 
+					ret, this, state->fOffset,
+					state->fIOVMAddr, state->fLength);
+	if (kIOReturnSuccess == ret)
+	{
+	    address = state->fIOVMAddr;
+	    length  = state->fLength;
+	}
         if (!address)
             length = 0;
     }
@@ -1182,29 +1392,80 @@ IOPhysicalAddress IOGeneralMemoryDescriptor::getPhysicalSegment
     if (lengthOfSegment)
         *lengthOfSegment = length;
 
-    return address;
+    return (address);
 }
 
-addr64_t IOMemoryDescriptor::getPhysicalSegment64
-                        (IOByteCount offset, IOByteCount *lengthOfSegment)
+IOPhysicalAddress
+IOGeneralMemoryDescriptor::getPhysicalSegment(IOByteCount offset, IOByteCount *lengthOfSegment)
+{
+    IOReturn          ret;
+    IOByteCount       length  = 0;
+    addr64_t	      address = 0;
+
+//  assert(offset <= _length);
+
+    if (offset < _length) // (within bounds?)
+    {
+	IOMDDMAWalkSegmentState _state;
+	IOMDDMAWalkSegmentArgs * state = (IOMDDMAWalkSegmentArgs *) &_state;
+
+	state->fOffset = offset;
+	state->fLength = _length - offset;
+	state->fMapped = true;
+
+	ret = dmaCommandOperation(
+		kIOMDFirstSegment, _state, sizeof(_state));
+
+	if ((kIOReturnSuccess != ret) && (kIOReturnOverrun != ret))
+	    DEBG("getPhysicalSegment dmaCommandOperation(%lx), %p, offset %qx, addr %qx, len %qx\n", 
+				    ret, this, state->fOffset,
+				    state->fIOVMAddr, state->fLength);
+	if (kIOReturnSuccess == ret)
+	{
+	    address = state->fIOVMAddr;
+	    length  = state->fLength;
+	}
+
+        if (!address)
+            length = 0;
+    }
+
+    if ((address + length) > 0x100000000ULL)
+    {
+	panic("getPhysicalSegment() out of 32b range 0x%qx, len 0x%x, class %s",
+		    address, length, (getMetaClass())->getClassName());
+    }
+
+    if (lengthOfSegment)
+        *lengthOfSegment = length;
+
+    return ((IOPhysicalAddress) address);
+}
+
+addr64_t
+IOMemoryDescriptor::getPhysicalSegment64(IOByteCount offset, IOByteCount *lengthOfSegment)
 {
     IOPhysicalAddress phys32;
     IOByteCount	      length;
     addr64_t 	      phys64;
+    IOMapper *        mapper = 0;
 
     phys32 = getPhysicalSegment(offset, lengthOfSegment);
     if (!phys32)
 	return 0;
 
     if (gIOSystemMapper)
+	mapper = gIOSystemMapper;
+
+    if (mapper)
     {
 	IOByteCount origLen;
 
-	phys64 = gIOSystemMapper->mapAddr(phys32);
+	phys64 = mapper->mapAddr(phys32);
 	origLen = *lengthOfSegment;
 	length = page_size - (phys64 & (page_size - 1));
 	while ((length < origLen)
-	    && ((phys64 + length) == gIOSystemMapper->mapAddr(phys32 + length)))
+	    && ((phys64 + length) == mapper->mapAddr(phys32 + length)))
 	    length += page_size;
 	if (length > origLen)
 	    length = origLen;
@@ -1217,8 +1478,8 @@ addr64_t IOMemoryDescriptor::getPhysicalSegment64
     return phys64;
 }
 
-IOPhysicalAddress IOGeneralMemoryDescriptor::
-getSourceSegment(IOByteCount offset, IOByteCount *lengthOfSegment)
+IOPhysicalAddress
+IOGeneralMemoryDescriptor::getSourceSegment(IOByteCount offset, IOByteCount *lengthOfSegment)
 {
     IOPhysicalAddress address = 0;
     IOPhysicalLength  length  = 0;
@@ -1282,6 +1543,42 @@ getSourceSegment(IOByteCount offset, IOByteCount *lengthOfSegment)
 /* DEPRECATED */ /* USE INSTEAD: map(), readBytes(), writeBytes() */
 
 
+
+IOReturn 
+IOMemoryDescriptor::dmaCommandOperation(DMACommandOps op, void *vData, UInt dataSize) const
+{
+    if (kIOMDGetCharacteristics == op) {
+	if (dataSize < sizeof(IOMDDMACharacteristics))
+	    return kIOReturnUnderrun;
+
+	IOMDDMACharacteristics *data = (IOMDDMACharacteristics *) vData;
+	data->fLength = getLength();
+	data->fSGCount = 0;
+	data->fDirection = _direction;
+	if (IOMapper::gSystem)
+	    data->fIsMapped = true;
+	data->fIsPrepared = true;	// Assume prepared - fails safe
+    }
+    else if (kIOMDWalkSegments & op) {
+	if (dataSize < sizeof(IOMDDMAWalkSegmentArgs))
+	    return kIOReturnUnderrun;
+
+	IOMDDMAWalkSegmentArgs *data = (IOMDDMAWalkSegmentArgs *) vData;
+	IOByteCount offset  = (IOByteCount) data->fOffset;
+
+	IOPhysicalLength length;
+	IOMemoryDescriptor *ncmd = const_cast<IOMemoryDescriptor *>(this);
+	if (data->fMapped && IOMapper::gSystem)
+	    data->fIOVMAddr = ncmd->getPhysicalSegment(offset, &length);
+	else
+	    data->fIOVMAddr = ncmd->getPhysicalSegment64(offset, &length);
+	data->fLength = length;
+    }
+    else
+	return kIOReturnBadArgument;
+
+    return kIOReturnSuccess;
+}
 
 IOReturn IOMemoryDescriptor::setPurgeable( IOOptionBits newState,
                                            IOOptionBits * oldState )
@@ -1414,10 +1711,12 @@ io_get_kernel_static_upl(
 	vm_size_t		*upl_size,
 	upl_t			*upl,
 	upl_page_info_array_t	page_list,
-	unsigned int		*count)
+	unsigned int		*count,
+	ppnum_t			*highest_page)
 {
     unsigned int pageCount, page;
     ppnum_t phys;
+    ppnum_t highestPage = 0;
 
     pageCount = atop_32(*upl_size);
     if (pageCount > *count)
@@ -1436,7 +1735,11 @@ io_get_kernel_static_upl(
 	page_list[page].dirty	  = 0;
 	page_list[page].precious  = 0;
 	page_list[page].device	  = 0;
+	if (phys > highestPage)
+	    highestPage = page;
     }
+
+    *highest_page = highestPage;
 
     return ((page >= pageCount) ? kIOReturnSuccess : kIOReturnVMError);
 }
@@ -1451,7 +1754,7 @@ IOReturn IOGeneralMemoryDescriptor::wireVirtual(IODirection forDirection)
     ipc_port_t sharedMem = (ipc_port_t) _memEntry;
 
     assert(!_wireCount);
-    assert(kIOMemoryTypeVirtual == type || kIOMemoryTypeUIO == type);
+    assert(kIOMemoryTypeVirtual == type || kIOMemoryTypeVirtual64 == type || kIOMemoryTypeUIO == type);
 
     if (_pages >= gIOMaximumMappedIOPageCount)
 	return kIOReturnNoResources;
@@ -1470,7 +1773,7 @@ IOReturn IOGeneralMemoryDescriptor::wireVirtual(IODirection forDirection)
         forDirection = _direction;
 
     int uplFlags;    // This Mem Desc's default flags for upl creation
-    switch (forDirection)
+    switch (kIODirectionOutIn & forDirection)
     {
     case kIODirectionOut:
         // Pages do not need to be marked as dirty on commit
@@ -1485,6 +1788,11 @@ IOReturn IOGeneralMemoryDescriptor::wireVirtual(IODirection forDirection)
     }
     uplFlags |= UPL_SET_IO_WIRE | UPL_SET_LITE;
 
+#ifdef UPL_NEED_32BIT_ADDR
+    if (kIODirectionPrepareToPhys32 & forDirection) 
+	uplFlags |= UPL_NEED_32BIT_ADDR;
+#endif
+
     // Find the appropriate vm_map for the given task
     vm_map_t curMap;
     if (_task == kernel_task && (kIOMemoryBufferPageable & _flags))
@@ -1496,10 +1804,12 @@ IOReturn IOGeneralMemoryDescriptor::wireVirtual(IODirection forDirection)
     Ranges vec = _ranges;
     unsigned int pageIndex = 0;
     IOByteCount mdOffset = 0;
+    ppnum_t highestPage = 0;
     for (UInt range = 0; range < _rangesCount; range++) {
         ioPLBlock iopl;
 	user_addr_t startPage;
         IOByteCount numBytes;
+	ppnum_t highPage = 0;
 
 	// Get the startPage address and length of vec[range]
 	getAddrLenForInd(startPage, numBytes, type, vec, range);
@@ -1539,7 +1849,8 @@ IOReturn IOGeneralMemoryDescriptor::wireVirtual(IODirection forDirection)
 						&ioplSize,
 						&iopl.fIOPL,
 						baseInfo,
-						&numPageInfo);
+						&numPageInfo,
+						&highPage);
 	    }
 	    else if (sharedMem) {
 		error = memory_object_iopl_request(sharedMem, 
@@ -1565,6 +1876,11 @@ IOReturn IOGeneralMemoryDescriptor::wireVirtual(IODirection forDirection)
             if (error != KERN_SUCCESS)
                 goto abortExit;
 
+	    if (iopl.fIOPL)
+		highPage = upl_get_highest_page(iopl.fIOPL);
+	    if (highPage > highestPage)
+		highestPage = highPage;
+
             error = kIOReturnNoMemory;
 
             if (baseInfo->device) {
@@ -1579,7 +1895,7 @@ IOReturn IOGeneralMemoryDescriptor::wireVirtual(IODirection forDirection)
             }
             else {
                 iopl.fFlags = 0;
-                if (mapper)
+		if (mapper)
                     mapper->iovmInsert(mapBase, pageIndex,
                                        baseInfo, numPageInfo);
             }
@@ -1621,6 +1937,8 @@ IOReturn IOGeneralMemoryDescriptor::wireVirtual(IODirection forDirection)
         }
     }
 
+    _highestPage = highestPage;
+
     return kIOReturnSuccess;
 
 abortExit:
@@ -1660,7 +1978,7 @@ IOReturn IOGeneralMemoryDescriptor::prepare(IODirection forDirection)
     IOOptionBits type = _flags & kIOMemoryTypeMask;
 
     if (!_wireCount
-    && (kIOMemoryTypeVirtual == type || kIOMemoryTypeUIO == type) ) {
+    && (kIOMemoryTypeVirtual == type || kIOMemoryTypeVirtual64 == type || kIOMemoryTypeUIO == type) ) {
         error = wireVirtual(forDirection);
         if (error)
             return error;
@@ -1691,7 +2009,7 @@ IOReturn IOGeneralMemoryDescriptor::complete(IODirection /* forDirection */)
     if (!_wireCount) {
 	IOOptionBits type = _flags & kIOMemoryTypeMask;
 
-        if (kIOMemoryTypePhysical == type) {
+        if ((kIOMemoryTypePhysical == type) || (kIOMemoryTypePhysical64 == type)) {
             /* kIOMemoryTypePhysical */
             // DO NOTHING
         }
@@ -1704,7 +2022,7 @@ IOReturn IOGeneralMemoryDescriptor::complete(IODirection /* forDirection */)
                 dataP->fMapper->iovmFree(ioplList[0].fMappedBase, _pages);
 
             // Only complete iopls that we created which are for TypeVirtual
-            if (kIOMemoryTypeVirtual == type || kIOMemoryTypeUIO == type) {
+            if (kIOMemoryTypeVirtual == type || kIOMemoryTypeVirtual64 == type || kIOMemoryTypeUIO == type) {
                 for (UInt ind = 0; ind < count; ind++)
 		    if (ioplList[ind].fIOPL) {
 			 upl_commit(ioplList[ind].fIOPL, 0, 0);
@@ -1755,7 +2073,7 @@ IOReturn IOGeneralMemoryDescriptor::doMap(
         vm_size_t size = ptoa_32(_pages);
 
         if( _task) {
-#ifndef i386
+
             memory_object_size_t actualSize = size;
             kr = mach_make_memory_entry_64(get_task_map(_task),
                         &actualSize, range0Addr,
@@ -1772,10 +2090,9 @@ IOReturn IOGeneralMemoryDescriptor::doMap(
             }
 
             if( KERN_SUCCESS != kr)
-#endif /* !i386 */
                 sharedMem = MACH_PORT_NULL;
 
-        } else do {
+        } else do {	// _task == 0, must be physical
 
             memory_object_t 	pager;
 	    unsigned int    	flags = 0;
@@ -1850,11 +2167,9 @@ IOReturn IOGeneralMemoryDescriptor::doMap(
     }
 
 
-#ifndef i386
     if( 0 == sharedMem)
       kr = kIOReturnVMError;
     else
-#endif
       kr = super::doMap( addressMap, atAddress,
                            options, sourceOffset, length );
 
@@ -2263,19 +2578,6 @@ IOReturn IOMemoryDescriptor::handleFault(
 		segLen - pageOffset);
 #endif
 
-
-
-
-
-#ifdef i386  
-	/* i386 doesn't support faulting on device memory yet */
-	if( addressMap && (kIOReturnSuccess == err))
-            err = IOMapPages( addressMap, address, (IOPhysicalAddress) physAddr, segLen, options );
-        assert( KERN_SUCCESS == err );
-	if( err)
-	    break;
-#endif
-
         if( pager) {
             if( reserved && reserved->pagerContig) {
                 IOPhysicalLength	allLen;
@@ -2299,7 +2601,7 @@ IOReturn IOMemoryDescriptor::handleFault(
             if( err)
                 break;
         }
-#ifndef i386
+
 	/*  *** ALERT *** */
 	/*  *** Temporary Workaround *** */
 
@@ -2327,7 +2629,7 @@ IOReturn IOMemoryDescriptor::handleFault(
 
 	/*  *** Temporary Workaround *** */
 	/*  *** ALERT *** */
-#endif
+
 	sourceOffset += segLen - pageOffset;
 	address += segLen;
 	bytes -= segLen;
@@ -2421,28 +2723,46 @@ IOReturn _IOMemoryMap::redirect( task_t safeTask, bool doRedirect )
     } else {
 
         LOCK;
-        if( logical && addressMap
-	&& (!safeTask || (get_task_map(safeTask) != addressMap))
-        && (0 == (options & kIOMapStatic)))
+
+	do
 	{
-	    IOUnmapPages( addressMap, logical, length );
-            if(!doRedirect && safeTask
-	     && ((memory->_flags & kIOMemoryTypeMask) == kIOMemoryTypePhysical))
-	     {
-                err = vm_deallocate( addressMap, logical, length );
-                err = memory->doMap( addressMap, &logical,
-                                     (options & ~kIOMapAnywhere) /*| kIOMapReserve*/,
-                                     offset, length );
-            } else
-                err = kIOReturnSuccess;
+	    if (!logical)
+		break;
+	    if (!addressMap)
+		break;
+
+	    if ((!safeTask || (get_task_map(safeTask) != addressMap))
+	      && (0 == (options & kIOMapStatic)))
+	    {
+		IOUnmapPages( addressMap, logical, length );
+		if(!doRedirect && safeTask
+		 && (((memory->_flags & kIOMemoryTypeMask) == kIOMemoryTypePhysical) 
+		    || ((memory->_flags & kIOMemoryTypeMask) == kIOMemoryTypePhysical64)))
+		 {
+		    err = vm_deallocate( addressMap, logical, length );
+		    err = memory->doMap( addressMap, &logical,
+					 (options & ~kIOMapAnywhere) /*| kIOMapReserve*/,
+					 offset, length );
+		} else
+		    err = kIOReturnSuccess;
 #ifdef DEBUG
-	    IOLog("IOMemoryMap::redirect(%d, %p) %x:%lx from %p\n", doRedirect, this, logical, length, addressMap);
+		IOLog("IOMemoryMap::redirect(%d, %p) %x:%lx from %p\n", doRedirect, this, logical, length, addressMap);
 #endif
-        }
-        UNLOCK;
+	    }
+	    else if (kIOMapWriteCombineCache == (options & kIOMapCacheMask))
+	    {
+		IOOptionBits newMode;
+		newMode = (options & ~kIOMapCacheMask) | (doRedirect ? kIOMapInhibitCache : kIOMapWriteCombineCache);
+		IOProtectCacheMode(addressMap, logical, length, newMode);
+	    }
+	}
+	while (false);
+
+	UNLOCK;
     }
 
-    if (((memory->_flags & kIOMemoryTypeMask) == kIOMemoryTypePhysical) 
+    if ((((memory->_flags & kIOMemoryTypeMask) == kIOMemoryTypePhysical)
+	 || ((memory->_flags & kIOMemoryTypeMask) == kIOMemoryTypePhysical64))
      && safeTask
      && (doRedirect != (0 != (memory->_flags & kIOMemoryRedirected))))
 	memory->redirect(safeTask, doRedirect);
@@ -2600,8 +2920,8 @@ _IOMemoryMap * _IOMemoryMap::copyCompatible(
     return( mapping );
 }
 
-IOPhysicalAddress _IOMemoryMap::getPhysicalSegment( IOByteCount _offset,
-	       					    IOPhysicalLength * _length)
+IOPhysicalAddress 
+_IOMemoryMap::getPhysicalSegment( IOByteCount _offset, IOPhysicalLength * _length)
 {
     IOPhysicalAddress	address;
 
@@ -2626,6 +2946,20 @@ void IOMemoryDescriptor::initialize( void )
 
     IORegistryEntry::getRegistryRoot()->setProperty(kIOMaximumMappedIOByteCountKey,
 						    ptoa_64(gIOMaximumMappedIOPageCount), 64);
+    if (!gIOCopyMapper)
+    {
+    	IOMapper *
+	mapper = new IOCopyMapper;
+	if (mapper)
+	{
+	    if (mapper->init() && mapper->start(NULL))
+		gIOCopyMapper = (IOCopyMapper *) mapper;
+	    else
+		mapper->release();
+	}
+    }
+
+    gIOLastPage = IOGetLastPageNumber();
 }
 
 void IOMemoryDescriptor::free( void )
@@ -2694,7 +3028,8 @@ IOReturn _IOMemoryMap::redirect(IOMemoryDescriptor * newBackingMemory,
 
     if (logical && addressMap) do 
     {
-	if ((memory->_flags & kIOMemoryTypeMask) == kIOMemoryTypePhysical)
+	if (((memory->_flags & kIOMemoryTypeMask) == kIOMemoryTypePhysical)
+	    || ((memory->_flags & kIOMemoryTypeMask) == kIOMemoryTypePhysical64))
 	{
 	    physMem = memory;
 	    physMem->retain();
@@ -2770,7 +3105,8 @@ IOMemoryMap * IOMemoryDescriptor::makeMapping(
 	    if (owner != this)
 		continue;
 
-	    if ((_flags & kIOMemoryTypeMask) == kIOMemoryTypePhysical)
+	    if (((_flags & kIOMemoryTypeMask) == kIOMemoryTypePhysical)
+		|| ((_flags & kIOMemoryTypeMask) == kIOMemoryTypePhysical64))
 	    {
 		phys = getPhysicalSegment(offset, &physLen);
 		if (!phys || (physLen < length))
@@ -2953,8 +3289,71 @@ void IOSubMemoryDescriptor::free( void )
 }
 
 
-IOPhysicalAddress IOSubMemoryDescriptor::getPhysicalSegment( IOByteCount offset,
-						      	IOByteCount * length )
+IOReturn
+IOSubMemoryDescriptor::dmaCommandOperation(DMACommandOps op, void *vData, UInt dataSize) const
+{
+    IOReturn rtn;
+
+    if (kIOMDGetCharacteristics == op) {
+
+	rtn = _parent->dmaCommandOperation(op, vData, dataSize);
+	if (kIOReturnSuccess == rtn) {
+	    IOMDDMACharacteristics *data = (IOMDDMACharacteristics *) vData;
+	    data->fLength = _length;
+	    data->fSGCount = 0;	// XXX gvdl: need to compute and pages
+	    data->fPages = 0;
+	    data->fPageAlign = 0;
+	}
+
+	return rtn;
+    }
+    else if (kIOMDWalkSegments & op) {
+	if (dataSize < sizeof(IOMDDMAWalkSegmentArgs))
+	    return kIOReturnUnderrun;
+
+	IOMDDMAWalkSegmentArgs *data =
+	    reinterpret_cast<IOMDDMAWalkSegmentArgs *>(vData);
+	UInt offset = data->fOffset;
+	UInt remain = _length - offset;
+	if ((int) remain <= 0)
+	    return (!remain)? kIOReturnOverrun : kIOReturnInternalError;
+
+	data->fOffset = offset + _start;
+	rtn = _parent->dmaCommandOperation(op, vData, dataSize);
+	if (data->fLength > remain)
+	    data->fLength = remain;
+	data->fOffset  = offset;
+
+	return rtn;
+    }
+    else
+	return kIOReturnBadArgument;
+}
+
+addr64_t
+IOSubMemoryDescriptor::getPhysicalSegment64(IOByteCount offset, IOByteCount * length)
+{
+    addr64_t	address;
+    IOByteCount	actualLength;
+
+    assert(offset <= _length);
+
+    if( length)
+        *length = 0;
+
+    if( offset >= _length)
+        return( 0 );
+
+    address = _parent->getPhysicalSegment64( offset + _start, &actualLength );
+
+    if( address && length)
+	*length = min( _length - offset, actualLength );
+
+    return( address );
+}
+
+IOPhysicalAddress
+IOSubMemoryDescriptor::getPhysicalSegment( IOByteCount offset, IOByteCount * length )
 {
     IOPhysicalAddress	address;
     IOByteCount		actualLength;
@@ -2988,8 +3387,8 @@ IOReturn IOSubMemoryDescriptor::doMap(
     return (_parent->doMap(addressMap, atAddress, options, sourceOffset + _start, length));
 }
 
-IOPhysicalAddress IOSubMemoryDescriptor::getSourceSegment( IOByteCount offset,
-						      	   IOByteCount * length )
+IOPhysicalAddress 
+IOSubMemoryDescriptor::getSourceSegment( IOByteCount offset, IOByteCount * length )
 {
     IOPhysicalAddress	address;
     IOByteCount		actualLength;
@@ -3336,7 +3735,7 @@ OSMetaClassDefineReservedUsed(IOMemoryDescriptor, 1);
 OSMetaClassDefineReservedUsed(IOMemoryDescriptor, 2);
 OSMetaClassDefineReservedUsed(IOMemoryDescriptor, 3);
 OSMetaClassDefineReservedUsed(IOMemoryDescriptor, 4);
-OSMetaClassDefineReservedUnused(IOMemoryDescriptor, 5);
+OSMetaClassDefineReservedUsed(IOMemoryDescriptor, 5);
 OSMetaClassDefineReservedUnused(IOMemoryDescriptor, 6);
 OSMetaClassDefineReservedUnused(IOMemoryDescriptor, 7);
 OSMetaClassDefineReservedUnused(IOMemoryDescriptor, 8);
@@ -3349,5 +3748,9 @@ OSMetaClassDefineReservedUnused(IOMemoryDescriptor, 14);
 OSMetaClassDefineReservedUnused(IOMemoryDescriptor, 15);
 
 /* ex-inline function implementation */
-IOPhysicalAddress IOMemoryDescriptor::getPhysicalAddress()
+IOPhysicalAddress 
+IOMemoryDescriptor::getPhysicalAddress()
         { return( getPhysicalSegment( 0, 0 )); }
+
+
+

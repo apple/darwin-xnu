@@ -1975,19 +1975,6 @@ LEXT(current_act)
 
 			mfsprg	r3,1
 			blr
-
-			.align	5
-			.globl	EXT(clock_get_uptime)
-LEXT(clock_get_uptime)
-1:			mftbu	r9
-			mftb	r0
-			mftbu	r11
-			cmpw	r11,r9
-			bne--	1b
-			stw		r0,4(r3)
-			stw		r9,0(r3)
-			blr
-
 		
 			.align	5
 			.globl	EXT(mach_absolute_time)

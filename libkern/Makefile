@@ -4,9 +4,9 @@ export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
 
-export COMP_LDFLAGS_COMPONENT_PPC = -i_OSCompareAndSwap:_hw_compare_and_store \
-                                    -i_OSDequeueAtomic:_hw_dequeue_atomic \
-                                    -i_OSEnqueueAtomic:_hw_queue_atomic
+export COMP_LDFLAGS_COMPONENT_PPC = -Wl,-i_OSCompareAndSwap:_hw_compare_and_store \
+                                    -Wl,-i_OSDequeueAtomic:_hw_dequeue_atomic \
+                                    -Wl,-i_OSEnqueueAtomic:_hw_queue_atomic
 
 include $(MakeInc_cmd)
 include $(MakeInc_def)

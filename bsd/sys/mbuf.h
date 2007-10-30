@@ -499,6 +499,7 @@ struct mbuf *m_pulldown(struct mbuf*, int, int, int*);
 struct mbuf *m_aux_add(struct mbuf *, int, int);
 struct mbuf *m_aux_find(struct mbuf *, int, int);
 void m_aux_delete(struct mbuf *, struct mbuf *);
+struct mbuf *m_aux_copy(struct mbuf *, struct mbuf *);
 
 struct mbuf *m_mclget(struct mbuf *, int);
 caddr_t m_mclalloc(int);

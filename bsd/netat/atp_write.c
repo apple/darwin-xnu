@@ -80,9 +80,6 @@ extern struct atp_rcb_qhead atp_need_rel;
 extern int atp_inited;
 extern struct atp_state *atp_used_list;
 extern asp_scb_t *scb_free_list;
-extern atlock_t atpgen_lock;
-extern atlock_t atpall_lock;
-extern atlock_t atptmo_lock;
 
 extern gbuf_t *scb_resource_m;
 extern gbuf_t *atp_resource_m;
@@ -145,7 +142,7 @@ atp_wput(gref, m)
 	register gbuf_t *m;
 {
 	register ioc_t    *iocbp;
-	int i, xcnt, s;
+	int i, xcnt;
 	struct atp_state *atp;
 	struct atp_trans *trp;
 	struct atp_rcb   *rcbp;
@@ -243,18 +240,16 @@ atp_wput(gref, m)
 				atp->atp_msgq = 0;
 			}
 
-			ATDISABLE(s, atp->atp_lock);
 			/*
 			 *	search for the corresponding rcb
 			 */
 			for (rcbp = atp->atp_rcb.head; rcbp; rcbp = rcbp->rc_list.next) {
-			    if (rcbp->rc_tid == UAS_VALUE(athp->tid) &&
+			    if (rcbp->rc_tid == UAS_VALUE_NTOH(athp->tid) &&
 				rcbp->rc_socket.node == ddp->dst_node &&
 				rcbp->rc_socket.net == NET_VALUE(ddp->dst_net) &&
 				rcbp->rc_socket.socket == ddp->dst_socket)
 				break;
 			}
-			ATENABLE(s, atp->atp_lock);
 
 			/*
 			 *	If it has already been sent then return an error
@@ -275,13 +270,11 @@ atp_wput(gref, m)
 			    rcbp->rc_socket.socket = ddp->dst_socket;
 			    rcbp->rc_socket.node = ddp->dst_node;
 			    rcbp->rc_socket.net = NET_VALUE(ddp->dst_net);
-			    rcbp->rc_tid = UAS_VALUE(athp->tid);
+			    rcbp->rc_tid = UAS_VALUE_NTOH(athp->tid);
 			    rcbp->rc_bitmap = 0xff;
 			    rcbp->rc_xo = 0;
-			    ATDISABLE(s, atp->atp_lock);
 			    rcbp->rc_state = RCB_SENDING;
 			    ATP_Q_APPEND(atp->atp_rcb, rcbp, rc_list);
-			    ATENABLE(s, atp->atp_lock);
 			}
 			xcnt = get_bds_entries(m2);
 			if ((i = atp_unpack_bdsp(atp, m2, rcbp, xcnt, FALSE))) {
@@ -309,7 +302,6 @@ atp_wput(gref, m)
 			/*
 			 *	search for a waiting request
 			 */
-			ATDISABLE(s, atp->atp_lock);
 			if ((rcbp = atp->atp_attached.head)) {
 			    /*
 			     *	Got one, move it to the active response Q
@@ -326,13 +318,11 @@ atp_wput(gref, m)
 				 */
 				atp_rcb_free(rcbp);
 			    }
-			    ATENABLE(s, atp->atp_lock);
 			    atp_iocack(atp, m);
 			} else {
 				/*
 				 *	None available - can out
 				 */
-				ATENABLE(s, atp->atp_lock);
 				atp_iocnak(atp, m, EAGAIN);
 			}
 			break;
@@ -349,16 +339,13 @@ atp_wput(gref, m)
 			i = *(int *)gbuf_rptr(gbuf_cont(m));
 			gbuf_freem(gbuf_cont(m));
 			gbuf_cont(m) = NULL;
-			ATDISABLE(s, atp->atp_lock);
 			for (trp = atp->atp_trans_wait.head; trp; trp = trp->tr_list.next) {
 			  if (trp->tr_tid == i)
 				break;
 			}
-			if (trp == NULL) {
-				ATENABLE(s, atp->atp_lock);
+			if (trp == NULL)
 				atp_iocnak(atp, m, ENOENT);
-			} else {
-				ATENABLE(s, atp->atp_lock);
+			else {
 				atp_free(trp);
 				atp_iocack(atp, m);
 			}
@@ -436,7 +423,7 @@ register struct atp_trans *trp;
 		gbuf_wset(m,TOTAL_ATP_HDR_SIZE);
 		ddp = AT_DDP_HDR(m);
 		ddp->type = DDP_ATP;
-		UAS_ASSIGN(ddp->checksum, 0);
+		UAS_ASSIGN_HTON(ddp->checksum, 0);
 		ddp->dst_socket = trp->tr_socket.socket;
 		ddp->dst_node = trp->tr_socket.node;
 		NET_ASSIGN(ddp->dst_net, trp->tr_socket.net);
@@ -449,7 +436,7 @@ register struct atp_trans *trp;
 		athp = AT_ATP_HDR(m);
 		ATP_CLEAR_CONTROL(athp);
 		athp->cmd = ATP_CMD_TREL;
-		UAS_ASSIGN(athp->tid, trp->tr_tid);
+		UAS_ASSIGN_HTON(athp->tid, trp->tr_tid);
 	}
 
 	return (m);
@@ -460,7 +447,7 @@ void atp_send_replies(atp, rcbp)
      register struct atp_rcb   *rcbp;
 {       register gbuf_t *m;
 	register int     i, len;
-	int              s_gen, s, cnt, err, offset, space;
+	int              s_gen, cnt, err, offset, space;
 	unsigned char *m0_rptr = NULL, *m0_wptr = NULL;
 	register at_atp_t *athp;
 	register struct atpBDS *bdsp;
@@ -474,11 +461,8 @@ void atp_send_replies(atp, rcbp)
 	};
 	struct timeval timenow;
 
-	ATDISABLE(s, atp->atp_lock);
-	if (rcbp->rc_queue != atp) {
-		ATENABLE(s, atp->atp_lock);
+	if (rcbp->rc_queue != atp)
 		return;
-	}
 	if (rcbp->rc_not_sent_bitmap == 0)
 		goto nothing_to_send;
 
@@ -566,21 +550,17 @@ void atp_send_replies(atp, rcbp)
 	   	 */
 	  	bdsp++;
 	}
-	if (mlist) {
-		ATENABLE(s, atp->atp_lock);
+	if (mlist)
 		DDP_OUTPUT(mlist);
-		ATDISABLE(s, atp->atp_lock);
-	}
+	
 
 nothing_to_send:
 	/*
 	 *	If all replies from this reply block have been sent then 
 	 *		remove it from the queue and mark it so
 	 */
-	if (rcbp->rc_queue != atp) {
-		ATENABLE(s, atp->atp_lock);
+	if (rcbp->rc_queue != atp)
 		return;
-	}
 	rcbp->rc_rep_waiting = 0;
 
 	/*
@@ -595,7 +575,6 @@ nothing_to_send:
 	 */
 	if (rcbp->rc_xo && rcbp->rc_state != RCB_RELEASED) {
 		getmicrouptime(&timenow);
-		ATDISABLE(s_gen, atpgen_lock);
 		if (rcbp->rc_timestamp == 0) {
 	        	rcbp->rc_timestamp = timenow.tv_sec;
 			if (rcbp->rc_timestamp == 0)
@@ -603,10 +582,8 @@ nothing_to_send:
 			ATP_Q_APPEND(atp_need_rel, rcbp, rc_tlist);
 		}
 		rcbp->rc_state = RCB_RESPONSE_FULL;
-		ATENABLE(s_gen, atpgen_lock);
 	} else
 		atp_rcb_free(rcbp);
-	ATENABLE(s, atp->atp_lock);
 } /* atp_send_replies */
 
 
@@ -694,7 +671,7 @@ atp_unpack_bdsp(atp, m, rcbp, cnt, wait)
 	register	 gbuf_t        *m2, *m1, *m0, *mhdr;
 	caddr_t 	lastPage;
     at_atp_t    *athp;
-	int  		i, len, s_gen;
+	int  		i, len;
 	at_socket 	src_socket;
 	
 	struct ddp_atp {
@@ -840,13 +817,11 @@ atp_unpack_bdsp(atp, m, rcbp, cnt, wait)
 l_send:
 	if (rcbp->rc_xo) {
 		getmicrouptime(&timenow);
-		ATDISABLE(s_gen, atpgen_lock);
 		if (rcbp->rc_timestamp == 0) {
 			if ((rcbp->rc_timestamp = timenow.tv_sec) == 0)
 				rcbp->rc_timestamp = 1;
 			ATP_Q_APPEND(atp_need_rel, rcbp, rc_tlist);
 		}
-		ATENABLE(s_gen, atpgen_lock);
 	}
 
 	DDP_OUTPUT(mlist);
@@ -868,7 +843,6 @@ int atp_bind(gref, sVal, flag)
 	unsigned char inpC, sNextUsed = 0;
 	unsigned int sMin, sMax, sSav;
 	struct atp_state *atp;
-	int s;
 
 	atp = (struct atp_state *)gref->info;
 	if (atp->dflag)
@@ -876,7 +850,6 @@ int atp_bind(gref, sVal, flag)
 
 	sMax = ATP_SOCKET_LAST;
 	sMin = ATP_SOCKET_FIRST;
-	ATDISABLE(s, atpgen_lock);
 	if (flag && (*flag == 3)) {
 		sMin += 40;
 		if (sMin < sNext) {
@@ -889,7 +862,6 @@ int atp_bind(gref, sVal, flag)
 	     ((sVal > sMax) || (sVal < 2) || (sVal == 6) || 
 	      (ddp_socket_inuse(sVal, DDP_ATP) &&
 	       (atp_inputQ[sVal] != (gref_t *)1)))) {
-		ATENABLE(s, atpgen_lock);
 		return 0;
 	}
 
@@ -919,7 +891,6 @@ again:
 				sNext = 0;
 				*flag = (unsigned char)sSav;
 			}
-			ATENABLE(s, atpgen_lock);
 			return 0;
 		}
 	}
@@ -933,7 +904,6 @@ again:
 			sNext = 0;
 	}
 
-	ATENABLE(s, atpgen_lock);
 	return (int)sVal;
 }
 
@@ -942,19 +912,16 @@ void atp_req_ind(atp, mioc)
 	register gbuf_t *mioc;
 {
 	register struct atp_rcb *rcbp;
-	int s;
 
 	if ((rcbp = atp->atp_attached.head) != 0) {
 		gbuf_cont(mioc) = rcbp->rc_ioctl;
 		rcbp->rc_ioctl = NULL;
-		ATDISABLE(s, atp->atp_lock);
 		if (rcbp->rc_xo) {
 			ATP_Q_REMOVE(atp->atp_attached, rcbp, rc_list);
 			rcbp->rc_state = RCB_NOTIFIED;
 			ATP_Q_APPEND(atp->atp_rcb, rcbp, rc_list);
 		} else
 			atp_rcb_free(rcbp);
-		ATENABLE(s, atp->atp_lock);
 		if (gbuf_cont(mioc))
 		  ((ioc_t *)gbuf_rptr(mioc))->ioc_count = gbuf_msgsize(gbuf_cont(mioc));
 		else
@@ -1007,7 +974,6 @@ void atp_cancel_req(gref, tid)
 	gref_t *gref;
 	unsigned short tid;
 {
-	int s;
 	struct atp_state *atp;
 	struct atp_trans *trp;
 
@@ -1015,12 +981,10 @@ void atp_cancel_req(gref, tid)
 	if (atp->dflag)
 		atp = (struct atp_state *)atp->atp_msgq;
 
-	ATDISABLE(s, atp->atp_lock);
 	for (trp = atp->atp_trans_wait.head; trp; trp = trp->tr_list.next) {
 	    if (trp->tr_tid == tid)
 			break;
 	}
-	ATENABLE(s, atp->atp_lock);
 	if (trp != NULL)
 		atp_free(trp);
 }
@@ -1032,9 +996,7 @@ void
 atp_dequeue_atp(atp)
 	struct atp_state *atp;
 {
-	int s;
 
-	ATDISABLE(s, atpall_lock);
 	if (atp == atp_used_list) {
 		if ((atp_used_list = atp->atp_trans_waiting) != 0)
 			atp->atp_trans_waiting->atp_rcb_waiting = 0;
@@ -1046,7 +1008,6 @@ atp_dequeue_atp(atp)
 
 	atp->atp_trans_waiting = 0;
 	atp->atp_rcb_waiting = 0;
-	ATENABLE(s, atpall_lock);
 }
 
 void
@@ -1055,15 +1016,11 @@ atp_timout(func, trp, ticks)
 	struct atp_trans *trp;
 	int ticks;
 {
-	int s;
 	unsigned int sum;
 	struct atp_trans *curr_trp, *prev_trp;
 
-	ATDISABLE(s, atptmo_lock);
-	if (trp->tr_tmo_func) {
-		ATENABLE(s, atptmo_lock);
+	if (trp->tr_tmo_func)
 		return;
-	}
 
 	trp->tr_tmo_func = func;
 	trp->tr_tmo_delta = 1+(ticks>>5);
@@ -1071,7 +1028,6 @@ atp_timout(func, trp, ticks)
 	if (trp_tmo_list == 0) {
 		trp->tr_tmo_next = trp->tr_tmo_prev = 0;
 		trp_tmo_list = trp;
-		ATENABLE(s, atptmo_lock);
 		return;
 	}
 
@@ -1105,7 +1061,6 @@ atp_timout(func, trp, ticks)
 		trp_tmo_list->tr_tmo_prev = trp;
 		trp_tmo_list = trp;
 	}
-	ATENABLE(s, atptmo_lock);
 }
 
 void
@@ -1113,13 +1068,9 @@ atp_untimout(func, trp)
 	void (*func)();
 	struct atp_trans *trp;
 {
-	int s;
 
-	ATDISABLE(s, atptmo_lock);
-	if (trp->tr_tmo_func == 0) {
-		ATENABLE(s, atptmo_lock);
+	if (trp->tr_tmo_func == 0)
 		return;
-	}
 
 	if (trp_tmo_list == trp) {
 		if ((trp_tmo_list = trp->tr_tmo_next) != 0) {
@@ -1133,7 +1084,6 @@ atp_untimout(func, trp)
 		}
 	}
 	trp->tr_tmo_func = 0;
-	ATENABLE(s, atptmo_lock);
 }
 
 void
@@ -1149,11 +1099,9 @@ void
 atp_trp_clock(arg)
 	void *arg;
 {
-	int s;
 	struct atp_trans *trp;
 	void (*tr_tmo_func)();
 
-	ATDISABLE(s, atptmo_lock);
 	if (trp_tmo_list)
 		trp_tmo_list->tr_tmo_delta--;
 	while (((trp = trp_tmo_list) != 0) && (trp_tmo_list->tr_tmo_delta == 0)) {
@@ -1161,12 +1109,9 @@ atp_trp_clock(arg)
 			trp_tmo_list->tr_tmo_prev = 0;
 		if ((tr_tmo_func = trp->tr_tmo_func) != 0) {
 			trp->tr_tmo_func = 0;
-			ATENABLE(s, atptmo_lock);
 			(*tr_tmo_func)(trp);
-			ATDISABLE(s, atptmo_lock);
 		}
 	}
-	ATENABLE(s, atptmo_lock);
 
 	timeout(atp_trp_clock_locked, (void *)arg, (1<<5));
 }
@@ -1183,8 +1128,9 @@ atp_send_req(gref, mioc)
 	register at_ddp_t *ddp;
 	gbuf_t *m, *m2, *bds;
 	struct atp_set_default *sdb;
-	int s, old;
+	int old;
 	unsigned int timer;
+	u_short		temp_net;
 
 	atp = (struct atp_state *)((struct atp_state *)gref->info)->atp_msgq;
 	iocbp = (ioc_t *)gbuf_rptr(mioc);
@@ -1232,7 +1178,7 @@ l_retry:
 	 */
 	athp = AT_ATP_HDR(m2);
 	athp->cmd = ATP_CMD_TREQ;
-	UAS_ASSIGN(athp->tid, trp->tr_tid);
+	UAS_ASSIGN_HTON(athp->tid, trp->tr_tid);
 	athp->eom = 0;
 	athp->sts = 0;
 	trp->tr_xo = athp->xo;
@@ -1245,7 +1191,8 @@ l_retry:
 	trp->tr_socket.net = NET_VALUE(ddp->dst_net);
 	trp->tr_local_socket = atp->atp_socket_no;
 	trp->tr_local_node = ddp->src_node;
-	NET_NET(trp->tr_local_net, ddp->src_net);
+	temp_net = NET_VALUE(ddp->src_net);
+	NET_ASSIGN_NOSWAP(trp->tr_local_net, temp_net);
 
 #ifdef NOT_YET
 	/* save the local information in the gref */
@@ -1258,9 +1205,7 @@ l_retry:
 	/*
 	 *	Put us in the transaction waiting queue
 	 */
-	ATDISABLE(s, atp->atp_lock);
 	ATP_Q_APPEND(atp->atp_trans_wait, trp, tr_list);
-	ATENABLE(s, atp->atp_lock);
 
 	/*
 	 * Send the message and set the timer	
@@ -1302,6 +1247,7 @@ void atp_send_rsp(gref, m, wait)
 	register at_atp_t *athp;
 	register at_ddp_t *ddp;
 	int s, xcnt;
+	u_short	temp_net;
 
 	atp = (struct atp_state *)gref->info;
 	if (atp->dflag)
@@ -1312,9 +1258,8 @@ void atp_send_rsp(gref, m, wait)
 	/*
 	 *	search for the corresponding rcb
 	 */
-	ATDISABLE(s, atp->atp_lock);
 	for (rcbp = atp->atp_rcb.head; rcbp; rcbp = rcbp->rc_list.next) {
-	    if ( (rcbp->rc_tid == UAS_VALUE(athp->tid)) &&
+	    if ( (rcbp->rc_tid == UAS_VALUE_NTOH(athp->tid)) &&
 			(rcbp->rc_socket.node == ddp->dst_node) &&
 			(rcbp->rc_socket.net == NET_VALUE(ddp->dst_net)) &&
 			(rcbp->rc_socket.socket == ddp->dst_socket) )
@@ -1326,11 +1271,9 @@ void atp_send_rsp(gref, m, wait)
 	 */
 	if ((rcbp && (rcbp->rc_state != RCB_NOTIFIED)) ||
 			(rcbp == NULL && athp->xo) ) {
-		ATENABLE(s, atp->atp_lock);
 		gbuf_freem(m);
 		return;
 	}
-	ATENABLE(s, atp->atp_lock);
 
 	if (rcbp == NULL) { /* a response is being sent for an ALO transaction */
 	    if ((rcbp = atp_rcb_alloc(atp)) == NULL) {
@@ -1341,16 +1284,15 @@ void atp_send_rsp(gref, m, wait)
 	    rcbp->rc_socket.socket = ddp->dst_socket;
 	    rcbp->rc_socket.node = ddp->dst_node;
 	    rcbp->rc_socket.net = NET_VALUE(ddp->dst_net);
-	    rcbp->rc_tid = UAS_VALUE(athp->tid);
+	    rcbp->rc_tid = UAS_VALUE_NTOH(athp->tid);
 	    rcbp->rc_bitmap = 0xff;
 	    rcbp->rc_xo = 0;
 	    rcbp->rc_state = RCB_RESPONSE_FULL;
-	    ATDISABLE(s, atp->atp_lock);
 	    ATP_Q_APPEND(atp->atp_rcb, rcbp, rc_list);
-		ATENABLE(s, atp->atp_lock);
 	}
 	else if (ddp->src_node == 0) {
-		NET_NET(ddp->src_net, rcbp->rc_local_net);
+		temp_net = NET_VALUE_NOSWAP(rcbp->rc_local_net);
+		NET_ASSIGN(ddp->src_net, temp_net);
 		ddp->src_node = rcbp->rc_local_node;
 	}
 
@@ -1448,7 +1390,7 @@ _ATPsndreq(fd, buf, len, nowait, err, proc)
 	void *proc;
 {
 	gref_t *gref;
-	int s, rc;
+	int rc;
 	unsigned short tid;
 	unsigned int timer;
 	register struct atp_state *atp;
@@ -1486,9 +1428,7 @@ _ATPsndreq(fd, buf, len, nowait, err, proc)
 		ts.tv_sec = 0;
 		ts.tv_nsec = 100 *1000 * NSEC_PER_USEC;
 
-		ATDISABLE(s, atp->atp_delay_lock);
 		rc = msleep(&atp->atp_delay_event, atalk_mutex, PSOCK | PCATCH, "atpmioc", &ts);
-		ATENABLE(s, atp->atp_delay_lock);
 		if (rc != 0) {
 			*err = rc;
 			file_drop(fd);
@@ -1504,9 +1444,7 @@ _ATPsndreq(fd, buf, len, nowait, err, proc)
         ts.tv_sec = 0;
         ts.tv_nsec = 100 *1000 * NSEC_PER_USEC;
 
-		ATDISABLE(s, atp->atp_delay_lock);
 		rc = msleep(&atp->atp_delay_event, atalk_mutex, PSOCK | PCATCH, "atpm2", &ts);
-		ATENABLE(s, atp->atp_delay_lock);
 		if (rc != 0) {
 			gbuf_freeb(mioc);
 			file_drop(fd);
@@ -1547,9 +1485,7 @@ _ATPsndreq(fd, buf, len, nowait, err, proc)
         ts.tv_sec = 0;
         ts.tv_nsec = 100 *1000 * NSEC_PER_USEC;
 
-		ATDISABLE(s, atp->atp_delay_lock);
 		rc = msleep(&atp->atp_delay_event, atalk_mutex, PSOCK | PCATCH, "atptrp", &ts);
-		ATENABLE(s, atp->atp_delay_lock);
 		if (rc != 0) {
 			gbuf_freem(mioc);
 			file_drop(fd);
@@ -1575,7 +1511,7 @@ _ATPsndreq(fd, buf, len, nowait, err, proc)
 	 */
 	athp = AT_ATP_HDR(m2);
 	athp->cmd = ATP_CMD_TREQ;
-	UAS_ASSIGN(athp->tid, trp->tr_tid);
+	UAS_ASSIGN_HTON(athp->tid, trp->tr_tid);
 	athp->eom = 0;
 	athp->sts = 0;
 	trp->tr_xo = athp->xo;
@@ -1600,9 +1536,7 @@ _ATPsndreq(fd, buf, len, nowait, err, proc)
 	/*
 	 *	Put us in the transaction waiting queue
 	 */
-	ATDISABLE(s, atp->atp_lock);
 	ATP_Q_APPEND(atp->atp_trans_wait, trp, tr_list);
-	ATENABLE(s, atp->atp_lock);
 
 	/*
 	 * Send the message and set the timer	
@@ -1623,21 +1557,18 @@ _ATPsndreq(fd, buf, len, nowait, err, proc)
 	/*
 	 * wait for the transaction to complete
 	 */
-	ATDISABLE(s, trp->tr_lock);
 	while ((trp->tr_state != TRANS_DONE) && (trp->tr_state != TRANS_FAILED) &&
 				(trp->tr_state != TRANS_ABORTING)) {
 		trp->tr_rsp_wait = 1;
 		rc = msleep(&trp->tr_event, atalk_mutex, PSOCK | PCATCH, "atpsndreq", 0);
 		if (rc != 0) {
 			trp->tr_rsp_wait = 0;
-			ATENABLE(s, trp->tr_lock);
 			file_drop(fd);
 			*err = rc;
 			return -1;
 		}
 	}
 	trp->tr_rsp_wait = 0;
-	ATENABLE(s, trp->tr_lock);
 
 
 	if (trp->tr_state == TRANS_FAILED || trp->tr_state == TRANS_ABORTING) {
@@ -1830,7 +1761,7 @@ _ATPgetreq(fd, buf, buflen, err, proc)
 	register struct atp_state *atp;
 	register struct atp_rcb *rcbp;
 	register gbuf_t *m, *m_head;
-	int s, size, len;
+	int size, len;
 
 	if ((*err = atalk_getref(0, fd, &gref, proc, 1)) != 0)
 		return -1;
@@ -1850,7 +1781,6 @@ _ATPgetreq(fd, buf, buflen, err, proc)
 		return -1;
 	}
 
-	ATDISABLE(s, atp->atp_lock);
 	if ((rcbp = atp->atp_attached.head) != NULL) {
 	    /*
 	     * Got one, move it to the active response Q
@@ -1868,7 +1798,6 @@ _ATPgetreq(fd, buf, buflen, err, proc)
 			 */
 			atp_rcb_free(rcbp);
 		}
-		ATENABLE(s, atp->atp_lock);
 
 		/*
 		 * copyout the request data, including the protocol header
@@ -1886,7 +1815,6 @@ _ATPgetreq(fd, buf, buflen, err, proc)
 		file_drop(fd);
 		return size;
 	}
-	ATENABLE(s, atp->atp_lock);
 
 	file_drop(fd);
 	return -1;
@@ -1902,7 +1830,7 @@ _ATPgetrsp(fd, bdsp, err, proc)
 	gref_t *gref;
 	register struct atp_state *atp;
 	register struct atp_trans *trp;
-	int s, tid;
+	int tid;
 	char bds[atpBDSsize];
 
 	if ((*err = atalk_getref(0, fd, &gref, proc, 1)) != 0)
@@ -1917,7 +1845,6 @@ _ATPgetrsp(fd, bdsp, err, proc)
 		return -1;
 	}
 
-	ATDISABLE(s, atp->atp_lock);
 	for (trp = atp->atp_trans_wait.head; trp; trp = trp->tr_list.next) {
 		dPrintf(D_M_ATP, D_L_INFO,
 			("ATPgetrsp: atp:0x%x, trp:0x%x, state:%d\n",
@@ -1925,7 +1852,6 @@ _ATPgetrsp(fd, bdsp, err, proc)
 
 		switch (trp->tr_state) {
 		case TRANS_DONE:
-	    	ATENABLE(s, atp->atp_lock);
 			if ((*err = copyin(CAST_USER_ADDR_T(bdsp),
 					(caddr_t)bds, sizeof(bds))) != 0) {
 				atp_free(trp);
@@ -1950,7 +1876,6 @@ _ATPgetrsp(fd, bdsp, err, proc)
 			/*
 			 * transaction timed out, return error
 			 */
-	    	ATENABLE(s, atp->atp_lock);
 			atp_free(trp);
 			file_drop(fd);
 			*err = ETIMEDOUT;
@@ -1960,7 +1885,6 @@ _ATPgetrsp(fd, bdsp, err, proc)
 			continue;
 	    }
 	}
-	ATENABLE(s, atp->atp_lock);
 
 	file_drop(fd);
 	*err = EINVAL;
@@ -1972,7 +1896,6 @@ atp_drop_req(gref, m)
 	gref_t *gref;
 	gbuf_t *m;
 {
-	int s;
 	struct atp_state *atp;
 	struct atp_rcb *rcbp;
 	at_atp_t *athp;
@@ -1987,9 +1910,8 @@ atp_drop_req(gref, m)
 	/*
 	 *	search for the corresponding rcb
 	 */
-	ATDISABLE(s, atp->atp_lock);
 	for (rcbp = atp->atp_rcb.head; rcbp; rcbp = rcbp->rc_list.next) {
-	    if ( (rcbp->rc_tid == UAS_VALUE(athp->tid)) &&
+	    if ( (rcbp->rc_tid == UAS_VALUE_NTOH(athp->tid)) &&
 			(rcbp->rc_socket.node == ddp->src_node) &&
 			(rcbp->rc_socket.net == NET_VALUE(ddp->src_net)) &&
 			(rcbp->rc_socket.socket == ddp->src_socket) )
@@ -2001,7 +1923,6 @@ atp_drop_req(gref, m)
 	 */
 	if (rcbp)
 		atp_rcb_free(rcbp);
-	ATENABLE(s, atp->atp_lock);
 
 	gbuf_freem(m);
 }

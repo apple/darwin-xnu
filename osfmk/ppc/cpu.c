@@ -37,6 +37,7 @@
 #include <kern/thread.h>
 #include <kern/sched_prim.h>
 #include <kern/processor.h>
+#include <kern/pms.h>
 
 #include <vm/pmap.h>
 #include <IOKit/IOHibernatePrivate.h>
@@ -54,7 +55,6 @@
 #include <ppc/Diagnostics.h>
 #include <ppc/trap.h>
 #include <ppc/machine_cpu.h>
-#include <ppc/pms.h>
 #include <ppc/rtclock.h>
 
 decl_mutex_data(static,ppt_lock);
@@ -71,9 +71,9 @@ static unsigned int	rht_state = 0;
 decl_simple_lock_data(static,SignalReadyLock);
 
 struct SIGtimebase {
-	boolean_t	avail;
-	boolean_t	ready;
-	boolean_t	done;
+	volatile boolean_t	avail;
+	volatile boolean_t	ready;
+	volatile boolean_t	done;
 	uint64_t	abstime;
 };
 
@@ -126,8 +126,9 @@ cpu_init(
 		mttbu(proc_info->save_tbu);
 		mttb(proc_info->save_tbl);
 	}
-	
-	setTimerReq();				/* Now that the time base is sort of correct, request the next timer pop */
+
+	proc_info->rtcPop = EndOfAllTime;			/* forget any existing decrementer setting */
+	etimer_resync_deadlines();				/* Now that the time base is sort of correct, request the next timer pop */
 
 	proc_info->cpu_type = CPU_TYPE_POWERPC;
 	proc_info->cpu_subtype = (cpu_subtype_t)proc_info->pf.rptdProc;
@@ -711,7 +712,7 @@ cpu_sync_timebase(
 							(unsigned int)&syncClkSpot) != KERN_SUCCESS)
 		continue;
 
-	while (*(volatile int *)&(syncClkSpot.avail) == FALSE)
+	while (syncClkSpot.avail == FALSE)
 		continue;
 
 	isync();
@@ -729,11 +730,10 @@ cpu_sync_timebase(
 
 	syncClkSpot.ready = TRUE;
 
-	while (*(volatile int *)&(syncClkSpot.done) == FALSE)
+	while (syncClkSpot.done == FALSE)
 		continue;
 
-	setTimerReq();									/* Start the timer */
-	
+	etimer_resync_deadlines();									/* Start the timer */
 	(void)ml_set_interrupts_enabled(intr);
 }
 
@@ -766,7 +766,8 @@ cpu_timebase_signal_handler(
 						
 	timebaseAddr->avail = TRUE;
 
-	while (*(volatile int *)&(timebaseAddr->ready) == FALSE);
+	while (timebaseAddr->ready == FALSE)
+		continue;
 
 	if(proc_info->time_base_enable !=  (void(*)(cpu_id_t, boolean_t ))NULL)
 		proc_info->time_base_enable(proc_info->cpu_id, TRUE);

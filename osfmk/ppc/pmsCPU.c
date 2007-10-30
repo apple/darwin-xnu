@@ -33,10 +33,13 @@
 #include <ppc/pmap.h>
 #include <ppc/asm.h>
 #include <ppc/proc_reg.h>
-#include <ppc/pms.h>
+#include <kern/pms.h>
 #include <ppc/savearea.h>
 #include <ppc/Diagnostics.h>
 #include <kern/processor.h>
+
+
+static void pmsCPURemote(uint32_t nstep);
 
 
 pmsDef pmsDefault[] = {
@@ -187,6 +190,15 @@ pCCfinish:
 }
 
 /*
+ * Machine-dependent initialization
+ */
+void
+pmsCPUMachineInit(void)
+{
+	return;
+}
+
+/*
  *	This function should be called once for each processor to force the
  *	processor to the correct voltage and frequency.
  */
@@ -207,7 +219,7 @@ void pmsCPUInit(void) {
 	return;
 }
 
-uint32_t pmsCPUquery(void) {
+uint32_t pmsCPUQuery(void) {
 
 	uint32_t result;
 	struct per_proc_info *pp;
@@ -235,5 +247,68 @@ uint32_t pmsCPUquery(void) {
 
 	return result;
 }
+
+/*
+ *	These are not implemented for PPC.
+ */
+void pmsCPUYellowFlag(void) {
+}
+
+void pmsCPUGreenFlag(void) {
+}
+
+uint32_t pmsCPUPackageQuery(void)
+{
+    	/* multi-core CPUs are not supported. */
+    	return(~(uint32_t)0);
+}
+
+/*
+ *	Broadcast a change to all processors including ourselves.
+ *	This must transition before broadcasting because we may block and end up on a different processor.
+ *
+ *	This will block until all processors have transitioned, so
+ *	obviously, this can block.
+ *
+ *	Called with interruptions disabled.
+ *
+ */
+ 
+void pmsCPURun(uint32_t nstep) {
+
+	pmsRunLocal(nstep);								/* If we aren't parking (we are already parked), transition ourselves */
+	(void)cpu_broadcast(&pmsBroadcastWait, pmsCPURemote, nstep);	/* Tell everyone else to do it too */
+
+	return;
+	
+}
+
+/*
+ *	Receive a broadcast and react.
+ *	This is called from the interprocessor signal handler.
+ *	We wake up the initiator after we are finished.
+ *
+ */
+	
+static void pmsCPURemote(uint32_t nstep) {
+
+	pmsRunLocal(nstep);								/* Go set the step */
+	if(!hw_atomic_sub(&pmsBroadcastWait, 1)) {		/* Drop the wait count */
+		thread_wakeup((event_t)&pmsBroadcastWait);	/* If we were the last, wake up the signaller */
+	}
+	return;
+}	
+
+/*
+ *	Control the Power Management Stepper.
+ *	Called from user state by the superuser via a ppc system call.
+ *	Interruptions disabled.
+ *
+ */
+int pmsCntrl(struct savearea *save) {
+	save->save_r3 = pmsControl(save->save_r3, (user_addr_t)(uintptr_t)save->save_r4, save->save_r5);
+	return 1;
+}
+
 
 

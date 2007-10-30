@@ -7,7 +7,7 @@ MD=     /usr/bin/md
 
 RM = /bin/rm -f
 CP = /bin/cp
-LN = /bin/ln -s
+LN = /bin/ln -fs
 CAT = /bin/cat
 MKDIR = /bin/mkdir -p
 

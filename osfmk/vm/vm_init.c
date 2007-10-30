@@ -79,7 +79,11 @@
 #include <vm/vm_protos.h>
 
 #define ZONE_MAP_MIN (12 * 1024 * 1024) 
-#define ZONE_MAP_MAX (768 * 1024 * 1024) 
+/* Maximum Zone size is 1G */
+#define ZONE_MAP_MAX (1024 * 1024 * 1024) 
+
+const vm_offset_t vm_min_kernel_address = VM_MIN_KERNEL_ADDRESS;
+const vm_offset_t vm_max_kernel_address = VM_MAX_KERNEL_ADDRESS;
 
 /*
  *	vm_mem_bootstrap initializes the virtual memory system.
@@ -90,7 +94,8 @@ void
 vm_mem_bootstrap(void)
 {
 	vm_offset_t	start, end;
-	vm_size_t zsize;
+	vm_size_t zsizearg;
+	mach_vm_size_t zsize;
 
 	/*
 	 *	Initializes resident memory structures.
@@ -110,8 +115,8 @@ vm_mem_bootstrap(void)
 	kmem_init(start, end);
 	pmap_init();
 	
-	if (PE_parse_boot_arg("zsize", &zsize))
-		zsize = zsize * 1024 * 1024;
+	if (PE_parse_boot_arg("zsize", &zsizearg))
+		zsize = zsizearg * 1024ULL * 1024ULL;
 	else {
 		zsize = sane_size >> 2;				/* Get target zone size as 1/4 of physical memory */
 	}

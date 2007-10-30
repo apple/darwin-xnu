@@ -179,13 +179,9 @@ struct	rusage {
  * WARNING - keep in sync with struct timeval
  */
 
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
-
 struct user_rusage_timeval {
 	user_time_t		tv_sec;		/* seconds */
-	__darwin_suseconds_t	tv_usec;	/* and microseconds */
+	__darwin_suseconds_t	tv_usec __attribute((aligned(8)));	/* and microseconds */
 };	
 struct	user_rusage {
 	struct user_rusage_timeval ru_utime;	/* user time used */
@@ -205,10 +201,6 @@ struct	user_rusage {
 	user_long_t	ru_nvcsw;		/* voluntary context switches */
 	user_long_t	ru_nivcsw;		/* involuntary " */
 };
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
-#endif
 
 #endif // KERNEL
 

@@ -40,17 +40,16 @@
  */
 #include "hfs.h"
 #include "hfscommon/headers/BTreesInternal.h"
-#include <architecture/byte_order.h>
+#include <libkern/OSByteOrder.h>
 
 /*********************/
 /* BIG ENDIAN Macros */
 /*********************/
-#if BYTE_ORDER == BIG_ENDIAN
+#define SWAP_BE16(__a) 							OSSwapBigToHostInt16 (__a)
+#define SWAP_BE32(__a) 							OSSwapBigToHostInt32 (__a)
+#define SWAP_BE64(__a) 							OSSwapBigToHostInt64 (__a)
 
-    /* HFS is always big endian, make swaps into no-ops */
-    #define SWAP_BE16(__a) (__a)
-    #define SWAP_BE32(__a) (__a)
-    #define SWAP_BE64(__a) (__a)
+#if BYTE_ORDER == BIG_ENDIAN
     
     /* HFS is always big endian, no swapping needed */
     #define SWAP_HFS_PLUS_FORK_DATA(__a)
@@ -60,11 +59,6 @@
 /************************/
 #elif BYTE_ORDER == LITTLE_ENDIAN
 
-    /* HFS is always big endian, make swaps actually swap */
-    #define SWAP_BE16(__a) 							NXSwapBigShortToHost (__a)
-    #define SWAP_BE32(__a) 							NXSwapBigLongToHost (__a)
-    #define SWAP_BE64(__a) 							NXSwapBigLongLongToHost (__a)
-    
     #define SWAP_HFS_PLUS_FORK_DATA(__a)			hfs_swap_HFSPlusForkData ((__a))
 
 #else

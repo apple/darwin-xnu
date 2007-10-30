@@ -155,13 +155,24 @@ typedef struct wait_queue_link {
  * a problem with a thread lock, it normally times out at the wait
  * queue level first, hiding the real problem.
  */
-#define wait_queue_lock(wq)	\
-	((void) (!hw_lock_to(&(wq)->wq_interlock, LockTimeOut * 2) ? \
-		 panic("wait queue deadlock - wq=0x%x, cpu=%d\n", \
-		       wq, cpu_number()) : 0))
 
-#define wait_queue_unlock(wq) \
-	(assert(wait_queue_held(wq)), hw_lock_unlock(&(wq)->wq_interlock))
+static inline void wait_queue_lock(wait_queue_t wq) {
+	if (!hw_lock_to(&(wq)->wq_interlock, LockTimeOut * 2))
+		panic("wait queue deadlock - wq=0x%x, cpu=%d\n", wq, cpu_number());
+}
+
+static inline void wait_queue_unlock(wait_queue_t wq) {
+	assert(wait_queue_held(wq));
+#if defined(__i386__)
+	/* On certain x86 systems, this spinlock is susceptible to
+	 * lock starvation. Hence use an unlock variant which performs
+	 * a cacheline flush to minimize cache affinity on acquisition.
+	 */
+	i386_lock_unlock_with_flush(&(wq)->wq_interlock);
+#else
+        hw_lock_unlock(&(wq)->wq_interlock);
+#endif
+}
 
 #define wqs_lock(wqs)		wait_queue_lock(&(wqs)->wqs_wait_queue)
 #define wqs_unlock(wqs)		wait_queue_unlock(&(wqs)->wqs_wait_queue)

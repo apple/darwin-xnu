@@ -151,7 +151,7 @@ static void mbuf_expand_thread(void);
 static int m_expand(int );
 static caddr_t m_bigalloc(int );
 static void m_bigfree(caddr_t ,  u_int ,  caddr_t );
-static struct mbuf * m_mbigget(struct mbuf *, int );
+__private_extern__ struct mbuf * m_mbigget(struct mbuf *, int );
 void mbinit(void);
 static void m_range_check(void *addr);
 
@@ -222,11 +222,9 @@ mbinit(void)
 	nclpp = round_page_32(MCLBYTES) / MCLBYTES;	/* see mbufgc() */
 	if (nclpp < 1) nclpp = 1;
 	mbuf_mlock_grp_attr = lck_grp_attr_alloc_init();
-	lck_grp_attr_setdefault(mbuf_mlock_grp_attr);
 
 	mbuf_mlock_grp = lck_grp_alloc_init("mbuf", mbuf_mlock_grp_attr);
 	mbuf_mlock_attr = lck_attr_alloc_init();
-	lck_attr_setdefault(mbuf_mlock_attr);
 
 	mbuf_mlock = lck_mtx_alloc_init(mbuf_mlock_grp, mbuf_mlock_attr);
 
@@ -824,7 +822,11 @@ m_dup_pkthdr(struct mbuf *to, struct mbuf *from, int how)
         to->m_flags = (from->m_flags & M_COPYFLAGS) | (to->m_flags & M_EXT);
         if ((to->m_flags & M_EXT) == 0)
                 to->m_data = to->m_pktdat;
+	if (to->m_pkthdr.aux != NULL)
+		m_freem(to->m_pkthdr.aux);
         to->m_pkthdr = from->m_pkthdr;
+	to->m_pkthdr.aux = NULL;
+	(void) m_aux_copy(to, from);
         SLIST_INIT(&to->m_pkthdr.tags);
         return (m_tag_copy_chain(to, from, how));
 }

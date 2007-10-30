@@ -85,9 +85,7 @@ typedef	__darwin_ino_t	ino_t;		/* inode number */
 
 #define __DARWIN_MAXNAMLEN	255
 
-#if __DARWIN_ALIGN_POWER
-#pragma options align=power
-#endif
+#pragma pack(4)
 
 struct dirent {
 	ino_t d_ino;			/* file number of entry */
@@ -97,9 +95,7 @@ struct dirent {
 	char d_name[__DARWIN_MAXNAMLEN + 1];	/* name must be no longer than this */
 };
 
-#if __DARWIN_ALIGN_POWER
-#pragma options align=reset
-#endif
+#pragma pack()
 
 #ifdef KERNEL
 #include <sys/kernel_types.h>

@@ -112,9 +112,7 @@ struct socket_filter;
 #include <kern/locks.h>
 #endif /* KERNEL */
 
-#if __DARWIN_ALIGN_POWER
-#pragma options align=power
-#endif
+#pragma pack(4)
 
 struct protosw {
 	short	pr_type;		/* socket type used for */
@@ -162,9 +160,7 @@ struct protosw {
 #endif
 };
 
-#if __DARWIN_ALIGN_POWER
-#pragma options align=reset
-#endif
+#pragma pack()
 
 /*
  * Values for pr_flags.

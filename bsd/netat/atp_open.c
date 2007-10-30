@@ -64,9 +64,6 @@
 
 int atp_inited = 0;
 struct atp_rcb_qhead atp_need_rel;
-atlock_t atpall_lock;
-atlock_t atptmo_lock;
-atlock_t atpgen_lock;
 
 /**********/
 int atp_pidM[256];
@@ -136,7 +133,7 @@ int atp_open(gref, flag)
 	int flag;
 {
 	register struct atp_state *atp;
-	register int s, i;
+	register int i;
 	vm_offset_t	temp;
 	
 	/*
@@ -176,18 +173,14 @@ int atp_open(gref, flag)
 	 *	If no atp structure available return failure
 	 */
 
-	ATDISABLE(s, atpall_lock);
-	if ((atp = atp_free_list) == NULL) {
-		ATENABLE(s, atpall_lock);
+	if ((atp = atp_free_list) == NULL)
 		return(EAGAIN);
-	}
 
 	/*
 	 *	Update free list
 	 */
 
 	atp_free_list = atp->atp_trans_waiting;
-	ATENABLE(s, atpall_lock);
 
 	/*
 	 *	Initialize the data structure
@@ -206,8 +199,6 @@ int atp_open(gref, flag)
 	atp->atp_socket_no = -1;
 	atp->atp_pid = gref->pid;
 	atp->atp_msgq = 0;
-	ATLOCKINIT(atp->atp_lock);
-	ATLOCKINIT(atp->atp_delay_lock);
 	ATEVENTINIT(atp->atp_event);
 	ATEVENTINIT(atp->atp_delay_event);
 	gref->info = (void *)atp;
@@ -217,11 +208,9 @@ int atp_open(gref, flag)
 	 */
 
 	if (flag) {
-		ATDISABLE(s, atpall_lock);
 		if ((atp->atp_trans_waiting = atp_used_list) != 0)
 			atp->atp_trans_waiting->atp_rcb_waiting = atp;
 		atp_used_list = atp;
-		ATENABLE(s, atpall_lock);
 	}
 	return(0);
 }
@@ -239,7 +228,6 @@ int atp_close(gref, flag)
 	register struct atp_state *atp;
 	register struct atp_trans *trp;
 	register struct atp_rcb *rcbp;
-	register int s;
 	int socket;
 	pid_t pid;
 
@@ -251,7 +239,6 @@ int atp_close(gref, flag)
 		atp->atp_msgq = 0;
 	}
 
-	ATDISABLE(s, atp->atp_lock);
 	atp->atp_flags |= ATP_CLOSING;
 	socket = atp->atp_socket_no;
 	if (socket != -1)
@@ -272,7 +259,6 @@ int atp_close(gref, flag)
 		atp_rcb_free(rcbp);
 	while ((rcbp = atp->atp_attached.head))
 		atp_rcb_free(rcbp);
-	ATENABLE(s, atp->atp_lock);
 
 	if (flag && (socket == -1))
 		atp_dequeue_atp(atp);
@@ -280,11 +266,9 @@ int atp_close(gref, flag)
 	/*
 	 *	free the state variable
 	 */
-	ATDISABLE(s, atpall_lock);
 	atp->atp_socket_no = -1;
 	atp->atp_trans_waiting = atp_free_list;
 	atp_free_list = atp;
-	ATENABLE(s, atpall_lock);
 
 	if (socket != -1) {
 		pid = (pid_t)atp_pidM[socket];

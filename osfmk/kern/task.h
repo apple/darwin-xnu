@@ -97,6 +97,7 @@
 #include <mach/mach_param.h>
 #include <mach/task_info.h>
 #include <mach/exception_types.h>
+#include <machine/task.h>
 
 #include <kern/cpu_data.h>
 #include <kern/queue.h>
@@ -154,6 +155,7 @@ struct task {
 	/* IPC structures */
 	decl_mutex_data(,itk_lock_data)
 	struct ipc_port *itk_self;	/* not a right, doesn't hold ref */
+	struct ipc_port *itk_nself;	/* not a right, doesn't hold ref */
 	struct ipc_port *itk_sself;	/* a send right */
 	struct exception_action exc_actions[EXC_TYPES_COUNT];
 		 			/* a send right each valid element  */
@@ -175,6 +177,8 @@ struct task {
 	struct ipc_port *paged_ledger_port;
 	unsigned int	priv_flags;			/* privilege resource flags */
 #define VM_BACKING_STORE_PRIV	0x1
+
+	MACHINE_TASK
         
 	integer_t faults;              /* faults counter */
         integer_t pageins;             /* pageins counter */
@@ -267,6 +271,7 @@ extern kern_return_t	task_terminate_internal(
 extern kern_return_t	task_create_internal(
 							task_t		parent_task,
 							boolean_t	inherit_memory,
+							boolean_t	is_64bit,
 							task_t		*child_task);	/* OUT */
 
 extern kern_return_t	task_importance(
@@ -282,6 +287,7 @@ extern void		task_backing_store_privileged(
 
 extern void		task_working_set_disable(
 					task_t		task);
+
 
 /* Get number of activations in a task */
 extern int		get_task_numacts(
@@ -310,6 +316,8 @@ extern task_t	kernel_task;
 extern void		task_deallocate(
 					task_t		task);
 
+extern void		task_name_deallocate(
+					task_name_t		task_name);
 __END_DECLS
 
 #endif	/* _KERN_TASK_H_ */

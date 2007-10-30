@@ -67,75 +67,72 @@
 	.text	
 	.align	12		// Page align for single bcopy_phys()
 
-#define	LJMP(segment,address)	\
-	.byte	0xea		;\
-	.long	address-EXT(slave_boot_base)		;\
+#define	operand_size_prefix	.byte 0x66
+#define	address_size_prefix	.byte 0x67
+
+#define	LJMP(segment,address)			\
+	operand_size_prefix			;\
+	.byte	0xea				;\
+	.long	address-EXT(slave_boot_base)	;\
 	.word	segment
 
-#define	LGDT(address)	\
-	.word	0x010f ;\
-	.byte	0x15 ;\
+#define	LGDT(address)				\
+	address_size_prefix			;\
+	operand_size_prefix			;\
+	.word	0x010f				;\
+	.byte	0x15				;\
 	.long	address-EXT(slave_boot_base)
 
 Entry(slave_boot_base)
 	/* code is loaded at 0x0:0x1000 */
 	/* ljmp to the next instruction to set up %cs */
-	data16
-	LJMP(MP_BOOTSEG, EXT(slave_pstart))
+	LJMP(MP_BOOTSEG, EXT(slave_rstart))
 
-Entry(slave_pstart)
+Entry(slave_rstart)
 	/* set up %ds */
 	mov	%cs, %ax
 	mov	%ax, %ds
 
-	POSTCODE(SLAVE_PSTART_ENTRY);
+	POSTCODE(SLAVE_RSTART_ENTRY);
 
 	/* set up %ss and %esp */
-	data16
-	mov	$(MP_BOOTSEG), %eax
+	mov	%cs, %ax
 	mov	%ax, %ss
-	data16
 	mov	$(MP_BOOTSTACK), %esp
 
 	/*set up %es */
 	mov	%ax, %es
 
 	/* change to protected mode */
-	data16
-	call	EXT(real_to_prot)
+	operand_size_prefix
+	call	EXT(slave_real_to_prot)
 
 	push	MP_MACH_START
-	call	EXT(startprog)
+	call	EXT(slave_startprog)
 
 /*
- real_to_prot()
+ slave_real_to_prot()
  	transfer from real mode to protected mode.
 */
 
-Entry(real_to_prot)
+Entry(slave_real_to_prot)
 	/* guarantee that interrupt is disabled when in prot mode */
 	cli
 
-	POSTCODE(REAL_TO_PROT_ENTRY);
+	POSTCODE(SLAVE_REAL_TO_PROT_ENTRY);
 
 	/* load the gdtr */
-	addr16
-	data16
 	LGDT(EXT(gdtr))
 
 	/* load the gdtr */
 	/* set the PE bit of CR0 */
 	mov	%cr0, %eax
-
-	data16
 	or	$(CR0_PE_ON), %eax
 	mov	%eax, %cr0 
 
 	/* make intrasegment jump to flush the processor pipeline and */
 	/* reload CS register */
-	data16
 	LJMP(0x08, xprot)
-
 xprot:
 	
 	/* we are in USE32 mode now */
@@ -145,20 +142,20 @@ xprot:
 	movw	%ax, %ss
 	movw	%ax, %es
 
-	POSTCODE(REAL_TO_PROT_EXIT);
+	POSTCODE(SLAVE_REAL_TO_PROT_EXIT);
 
 	ret
 
 /*
- startprog(phyaddr)
+ slave_startprog(phyaddr)
 	start the program on protected mode where phyaddr is the entry point
 */
 
-Entry(startprog)
+Entry(slave_startprog)
 	push	%ebp
 	movl	%esp, %ebp
 	
-	POSTCODE(STARTPROG_ENTRY);
+	POSTCODE(SLAVE_STARTPROG_ENTRY);
 
 	movl	0x8(%ebp), %ecx		/* entry offset  */
 	movl	$0x28, %ebx		/* segment */
@@ -170,7 +167,7 @@ Entry(startprog)
 	movw	%bx, %ds
 	movw	%bx, %es
 
-	POSTCODE(STARTPROG_EXIT);
+	POSTCODE(SLAVE_STARTPROG_EXIT);
 
 	lret
 
@@ -204,7 +201,7 @@ Entry(Gdt)
 	.byte	0,0x9e,0x0,0
 
 	.word	0xffff,0	/* 0x20 : init data */
-	.byte	0,0x93,0xcf,0
+	.byte	0,0x9f,0xcf,0
 
 	.word	0xffff,0	/* 0x28 : init code */
 	.byte	0,0x9f,0xcf,0

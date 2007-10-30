@@ -103,7 +103,7 @@ rlim_t maxsmap = MAXSSIZ;	/* XXX */
  *
  * Note: would be in kern/subr_param.c in FreeBSD.
  */
-int maxprocperuid = CHILD_MAX;		/* max # of procs per user */
+extern int maxprocperuid;		/* max # of procs per user */
 int maxfilesperproc = OPEN_MAX;		/* per-proc open files limit */
 
 SYSCTL_INT( _kern, KERN_MAXPROCPERUID, maxprocperuid, CTLFLAG_RW,

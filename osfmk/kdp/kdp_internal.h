@@ -46,7 +46,8 @@ typedef struct {
 
 extern kdp_glob_t	kdp;
 
-extern int		kdp_flag;
+extern volatile int	kdp_flag;
+
 #define KDP_READY       0x1
 #define KDP_ARP         0x2
 #define KDP_BP_DIS      0x4

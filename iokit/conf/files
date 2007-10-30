@@ -11,7 +11,7 @@ iokit/Kernel/WKdmDecompress.c				optional iokitcpp
 iokit/Kernel/IOHibernateIO.cpp				optional iokitcpp
 iokit/Kernel/IOHibernateRestoreKernel.c			optional iokitcpp
 
-iokit/Kernel/IOLib.c					optional iokitcpp
+iokit/Kernel/IOLib.cpp					optional iokitcpp
 iokit/Kernel/IOLocks.cpp				optional iokitcpp
 iokit/Kernel/IOConditionLock.cpp			optional iokitcpp
 iokit/Kernel/IOSyncer.cpp				optional iokitcpp
@@ -21,6 +21,7 @@ iokit/Kernel/IOStartIOKit.cpp				optional iokitcpp
 
 iokit/Kernel/IODeviceTreeSupport.cpp			optional iokitcpp
 
+iokit/Kernel/IOPMWorkArbiter.cpp                        optional iokitcpp
 iokit/Kernel/IORegistryEntry.cpp			optional iokitcpp
 iokit/Kernel/IOService.cpp				optional iokitcpp
 iokit/Kernel/IOServicePM.cpp				optional iokitcpp
@@ -42,11 +43,14 @@ iokit/Kernel/IOCommandQueue.cpp				optional iokitcpp
 iokit/Kernel/IOFilterInterruptEventSource.cpp		optional iokitcpp
 iokit/Kernel/IOTimerEventSource.cpp			optional iokitcpp
 
+# Memory system
+iokit/Kernel/IOBufferMemoryDescriptor.cpp		optional iokitcpp
+iokit/Kernel/IODMACommand.cpp				optional iokitcpp
 iokit/Kernel/IODeviceMemory.cpp				optional iokitcpp
 iokit/Kernel/IOMapper.cpp				optional iokitcpp
-iokit/Kernel/IOMemoryDescriptor.cpp			optional iokitcpp
+iokit/Kernel/IOCopyMapper.cpp				optional iokitcpp
 iokit/Kernel/IOMemoryCursor.cpp				optional iokitcpp
-iokit/Kernel/IOBufferMemoryDescriptor.cpp		optional iokitcpp
+iokit/Kernel/IOMemoryDescriptor.cpp			optional iokitcpp
 iokit/Kernel/IOMultiMemoryDescriptor.cpp		optional iokitcpp
 iokit/Kernel/IORangeAllocator.cpp			optional iokitcpp
 

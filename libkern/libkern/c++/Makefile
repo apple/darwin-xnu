@@ -27,6 +27,7 @@ DATAFILES = \
           OSCPPDebug.h \
           OSData.h \
           OSDictionary.h \
+          OSEndianTypes.h \
           OSIterator.h \
           OSLib.h \
           OSMetaClass.h \

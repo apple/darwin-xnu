@@ -882,7 +882,6 @@ union_vn_create(vpp, un, p)
 	struct proc *p;
 {
 	struct vnode *vp;
-	kauth_cred_t cred = p->p_ucred;
 	struct vnode_attr vat;
 	struct vnode_attr *vap = &vat;
 	struct vfs_context context;
@@ -895,7 +894,7 @@ union_vn_create(vpp, un, p)
 	*vpp = NULLVP;
 
 	context.vc_proc = p;
-	context.vc_ucred = p->p_ucred;
+	context.vc_ucred = kauth_cred_proc_ref(p);
 
 	/*
 	 * Build a new componentname structure (for the same
@@ -919,12 +918,15 @@ union_vn_create(vpp, un, p)
 	cn.cn_consume = 0;
 
 	vnode_get(un->un_dirvp);
-	if (error = relookup(un->un_dirvp, &vp, &cn))
+	if (error = relookup(un->un_dirvp, &vp, &cn)) {
+		kauth_cred_unref(&context.vc_ucred);
 		return (error);
+	}
 	vnode_put(un->un_dirvp);
 
 	if (vp) {
 	        vnode_put(un->un_dirvp);
+		kauth_cred_unref(&context.vc_ucred);
 		vnode_put(vp);
 		return (EEXIST);
 	}
@@ -946,11 +948,14 @@ union_vn_create(vpp, un, p)
 	VATTR_SET(vap, va_type, VREG);
 	VATTR_SET(vap, va_mode, cmode);
 
-	if (error = vn_create(un->un_dirvp, &vp, &cn, vap, 0, &context))
+	if (error = vn_create(un->un_dirvp, &vp, &cn, vap, 0, &context)) {
+		kauth_cred_unref(&context.vc_ucred);
 		return (error);
+	}
 
 	if (error = VNOP_OPEN(vp, fmode, &context)) {
 		vnode_put(vp);
+		kauth_cred_unref(&context.vc_ucred);
 		return (error);
 	}
 
@@ -959,6 +964,7 @@ union_vn_create(vpp, un, p)
 		panic("union: v_writecount");
 	vnode_unlock(vp);
 	*vpp = vp;
+	kauth_cred_unref(&context.vc_ucred);
 	return (0);
 }
 

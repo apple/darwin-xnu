@@ -410,6 +410,7 @@ extern kern_return_t vm_map_find_space(
 				vm_map_address_t	*address,	/* OUT */
 				vm_map_size_t		size,
 				vm_map_offset_t		mask,
+				int			flags,
 				vm_map_entry_t		*o_entry);	/* OUT */
 
 /* Lookup map entry containing or the specified address in the given map */
@@ -845,6 +846,31 @@ extern kern_return_t	vm_map_copyin_common(
 				boolean_t		src_volatile,
 				vm_map_copy_t		*copy_result,	/* OUT */
 				boolean_t		use_maxprot);
+
+extern void		vm_map_disable_NX(
+			        vm_map_t		map);
+
+extern void		vm_map_set_64bit(
+			        vm_map_t		map);
+
+extern void		vm_map_set_32bit(
+			        vm_map_t		map);
+
+extern boolean_t	vm_map_has_4GB_pagezero(
+		       		vm_map_t		map);
+
+extern void		vm_map_set_4GB_pagezero(
+			        vm_map_t		map);
+
+extern void		vm_map_clear_4GB_pagezero(
+			        vm_map_t		map);
+
+extern kern_return_t	vm_map_raise_min_offset(
+	vm_map_t	map,
+	vm_map_offset_t	new_min_offset);
+
+extern vm_map_offset_t	vm_compute_max_offset(
+				unsigned		is64);
 
 /*
  *	Macros to invoke vm_map_copyin_common.  vm_map_copyin is the

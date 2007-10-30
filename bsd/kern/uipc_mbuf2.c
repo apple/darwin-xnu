@@ -439,6 +439,46 @@ m_aux_delete(m, victim)
 	}
 }
 
+struct mbuf *
+m_aux_copy(struct mbuf *to, struct mbuf *from)
+{
+	struct mbuf *m;
+	struct mbuf *top = NULL, **np = &top;
+
+	if (!(to->m_flags & M_PKTHDR) || !(from->m_flags & M_PKTHDR))
+		return (NULL);
+
+	if ((m = from->m_pkthdr.aux) == NULL)
+		return (NULL);
+
+	while (m != NULL) {
+		struct mbuf *n;
+
+		MGET(n, M_DONTWAIT, m->m_type);
+		if (n == NULL) {
+			m_freem(top);
+			return (NULL);
+		}
+
+		/* Set length and data offset accordingly */
+		n->m_len = m->m_len;
+		n->m_data += (m->m_data - m->m_dat);
+
+		/* Copy databuf (mauxtag + possible aux data) */
+		bcopy(m->m_dat, n->m_dat, sizeof (m->m_dat));
+
+		*np = n;
+		np = &n->m_next;
+		m = m->m_next;
+	}
+
+	if (to->m_pkthdr.aux != NULL)
+		m_freem(to->m_pkthdr.aux);
+
+	to->m_pkthdr.aux = top;
+	return (top);
+}
+
 /* Get a packet tag structure along with specified data following. */
 struct m_tag *
 m_tag_alloc(u_int32_t id, u_int16_t type, int len, int wait)

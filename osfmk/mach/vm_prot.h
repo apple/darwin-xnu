@@ -85,6 +85,12 @@ typedef int		vm_prot_t;
 #define VM_PROT_EXECUTE	((vm_prot_t) 0x04)	/* execute permission */
 
 /*
+ *	For now we can only support no execute on stacks... too many
+ *	entries are marked w/o VM_PROT_EXECUTE that actually have code
+ */
+#define STACK_ONLY_NX	1
+
+/*
  *	The default protection for newly-created virtual memory
  */
 
@@ -128,5 +134,6 @@ typedef int		vm_prot_t;
  */
 
 #define VM_PROT_WANTS_COPY	((vm_prot_t) 0x10)
+
 
 #endif	/* _MACH_VM_PROT_H_ */

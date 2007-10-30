@@ -87,6 +87,7 @@
 #include <sys/tty.h>
 #include <sys/quota.h>
 #include <sys/uio_internal.h>
+#include <sys/resourcevar.h>
 
 #include <ufs/ufs/inode.h>
 

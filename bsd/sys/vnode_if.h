@@ -124,7 +124,6 @@ extern struct vnodeop_desc vnop_truncate_desc;
 extern struct vnodeop_desc vnop_allocate_desc;
 extern struct vnodeop_desc vnop_pagein_desc;
 extern struct vnodeop_desc vnop_pageout_desc;
-extern struct vnodeop_desc vnop_devblocksize_desc;
 extern struct vnodeop_desc vnop_searchfs_desc;
 extern struct vnodeop_desc vnop_copyfile_desc;
 extern struct vnodeop_desc vnop_blktooff_desc;
@@ -709,18 +708,6 @@ struct vnop_pageout_args {
 };
 extern errno_t VNOP_PAGEOUT(vnode_t, upl_t, vm_offset_t, off_t, size_t, int, vfs_context_t);
 
-
-#ifdef BSD_KERNEL_PRIVATE
-/*
- *#% devblocksize vp      = = =
- *#
- */
-struct vnop_devblocksize_args {
-	struct vnodeop_desc *a_desc;
-	vnode_t a_vp;
-	register_t *a_retval;
-};
-#endif /* BSD_KERNEL_PRIVATE */
 
 /*
  *#

@@ -166,6 +166,7 @@ struct pmap {
 #define pmapKeyDef	0x00000006			/* Default keys - Sup = 1, user = 1, no ex = 0 */
 #define pmapVMhost	0x00000010			/* pmap with Virtual Machines attached to it */
 #define pmapVMgsaa	0x00000020			/* Guest shadow assist active */
+#define pmapNXdisabled	0x00000040			/* no-execute disabled for this pmap */
 	unsigned int	spaceNum;			/* Space number */
 	unsigned int	pmapCCtl;			/* Cache control */
 #define pmapCCtlVal	0xFFFF0000			/* Valid entries */
@@ -282,13 +283,12 @@ extern pmapTransTab *pmapTrans;			/* Space to pmap translate table */
 /* 
  * prototypes.
  */
-extern vm_offset_t phystokv(vm_offset_t pa);					/* Get kernel virtual address from physical */
-extern vm_offset_t kvtophys(vm_offset_t va);					/* Get physical address from kernel virtual */
-extern vm_map_offset_t kvtophys64(vm_map_offset_t va);				/* Get 64-bit physical address from kernel virtual */
+extern addr64_t	   	kvtophys(vm_offset_t va);					/* Get physical address from kernel virtual */
 extern vm_offset_t	pmap_map(vm_offset_t va,
 				 vm_offset_t spa,
 				 vm_offset_t epa,
-				 vm_prot_t prot);
+				 vm_prot_t prot,
+				 unsigned int flags);
 extern kern_return_t    pmap_add_physical_memory(vm_offset_t spa,
 						 vm_offset_t epa,
 						 boolean_t available,
@@ -326,6 +326,10 @@ extern int pmap_list_resident_pages(
 extern void pmap_init_sharedpage(vm_offset_t cpg);
 extern void pmap_map_sharedpage(task_t task, pmap_t pmap);
 extern void pmap_unmap_sharedpage(pmap_t pmap);
+extern void pmap_disable_NX(pmap_t pmap);
+/* Not required for ppc: */
+static inline void pmap_set_4GB_pagezero(__unused pmap_t pmap) {}
+static inline void pmap_clear_4GB_pagezero(__unused pmap_t pmap) {}
 
 
 

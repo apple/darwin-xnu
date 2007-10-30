@@ -31,7 +31,7 @@
 
 #if defined (__ppc__) || defined (__ppc64__)
 #include "ppc/psl.h"
-#elif defined (__i386__)
+#elif defined (__i386__) || defined(__x86_64__)
 #include "i386/psl.h"
 #else
 #error architecture not supported

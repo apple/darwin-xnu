@@ -104,8 +104,6 @@ my_lck_grp_alloc_init(const char * grp_name)
     lck_grp_attr_t *	grp_attrs;
     
     grp_attrs = lck_grp_attr_alloc_init();
-    lck_grp_attr_setdefault(grp_attrs);
-    lck_grp_attr_setdefault(grp_attrs);
     grp = lck_grp_alloc_init(grp_name, grp_attrs);
     lck_grp_attr_free(grp_attrs);
     return (grp);
@@ -118,7 +116,6 @@ my_lck_mtx_alloc_init(lck_grp_t * lck_grp)
     lck_mtx_t *		lck_mtx;
 
     lck_attrs = lck_attr_alloc_init();
-    lck_attr_setdefault(lck_attrs);
     lck_mtx = lck_mtx_alloc_init(lck_grp, lck_attrs);
     lck_attr_free(lck_attrs);
     return (lck_mtx);

@@ -102,6 +102,8 @@
 #include <kern/assert.h>
 #include <kern/kalloc.h>
 
+#include <libkern/OSByteOrder.h>
+
 #include <miscfs/specfs/specdev.h>
 
 #include <mach/mach_types.h>
@@ -1051,14 +1053,18 @@ vfs_context_create(vfs_context_t context)
 	newcontext = (struct vfs_context *)kalloc(sizeof(struct vfs_context));
 
 	if (newcontext) {
+		kauth_cred_t safecred;
 		if (context) {
 			newcontext->vc_proc = context->vc_proc;
-			newcontext->vc_ucred = context->vc_ucred;
+			safecred = context->vc_ucred;
 		} else {
 			newcontext->vc_proc = proc_self();
-			newcontext->vc_ucred = kauth_cred_get();
+			safecred = kauth_cred_get();
 		}
-	   return(newcontext);
+		if (IS_VALID_CRED(safecred))
+			kauth_cred_ref(safecred);
+		newcontext->vc_ucred = safecred;
+		return(newcontext);
 	}
 	return((vfs_context_t)0);	
 }
@@ -1066,8 +1072,11 @@ vfs_context_create(vfs_context_t context)
 int
 vfs_context_rele(vfs_context_t context)
 {
-	if (context)
+	if (context) {
+		if (IS_VALID_CRED(context->vc_ucred))
+			kauth_cred_unref(&context->vc_ucred);
 		kfree(context, sizeof(struct vfs_context));
+	}
 	return(0);
 }
 
@@ -1511,6 +1520,39 @@ current_rootdir(void)
 	return vp;
 }
 
+/*
+ * Get a filesec and optional acl contents from an extended attribute.
+ * Function will attempt to retrive ACL, UUID, and GUID information using a
+ * read of a named extended attribute (KAUTH_FILESEC_XATTR).
+ *
+ * Parameters:	vp			The vnode on which to operate.
+ *		fsecp			The filesec (and ACL, if any) being
+ *					retrieved.
+ *		ctx			The vnode context in which the
+ *					operation is to be attempted.
+ *
+ * Returns:	0			Success
+ *		!0			errno value
+ *
+ * Notes:	The kauth_filesec_t in '*fsecp', if retrieved, will be in
+ *		host byte order, as will be the ACL contents, if any.
+ *		Internally, we will cannonize these values from network (PPC)
+ *		byte order after we retrieve them so that the on-disk contents
+ *		of the extended attribute are identical for both PPC and Intel
+ *		(if we were not being required to provide this service via
+ *		fallback, this would be the job of the filesystem
+ *		'VNOP_GETATTR' call).
+ *
+ *		We use ntohl() because it has a transitive property on Intel
+ *		machines and no effect on PPC mancines.  This guarantees us
+ *
+ * XXX:		Deleting rather than ignoreing a corrupt security structure is
+ *		probably the only way to reset it without assistance from an
+ *		file system integrity checking tool.  Right now we ignore it.
+ *
+ * XXX:		We should enummerate the possible errno values here, and where
+ *		in the code they originated.
+ */
 static int
 vnode_get_filesec(vnode_t vp, kauth_filesec_t *fsecp, vfs_context_t ctx)
 {
@@ -1519,6 +1561,9 @@ vnode_get_filesec(vnode_t vp, kauth_filesec_t *fsecp, vfs_context_t ctx)
 	size_t	fsec_size;
 	size_t	xsize, rsize;
 	int	error;
+	int	i;
+	uint32_t	host_fsec_magic;
+	uint32_t	host_acl_entrycount;
 
 	fsec = NULL;
 	fsec_uio = NULL;
@@ -1530,6 +1575,18 @@ vnode_get_filesec(vnode_t vp, kauth_filesec_t *fsecp, vfs_context_t ctx)
 		if ((error == ENOATTR) || (error == ENOENT) || (error == EJUSTRETURN))
 			error = 0;
 		/* either way, we are done */
+		goto out;
+	}
+
+	/*
+	 * To be valid, a kauth_filesec_t must be large enough to hold a zero
+	 * ACE entrly ACL, and if it's larger than that, it must have the right
+	 * number of bytes such that it contains an atomic number of ACEs,
+	 * rather than partial entries.  Otherwise, we ignore it.
+	 */
+	if (!KAUTH_FILESEC_VALID(xsize)) {
+		KAUTH_DEBUG("    ERROR - Bogus kauth_fiilesec_t: %ld bytes", xsize);	
+		error = 0;
 		goto out;
 	}
 				
@@ -1562,27 +1619,37 @@ vnode_get_filesec(vnode_t vp, kauth_filesec_t *fsecp, vfs_context_t ctx)
 	}
 
 	/*
-	 * Validate security structure.  If it's corrupt, we will
-	 * just ignore it.
+	 * Validate security structure; the validation must take place in host
+	 * byte order.  If it's corrupt, we will just ignore it.
 	 */
+
+	/* Validate the size before trying to convert it */
 	if (rsize < KAUTH_FILESEC_SIZE(0)) {
 		KAUTH_DEBUG("ACL - DATA TOO SMALL (%d)", rsize);
 		goto out;
 	}
-	if (fsec->fsec_magic != KAUTH_FILESEC_MAGIC) {
-		KAUTH_DEBUG("ACL - BAD MAGIC %x", fsec->fsec_magic);
+
+	/* Validate the magic number before trying to convert it */
+	host_fsec_magic = ntohl(KAUTH_FILESEC_MAGIC);
+	if (fsec->fsec_magic != host_fsec_magic) {
+		KAUTH_DEBUG("ACL - BAD MAGIC %x", host_fsec_magic);
 		goto out;
 	}
-	if ((fsec->fsec_acl.acl_entrycount != KAUTH_FILESEC_NOACL) &&
-	    (fsec->fsec_acl.acl_entrycount > KAUTH_ACL_MAX_ENTRIES)) {
-		KAUTH_DEBUG("ACL - BAD ENTRYCOUNT %x", fsec->fsec_entrycount);
-		goto out;
+
+	/* Validate the entry count before trying to convert it. */
+	host_acl_entrycount = ntohl(fsec->fsec_acl.acl_entrycount);
+	if (host_acl_entrycount != KAUTH_FILESEC_NOACL) {
+		if (host_acl_entrycount > KAUTH_ACL_MAX_ENTRIES) {
+			KAUTH_DEBUG("ACL - BAD ENTRYCOUNT %x", host_acl_entrycount);
+			goto out;
+		}
+	    	if (KAUTH_FILESEC_SIZE(host_acl_entrycount) > rsize) {
+			KAUTH_DEBUG("ACL - BUFFER OVERFLOW (%d entries too big for %d)", host_acl_entrycount, rsize);
+			goto out;
+		}
 	}
-	if ((fsec->fsec_acl.acl_entrycount != KAUTH_FILESEC_NOACL) &&
-	    (KAUTH_FILESEC_SIZE(fsec->fsec_acl.acl_entrycount) > rsize)) {
-		KAUTH_DEBUG("ACL - BUFFER OVERFLOW (%d entries too big for %d)", fsec->fsec_acl.acl_entrycount, rsize);
-		goto out;
-	}
+
+	kauth_filesec_acl_setendian(KAUTH_ENDIAN_HOST, fsec, NULL);
 
 	*fsecp = fsec;
 	fsec = NULL;
@@ -1597,11 +1664,44 @@ out:
 	return(error);
 }
 
+/*
+ * Set a filesec and optional acl contents into an extended attribute.
+ * function will attempt to store ACL, UUID, and GUID information using a
+ * write to a named extended attribute (KAUTH_FILESEC_XATTR).  The 'acl'
+ * may or may not point to the `fsec->fsec_acl`, depending on whether the
+ * original caller supplied an acl.
+ *
+ * Parameters:	vp			The vnode on which to operate.
+ *		fsec			The filesec being set.
+ *		acl			The acl to be associated with 'fsec'.
+ *		ctx			The vnode context in which the
+ *					operation is to be attempted.
+ *
+ * Returns:	0			Success
+ *		!0			errno value
+ *
+ * Notes:	Both the fsec and the acl are always valid.
+ *
+ *		The kauth_filesec_t in 'fsec', if any, is in host byte order,
+ *		as are the acl contents, if they are used.  Internally, we will
+ *		cannonize these values into network (PPC) byte order before we
+ *		attempt to write them so that the on-disk contents of the
+ *		extended attribute are identical for both PPC and Intel (if we
+ *		were not being required to provide this service via fallback,
+ *		this would be the job of the filesystem 'VNOP_SETATTR' call).
+ *		We reverse this process on the way out, so we leave with the
+ *		same byte order we started with.
+ *
+ * XXX:		We should enummerate the possible errno values here, and where
+ *		in the code they originated.
+ */
 static int
 vnode_set_filesec(vnode_t vp, kauth_filesec_t fsec, kauth_acl_t acl, vfs_context_t ctx)
 {
-	uio_t	fsec_uio;
-	int	error;
+	uio_t		fsec_uio;
+	int		error;
+	int		i;
+	uint32_t	saved_acl_copysize;
 
 	fsec_uio = NULL;
 	
@@ -1610,14 +1710,24 @@ vnode_set_filesec(vnode_t vp, kauth_filesec_t fsec, kauth_acl_t acl, vfs_context
 		error = ENOMEM;
 		goto out;
 	}
+	/*
+	 * Save the pre-converted ACL copysize, because it gets swapped too
+	 * if we are running with the wrong endianness.
+	 */
+	saved_acl_copysize = KAUTH_ACL_COPYSIZE(acl);
+
+	kauth_filesec_acl_setendian(KAUTH_ENDIAN_DISK, fsec, acl);
+
 	uio_addiov(fsec_uio, CAST_USER_ADDR_T(fsec), sizeof(struct kauth_filesec) - sizeof(struct kauth_acl));
-	uio_addiov(fsec_uio, CAST_USER_ADDR_T(acl), KAUTH_ACL_COPYSIZE(acl));
+	uio_addiov(fsec_uio, CAST_USER_ADDR_T(acl), saved_acl_copysize);
 	error = vn_setxattr(vp,
 	    KAUTH_FILESEC_XATTR,
 	    fsec_uio,
 	    XATTR_NOSECURITY, 		/* we have auth'ed already */
 	    ctx);
 	VFS_DEBUG(ctx, vp, "SETATTR - set ACL returning %d", error);
+
+	kauth_filesec_acl_setendian(KAUTH_ENDIAN_HOST, fsec, acl);
 
 out:
 	if (fsec_uio != NULL)
@@ -1832,6 +1942,28 @@ out:
 	return(error);
 }
 
+/*
+ * Set the attributes on a vnode in a vnode context.
+ *
+ * Parameters:	vp			The vnode whose attributes to set.
+ *		vap			A pointer to the attributes to set.
+ *		ctx			The vnode context in which the
+ *					operation is to be attempted.
+ *
+ * Returns:	0			Success
+ *		!0			errno value
+ *
+ * Notes:	The kauth_filesec_t in 'vap', if any, is in host byte order.
+ *
+ *		The contents of the data area pointed to by 'vap' may be
+ *		modified if the vnode is on a filesystem which has been
+ *		mounted with ingore ownership flags, or by the underlyng
+ *		VFS itself, or by the fallback code, if the underlying VFS
+ *		does not support ACL, UUID, or GUUID attributes directly.
+ *
+ * XXX:		We should enummerate the possible errno values here, and where
+ *		in the code they originated.
+ */
 int
 vnode_setattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 {
@@ -1841,8 +1973,10 @@ vnode_setattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 	 * Make sure the filesystem is mounted R/W.
 	 * If not, return an error.
 	 */
-	if (vfs_isrdonly(vp->v_mount))
-		return(EROFS);
+	if (vfs_isrdonly(vp->v_mount)) {
+		error = EROFS;
+		goto out;
+	}
 	
 	/*
 	 * If ownership is being ignored on this volume, we silently discard
@@ -1864,7 +1998,8 @@ vnode_setattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 	if (!vfs_extendedsecurity(vnode_mount(vp)) &&
 	    (VATTR_IS_ACTIVE(vap, va_acl) || VATTR_IS_ACTIVE(vap, va_uuuid) || VATTR_IS_ACTIVE(vap, va_guuid))) {
 		KAUTH_DEBUG("SETATTR - returning ENOTSUP to request to set extended security");
-		return(ENOTSUP);
+		error = ENOTSUP;
+		goto out;
 	}
 
 	error = VNOP_SETATTR(vp, vap, ctx);
@@ -1895,13 +2030,35 @@ vnode_setattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 		        add_fsevent(FSE_CHOWN, ctx, FSE_ARG_VNODE, vp, FSE_ARG_DONE);
 	    }
 	}
+
+out:
 	return(error);
 }
 
 /*
- * Following an operation which sets attributes (setattr, create, etc.) we may
- * need to perform fallback operations to get attributes saved.
- */ 
+ * Fallback for setting the attributes on a vnode in a vnode context.  This
+ * Function will attempt to store ACL, UUID, and GUID information utilizing
+ * a read/modify/write operation against an EA used as a backing store for
+ * the object.
+ *
+ * Parameters:	vp			The vnode whose attributes to set.
+ *		vap			A pointer to the attributes to set.
+ *		ctx			The vnode context in which the
+ *					operation is to be attempted.
+ *
+ * Returns:	0			Success
+ *		!0			errno value
+ *
+ * Notes:	The kauth_filesec_t in 'vap', if any, is in host byte order,
+ *		as are the fsec and lfsec, if they are used.
+ *
+ *		The contents of the data area pointed to by 'vap' may be
+ *		modified to indicate that the attribute is supported for
+ *		any given requested attribute.
+ *
+ * XXX:		We should enummerate the possible errno values here, and where
+ *		in the code they originated.
+ */
 int
 vnode_setattr_fallback(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 {
@@ -1915,7 +2072,8 @@ vnode_setattr_fallback(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 	/*
 	 * Extended security fallback via extended attributes.
 	 *
-	 * Note that we do not free the filesec; the caller is expected to do this.
+	 * Note that we do not free the filesec; the caller is expected to
+	 * do this.
 	 */
 	if (VATTR_NOT_RETURNED(vap, va_acl) ||
 	    VATTR_NOT_RETURNED(vap, va_uuuid) ||
@@ -1923,7 +2081,8 @@ vnode_setattr_fallback(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 		VFS_DEBUG(ctx, vp, "SETATTR - doing filesec fallback");
 
 		/*
-		 * Fail for file types that we don't permit extended security to be set on.
+		 * Fail for file types that we don't permit extended security
+		 * to be set on.
 		 */
 		if ((vp->v_type != VDIR) && (vp->v_type != VLNK) && (vp->v_type != VREG)) {
 			VFS_DEBUG(ctx, vp, "SETATTR - Can't write ACL to file type %d", vnode_vtype(vp));
@@ -1932,8 +2091,9 @@ vnode_setattr_fallback(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 		}
 
 		/*
-		 * If we don't have all the extended security items, we need to fetch the existing
-		 * data to perform a read-modify-write operation.
+		 * If we don't have all the extended security items, we need
+		 * to fetch the existing data to perform a read-modify-write
+		 * operation.
 		 */
 		fsec = NULL;
 		if (!VATTR_IS_ACTIVE(vap, va_acl) ||
@@ -1988,7 +2148,8 @@ vnode_setattr_fallback(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 		}
 		
 		/*
-		 * If the filesec data is all invalid, we can just remove the EA completely.
+		 * If the filesec data is all invalid, we can just remove
+		 * the EA completely.
 		 */
 		if ((facl->acl_entrycount == KAUTH_FILESEC_NOACL) &&
 		    kauth_guid_equal(&fsec->fsec_owner, &kauth_null_guid) &&

@@ -113,7 +113,7 @@ void
 ktrsyscall(p, code, narg, args)
 	struct proc *p;
 	int code, narg;
-	u_int64_t args[];
+	syscall_arg_t args[];
 {
 #if KTRACE
 	struct vnode *vp;

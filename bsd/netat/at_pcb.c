@@ -189,7 +189,6 @@ int at_pcbbind(pcb, nam)
 	register struct atpcb *pcb;
 	struct sockaddr *nam;
 {
-	register struct socket *so = pcb->atpcb_socket;
 	register struct sockaddr_at *local = (struct sockaddr_at *) nam;
 	u_char ddpsock = local->sat_port;
 

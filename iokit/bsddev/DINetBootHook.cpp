@@ -8,10 +8,16 @@
  *	Revision History
  *
  *	$Log: DINetBootHook.cpp,v $
+ *	Revision 1.3.1558.1  2005/06/24 01:47:25  lindak
+ *	Bringing over all of the Karma changes into chardonnay.
+ *
+ *	Revision 1.1.1.1  2005/02/24 21:48:06  akosut
+ *	Import xnu-764 from Tiger8A395
+ *	
  *	Revision 1.3  2002/06/16 20:36:02  lindak
  *	Merged PR-2957314 into Jaguar (siegmund: netboot kernel code needs to set
  *	com.apple.AppleDiskImageController.load to boolean Yes)
- *
+ *	
  *	Revision 1.2.40.2  2002/06/15 03:50:38  dieter
  *	- corrected com.apple.AppleDiskImageController.load string
  *	

@@ -73,7 +73,6 @@ int FillSendQueue(sp, pb)		/* (CCBPtr sp) */
 	int eom;		/* True if should set eom in header */
 	int cnt;		/* # of bytes in this write */
 	int err = 0;
-	int s;
 
 	cnt = pb->u.ioParams.reqCount - pb->u.ioParams.actCount;
 	eom = pb->u.ioParams.eom ? F_EOM : 0;
@@ -102,7 +101,6 @@ int FillSendQueue(sp, pb)		/* (CCBPtr sp) */
 	}
 	gbuf_cont(mb) = 0;
 
-	ATDISABLE(s, sp->lock);
 	sp->sData = 1;		/* note that there is data to send */
 	if ((mb = sp->csbuf_mb)) {	/* add to the current message */
 	    gbuf_linkb(mb, nmb);
@@ -118,7 +116,6 @@ int FillSendQueue(sp, pb)		/* (CCBPtr sp) */
 	    sp->csbuf_mb = 0;	/* if its done, no current buffer */
 	}
 	pb->u.ioParams.actCount += cnt; /* Update count field in param blk */
-	ATENABLE(s, sp->lock);
 	
 	if (pb->u.ioParams.actCount == pb->u.ioParams.reqCount) {
 	    /* Write is complete */
@@ -156,24 +153,20 @@ int adspWrite(sp, pb)		/* (DSPPBPtr pb) */
     CCBPtr sp;
     struct adspcmd *pb;
 {
-    int	s;
 	
     if (sp == 0) {
 	pb->ioResult = errRefNum;
 	return EINVAL;		/* no stream, so drop the message */
     }
 	
-    ATDISABLE(s, sp->lock);
     if (sp->state != sOpen) {	/* Not allowed */
 	pb->ioResult = errState;
-	ATENABLE(s, sp->lock);
 	atalk_notify(sp->gref, ENOTCONN);
 	gbuf_freem(pb->mp);
 	return 0;
     }
 	
     pb->u.ioParams.actCount = 0; /* Set # of bytes so far to zero */
-    ATENABLE(s, sp->lock);
     
     FillSendQueue(sp, pb);	/* Copy from write param block to send queue */
 

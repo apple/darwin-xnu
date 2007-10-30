@@ -147,6 +147,10 @@ boot(paniced, howto, command)
 	if (paniced == RB_PANIC)
 		hostboot_option = HOST_REBOOT_HALT;
 
+    if (howto & RB_UPSDELAY) {
+        hostboot_option = HOST_REBOOT_UPSDELAY;
+    }
+
 	/*
 	 * if we're going to power down due to a halt,
 	 * give the disks a chance to finish getting

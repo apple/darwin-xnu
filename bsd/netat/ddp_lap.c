@@ -121,8 +121,6 @@ int xpatcnt = 0;
 /* externs */
 extern TAILQ_HEAD(name_registry, _nve_) name_registry;
 extern snmpStats_t	snmpStats;
-extern atlock_t ddpinp_lock;
-extern atlock_t arpinp_lock;
 extern short appletalk_inited;
 extern int adspInited;
 extern struct atpcb ddp_head;
@@ -861,7 +859,7 @@ elap_dataput(m, elapp, addr_flag, addr)
 	     * it doesn't know net#, consequently can't do 
 	     * AMT_LOOKUP.  That task left to aarp now.
 	     */
-	    error = aarp_send_data(m,elapp,&dest_at_addr, loop);
+	    error = aarp_send_data(m, elapp, &dest_at_addr, loop);
 	    break;
 	case ET_ADDR :
 	    error = pat_output(elapp, m, &dest_addr, 0);
@@ -1032,7 +1030,6 @@ void elap_offline(elapp)
 {
 	void	zip_sched_getnetinfo(); /* forward reference */
 	int	errno;
-	int s;
 
 	dPrintf(D_M_ELAP, D_L_SHUTDN_INFO, ("elap_offline:%s\n", elapp->ifName));
 	if (elapp->ifState != LAP_OFFLINE) {
@@ -1046,11 +1043,9 @@ void elap_offline(elapp)
 		(void)at_unreg_mcast(elapp, (caddr_t)&elapp->cable_multicast_addr);
 		elapp->ifState = LAP_OFFLINE;
 
-		ATDISABLE(s, ddpinp_lock);
 		if (MULTIPORT_MODE)
 			RT_DELETE(elapp->ifThisCableEnd,
 				  elapp->ifThisCableStart);
-		ATENABLE(s, ddpinp_lock);
 
 		/* make sure no zip timeouts are left running */
 		elapp->ifGNIScheduled = 0;
@@ -1103,7 +1098,7 @@ int ddp_shutdown(count_only)
 	CCB *sp, *sp_next;
 	gref_t *gref;
 	vm_offset_t temp_rcb_data, temp_state_data;
-	int i, s, active_skts = 0;	/* count of active pids for non-socketized
+	int i, active_skts = 0;	/* count of active pids for non-socketized
 				   AppleTalk protocols */
 
 	/* Network is shutting down... send error messages up on each open
@@ -1112,8 +1107,6 @@ int ddp_shutdown(count_only)
 	     sockets, but return EBUSY and don't complete shutdown. *** 
 	 */
 
-	s = splimp();	/* *** previously contained mismatched locking 
-			   that was ifdef'ed to splimp() *** */
 	if (!count_only)
 		nbp_shutdown();	/* clear all known NVE */
 
@@ -1199,11 +1192,9 @@ int ddp_shutdown(count_only)
 		atalk_notify(gref, ESHUTDOWN);
 	    }
 	}
-	if (count_only) {
-		splx(s);
+	if (count_only)
 		return(active_skts);
 
-	}
 	/* if there are no interfaces in the process of going online, continue shutting down DDP */
 	for (i = 0; i < IF_TOTAL_MAX; i++) {
 		if (at_interfaces[i].startup_inprogress == TRUE)
@@ -1255,7 +1246,6 @@ int ddp_shutdown(count_only)
 	}
 	ddp_start();
 	
-	splx(s);
 	return(0);
 } /* ddp_shutdown */
 
@@ -1316,11 +1306,9 @@ void ZIPwakeup(elapp, ZipError)
      at_ifaddr_t *elapp;
      int ZipError;
 {
-	int s, error = ZipError;
+	int error = ZipError;
 
-	ATDISABLE(s, ddpinp_lock);
 	if ( (elapp != NULL) && elapp->startup_inprogress) {
-		ATENABLE(s, ddpinp_lock);
 
 		/* was ZIPContinue */
 		/* was elapp_online() with jump to ZIP_sleep */
@@ -1355,21 +1343,17 @@ void ZIPwakeup(elapp, ZipError)
 			dPrintf(D_M_ELAP, D_L_STARTUP_INFO,
 				("elap_online: ifZipError=%d\n", error));
 		}
-	} else
-		ATENABLE(s, ddpinp_lock);
+	}
 } /* ZIPwakeup */
 
 void AARPwakeup(probe_cb)
      aarp_amt_t *probe_cb;
 {
-	int s;
 	int errno;
 	at_ifaddr_t *elapp;
 
-	ATDISABLE(s, arpinp_lock);
 	elapp = probe_cb->elapp;
 	if ( (elapp != NULL) && elapp->startup_inprogress && elapp->aa_ifp != 0) {
-		ATENABLE(s, arpinp_lock);
 
 		/* was AARPContinue */
 		errno = aarp_init2(elapp);
@@ -1391,8 +1375,7 @@ void AARPwakeup(probe_cb)
 				("elap_online: aarp_init returns zero\n"));
 			elap_online2(elapp);
 		}
-	} else
-		ATENABLE(s, arpinp_lock);
+	}
 } /* AARPwakeup */
 
 void ddp_bit_reverse(addr)

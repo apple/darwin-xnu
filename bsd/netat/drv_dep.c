@@ -82,38 +82,12 @@ struct ifqueue atalkintrq; 	/* appletalk and aarp packet input queue */
 
 short appletalk_inited = 0;
 
-extern atlock_t 
-	ddpall_lock, ddpinp_lock, arpinp_lock, refall_lock, nve_lock,
-  	aspall_lock, asptmo_lock, atpall_lock, atptmo_lock, atpgen_lock;
 
-extern int (*sys_ATsocket )(), (*sys_ATgetmsg)(), (*sys_ATputmsg)();
-extern int (*sys_ATPsndreq)(), (*sys_ATPsndrsp)();
-extern int (*sys_ATPgetreq)(), (*sys_ATPgetrsp)();
 
 void atalk_load()
 {
-	extern int _ATsocket(), _ATgetmsg(), _ATputmsg();
-	extern int _ATPsndreq(), _ATPsndrsp(), _ATPgetreq(), _ATPgetrsp();
 	extern lck_mtx_t *domain_proto_mtx;
 
-	sys_ATsocket  = _ATsocket;
-	sys_ATgetmsg  = _ATgetmsg;
-	sys_ATputmsg  = _ATputmsg;
-	sys_ATPsndreq = _ATPsndreq;
-	sys_ATPsndrsp = _ATPsndrsp;
-	sys_ATPgetreq = _ATPgetreq;
-	sys_ATPgetrsp = _ATPgetrsp;
-
-	ATLOCKINIT(ddpall_lock);
-	ATLOCKINIT(ddpinp_lock);
-	ATLOCKINIT(arpinp_lock);
-	ATLOCKINIT(refall_lock);
-	ATLOCKINIT(aspall_lock);
-	ATLOCKINIT(asptmo_lock);
-	ATLOCKINIT(atpall_lock);
-	ATLOCKINIT(atptmo_lock);
-	ATLOCKINIT(atpgen_lock);
-	ATLOCKINIT(nve_lock);
 
 	atp_init();
 	atp_link();
@@ -133,14 +107,6 @@ void atalk_unload()  /* not currently used */
 {
 	extern gbuf_t *scb_resource_m;
 	extern gbuf_t *atp_resource_m;
-
-	sys_ATsocket  = 0;
-	sys_ATgetmsg  = 0;
-	sys_ATputmsg  = 0;
-	sys_ATPsndreq = 0;
-	sys_ATPsndrsp = 0;
-	sys_ATPgetreq = 0;
-	sys_ATPgetrsp = 0;
 
 	atp_unlink();
 
@@ -173,7 +139,7 @@ void appletalk_hack_start()
 int pat_output(patp, mlist, dst_addr, type)
 	at_ifaddr_t *patp;
 	struct mbuf *mlist;			/* packet chain */
-	unsigned char *dst_addr;
+	unsigned char *dst_addr;	/* for atalk addr - net # must be in network byte order */
 	int 	type;
 {
 	struct mbuf *m, *m1;

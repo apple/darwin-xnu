@@ -26,6 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <libkern/c++/OSObject.h>
+#include <IOKit/IOLocks.h>
 #include <IOKit/IOReturn.h>
 
 class IOPMinformee;
@@ -36,25 +37,24 @@ class IOPMinformeeList : public OSObject
 OSDeclareDefaultStructors(IOPMinformeeList)
 
 private:
-IOPMinformee *	 firstItem;		// pointer to first informee in the list
-unsigned long	length;			// how many informees are in the list
-
+    IOPMinformee       *firstItem;      // pointer to first informee in the list
+    unsigned long       length;         // how many informees are in the list
 
 public:
-void initialize ( void );
+    void initialize ( void );
+    void free ( void );
 
-IOReturn addToList ( IOPMinformee *   newInformee );
+    unsigned long numberOfItems ( void );
 
-IOPMinformee * firstInList ( void );
+    IOReturn addToList ( IOPMinformee *   newInformee );
+    IOReturn removeFromList ( IOService * theItem );
+    
+    IOPMinformee * firstInList ( void );
+    IOPMinformee * nextInList ( IOPMinformee * currentItem );
+    
+    IOPMinformee * findItem ( IOService * driverOrChild );        
 
-IOPMinformee * nextInList ( IOPMinformee * currentItem );
-
-unsigned long numberOfItems ( void );
-
-IOPMinformee * findItem ( IOService * driverOrChild );
-
-IOReturn removeFromList ( IOService * theItem );
-
-void free ( void );
+    // This lock must be held while modifying list or length
+    static IORecursiveLock * getSharedRecursiveLock( void );
 };
 

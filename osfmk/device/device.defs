@@ -88,6 +88,7 @@ type io_struct_inband_t = array[*:4096] of char;
 type io_scalar_inband_t = array[*:16] of int;
 type io_async_ref_t 	= array[*:8] of natural_t;
 type io_buf_ptr_t	= ^array[] of MACH_MSG_TYPE_INTEGER_8;
+type NDR_record_t       = struct[8] of char;
 
 type io_object_t = mach_port_t
 		ctype: mach_port_t
@@ -496,6 +497,16 @@ routine io_object_get_bundle_identifier(
 	in  obj_name			: io_name_t;
 	out class_name          : io_name_t   
         );
+
+routine io_service_open_extended(
+	    service		: io_object_t;
+	in  owningTask		: task_t;
+	in  connect_type	: int;
+	in  ndr			: NDR_record_t;
+	in  properties		: io_buf_ptr_t, physicalcopy;
+        out result		: natural_t;
+	out connection		: io_connect_t
+	);
 
 #endif
 

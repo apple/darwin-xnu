@@ -62,7 +62,7 @@
 
 #define CRED_DIAGNOSTIC 1
 
-# define NULLCRED_CHECK(_c)	do {if (((_c) == NOCRED) || ((_c) == FSCRED)) panic("bad credential %p", _c);} while(0)
+# define NULLCRED_CHECK(_c)	do {if (!IS_VALID_CRED(_c)) panic("bad credential %p", _c);} while(0)
 
 /*
  * Interface to external identity resolver.
@@ -108,13 +108,14 @@ static int	kauth_cred_table_size = 0;
 TAILQ_HEAD(kauth_cred_entry_head, ucred);
 static struct kauth_cred_entry_head * kauth_cred_table_anchor = NULL;
 
-#define KAUTH_CRED_HASH_DEBUG 0
+#define KAUTH_CRED_HASH_DEBUG	0
 
 static int kauth_cred_add(kauth_cred_t new_cred);
 static void kauth_cred_remove(kauth_cred_t cred);
 static inline u_long kauth_cred_hash(const uint8_t *datap, int data_len, u_long start_key);
 static u_long kauth_cred_get_hashkey(kauth_cred_t cred);
 static kauth_cred_t kauth_cred_update(kauth_cred_t old_cred, kauth_cred_t new_cred, boolean_t retain_auditinfo);
+static void kauth_cred_unref_hashlocked(kauth_cred_t *credp);
 
 #if KAUTH_CRED_HASH_DEBUG
 static int	kauth_cred_count = 0;
@@ -1442,6 +1443,11 @@ kauth_cred_issuser(kauth_cred_t cred)
 static lck_mtx_t *kauth_cred_hash_mtx;
 #define KAUTH_CRED_HASH_LOCK()		lck_mtx_lock(kauth_cred_hash_mtx);
 #define KAUTH_CRED_HASH_UNLOCK()	lck_mtx_unlock(kauth_cred_hash_mtx);
+#if KAUTH_CRED_HASH_DEBUG
+#define KAUTH_CRED_HASH_LOCK_ASSERT()	_mutex_assert(kauth_cred_hash_mtx, MA_OWNED)
+#else	/* !KAUTH_CRED_HASH_DEBUG */
+#define KAUTH_CRED_HASH_LOCK_ASSERT()
+#endif	/* !KAUTH_CRED_HASH_DEBUG */
 
 void
 kauth_cred_init(void)
@@ -1519,9 +1525,7 @@ kauth_cred_get(void)
 	if (uthread->uu_ucred == NOCRED) {
 		if ((p = (proc_t) get_bsdtask_info(get_threadtask(current_thread()))) == NULL)
 			panic("thread wants credential but has no BSD process");
-		proc_lock(p);
-		kauth_cred_ref(uthread->uu_ucred = p->p_ucred);
-		proc_unlock(p);
+		uthread->uu_ucred = kauth_cred_proc_ref(p);
 	}
 	return(uthread->uu_ucred);
 }
@@ -1547,14 +1551,12 @@ kauth_cred_get_with_ref(void)
 	 * If we later inline this function, the code in this block should probably be
 	 * called out in a function.
 	 */
-	proc_lock(procp);
 	if (uthread->uu_ucred == NOCRED) {
 		/* take reference for new cred in thread */
-		kauth_cred_ref(uthread->uu_ucred = proc_ucred(procp));
+		uthread->uu_ucred = kauth_cred_proc_ref(procp);
 	}
 	/* take a reference for our caller */
 	kauth_cred_ref(uthread->uu_ucred);
-	proc_unlock(procp);
 	return(uthread->uu_ucred);
 }
 
@@ -1581,7 +1583,7 @@ kauth_cred_alloc(void)
 {
 	kauth_cred_t newcred;
 	
-	MALLOC(newcred, kauth_cred_t, sizeof(*newcred), M_KAUTH, M_WAITOK | M_ZERO);
+	MALLOC(newcred, kauth_cred_t, sizeof(*newcred), M_CRED, M_WAITOK | M_ZERO);
 	if (newcred != 0) {
 		newcred->cr_ref = 1;
 		/* must do this, or cred has same group membership as uid 0 */
@@ -1645,7 +1647,7 @@ kauth_cred_create(kauth_cred_t cred)
 			/* retry if kauth_cred_add returns non zero value */
 			if (err == 0)
 				break;
-			FREE(new_cred, M_KAUTH);
+			FREE(new_cred, M_CRED);
 			new_cred = NULL;
 		}
 	}
@@ -1746,6 +1748,7 @@ kauth_cred_setgid(kauth_cred_t cred, gid_t gid)
 
 	return(kauth_cred_update(cred, &temp_cred, TRUE));
 }
+
 
 /*
  * Update the given credential using the egid argument.  The given gid is used
@@ -1936,27 +1939,49 @@ kauth_cred_ref(kauth_cred_t cred)
 
 /*
  * Drop a reference from the passed credential, potentially destroying it.
+ *
+ * Note:	Assumes credential hash is NOT locked
  */
 void
-kauth_cred_rele(kauth_cred_t cred)
+kauth_cred_unref(kauth_cred_t *credp)
+{
+	KAUTH_CRED_HASH_LOCK();
+	kauth_cred_unref_hashlocked(credp);
+	KAUTH_CRED_HASH_UNLOCK();
+}
+
+/*
+ * Drop a reference from the passed credential, potentially destroying it.
+ *
+ * Note:	Assumes credential hash IS locked
+ */
+static void
+kauth_cred_unref_hashlocked(kauth_cred_t *credp)
 {
 	int		old_value;
 
-	NULLCRED_CHECK(cred);
-
-	KAUTH_CRED_HASH_LOCK();
-	old_value = OSAddAtomic(-1, &cred->cr_ref);
+	KAUTH_CRED_HASH_LOCK_ASSERT();
+	NULLCRED_CHECK(*credp);
+	old_value = OSAddAtomic(-1, &(*credp)->cr_ref);
 
 #if DIAGNOSTIC
 	if (old_value == 0)
-		panic("kauth_cred_rele: dropping a reference on a cred with no references");
+		panic("%s:0x%08x kauth_cred_rele: dropping a reference on a cred with no references", current_proc()->p_comm, *credp);
+	if (old_value == 1)
+		panic("%s:0x%08x kauth_cred_rele: dropping a reference on a cred with no hash entry", current_proc()->p_comm, *credp);
 #endif
 
 	if (old_value < 3) {
 		/* the last reference is our credential hash table */
-		kauth_cred_remove(cred);
+		kauth_cred_remove(*credp);
 	}
-	KAUTH_CRED_HASH_UNLOCK();
+	*credp = NOCRED;
+}
+
+void
+kauth_cred_rele(kauth_cred_t cred)
+{
+	kauth_cred_unref(&cred);
 }
 
 /*
@@ -2004,7 +2029,10 @@ kauth_cred_copy_real(kauth_cred_t cred)
 	bcopy(cred, &temp_cred, sizeof(temp_cred));
 	temp_cred.cr_uid = cred->cr_ruid;
 	temp_cred.cr_groups[0] = cred->cr_rgid;
-	/* if the cred is not opted out, make sure we are using the r/euid for group checks */
+	/*
+	 * if the cred is not opted out, make sure we are using the r/euid
+	 * for group checks
+	 */
 	if (temp_cred.cr_gmuid != KAUTH_UID_NONE)
 		temp_cred.cr_gmuid = cred->cr_ruid;
 
@@ -2019,8 +2047,9 @@ kauth_cred_copy_real(kauth_cred_t cred)
 			return(cred); 
 		}
 		if (found_cred != NULL) {
-			/* found a match so we bump reference count on new one and decrement 
-			 * reference count on the old one.
+			/*
+			 * found a match so we bump reference count on new one.
+			 * we leave the old one alone.
 			 */
 			kauth_cred_ref(found_cred);
 			KAUTH_CRED_HASH_UNLOCK();
@@ -2037,7 +2066,7 @@ kauth_cred_copy_real(kauth_cred_t cred)
 		/* retry if kauth_cred_add returns non zero value */
 		if (err == 0)
 			break;
-		FREE(newcred, M_KAUTH);
+		FREE(newcred, M_CRED);
 		newcred = NULL;
 	}
 	
@@ -2045,12 +2074,16 @@ kauth_cred_copy_real(kauth_cred_t cred)
 }
 	
 /*
- * common code to update a credential.  model_cred is a temporary, non reference
- * counted credential used only for comparison and modeling purposes.  old_cred
- * is a live reference counted credential that we intend to update using model_cred
- * as our model.
+ * Common code to update a credential.  model_cred is a temporary, non
+ * reference counted credential used only for comparison and modeling
+ * purposes.  old_cred is a live reference counted credential that we
+ * intend to update using model_cred as our model.
+ *
+ * IMPORTANT:	If the old_cred ends up updated by this process, we will, as
+ *		a side effect, drop the reference we held on it going in.
  */
-static kauth_cred_t kauth_cred_update(kauth_cred_t old_cred, kauth_cred_t model_cred, boolean_t retain_auditinfo)
+static kauth_cred_t
+kauth_cred_update(kauth_cred_t old_cred, kauth_cred_t model_cred, boolean_t retain_auditinfo)
 {	
 	kauth_cred_t found_cred, new_cred = NULL;
 	
@@ -2071,12 +2104,13 @@ static kauth_cred_t kauth_cred_update(kauth_cred_t old_cred, kauth_cred_t model_
 			return(old_cred); 
 		}
 		if (found_cred != NULL) {
-			/* found a match so we bump reference count on new one and decrement 
-			 * reference count on the old one.
+			/*
+			 * found a match so we bump reference count on new
+			 * one and decrement reference count on the old one.
 			 */
 			kauth_cred_ref(found_cred);
+			kauth_cred_unref_hashlocked(&old_cred);
 			KAUTH_CRED_HASH_UNLOCK();
-			kauth_cred_rele(old_cred);
 			return(found_cred);
 		}
 	
@@ -2090,11 +2124,11 @@ static kauth_cred_t kauth_cred_update(kauth_cred_t old_cred, kauth_cred_t model_
 		/* retry if kauth_cred_add returns non zero value */
 		if (err == 0)
 			break;
-		FREE(new_cred, M_KAUTH);
+		FREE(new_cred, M_CRED);
 		new_cred = NULL;
 	}
 
-	kauth_cred_rele(old_cred);
+	kauth_cred_unref(&old_cred);
 	return(new_cred);
 }
 
@@ -2103,10 +2137,13 @@ static kauth_cred_t kauth_cred_update(kauth_cred_t old_cred, kauth_cred_t model_
  *	reference to account for our use of the credential in the hash table.
  *	NOTE - expects caller to hold KAUTH_CRED_HASH_LOCK!
  */
-static int kauth_cred_add(kauth_cred_t new_cred)
+static int
+kauth_cred_add(kauth_cred_t new_cred)
 {
 	u_long			hash_key;
-	
+
+	KAUTH_CRED_HASH_LOCK_ASSERT();
+
 	hash_key = kauth_cred_get_hashkey(new_cred);
 	hash_key %= kauth_cred_table_size;
 
@@ -2128,14 +2165,18 @@ static int kauth_cred_add(kauth_cred_t new_cred)
 	return(0);
 }
 
+
 /* 
  *	Remove the given credential from our credential hash table.
  *	NOTE - expects caller to hold KAUTH_CRED_HASH_LOCK!
  */
-static void kauth_cred_remove(kauth_cred_t cred)
+static void
+kauth_cred_remove(kauth_cred_t cred)
 {
 	u_long			hash_key;
 	kauth_cred_t	found_cred;
+
+	KAUTH_CRED_HASH_LOCK_ASSERT();
 
 	hash_key = kauth_cred_get_hashkey(cred);
 	hash_key %= kauth_cred_table_size;
@@ -2143,15 +2184,16 @@ static void kauth_cred_remove(kauth_cred_t cred)
 	/* avoid race */
 	if (cred->cr_ref < 1)
 		panic("cred reference underflow");
-	if (cred->cr_ref > 1)
+	if (cred->cr_ref > 1) {
 		return;		/* someone else got a ref */
-		
+	}
+
 	/* find cred in the credential hash table */
 	TAILQ_FOREACH(found_cred, &kauth_cred_table_anchor[hash_key], cr_link) {
 		if (found_cred == cred) {
 			/* found a match, remove it from the hash table */
 			TAILQ_REMOVE(&kauth_cred_table_anchor[hash_key], found_cred, cr_link);
-			FREE(cred, M_KAUTH);
+			FREE(cred, M_CRED);
 #if KAUTH_CRED_HASH_DEBUG
 			kauth_cred_count--;
 #endif
@@ -2160,7 +2202,7 @@ static void kauth_cred_remove(kauth_cred_t cred)
 	}
 
 	/* did not find a match.  this should not happen! */
-	printf("%s - %d - %s - did not find a match \n", __FILE__, __LINE__, __FUNCTION__);
+	printf("%s:%s - %d - %s - did not find a match for 0x%08x\n", __FILE__, __LINE__, __FUNCTION__, current_proc()->p_comm, cred);
 	return;
 }
 
@@ -2169,11 +2211,14 @@ static void kauth_cred_remove(kauth_cred_t cred)
  *	table.
  *	NOTE - expects caller to hold KAUTH_CRED_HASH_LOCK!
  */
-kauth_cred_t kauth_cred_find(kauth_cred_t cred)
+kauth_cred_t
+kauth_cred_find(kauth_cred_t cred)
 {
 	u_long			hash_key;
 	kauth_cred_t	found_cred;
 	
+	KAUTH_CRED_HASH_LOCK_ASSERT();
+
 #if KAUTH_CRED_HASH_DEBUG
 	static int		test_count = 0; 
 
@@ -2200,12 +2245,13 @@ kauth_cred_t kauth_cred_find(kauth_cred_t cred)
 /*
  * Generates a hash key using data that makes up a credential.  Based on ElfHash.
  */
-static u_long kauth_cred_get_hashkey(kauth_cred_t cred)
+static u_long
+kauth_cred_get_hashkey(kauth_cred_t cred)
 {
 	u_long	hash_key = 0;
 	
 	hash_key = kauth_cred_hash((uint8_t *)&cred->cr_uid, 
-							   (sizeof(struct ucred) - offsetof(struct ucred, cr_uid)), 
+				   (sizeof(struct ucred) - offsetof(struct ucred, cr_uid)), 
 							   hash_key);
 	return(hash_key);
 }

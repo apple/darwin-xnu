@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -69,11 +69,13 @@
 #include <i386/thread.h>		/* for thread_status */
 #include <i386/eflags.h>
 #include <i386/trap.h>
+#include <i386/pmCPU.h>
+#include <i386/hpet.h>
 
-typedef	vm_offset_t	db_addr_t;	/* address - unsigned */
-typedef	int		db_expr_t;	/* expression - signed */
+typedef	addr64_t	db_addr_t;	/* address - unsigned */
+typedef	uint64_t	db_expr_t;	/* expression */
 
-typedef struct i386_saved_state db_regs_t;
+typedef struct x86_saved_state32 db_regs_t;
 db_regs_t	ddb_regs;	/* register state */
 #define	DDB_REGS	(&ddb_regs)
 extern int	db_active;	/* ddb is active */
@@ -113,9 +115,7 @@ int db_inst_store(unsigned long);
 	db_check_access(addr,size,task)
 #define DB_PHYS_EQ(task1,addr1,task2,addr2)			\
 	db_phys_eq(task1,addr1,task2,addr2)
-#define DB_VALID_KERN_ADDR(addr)				\
-	((addr) >= VM_MIN_KERNEL_ADDRESS && 			\
-	 (addr) < VM_MAX_KERNEL_ADDRESS)
+#define DB_VALID_KERN_ADDR(addr)		(1)
 #define DB_VALID_ADDRESS(addr,user)				\
 	((!(user) && DB_VALID_KERN_ADDR(addr)) ||		\
 	 ((user) && (addr) < VM_MAX_ADDRESS))
@@ -160,6 +160,19 @@ extern void		db_reboot(
 				db_expr_t	count,
 				char		*modif);
 
+extern void db_display_kmod(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
+extern void db_display_real(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
+extern void db_display_iokit(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
+extern void db_cpuid(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
+extern void db_msr(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
+extern void db_apic(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
+extern void db_test(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
+extern void db_intcnt(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
+extern void db_display_hpet(hpetReg_t *hpt);
+extern void db_hpet(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
+extern void db_cfg(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
+extern void db_dtimers(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
+
 /* macros for printing OS server dependent task name */
 
 #define DB_TASK_NAME(task)	db_task_name(task)
@@ -172,21 +185,26 @@ extern void		db_task_name(
 
 /* macro for checking if a thread has used floating-point */
 
-#define db_act_fp_used(act)	(act && act->machine.pcb->ims.ifps)
+#define db_act_fp_used(act)	(act && act->machine.pcb->ifps)
 
 extern void		db_tss_to_frame(
 				int			tss_sel,
-				struct i386_saved_state	*regs);
+				x86_saved_state32_t	*regs);
 extern int		kdb_trap(
 				int			type,
 				int			code,
-				struct i386_saved_state	*regs);
+				x86_saved_state32_t	*regs);
 extern boolean_t	db_trap_from_asm(
-				struct i386_saved_state *regs);
+				x86_saved_state32_t *regs);
 extern int		dr6(void);
 extern void		kdb_on(
 				int			cpu);
-extern void		cnpollc(
-				boolean_t		on);
+
+#if MACH_KDB
+extern void db_getpmgr(pmData_t *pmj);
+extern void db_chkpmgr(void);
+#endif /* MACH_KDB */
+extern void db_pmgr(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
+extern void db_nap(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
 
 #endif	/* _I386_DB_MACHDEP_H_ */
