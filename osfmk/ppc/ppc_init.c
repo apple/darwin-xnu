@@ -54,7 +54,7 @@
 #include <ppc/mem.h>
 #include <ppc/mappings.h>
 #include <ppc/locks.h>
-#include <kern/pms.h>
+#include <ppc/pms.h>
 #include <ppc/rtclock.h>
 
 #include <pexpert/pexpert.h>

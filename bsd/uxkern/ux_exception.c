@@ -240,12 +240,8 @@ catch_exception_raise(
 	    /*
 	     *	Send signal.
 	     */
-	    if (ux_signal != 0) {
-			ut->uu_exception = exception;
-			//ut->uu_code = code[0]; // filled in by threadsignal
-			ut->uu_subcode = code[1];			
-			threadsignal(th_act, ux_signal, code[0]);
-		}
+	    if (ux_signal != 0)
+		threadsignal(th_act, ux_signal, ucode);
 
 	    thread_deallocate(th_act);
 	}

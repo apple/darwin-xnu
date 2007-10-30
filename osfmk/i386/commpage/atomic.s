@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -99,14 +99,14 @@ Lcompare_and_swap64_up:
 Lbit_test_and_set_mp:
 .long	_COMM_PAGE_BTS+4
 	lock
-	btsl %eax, (%edx)
+	bts %eax, (%edx)
 	ret
 
     COMMPAGE_DESCRIPTOR(bit_test_and_set_mp,_COMM_PAGE_BTS,0,kUP)
 
 Lbit_test_and_set_up:
 .long	_COMM_PAGE_BTS+4
-	btsl %eax, (%edx)
+	bts %eax, (%edx)
 	ret
 
     COMMPAGE_DESCRIPTOR(bit_test_and_set_up,_COMM_PAGE_BTS,kUP,0)
@@ -120,14 +120,14 @@ Lbit_test_and_set_up:
 Lbit_test_and_clear_mp:
 .long	_COMM_PAGE_BTC+4
 	lock
-	btrl %eax, (%edx)
+	btc %eax, (%edx)
 	ret
 
     COMMPAGE_DESCRIPTOR(bit_test_and_clear_mp,_COMM_PAGE_BTC,0,kUP)
 
 Lbit_test_and_clear_up:
 .long	_COMM_PAGE_BTC+4
-	btrl %eax, (%edx)
+	btc %eax, (%edx)
 	ret
 
     COMMPAGE_DESCRIPTOR(bit_test_and_clear_up,_COMM_PAGE_BTC,kUP,0)
@@ -153,153 +153,3 @@ Latomic_add32_up:
 	ret
 
     COMMPAGE_DESCRIPTOR(atomic_add32_up,_COMM_PAGE_ATOMIC_ADD32,kUP,0)
-
-
-/************************* x86_64 versions follow **************************/
-
-
-// This is a subroutine used by:
-
-// bool OSAtomicCompareAndSwap32( int32_t old, int32_t new, int32_t *value);
-// int32_t OSAtomicAnd32( int32_t mask, int32_t *value);
-// int32_t OSAtomicOr32( int32_t mask, int32_t *value);
-// int32_t OSAtomicXor32( int32_t mask, int32_t *value);
-
-// It assumes: old -> %rdi  (ie, it follows the ABI parameter conventions)
-//             new -> %rsi
-//             value -> %rdx
-// on success: returns with ZF set
-// on failure: returns with *value in %eax, ZF clear
-
-	.code64
-Lcompare_and_swap32_mp_64:
-	movl	%edi,%eax			// put old value where "cmpxchg" wants it
-	lock
-	cmpxchgl  %esi, (%rdx)
-	ret
-
-    COMMPAGE_DESCRIPTOR(compare_and_swap32_mp_64,_COMM_PAGE_COMPARE_AND_SWAP32,0,kUP)
-
-	.code64
-Lcompare_and_swap32_up_64:
-	movl	%edi,%eax			// put old value where "cmpxchg" wants it
-	cmpxchgl  %esi, (%rdx)
-	ret
-
-    COMMPAGE_DESCRIPTOR(compare_and_swap32_up_64,_COMM_PAGE_COMPARE_AND_SWAP32,kUP,0)
-
-// This is a subroutine used by:
-// bool OSAtomicCompareAndSwap64( int64_t old, int64_t new, int64_t *value);
-
-// It assumes: old -> %rdi  (ie, it follows the ABI parameter conventions)
-//             new -> %rsi
-//             value -> %rdx
-// on success: returns with ZF set
-// on failure: returns with *value in %rax, ZF clear
-
-	.code64
-Lcompare_and_swap64_mp_64:
-	movq	%rdi,%rax			// put old value where "cmpxchg" wants it
-	lock
-	cmpxchgq  %rsi, (%rdx)
-	ret
-
-    COMMPAGE_DESCRIPTOR(compare_and_swap64_mp_64,_COMM_PAGE_COMPARE_AND_SWAP64,0,kUP)
-
-	.code64
-Lcompare_and_swap64_up_64:
-	movq	%rdi,%rax			// put old value where "cmpxchg" wants it
-	cmpxchgq  %rsi, (%rdx)
-	ret
-
-    COMMPAGE_DESCRIPTOR(compare_and_swap64_up_64,_COMM_PAGE_COMPARE_AND_SWAP64,kUP,0)
-
-// This is a subroutine used by:
-// bool OSAtomicTestAndSet( uint32_t n, void *value );
-// It is called with standard register conventions:
-//			n = %rdi
-//			value = %rsi
-// Returns: old value of bit in CF
-
-	.code64
-Lbit_test_and_set_mp_64:
-	lock
-	btsl %edi, (%rsi)
-	ret
-
-    COMMPAGE_DESCRIPTOR(bit_test_and_set_mp_64,_COMM_PAGE_BTS,0,kUP)
-
-	.code64
-Lbit_test_and_set_up_64:
-	btsl %edi, (%rsi)
-	ret
-
-    COMMPAGE_DESCRIPTOR(bit_test_and_set_up_64,_COMM_PAGE_BTS,kUP,0)
-
-// This is a subroutine used by:
-// bool OSAtomicTestAndClear( uint32_t n, void *value );
-// It is called with standard register conventions:
-//			n = %rdi
-//			value = %rsi
-// Returns: old value of bit in CF
-
-	.code64
-Lbit_test_and_clear_mp_64:
-	lock
-	btrl %edi, (%rsi)
-	ret
-
-    COMMPAGE_DESCRIPTOR(bit_test_and_clear_mp_64,_COMM_PAGE_BTC,0,kUP)
-
-	.code64
-Lbit_test_and_clear_up_64:
-	btrl %edi, (%rsi)
-	ret
-
-    COMMPAGE_DESCRIPTOR(bit_test_and_clear_up_64,_COMM_PAGE_BTC,kUP,0)
-
-// This is a subroutine used by:
-// int32_t OSAtomicAdd32( int32_t amt, int32_t *value );
-// It is called with standard register conventions:
-//			amt = %rdi
-//			value = %rsi
-// Returns: old value in %edi
-// NB: OSAtomicAdd32 returns the new value,  so clients will add amt to %edi 
-
-	.code64
-Latomic_add32_mp_64:
-	lock
-	xaddl	%edi, (%rsi)
-	ret
-		
-    COMMPAGE_DESCRIPTOR(atomic_add32_mp_64,_COMM_PAGE_ATOMIC_ADD32,0,kUP)
-
-	.code64
-Latomic_add32_up_64:
-	xaddl	%edi, (%rsi)
-	ret
-
-    COMMPAGE_DESCRIPTOR(atomic_add32_up_64,_COMM_PAGE_ATOMIC_ADD32,kUP,0)
-
-// This is a subroutine used by:
-// int64_t OSAtomicAdd64( int64_t amt, int64_t *value );
-// It is called with standard register conventions:
-//			amt = %rdi
-//			value = %rsi
-// Returns: old value in %rdi
-// NB: OSAtomicAdd64 returns the new value,  so clients will add amt to %rdi 
-
-	.code64
-Latomic_add64_mp_64:
-	lock
-	xaddq	%rdi, (%rsi)
-	ret
-		
-    COMMPAGE_DESCRIPTOR(atomic_add64_mp_64,_COMM_PAGE_ATOMIC_ADD64,0,kUP)
-
-	.code64
-Latomic_add64_up_64:
-	xaddq	%rdi, (%rsi)
-	ret
-
-    COMMPAGE_DESCRIPTOR(atomic_add64_up_64,_COMM_PAGE_ATOMIC_ADD64,kUP,0)

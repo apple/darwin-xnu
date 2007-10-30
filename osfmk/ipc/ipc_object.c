@@ -1047,13 +1047,10 @@ const char *ikot_print_array[IKOT_MAX_TYPE] = {
 	"(IOKIT_CONNECT)    ",
 	"(IOKIT_OBJECT)     ",	/* 30 */
 	"(UPL)              ",
-	"(MEM_OBJ_CONTROL)  ",
-/*
- * Add new entries here.
- * Please keep in sync with kern/ipc_kobject.h
- */
+						/* << new entries here	*/
 	"(UNKNOWN)          "	/* magic catchall	*/
 };
+/* Please keep in sync with kern/ipc_kobject.h	*/
 
 void
 ipc_object_print(

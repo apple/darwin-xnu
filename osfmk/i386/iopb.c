@@ -400,7 +400,7 @@ i386_io_port_add(
 	/* Make sure the thread has a TSS. */
 
 	simple_lock(&pcb->lock);
-	io_tss = pcb->io_tss;
+	io_tss = pcb->ims.io_tss;
 	if (io_tss == 0) {
 	    if (new_io_tss == 0) {
 		/*
@@ -415,7 +415,7 @@ i386_io_port_add(
 		goto Retry;
 	    }
 	    io_tss = new_io_tss;
-	    pcb->io_tss = io_tss;
+	    pcb->ims.io_tss = io_tss;
 	    new_io_tss = 0;
 	}
 
@@ -489,7 +489,7 @@ i386_io_port_remove(
 	}
 
 	simple_lock(&pcb->lock);
-	io_tss = pcb->io_tss;
+	io_tss = pcb->ims.io_tss;
 	if (io_tss == 0) {
 	    simple_unlock(&pcb->lock);
 	    simple_unlock(&iopb_lock);
@@ -569,7 +569,7 @@ i386_io_port_list(thread, list, list_count)
 
 	    simple_lock(&iopb_lock);
 	    simple_lock(&pcb->lock);
-	    io_tss = pcb->io_tss;
+	    io_tss = pcb->ims.io_tss;
 	    if (io_tss != 0) {
 		register io_use_t iu;
 
@@ -654,7 +654,7 @@ iopb_check_mapping(
 	/* Look up the mapping in the device`s mapping list. */
 
 	queue_iterate(&io_port->io_use_list, iu, io_use_t, psq) {
-	    if (iu->ts == pcb->io_tss) {
+	    if (iu->ts == pcb->ims.io_tss) {
 		/*
 		 * Device is mapped.
 		 */

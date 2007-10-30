@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -28,343 +28,246 @@
 #ifndef _IOKIT_IOPM_H
 #define _IOKIT_IOPM_H
 
-#include <IOKit/IOTypes.h>
-#include <IOKit/IOMessage.h>
-#include <IOKit/IOReturn.h>
-
-#ifdef __ppc__
-#include <IOKit/pwr_mgt/IOPMDeprecated.h>
-#endif
-
-
-
-enum {
-    kIOPMMaxPowerStates = 10,
-    IOPMMaxPowerStates = kIOPMMaxPowerStates
-};
+#define IOPMMaxPowerStates 10
 
 typedef unsigned long IOPMPowerFlags;
 enum {
-    // The following  bits are used in the input and output power fields.
-    kIOPMClockNormal                = 0x0004,
-    kIOPMClockRunning               = 0x0008,
-    // Reserved - Used only between root and root parent.
-    kIOPMAuxPowerOn                 = 0x0020,
-    // Reserved - kIOPMPagingAvailable used only by now-defunct paging plexus
-    kIOPMPagingAvailable            = 0x0020,
-    kIOPMPassThrough                = 0x0100,
-    kIOPMDoze                       = 0x0400,
-    // Obsolete - use kIOPMDoze instead of kIOPMSoftSleep
-    kIOPMSoftSleep                  = 0x0400,
-    kIOPMSleep                      = 0x0001,
-    kIOPMRestart                    = 0x0080,
-
-    // The following bits are used in the capabilites field and the power fields
-    kIOPMPowerOn                    = 0x0002,
-    kIOPMPreventSystemSleep         = 0x0010,
-    kIOPMPreventIdleSleep           = 0x0040,
-
-    // The following  bits are used in the capabilites field only.
-    // Used between a driver and its policy-maker
-    kIOPMNotAttainable              = 0x0001,
-    // Used internally in a power domain parent
-    kIOPMChildClamp                 = 0x0080,
-    // Used internally in a power domain parent
-    kIOPMChildClamp2                = 0x0200,
-    // Marks device as usable in this state
-    kIOPMDeviceUsable               = 0x8000,
-    // Device runs at max performance in this state
-    kIOPMMaxPerformance             = 0x4000,
-    kIOPMContextRetained            = 0x2000,
-    kIOPMConfigRetained             = 0x1000,
-    // Device is capable of system sleep in this state
-    kIOPMSleepCapability            = 0x0004,
-    kIOPMRestartCapability          = 0x0080,
-
-    // Reserved - Error code. (this is an error return rather than a bit)
-    kIOPMNotPowerManaged            = 0x0800,
-    // Therefore this bit safely overloads it
-    kIOPMStaticPowerValid           = 0x0800,
+                        // following  bits are used in the input and output power fields
+    kIOPMClockNormal		= 0x0004,
+    kIOPMClockRunning		= 0x0008,
+    kIOPMAuxPowerOn		= 0x0020,	// used only between root and root parent
+    kIOPMPagingAvailable	= 0x0020,	// used only between paging plexus and its children
+    kIOPMPassThrough		= 0x0100,
+    kIOPMDoze			= 0x0400,
+    kIOPMSoftSleep		= 0x0400,	// old usage, replaced by kIOPMDoze
+    kIOPMSleep			= 0x0001,
+    kIOPMRestart		= 0x0080,
+                        // following  bits are used in the capabilites field and the power fields
+    kIOPMPowerOn		= 0x0002,
+    kIOPMPreventSystemSleep	= 0x0010,
+    kIOPMPreventIdleSleep	= 0x0040,
+                        // following  bits are used in the capabilites field
+    kIOPMNotAttainable		= 0x0001,	// used between a driver and its policy-maker
+    kIOPMChildClamp		= 0x0080,	// used internally in a power domain parent
+    kIOPMChildClamp2		= 0x0200,	// used internally in a power domain parent
+    kIOPMDeviceUsable		= 0x8000,
+    kIOPMMaxPerformance	 	= 0x4000,
+    kIOPMContextRetained	= 0x2000,
+    kIOPMConfigRetained		= 0x1000,
+    kIOPMSleepCapability	= 0x0004,
+    kIOPMRestartCapability	= 0x0080,
+    kIOPMNotPowerManaged	= 0x0800,	// this is an error return rather than a bit
+    kIOPMStaticPowerValid	= 0x0800,	// therefore this bit safely overloads it
     
-    kIOPMCapabilitiesMask =     kIOPMPowerOn | kIOPMDeviceUsable | 
-                                kIOPMMaxPerformance | kIOPMContextRetained | 
-                                kIOPMConfigRetained | kIOPMSleepCapability |
+    kIOPMCapabilitiesMask =     kIOPMPowerOn | kIOPMDeviceUsable | kIOPMMaxPerformance |
+                                kIOPMContextRetained | kIOPMConfigRetained | kIOPMSleepCapability |
                                 kIOPMRestartCapability
 };
 
 
 enum {
-    IOPMNotAttainable           = kIOPMNotAttainable,
-    IOPMPowerOn                 = kIOPMPowerOn,
-    IOPMClockNormal             = kIOPMClockNormal,
-    IOPMClockRunning            = kIOPMClockRunning,
-    IOPMAuxPowerOn              = kIOPMAuxPowerOn,
-    IOPMDeviceUsable            = kIOPMDeviceUsable,
-    IOPMMaxPerformance          = kIOPMMaxPerformance,
-    IOPMContextRetained         = kIOPMContextRetained,
-    IOPMConfigRetained          = kIOPMConfigRetained,
-    IOPMNotPowerManaged         = kIOPMNotPowerManaged,
-    IOPMPagingAvailable         = kIOPMPagingAvailable,
-    IOPMSoftSleep               = kIOPMSoftSleep
+    IOPMNotAttainable	= kIOPMNotAttainable,
+    IOPMPowerOn		= kIOPMPowerOn,
+    IOPMClockNormal	= kIOPMClockNormal,
+    IOPMClockRunning	= kIOPMClockRunning,
+    IOPMAuxPowerOn	= kIOPMAuxPowerOn,
+    IOPMDeviceUsable	= kIOPMDeviceUsable,
+    IOPMMaxPerformance	= kIOPMMaxPerformance,
+    IOPMContextRetained	= kIOPMContextRetained,
+    IOPMConfigRetained	= kIOPMConfigRetained,
+    IOPMNotPowerManaged	= kIOPMNotPowerManaged,
+    IOPMPagingAvailable	= kIOPMPagingAvailable,
+    IOPMSoftSleep	= kIOPMSoftSleep
 };
 
 
 enum {
-    kIOPMNextHigherState        = 1,
-    kIOPMHighestState           = 2,
-    kIOPMNextLowerState         = 3,
-    kIOPMLowestState            = 4
+    kIOPMNextHigherState	= 1,
+    kIOPMHighestState		= 2,
+    kIOPMNextLowerState		= 3,
+    kIOPMLowestState		= 4
 };
 
 enum {
-    IOPMNextHigherState         = kIOPMNextHigherState,
-    IOPMHighestState            = kIOPMHighestState,
-    IOPMNextLowerState          = kIOPMNextLowerState,
-    IOPMLowestState             = kIOPMLowestState
+    IOPMNextHigherState		= kIOPMNextHigherState,
+    IOPMHighestState		= kIOPMHighestState,
+    IOPMNextLowerState		= kIOPMNextLowerState,
+    IOPMLowestState		= kIOPMLowestState
 };
 
-// Internal commands used by power managment command queue
-enum {
+
+
+enum {		// commands on power managment command queue
     kIOPMBroadcastAggressiveness = 1,
     kIOPMUnidleDevice
 };
 
-// Power consumption unknown value
-enum {
+enum {		// special value means "power consumption unknown"
     kIOPMUnknown = 0xFFFF
 };
 
-/*******************************************************************************
- *
- * Root Domain property keys of interest
- *
- ******************************************************************************/
-
-/* AppleClamshellState 
- * reflects the state of the clamshell (lid) on a portable.
- * It has a boolean value.
- *  true        == clamshell is closed
- *  false       == clamshell is open
- *  not present == no clamshell on this hardware
- */
-#define kAppleClamshellStateKey             "AppleClamshellState"
-
-/* AppleClamshellCausesSleep 
- * reflects the clamshell close behavior on a portable. 
- * It has a boolean value.
- *  true        == system will sleep when clamshell is closed
- *  false       == system will not sleep on clamshell close 
- *                  (typically external display mode)
- *  not present == no clamshell on this hardware
- */
-#define kAppleClamshellCausesSleepKey       "AppleClamshellCausesSleep"
-
-/*******************************************************************************
- *
- * Root Domain general interest messages
- *
- ******************************************************************************/
-
-/* kIOPMMessageClamshellStateChange
- * Delivered as a general interest notification on the IOPMrootDomain
- * IOPMrootDomain sends this message when state of either AppleClamshellState
- * or AppleClamshellCausesSleep changes. If this clamshell change results in
- * a sleep, the sleep will initiate soon AFTER delivery of this message.
- * The state of both variables is encoded in a bitfield argument sent with
- * the message. Check bits 0 and 1 using kClamshellStateBit & kClamshellSleepBit
- */
+// Power events
 enum {
-    kClamshellStateBit = (1 << 0),
-    kClamshellSleepBit = (1 << 1)
+  kClamshellClosedEventMask  = (1<<0),  // User closed lid
+  kDockingBarEventMask       = (1<<1),  // OBSOLETE
+  kACPlugEventMask           = (1<<2),  // User plugged or unplugged adapter
+  kFrontPanelButtonEventMask = (1<<3),  // User hit the front panel button
+  kBatteryStatusEventMask    = (1<<4)   // Battery status has changed
 };
 
-#define kIOPMMessageClamshellStateChange   \
-                iokit_family_msg(sub_iokit_powermanagement, 0x100)
-
-/* kIOPMMessageFeatureChange
- * Delivered when the set of supported features ("Supported Features" dictionary
- * under IOPMrootDomain registry) changes in some way. Typically addition or
- * removal of a supported feature.
- * RootDomain passes no argument with this message.
- */
-#define kIOPMMessageFeatureChange           \
-                iokit_family_msg(sub_iokit_powermanagement, 0x110)
-
-/* kIOPMMessageInflowDisableCancelled
- * The battery has drained completely to its "Fully Discharged" state. 
- * If a user process has disabled battery inflow for battery 
- * calibration, we forcibly re-enable Inflow at this point.
- * If inflow HAS been forcibly re-enabled, bit 0
- * (kInflowForciblyEnabledBit) will be set.
- */
+// Power commands issued to root domain
 enum {
-    kInflowForciblyEnabledBit = (1 << 0)
+  kIOPMSleepNow                  = (1<<0),  // put machine to sleep now
+  kIOPMAllowSleep                = (1<<1),  // allow idle sleep
+  kIOPMPreventSleep              = (1<<2),  // do not allow idle sleep
+  kIOPMPowerButton		 = (1<<3),  // power button was pressed
+  kIOPMClamshellClosed		 = (1<<4),  // clamshell was closed
+  kIOPMPowerEmergency		 = (1<<5),  // battery dangerously low
+  kIOPMDisableClamshell		 = (1<<6),  // do not sleep on clamshell closure
+  kIOPMEnableClamshell		 = (1<<7),  // sleep on clamshell closure
+  kIOPMProcessorSpeedChange	 = (1<<8),  // change the processor speed
+  kIOPMOverTemp                  = (1<<9)   // system dangerously hot
 };
+                                        // Return codes
 
-#define kIOPMMessageInternalBatteryFullyDischarged  \
-                iokit_family_msg(sub_iokit_powermanagement, 0x120)
-
-
-/*******************************************************************************
- *
- * Power commands issued to root domain
- *
- * These commands are issued from system drivers only:
- *      ApplePMU, AppleSMU, IOGraphics, AppleACPIFamily
- *
- ******************************************************************************/
+// PUBLIC power management features
+// NOTE: this is a direct port from classic, some of these bits
+//       are obsolete but are included for completeness
 enum {
-  kIOPMSleepNow                 = (1<<0),  // put machine to sleep now
-  kIOPMAllowSleep               = (1<<1),  // allow idle sleep
-  kIOPMPreventSleep             = (1<<2),  // do not allow idle sleep
-  kIOPMPowerButton              = (1<<3),  // power button was pressed
-  kIOPMClamshellClosed          = (1<<4),  // clamshell was closed
-  kIOPMPowerEmergency           = (1<<5),  // battery dangerously low
-  kIOPMDisableClamshell         = (1<<6),  // do not sleep on clamshell closure
-  kIOPMEnableClamshell          = (1<<7),  // sleep on clamshell closure
-  kIOPMProcessorSpeedChange     = (1<<8),  // change the processor speed
-  kIOPMOverTemp                 = (1<<9),  // system dangerously hot
-  kIOPMClamshellOpened          = (1<<10)  // clamshell was opened
+  kPMHasWakeupTimerMask        = (1<<0),  // 1=wake timer is supported
+  kPMHasSharedModemPortMask    = (1<<1),  // Not used
+  kPMHasProcessorCyclingMask   = (1<<2),  // 1=processor cycling supported
+  kPMMustProcessorCycleMask    = (1<<3),  // Not used
+  kPMHasReducedSpeedMask       = (1<<4),  // 1=supports reduced processor speed
+  kPMDynamicSpeedChangeMask    = (1<<5),  // 1=supports changing processor speed on the fly
+  kPMHasSCSIDiskModeMask       = (1<<6),  // 1=supports using machine as SCSI drive
+  kPMCanGetBatteryTimeMask     = (1<<7),  // 1=battery time can be calculated
+  kPMCanWakeupOnRingMask       = (1<<8),  // 1=machine can wake on modem ring
+  kPMHasDimmingSupportMask     = (1<<9),  // 1=has monitor dimming support
+  kPMHasStartupTimerMask       = (1<<10), // 1=can program startup timer
+  kPMHasChargeNotificationMask = (1<<11), // 1=client can determine charger status/get notifications
+  kPMHasDimSuspendSupportMask  = (1<<12), // 1=can dim diplay to DPMS ('off') state
+  kPMHasWakeOnNetActivityMask  = (1<<13), // 1=supports waking upon receipt of net packet
+  kPMHasWakeOnLidMask          = (1<<14), // 1=can wake upon lid/case opening
+  kPMCanPowerOffPCIBusMask     = (1<<15), // 1=can remove power from PCI bus on sleep
+  kPMHasDeepSleepMask          = (1<<16), // 1=supports deep (hibernation) sleep
+  kPMHasSleepMask              = (1<<17), // 1=machine support low power sleep (ala powerbooks)
+  kPMSupportsServerModeAPIMask = (1<<18), // 1=supports reboot on AC resume for unexpected power loss
+  kPMHasUPSIntegrationMask     = (1<<19)  // 1=supports incorporating UPS devices into power source calcs
 };
 
-/*******************************************************************************
- *
- * Power Management Return Codes
- *
- ******************************************************************************/
+// PRIVATE power management features
+// NOTE: this is a direct port from classic, some of these bits
+//       are obsolete but are included for completeness.
 enum {
-    kIOPMNoErr                  = 0,
-    // Returned by powerStateWillChange and powerStateDidChange:
-    // Immediate acknowledgement of power state change
-    kIOPMAckImplied             = 0,
-    // Acknowledgement of power state change will come later 
-    kIOPMWillAckLater           = 1,
-    
-    // Returned by requestDomainState:
-    // Unrecognized specification parameter
-    kIOPMBadSpecification       = 4,
-    // No power state matches search specification
-    kIOPMNoSuchState            = 5,
-    
-    // Device cannot change its power for some reason
-    kIOPMCannotRaisePower       = 6,
-    
-  // Returned by changeStateTo:
-    // Requested state doesn't exist
-    kIOPMParameterError         = 7,
-    // Device not yet fully hooked into power management
-    kIOPMNotYetInitialized      = 8,
-
-    // And the old constants; deprecated
-    IOPMNoErr = kIOPMNoErr,
-    IOPMAckImplied = kIOPMAckImplied, 
-    IOPMWillAckLater = kIOPMWillAckLater,
-    IOPMBadSpecification = kIOPMBadSpecification,
-    IOPMNoSuchState = kIOPMNoSuchState,
-    IOPMCannotRaisePower = kIOPMCannotRaisePower,
-    IOPMParameterError = kIOPMParameterError,
-    IOPMNotYetInitialized = kIOPMNotYetInitialized
+  kPMHasExtdBattInfoMask       = (1<<0),  // Not used
+  kPMHasBatteryIDMask          = (1<<1),  // Not used
+  kPMCanSwitchPowerMask        = (1<<2),  // Not used 
+  kPMHasCelsiusCyclingMask     = (1<<3),  // Not used
+  kPMHasBatteryPredictionMask  = (1<<4),  // Not used
+  kPMHasPowerLevelsMask        = (1<<5),  // Not used
+  kPMHasSleepCPUSpeedMask      = (1<<6),  // Not used
+  kPMHasBtnIntHandlersMask     = (1<<7),  // 1=supports individual button interrupt handlers
+  kPMHasSCSITermPowerMask      = (1<<8),  // 1=supports SCSI termination power switch
+  kPMHasADBButtonHandlersMask  = (1<<9),  // 1=supports button handlers via ADB
+  kPMHasICTControlMask         = (1<<10), // 1=supports ICT control
+  kPMHasLegacyDesktopSleepMask = (1<<11), // 1=supports 'doze' style sleep
+  kPMHasDeepIdleMask           = (1<<12), // 1=supports Idle2 in hardware
+  kPMOpenLidPreventsSleepMask  = (1<<13), // 1=open case prevent machine from sleeping
+  kPMClosedLidCausesSleepMask  = (1<<14), // 1=case closed (clamshell closed) causes sleep
+  kPMHasFanControlMask         = (1<<15), // 1=machine has software-programmable fan/thermostat controls
+  kPMHasThermalControlMask     = (1<<16), // 1=machine supports thermal monitoring
+  kPMHasVStepSpeedChangeMask   = (1<<17), // 1=machine supports processor voltage/clock change
+  kPMEnvironEventsPolledMask   = (1<<18)  // 1=machine doesn't generate pmu env ints, we must poll instead 
 };
 
+// DEFAULT public and private features for machines whose device tree
+// does NOT contain this information (pre-Core99).
 
-// IOPMPowerSource class descriptive strings
-// Power Source state is published as properties to the IORegistry under these 
-// keys.
-#define kIOPMPSExternalConnectedKey                 "ExternalConnected"
-#define kIOPMPSExternalChargeCapableKey             "ExternalChargeCapable"
-#define kIOPMPSBatteryInstalledKey                  "BatteryInstalled"
-#define kIOPMPSIsChargingKey                        "IsCharging"
-#define kIOPMFullyChargedKey                        "FullyCharged"
-#define kIOPMPSAtWarnLevelKey                       "AtWarnLevel"
-#define kIOPMPSAtCriticalLevelKey                   "AtCriticalLevel"
-#define kIOPMPSCurrentCapacityKey                   "CurrentCapacity"
-#define kIOPMPSMaxCapacityKey                       "MaxCapacity"
-#define kIOPMPSDesignCapacityKey                    "DesignCapacity"
-#define kIOPMPSTimeRemainingKey                     "TimeRemaining"
-#define kIOPMPSAmperageKey                          "Amperage"
-#define kIOPMPSVoltageKey                           "Voltage"
-#define kIOPMPSCycleCountKey                        "CycleCount"
-#define kIOPMPSMaxErrKey                            "MaxErr"
-#define kIOPMPSAdapterInfoKey                       "AdapterInfo"
-#define kIOPMPSLocationKey                          "Location"
-#define kIOPMPSErrorConditionKey                    "ErrorCondition"
-#define kIOPMPSManufacturerKey                      "Manufacturer"
-#define kIOPMPSManufactureDateKey                   "ManufactureDate"
-#define kIOPMPSModelKey                             "Model"
-#define kIOPMPSSerialKey                            "Serial"
-#define kIOPMDeviceNameKey                          "DeviceName"
-#define kIOPMPSLegacyBatteryInfoKey                 "LegacyBatteryInfo"
-#define kIOPMPSBatteryHealthKey                     "BatteryHealth"
-#define kIOPMPSHealthConfidenceKey                  "HealthConfidence"
+// For Cuda-based Desktops
 
-// Definitions for battery location, in case of multiple batteries.
-// A location of 0 is unspecified
-// Location is undefined for single battery systems
-enum {
-    kIOPMPSLocationLeft = 1001,
-    kIOPMPSLocationRight = 1002
-};
+#define kStdDesktopPMFeatures   kPMHasWakeupTimerMask         |\
+                                kPMHasProcessorCyclingMask    |\
+                                kPMHasDimmingSupportMask      |\
+                                kPMHasStartupTimerMask        |\
+                                kPMSupportsServerModeAPIMask  |\
+                                kPMHasUPSIntegrationMask
 
-// Battery quality health types, specified by BatteryHealth and HealthConfidence
-// properties in an IOPMPowerSource battery kext.
-enum {
-    kIOPMUndefinedValue = 0,
-    kIOPMPoorValue      = 1,
-    kIOPMFairValue      = 2,
-    kIOPMGoodValue      = 3
-};
+#define kStdDesktopPrivPMFeatures  kPMHasExtdBattInfoMask     |\
+                                   kPMHasICTControlMask       |\
+                                   kPMHasLegacyDesktopSleepMask
 
-// Battery's time remaining estimate is invalid this long (seconds) after a wake
-#define kIOPMPSInvalidWakeSecondsKey           "BatteryInvalidWakeSeconds"
+#define kStdDesktopNumBatteries 0
 
-// Battery must wait this long (seconds) after being completely charged before
-// the battery is settled.
-#define kIOPMPSPostChargeWaitSecondsKey        "PostChargeWaitSeconds"
+// For Wallstreet (PowerBook G3 Series 1998)
 
-// Battery must wait this long (seconds) after being completely discharged 
-// before the battery is settled.
-#define kIOPMPSPostDishargeWaitSecondsKey      "PostDischargeWaitSeconds"
+#define kWallstreetPMFeatures   kPMHasWakeupTimerMask         |\
+                                kPMHasProcessorCyclingMask    |\
+                                kPMHasReducedSpeedMask        |\
+                                kPMDynamicSpeedChangeMask     |\
+                                kPMHasSCSIDiskModeMask        |\
+                                kPMCanGetBatteryTimeMask      |\
+                                kPMHasDimmingSupportMask      |\
+                                kPMHasChargeNotificationMask  |\
+                                kPMHasDimSuspendSupportMask   |\
+                                kPMHasSleepMask
+
+#define kWallstreetPrivPMFeatures  kPMHasExtdBattInfoMask      |\
+                                   kPMHasBatteryIDMask         |\
+                                   kPMCanSwitchPowerMask       |\
+                                   kPMHasADBButtonHandlersMask |\
+                                   kPMHasSCSITermPowerMask     |\
+                                   kPMHasICTControlMask        |\
+                                   kPMClosedLidCausesSleepMask |\
+                                   kPMEnvironEventsPolledMask
+
+#define kStdPowerBookPMFeatures      kWallstreetPMFeatures
+#define kStdPowerBookPrivPMFeatures  kWallstreetPrivPMFeatures
+
+#define kStdPowerBookNumBatteries 2
+
+// For 101 (PowerBook G3 Series 1999)
+
+#define k101PMFeatures          kPMHasWakeupTimerMask         |\
+                                kPMHasProcessorCyclingMask    |\
+                                kPMHasReducedSpeedMask        |\
+                                kPMDynamicSpeedChangeMask     |\
+                                kPMHasSCSIDiskModeMask        |\
+                                kPMCanGetBatteryTimeMask      |\
+                                kPMHasDimmingSupportMask      |\
+                                kPMHasChargeNotificationMask  |\
+                                kPMHasDimSuspendSupportMask   |\
+                                kPMHasSleepMask               |\
+                                kPMHasUPSIntegrationMask
+
+#define k101PrivPMFeatures      kPMHasExtdBattInfoMask        |\
+                                kPMHasBatteryIDMask           |\
+                                kPMCanSwitchPowerMask         |\
+                                kPMHasADBButtonHandlersMask   |\
+                                kPMHasSCSITermPowerMask       |\
+                                kPMHasICTControlMask          |\
+                                kPMClosedLidCausesSleepMask   |\
+                                kPMEnvironEventsPolledMask
+
+#define IOPMNoErr		0	// normal return
+
+                        // returned by powerStateWillChange and powerStateDidChange:
+#define IOPMAckImplied		0	// acknowledgement of power state change is implied
+#define IOPMWillAckLater	1	// acknowledgement of power state change will come later
+
+                        // returned by requestDomainState
+#define IOPMBadSpecification	4	// unrecognized specification parameter
+#define IOPMNoSuchState		5	// no power state matches search specification
+
+#define IOPMCannotRaisePower	6	// a device cannot change its power for some reason
+
+                        // returned by changeStateTo
+#define IOPMParameterError	7	// requested state doesn't exist
+#define IOPMNotYetInitialized	8	// device not yet fully hooked into power management "graph"
 
 
+						// used by Root Domain UserClient
 
-// PM Settings Controller setting types
-// Settings types used primarily with:
-//      IOPMrootDomain::registerPMSettingController
-// The values are identical to the similarly named keys for use in user space
-// PM settings work. Those keys are defined in IOPMLibPrivate.h.
-#define kIOPMSettingWakeOnRingKey                   "Wake On Modem Ring"
-#define kIOPMSettingRestartOnPowerLossKey           "Automatic Restart On Power Loss"
-#define kIOPMSettingWakeOnACChangeKey               "Wake On AC Change"
-#define kIOPMSettingSleepOnPowerButtonKey           "Sleep On Power Button"
-#define kIOPMSettingWakeOnClamshellKey              "Wake On Clamshell Open"
-#define kIOPMSettingReduceBrightnessKey             "ReduceBrightness"
-#define kIOPMSettingDisplaySleepUsesDimKey          "Display Sleep Uses Dim"
-#define kIOPMSettingTimeZoneOffsetKey               "TimeZoneOffsetSeconds"
-
-// Setting controlling drivers can register to receive scheduled wake data
-// Either in "CF seconds" type, or structured calendar data in a formatted
-// IOPMCalendarStruct defined below.
-#define kIOPMSettingAutoWakeSecondsKey              "wake"
-#define kIOPMSettingAutoWakeCalendarKey             "WakeByCalendarDate"
-#define kIOPMSettingAutoPowerSecondsKey             "poweron"
-#define kIOPMSettingAutoPowerCalendarKey            "PowerByCalendarDate"
-
-// Debug seconds auto wake
-// Used by sleep cycling debug tools
-#define kIOPMSettingDebugWakeRelativeKey            "WakeRelativeToSleep"
-#define kIOPMSettingDebugPowerRelativeKey           "PowerRelativeToShutdown"
-
-struct IOPMCalendarStruct {
-    UInt32      year;
-    UInt8       month;
-    UInt8       day;
-    UInt8       hour;
-    UInt8       minute;
-    UInt8       second;
-};
-typedef struct IOPMCalendarStruct IOPMCalendarStruct;
-
-// SetAggressiveness types
 enum {
     kPMGeneralAggressiveness = 0,
     kPMMinutesToDim,
@@ -384,21 +287,21 @@ enum {
     kIOPMExternalPower
 };
 
-#define kIOREMSleepEnabledKey               "REMSleepEnabled"
+#define kAppleClamshellStateKey           "AppleClamshellState"
+#define kIOREMSleepEnabledKey             "REMSleepEnabled"
 
 // Strings for deciphering the dictionary returned from IOPMCopyBatteryInfo
-#define kIOBatteryInfoKey                   "IOBatteryInfo"
-#define kIOBatteryCurrentChargeKey          "Current"
-#define kIOBatteryCapacityKey               "Capacity"
-#define kIOBatteryFlagsKey                  "Flags"
-#define kIOBatteryVoltageKey                "Voltage"
-#define kIOBatteryAmperageKey               "Amperage"
-#define kIOBatteryCycleCountKey             "Cycle Count"
+#define kIOBatteryInfoKey		"IOBatteryInfo"
+#define kIOBatteryCurrentChargeKey	"Current"
+#define kIOBatteryCapacityKey		"Capacity"
+#define kIOBatteryFlagsKey		"Flags"
+#define kIOBatteryVoltageKey		"Voltage"
+#define kIOBatteryAmperageKey		"Amperage"
 
 enum {
-    kIOBatteryInstalled         = (1 << 2),
-    kIOBatteryCharge            = (1 << 1),
-    kIOBatteryChargerConnect    = (1 << 0)
+    kIOBatteryInstalled		= (1 << 2),
+    kIOBatteryCharge		= (1 << 1),
+    kIOBatteryChargerConnect	= (1 << 0)
 };
 
 
@@ -409,7 +312,20 @@ enum {
 // Apple private Legacy messages for re-routing AutoWake and AutoPower messages to the PMU
 // through newer user space IOPMSchedulePowerEvent API
 #define kIOPMUMessageLegacyAutoWake                 iokit_family_msg(sub_iokit_pmu, 0x200)
-#define kIOPMUMessageLegacyAutoPower                iokit_family_msg(sub_iokit_pmu, 0x210)
+#define kIOPMUMessageLegacyAutoPower            	iokit_family_msg(sub_iokit_pmu, 0x210)
+
+// These flags are deprecated. Use the version with the kIOPM prefix below.
+enum {
+  kACInstalled      = kIOBatteryChargerConnect,
+  kBatteryCharging  = kIOBatteryCharge,
+  kBatteryInstalled = kIOBatteryInstalled,
+  kUPSInstalled     = (1<<3),
+  kBatteryAtWarn    = (1<<4),
+  kBatteryDepleted  = (1<<5),
+  kACnoChargeCapability = (1<<6),     // AC adapter cannot charge battery
+  kRawLowBattery    = (1<<7),         // used only by  Platform Expert
+  kForceLowSpeed    = (1<<8)         // set by Platfm Expert, chk'd by Pwr Plugin};
+};
 
 // For use with IOPMPowerSource bFlags
 #define IOPM_POWER_SOURCE_REV   2
@@ -445,17 +361,17 @@ enum {
 };
 
 struct stateChangeNote{
-    IOPMPowerFlags    stateFlags;
-    unsigned long    stateNum;
-    void *         powerRef;
+    IOPMPowerFlags	stateFlags;
+    unsigned long	stateNum;
+    void * 		powerRef;
 };
 typedef struct stateChangeNote stateChangeNote;
 
 struct IOPowerStateChangeNotification {
-    void *        powerRef;
-    unsigned long    returnValue;
-    unsigned long    stateNumber;
-    IOPMPowerFlags    stateFlags;
+    void *		powerRef;
+    unsigned long	returnValue;
+    unsigned long	stateNumber;
+    IOPMPowerFlags	stateFlags;
 };
 typedef struct IOPowerStateChangeNotification IOPowerStateChangeNotification;
 typedef IOPowerStateChangeNotification sleepWakeNote;

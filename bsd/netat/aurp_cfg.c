@@ -33,9 +33,6 @@
  *
  *	File: cfg.c
  */
- 
-#ifdef AURP_SUPPORT
-
 #define RESOLVE_DBG
 #include <sys/errno.h>
 #include <sys/types.h>
@@ -58,6 +55,7 @@
 #include <netat/at_pcb.h>
 #include <netat/aurp.h>
 
+extern atlock_t aurpgen_lock;
 static int aurp_inited = 0;
 static char aurp_minor_no[4];
 
@@ -67,8 +65,10 @@ int aurp_open(gref)
 	extern void AURPcmdx();
 	int i;
 
-	if (!aurp_inited)
+	if (!aurp_inited) {
 		aurp_inited = 1;
+		ATLOCKINIT(aurpgen_lock);
+	}
 
 	for (i=1; i < sizeof(aurp_minor_no); i++) {
 		if (aurp_minor_no[i] == 0) {
@@ -104,5 +104,3 @@ int aurp_close(gref)
 	gref->info = 0;
 	return 0;
 }
-
-#endif  /* AURP_SUPPORT */

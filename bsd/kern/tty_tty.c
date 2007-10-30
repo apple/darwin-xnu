@@ -119,9 +119,8 @@ cttyopen(__unused dev_t dev, int flag, __unused int mode, struct proc *p)
 		return (ENXIO);
 
 	context.vc_proc = p;
-	context.vc_ucred = kauth_cred_proc_ref(p);
+	context.vc_ucred = p->p_ucred;
 	error = VNOP_OPEN(ttyvp, flag, &context);
-	kauth_cred_unref(&context.vc_ucred);
 
 	return (error);
 }

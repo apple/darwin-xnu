@@ -32,7 +32,6 @@
 
 #include <IOKit/assert.h>
 #include <IOKit/IOLib.h>
-#include <IOKit/IOKitKeys.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include "RootDomainUserClient.h"
 #include <IOKit/pwr_mgt/IOPMLibDefs.h>
@@ -45,13 +44,9 @@ OSDefineMetaClassAndStructors(RootDomainUserClient, IOUserClient)
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-bool RootDomainUserClient::initWithTask(task_t owningTask, void *security_id, 
-					UInt32 type, OSDictionary * properties)
+bool RootDomainUserClient::initWithTask(task_t owningTask, void *security_id, UInt32)
 {
-    if (properties)
-	properties->setObject(kIOUserClientCrossEndianCompatibleKey, kOSBooleanTrue);
-
-    if (!super::initWithTask(owningTask, security_id, type, properties))
+    if (!super::init())
 	return false;
 
     fOwningTask = owningTask;
@@ -136,13 +131,13 @@ RootDomainUserClient::getTargetAndMethodForIndex( IOService ** targetP, UInt32 i
 {
     static IOExternalMethod sMethods[] = {
         { // kPMSetAggressiveness, 0
-            (IOService *)1, (IOMethod)&RootDomainUserClient::secureSetAggressiveness, kIOUCScalarIScalarO, 2, 1
+            1, (IOMethod)&RootDomainUserClient::secureSetAggressiveness, kIOUCScalarIScalarO, 2, 1
         },
         { // kPMGetAggressiveness, 1
             0, (IOMethod)&IOPMrootDomain::getAggressiveness, kIOUCScalarIScalarO, 1, 1
         },
         { // kPMSleepSystem, 2
-            (IOService *)1, (IOMethod)&RootDomainUserClient::secureSleepSystem, kIOUCScalarIScalarO, 0, 1
+            1, (IOMethod)&RootDomainUserClient::secureSleepSystem, kIOUCScalarIScalarO, 0, 1
         },
         { // kPMAllowPowerChange, 3
             0, (IOMethod)&IOPMrootDomain::allowPowerChange, kIOUCScalarIScalarO, 1, 0
@@ -157,7 +152,7 @@ RootDomainUserClient::getTargetAndMethodForIndex( IOService ** targetP, UInt32 i
             0, (IOMethod)&IOPMrootDomain::restartSystem, kIOUCScalarIScalarO, 0, 0
         },
         { // kPMSetPreventative, 7
-            (IOService *)1, (IOMethod)&RootDomainUserClient::setPreventative, kIOUCScalarIScalarO, 2, 0
+            1, (IOMethod) &RootDomainUserClient::setPreventative, kIOUCScalarIScalarO, 2, 0
         },
     };
     

@@ -322,4 +322,4 @@ extern struct ipfw_flow_id last_pkt ;
 #endif KERNEL_PRIVATE
 
 #endif !IPFW2
-#endif /* _IP_FW_H */
+#endif _IP_FW_H

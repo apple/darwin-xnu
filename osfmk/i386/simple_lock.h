@@ -100,8 +100,6 @@ typedef struct slock {
 	uslock_debug	debug;
 } usimple_lock_data_t, *usimple_lock_t;
 
-extern void			i386_lock_unlock_with_flush(
-					hw_lock_t);
 #else
 
 typedef	struct slock {

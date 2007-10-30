@@ -29,7 +29,6 @@
 #include <pexpert/pexpert.h>
 #include <pexpert/ppc/powermac.h>
 #include <pexpert/device_tree.h>
-#include <vm/pmap.h>
 
 /* pe_identify_machine:
  *
@@ -182,7 +181,7 @@ unsigned int PE_init_taproot(vm_offset_t *taddr)
 
 	tappdata[1] = (tappdata[1] + 4095 ) & -4096;	/* Make sure this is a whole page */
 
-	*taddr = io_map_spec(tappdata[0], tappdata[1], VM_WIMG_IO);	/* Map it in and return the address */
+	*taddr = io_map_spec(tappdata[0], tappdata[1]);		/* Map it in and return the address */
 	tappdata[0] = *taddr;					/* Also change property */
 	return tappdata[1];						/* And the size */
 }

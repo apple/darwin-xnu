@@ -97,16 +97,8 @@
 #define	NBP_HDR_SIZE	2
 
 typedef struct at_nbp {
-#if BYTE_ORDER == BIG_ENDIAN
-        unsigned      	
-        	control : 4,
-        	tuple_count : 4;
-#endif
-#if BYTE_ORDER == LITTLE_ENDIAN
-		unsigned
-			tuple_count : 4,
-			control : 4;
-#endif
+        unsigned      	control : 4,
+        	      	tuple_count : 4;
 	u_char		at_nbp_id;
 	at_nbptuple_t	tuple[NBP_TUPLE_MAX];
 } at_nbp_t;

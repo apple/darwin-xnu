@@ -211,9 +211,11 @@ ip6_init()
 	}
 
 	ip6_mutex_grp_attr  = lck_grp_attr_alloc_init();
+	lck_grp_attr_setdefault(ip6_mutex_grp_attr);
 
 	ip6_mutex_grp = lck_grp_alloc_init("ip6", ip6_mutex_grp_attr);
 	ip6_mutex_attr = lck_attr_alloc_init();
+	lck_attr_setdefault(ip6_mutex_attr);
 
 	if ((ip6_mutex = lck_mtx_alloc_init(ip6_mutex_grp, ip6_mutex_attr)) == NULL) {
 		printf("ip6_init: can't alloc ip6_mutex\n");

@@ -68,17 +68,9 @@
 /* DDP extended header packet format */
 
 typedef struct {
-#if BYTE_ORDER == BIG_ENDIAN
-		unsigned	unused:2,
-        		    hopcount:4,  	/* hop count/len high order  */
-        			length_H:2;	
-#endif
-#if BYTE_ORDER == LITTLE_ENDIAN
-		unsigned	length_H:2,
-					hopcount:4,
-					unused:2;
-#endif
-        u_char	   length_L;			/* len low order */
+        unsigned   unused:2,
+		   hopcount:4,
+		   length:10;  		/* Datagram length */
         ua_short   checksum;    	/* Checksum */
         at_net     dst_net;  		/* Destination network number */
         at_net     src_net;  		/* Source network number */
@@ -86,17 +78,12 @@ typedef struct {
         at_node    src_node;  		/* Source node ID */
         at_socket  dst_socket; 		/* Destination socket number */
         at_socket  src_socket; 		/* Source socket number */
-        u_char	   type;  			/* Protocol type */
+        u_char	   type;  		/* Protocol type */
         char       data[DDP_DATA_SIZE];
 } at_ddp_t;
 
-
-#define	DDPLEN_ASSIGN(ddp, len)		\
-		ddp->length_H = 0x03 & (len >> 8); \
-		ddp->length_L = len & 0xff;
-		
-#define	DDPLEN_VALUE(ddp)			\
-		(((u_short)ddp->length_H) << 8) + ddp->length_L
+#define	DDPLEN_ASSIGN(ddp, len)		ddp->length = len
+#define	DDPLEN_VALUE(ddp)		ddp->length
 
 /* DDP module statistics and configuration */
 

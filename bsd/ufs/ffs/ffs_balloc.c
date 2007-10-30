@@ -87,7 +87,7 @@
 
 #if REV_ENDIAN_FS
 #include <ufs/ufs/ufs_byte_order.h>
-#include <libkern/OSByteOrder.h>
+#include <architecture/byte_order.h>
 #endif /* REV_ENDIAN_FS */
 
 /*
@@ -312,7 +312,7 @@ ffs_balloc(
 		bap = (ufs_daddr_t *)buf_dataptr(bp);
 #if	REV_ENDIAN_FS
 	if (rev_endian)
-		nb = OSSwapInt32(bap[indirs[i].in_off]);
+		nb = NXSwapLong(bap[indirs[i].in_off]);
 	else {
 #endif	/* REV_ENDIAN_FS */
 		nb = bap[indirs[i].in_off];
@@ -350,7 +350,7 @@ ffs_balloc(
 		}
 #if	REV_ENDIAN_FS
 	if (rev_endian)
-		bap[indirs[i - 1].in_off] = OSSwapInt32(nb);
+		bap[indirs[i - 1].in_off] = NXSwapLong(nb);
 	else {
 #endif	/* REV_ENDIAN_FS */
 		bap[indirs[i - 1].in_off] = nb;
@@ -381,7 +381,7 @@ ffs_balloc(
 		*allocblk++ = nb;
 #if	REV_ENDIAN_FS
 	if (rev_endian)
-		bap[indirs[i].in_off] = OSSwapInt32(nb);
+		bap[indirs[i].in_off] = NXSwapLong(nb);
 	else {
 #endif	/* REV_ENDIAN_FS */
 		bap[indirs[i].in_off] = nb;
@@ -585,7 +585,7 @@ ffs_blkalloc(
 		bap = (ufs_daddr_t *)buf_dataptr(bp);
 #if	REV_ENDIAN_FS
 	if (rev_endian)
-		nb = OSSwapInt32(bap[indirs[i].in_off]);
+		nb = NXSwapLong(bap[indirs[i].in_off]);
 	else {
 #endif	/* REV_ENDIAN_FS */
 		nb = bap[indirs[i].in_off];
@@ -623,7 +623,7 @@ ffs_blkalloc(
 		}
 #if	REV_ENDIAN_FS
 	if (rev_endian)
-		bap[indirs[i - 1].in_off] = OSSwapInt32(nb);
+		bap[indirs[i - 1].in_off] = NXSwapLong(nb);
 	else {
 #endif	/* REV_ENDIAN_FS */
 		bap[indirs[i - 1].in_off] = nb;
@@ -654,7 +654,7 @@ ffs_blkalloc(
 		*allocblk++ = nb;
 #if	REV_ENDIAN_FS
 	if (rev_endian)
-		bap[indirs[i].in_off] = OSSwapInt32(nb);
+		bap[indirs[i].in_off] = NXSwapLong(nb);
 	else {
 #endif	/* REV_ENDIAN_FS */
 		bap[indirs[i].in_off] = nb;

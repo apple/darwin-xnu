@@ -58,11 +58,13 @@
 #endif /* defined(TypeCheck) */
 
 /*
- * Pack MIG message structs.
+ * Pack MIG message structs if we have Power alignment of structs.
  * This is an indicator of the need to view shared structs in a
  * binary-compatible format - and MIG message structs are no different.
  */
+#if __DARWIN_ALIGN_POWER
 #define __MigPackStructs 1
+#endif
 
 /*
  * Definition for MIG-generated server stub routines.  These routines

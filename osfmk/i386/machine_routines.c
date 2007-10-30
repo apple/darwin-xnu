@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -41,37 +41,14 @@
 #include <i386/cpu_threads.h>
 #include <i386/pmap.h>
 #include <i386/misc_protos.h>
-#include <i386/pmCPU.h>
-#include <i386/proc_reg.h>
 #include <mach/vm_param.h>
-#if MACH_KDB
-#include <i386/db_machdep.h>
-#include <ddb/db_aout.h>
-#include <ddb/db_access.h>
-#include <ddb/db_sym.h>
-#include <ddb/db_variables.h>
-#include <ddb/db_command.h>
-#include <ddb/db_output.h>
-#include <ddb/db_expr.h>
-#endif
 
 #define MIN(a,b) ((a)<(b)? (a) : (b))
 
-#if DEBUG
-#define DBG(x...)	kprintf("DBG: " x)
-#else
-#define DBG(x...)
-#endif
-
 extern void	initialize_screen(Boot_Video *, unsigned int);
-extern thread_t	Shutdown_context(thread_t thread, void (*doshutdown)(processor_t),processor_t  processor);
 extern void 	wakeup(void *);
-extern unsigned KernelRelocOffset;
 
 static int max_cpus_initialized = 0;
-
-unsigned int	LockTimeOut = 12500000;
-unsigned int	MutexSpin = 0;
 
 #define MAX_CPUS_SET    0x1
 #define MAX_CPUS_WAIT   0x2
@@ -83,7 +60,7 @@ vm_offset_t ml_io_map(
 	vm_offset_t phys_addr, 
 	vm_size_t size)
 {
-	return(io_map(phys_addr,size,VM_WIMG_IO));
+	return(io_map(phys_addr,size));
 }
 
 /* boot memory allocation */
@@ -92,21 +69,6 @@ vm_offset_t ml_static_malloc(
 {
 	return((vm_offset_t)NULL);
 }
-
-
-void ml_get_bouncepool_info(vm_offset_t *phys_addr, vm_size_t *size)
-{
-        *phys_addr = bounce_pool_base;
-	*size      = bounce_pool_size;
-}
-
-
-vm_offset_t
-ml_boot_ptovirt(
-	vm_offset_t paddr)
-{
-	return (vm_offset_t)((paddr-KernelRelocOffset) | LINEAR_KERNEL_ADDRESS);
-} 
 
 vm_offset_t
 ml_static_ptovirt(
@@ -128,7 +90,7 @@ ml_static_mfree(
 	vm_offset_t vaddr_cur;
 	ppnum_t ppn;
 
-//	if (vaddr < VM_MIN_KERNEL_ADDRESS) return;
+	if (vaddr < VM_MIN_KERNEL_ADDRESS) return;
 
 	assert((vaddr & (PAGE_SIZE-1)) == 0); /* must be page aligned */
 
@@ -143,7 +105,6 @@ ml_static_mfree(
 		}
 	}
 }
-
 
 /* virtual to physical on wired pages */
 vm_offset_t ml_vtophys(
@@ -176,21 +137,10 @@ boolean_t ml_set_interrupts_enabled(boolean_t enable)
 
   __asm__ volatile("pushf; popl	%0" :  "=r" (flags));
 
-  if (enable) {
-	ast_t		*myast;
-
-	myast = ast_pending();
-
-	if ( (get_preemption_level() == 0) &&  (*myast & AST_URGENT) ) {
+ if (enable)
 	__asm__ volatile("sti");
-          __asm__ volatile ("int $0xff");
-        } else {
-	  __asm__ volatile ("sti");
-	}
-  }
-  else {
+  else
 	__asm__ volatile("cli");
-  }
 
   return (flags & EFL_IF) != 0;
 }
@@ -247,6 +197,12 @@ void ml_install_interrupt_handler(
 	initialize_screen(0, kPEAcquireScreen);
 }
 
+static void
+cpu_idle(void)
+{
+	__asm__ volatile("sti; hlt": : :"memory");
+}
+void (*cpu_idle_handler)(void) = cpu_idle;
 
 void
 machine_idle(void)
@@ -259,15 +215,12 @@ machine_idle(void)
 	 * unless kernel param idlehalt is false and no other thread
 	 * in the same core is active - if so, don't halt so that this
 	 * core doesn't go into a low-power mode.
-	 * For 4/4, we set a null "active cr3" while idle.
 	 */
 	others_active = !atomic_decl_and_test(
 				(long *) &my_core->active_threads, 1);
 	if (idlehalt || others_active) {
 		DBGLOG(cpu_handle, cpu_number(), MP_IDLE);
-		MARK_CPU_IDLE(cpu_number());
-		machine_idle_cstate();
-		MARK_CPU_ACTIVE(cpu_number());
+		cpu_idle_handler();
 		DBGLOG(cpu_handle, cpu_number(), MP_UNIDLE);
 	} else {
 		__asm__ volatile("sti");
@@ -280,16 +233,6 @@ machine_signal_idle(
         processor_t processor)
 {
 	cpu_interrupt(PROCESSOR_DATA(processor, slot_num));
-}
-
-thread_t        
-machine_processor_shutdown(
-	thread_t               thread,
-	void                   (*doshutdown)(processor_t),
-	processor_t    processor)
-{
-        fpu_save_context(thread);
-	return(Shutdown_context(thread, doshutdown, processor));
 }
 
 kern_return_t
@@ -320,13 +263,7 @@ ml_processor_register(
 	if (this_cpu_datap->cpu_console_buf == NULL)
 		goto failed;
 
-	this_cpu_datap->cpu_chud = chudxnu_cpu_alloc(boot_cpu);
-	if (this_cpu_datap->cpu_chud == NULL)
-		goto failed;
-
 	if (!boot_cpu) {
-		this_cpu_datap->cpu_core = cpu_thread_alloc(target_cpu);
-
 		this_cpu_datap->cpu_pmap = pmap_cpu_alloc(boot_cpu);
 		if (this_cpu_datap->cpu_pmap == NULL)
 			goto failed;
@@ -345,7 +282,6 @@ ml_processor_register(
 failed:
 	cpu_processor_free(this_cpu_datap->cpu_processor);
 	pmap_cpu_free(this_cpu_datap->cpu_pmap);
-	chudxnu_cpu_free(this_cpu_datap->cpu_chud);
 	console_cpu_free(this_cpu_datap->cpu_console_buf);
 	return KERN_FAILURE;
 }
@@ -360,15 +296,11 @@ ml_cpu_get_info(ml_cpu_info_t *cpu_infop)
 		return;
  
 	/*
-	 * Are we supporting MMX/SSE/SSE2/SSE3?
+	 * Are we supporting XMM/SSE/SSE2?
 	 * As distinct from whether the cpu has these capabilities.
 	 */
 	os_supports_sse = get_cr4() & CR4_XMM;
-	if ((cpuid_features() & CPUID_FEATURE_MNI) && os_supports_sse)
-		cpu_infop->vector_unit = 6;
-	else if ((cpuid_features() & CPUID_FEATURE_SSE3) && os_supports_sse)
-		cpu_infop->vector_unit = 5;
-	else if ((cpuid_features() & CPUID_FEATURE_SSE2) && os_supports_sse)
+	if ((cpuid_features() & CPUID_FEATURE_SSE2) && os_supports_sse)
 		cpu_infop->vector_unit = 4;
 	else if ((cpuid_features() & CPUID_FEATURE_SSE) && os_supports_sse)
 		cpu_infop->vector_unit = 3;
@@ -393,8 +325,8 @@ ml_cpu_get_info(ml_cpu_info_t *cpu_infop)
         }
 
         if (cpuid_infop->cache_size[L3U] > 0) {
-            cpu_infop->l3_settings = 1;
-            cpu_infop->l3_cache_size = cpuid_infop->cache_size[L3U];
+            cpu_infop->l2_settings = 1;
+            cpu_infop->l2_cache_size = cpuid_infop->cache_size[L3U];
         } else {
             cpu_infop->l3_settings = 0;
             cpu_infop->l3_cache_size = 0xFFFFFFFF;
@@ -437,34 +369,6 @@ ml_get_max_cpus(void)
         }
         (void) ml_set_interrupts_enabled(current_state);
         return(machine_info.max_cpus);
-}
-
-/*
- *	Routine:        ml_init_lock_timeout
- *	Function:
- */
-void
-ml_init_lock_timeout(void)
-{
-	uint64_t	abstime;
-	uint32_t	mtxspin; 
-
-	/*
-	 * XXX As currently implemented for x86, LockTimeOut should be a
-	 * cycle (tsc) count not an absolute time (nanoseconds) -
-	 * but it's of the right order.
-	 */
-	nanoseconds_to_absolutetime(NSEC_PER_SEC>>2, &abstime);
-	LockTimeOut = (unsigned int)abstime;
-
-	if (PE_parse_boot_arg("mtxspin", &mtxspin)) {
-		if (mtxspin > USEC_PER_SEC>>4)
-			mtxspin =  USEC_PER_SEC>>4;
-		nanoseconds_to_absolutetime(mtxspin*NSEC_PER_USEC, &abstime);
-	} else {
-		nanoseconds_to_absolutetime(10*NSEC_PER_USEC, &abstime);
-	}
-	MutexSpin = (unsigned int)abstime;
 }
 
 /*
@@ -528,134 +432,3 @@ current_thread(void)
 {
   return(current_thread_fast());
 }
-
-/*
- * Set the worst-case time for the C4 to C2 transition.
- * The maxdelay parameter is in nanoseconds. 
- */
- 
-void
-ml_set_maxsnoop(uint32_t maxdelay)
-{
-	C4C2SnoopDelay = maxdelay;	/* Set the transition time */ 
-   	machine_nap_policy();		/* Adjust the current nap state */
-}
-
-
-/*
- * Get the worst-case time for the C4 to C2 transition.  Returns nanoseconds.
- */
-
-unsigned
-ml_get_maxsnoop(void)
-{
-	return C4C2SnoopDelay;		/* Set the transition time */
-}
-
-
-uint32_t
-ml_get_maxbusdelay(void)
-{
-    return maxBusDelay;
-}
-
-/*
- * Set the maximum delay time allowed for snoop on the bus.
- *
- * Note that this value will be compared to the amount of time that it takes
- * to transition from a non-snooping power state (C4) to a snooping state (C2).
- * If maxBusDelay is less than C4C2SnoopDelay,
- * we will not enter the lowest power state.
- */
- 
-void
-ml_set_maxbusdelay(uint32_t mdelay)
-{
-	maxBusDelay = mdelay;		/* Set the delay */
-	machine_nap_policy();		/* Adjust the current nap state */
-}
-
-
-boolean_t ml_is64bit(void) {
-
-        return (cpu_mode_is64bit());
-}
-
-
-boolean_t ml_thread_is64bit(thread_t thread) {
-  
-        return (thread_is_64bit(thread));
-}
-
-
-boolean_t ml_state_is64bit(void *saved_state) {
-
-	return is_saved_state64(saved_state);
-}
-
-void ml_cpu_set_ldt(int selector)
-{
-	/*
-	 * Avoid loading the LDT
-	 * if we're setting the KERNEL LDT and it's already set.
-	 */
-	if (selector == KERNEL_LDT &&
-	    current_cpu_datap()->cpu_ldt == KERNEL_LDT)
-		return;
-
-	/*
- 	 * If 64bit this requires a mode switch (and back). 
-	 */
-	if (cpu_mode_is64bit())
-		ml_64bit_lldt(selector);
-	else
-		lldt(selector);
-	current_cpu_datap()->cpu_ldt = selector;	
-}
-
-void ml_fp_setvalid(boolean_t value)
-{
-        fp_setvalid(value);
-}
-
-#if MACH_KDB
-
-/*
- *	Display the global msrs
- * *		
- *	ms
- */
-void 
-db_msr(__unused db_expr_t addr,
-       __unused int have_addr,
-       __unused db_expr_t count,
-       __unused char *modif)
-{
-
-	uint32_t        i, msrlow, msrhigh;
-
-	/* Try all of the first 4096 msrs */
-	for (i = 0; i < 4096; i++) {
-		if (!rdmsr_carefully(i, &msrlow, &msrhigh)) {
-			db_printf("%08X - %08X.%08X\n", i, msrhigh, msrlow);
-		}
-	}
-
-	/* Try all of the 4096 msrs at 0x0C000000 */
-	for (i = 0; i < 4096; i++) {
-		if (!rdmsr_carefully(0x0C000000 | i, &msrlow, &msrhigh)) {
-			db_printf("%08X - %08X.%08X\n",
-				0x0C000000 | i, msrhigh, msrlow);
-		}
-	}
-
-	/* Try all of the 4096 msrs at 0xC0000000 */
-	for (i = 0; i < 4096; i++) {
-		if (!rdmsr_carefully(0xC0000000 | i, &msrlow, &msrhigh)) {
-			db_printf("%08X - %08X.%08X\n",
-				0xC0000000 | i, msrhigh, msrlow);
-		}
-	}
-}
-
-#endif

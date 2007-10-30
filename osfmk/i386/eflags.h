@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -63,7 +63,7 @@
  *	i386 flags register
  */
 
-#ifndef EFL_CF
+#ifndef EFL_CF		/* FIXME - this is pulled from mach/i386/eflags.h */
 #define	EFL_CF		0x00000001		/* carry */
 #define	EFL_PF		0x00000004		/* parity of low 8 bits */
 #define	EFL_AF		0x00000010		/* carry out of bit 3 */
@@ -84,9 +84,6 @@
 #define EFL_VIP		0x00100000		/* virtual interrupt pending */
 #define EFL_ID		0x00200000		/* cpuID instruction */
 #endif
-
-#define EFL_CLR		0xfff88028
-#define EFL_SET		0x00000002
 
 #define	EFL_USER_SET	(EFL_IF)
 #define	EFL_USER_CLEAR	(EFL_IOPL|EFL_NT|EFL_RF)

@@ -97,6 +97,3 @@ extern int         sectSizeHIB;
 extern vm_offset_t sectDATAB;
 extern int         sectSizeDATA;
 
-extern vm_offset_t gIOHibernateWakeMap;	    // ppnum
-extern vm_size_t   gIOHibernateWakeMapSize;
-

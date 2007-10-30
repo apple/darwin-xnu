@@ -171,8 +171,8 @@ getval(
 	char *s, 
 	int *val)
 {
-	unsigned int radix, intval;
-        char c;
+	register unsigned radix, intval;
+	register unsigned char c;
 	int sign = 1;
 
 	if (*s == '=') {
@@ -181,7 +181,7 @@ getval(
 			sign = -1, s++;
 		intval = *s++-'0';
 		radix = 10;
-		if (intval == 0) {
+		if (intval == 0)
 			switch(*s) {
 
 			case 'x':
@@ -205,44 +205,28 @@ getval(
 				if (!isargsep(*s))
 					return (STR);
 			}
-                } else if (intval >= radix) {
-                    return (STR);
-                }
 		for(;;) {
-                        c = *s++;
-                        if (isargsep(c))
-                            break;
-                        if ((radix <= 10) &&
-                            ((c >= '0') && (c <= ('9' - (10 - radix))))) {
-                                c -= '0';
-                        } else if ((radix == 16) &&
-                                   ((c >= '0') && (c <= '9'))) {
+			if (((c = *s++) >= '0') && (c <= '9'))
 				c -= '0';
-                        } else if ((radix == 16) &&
-                                   ((c >= 'a') && (c <= 'f'))) {
+			else if ((c >= 'a') && (c <= 'f'))
 				c -= 'a' - 10;
-                        } else if ((radix == 16) &&
-                                   ((c >= 'A') && (c <= 'F'))) {
+			else if ((c >= 'A') && (c <= 'F'))
 				c -= 'A' - 10;
-                        } else if (c == 'k' || c == 'K') {
-				sign *= 1024;
+			else if (c == 'k' || c == 'K')
+				{ sign *= 1024; break; }
+			else if (c == 'm' || c == 'M')
+				{ sign *= 1024 * 1024; break; }
+			else if (c == 'g' || c == 'G')
+				{ sign *= 1024 * 1024 * 1024; break; }
+			else if (isargsep(c))
 				break;
-			} else if (c == 'm' || c == 'M') {
-				sign *= 1024 * 1024;
-                                break;
-			} else if (c == 'g' || c == 'G') {
-				sign *= 1024 * 1024 * 1024;
-                                break;
-			} else {
+			else
 				return (STR);
-                        }
 			if (c >= radix)
 				return (STR);
 			intval *= radix;
 			intval += c;
 		}
-                if (!isargsep(c) && !isargsep(*s))
-                    return STR;
 		*val = intval * sign;
 		return (NUM);
 	}

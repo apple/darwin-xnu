@@ -33,9 +33,6 @@
  *
  *	File: open.c
  */
- 
-#ifdef AURP_SUPPORT
-
 #include <sys/errno.h>
 #include <sys/types.h>
 #include <sys/param.h>
@@ -255,5 +252,3 @@ void AURPrcvOpenRsp(state, m)
 	/* get routing info */
 	AURPsndRIReq(state);
 }
-
-#endif  /* AURP_SUPPORT */

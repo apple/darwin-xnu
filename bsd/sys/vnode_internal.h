@@ -303,7 +303,7 @@ extern void * mntvnode_slock;
 #define VDESC(OP) (& __CONCAT(OP,_desc))
 #define VOFFSET(OP) (VDESC(OP)->vdesc_offset)
 
-struct ostat;
+
 
 int	build_path(vnode_t first_vp, char *buff, int buflen, int *outlen);
 int 	bdevvp(dev_t dev, struct vnode **vpp);
@@ -337,7 +337,6 @@ int	vn_setxattr(vnode_t, const char *, uio_t, int, vfs_context_t);
 int	vn_removexattr(vnode_t, const char *, int, vfs_context_t);
 int	vn_listxattr(vnode_t, uio_t, size_t *, int, vfs_context_t);
 
-void	name_cache_lock_shared(void);
 void	name_cache_lock(void);
 void	name_cache_unlock(void);
 

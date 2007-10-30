@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -43,7 +43,6 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOKitKeys.h>
 #include <IOKit/IOKitDebug.h>
-#include <IOKit/pwr_mgt/IOPMinformeeList.h>
 
 #include <IOKit/assert.h>
 
@@ -52,7 +51,6 @@
 extern "C" {
 
 extern void OSlibkernInit (void);
-extern void ml_hpet_cfg(uint32_t, uint32_t);
 
 #include <kern/clock.h>
 
@@ -67,7 +65,6 @@ void IOKitResetTime( void )
 #ifndef i386
 	IOService::waitForService(
 		IOService::resourceMatching("IONVRAM"), &t );
-
 #endif
 
     clock_initialize_calendar();
@@ -158,9 +155,6 @@ void StartIOKit( void * p1, void * p2, void * p3, void * p4 )
     IOCatalogue::initialize();
     IOUserClient::initialize();
     IOMemoryDescriptor::initialize();
-
-    // Initializes IOPMinformeeList class-wide shared lock
-    IOPMinformeeList::getSharedRecursiveLock();
 
     obj = OSString::withCString( version );
     assert( obj );

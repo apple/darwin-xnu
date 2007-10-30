@@ -678,10 +678,12 @@ mbuf_tag_id_find_internal(
 		lck_mtx_t		*new_lock = NULL;
 		
 		grp_attrib = lck_grp_attr_alloc_init();
+		lck_grp_attr_setdefault(grp_attrib);
 		lck_group = lck_grp_alloc_init("mbuf_tag_allocate_id", grp_attrib);
 		lck_grp_attr_free(grp_attrib);
 		lck_attrb = lck_attr_alloc_init();
-
+		lck_attr_setdefault(lck_attrb);
+		lck_attr_setdebug(lck_attrb);
 		new_lock = lck_mtx_alloc_init(lck_group, lck_attrb);
 		if (!OSCompareAndSwap((UInt32)0, (UInt32)new_lock, (UInt32*)&mtag_id_lock)) {
 			/*

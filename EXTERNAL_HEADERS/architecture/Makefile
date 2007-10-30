@@ -15,7 +15,8 @@ INSTINC_SUBDIRS_PPC = 	\
 INSTINC_SUBDIRS_I386 =	\
 	i386
 
-EXPORT_FILES = 
+EXPORT_FILES = \
+	byte_order.h
 
 INSTALL_MI_LIST = 
 
@@ -29,6 +30,3 @@ include $(MakeInc_rule)
 include $(MakeInc_dir)
 
 
-build_installhdrs_mi::
-	$(MKDIR) $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR)
-	$(LN) ../../../../../../../../usr/include/architecture/byte_order.h $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR)/byte_order.h 

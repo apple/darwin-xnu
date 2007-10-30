@@ -2942,10 +2942,8 @@ ipfw_ctl(struct sockopt *sopt)
 			int	i, len = 0;
 			struct ip_old_fw	*buf2, *rule_vers0;
 			
-			lck_mtx_lock(ipfw_mutex);
 			buf2 = _MALLOC(static_count * sizeof(struct ip_old_fw), M_TEMP, M_WAITOK);
 			if (buf2 == 0) {
-				lck_mtx_unlock(ipfw_mutex);
 				error = ENOBUFS;
 			}
 			
@@ -2961,7 +2959,6 @@ ipfw_ctl(struct sockopt *sopt)
 					len += sizeof(*rule_vers0);
 					rule_vers0++;
 				}
-				lck_mtx_unlock(ipfw_mutex);
 				error = sooptcopyout(sopt, buf2, len);
 				_FREE(buf2, M_TEMP);
 			}
@@ -2971,13 +2968,11 @@ ipfw_ctl(struct sockopt *sopt)
 			struct ipfw_dyn_rule_compat	*dyn_rule_vers1, *dyn_last = NULL;
 			ipfw_dyn_rule 	*p;
 
-			lck_mtx_lock(ipfw_mutex);
 			buf_size = static_count * sizeof(struct ip_fw_compat) +
 						dyn_count * sizeof(struct ipfw_dyn_rule_compat);
 						
 			buf2 = _MALLOC(buf_size, M_TEMP, M_WAITOK);
 			if (buf2 == 0) {
-				lck_mtx_unlock(ipfw_mutex);
 				error = ENOBUFS;
 			}
 			
@@ -3022,7 +3017,6 @@ ipfw_ctl(struct sockopt *sopt)
 						dyn_last->next = NULL;
 					}
 				}
-				lck_mtx_unlock(ipfw_mutex);
 				
 				error = sooptcopyout(sopt, buf2, len);
 				_FREE(buf2, M_TEMP);
@@ -3269,6 +3263,7 @@ ipfw_init(void)
 	ipfw_mutex_grp_attr = lck_grp_attr_alloc_init();
 	ipfw_mutex_grp = lck_grp_alloc_init("ipfw", ipfw_mutex_grp_attr);
 	ipfw_mutex_attr = lck_attr_alloc_init();
+	lck_attr_setdefault(ipfw_mutex_attr);
 
 	if ((ipfw_mutex = lck_mtx_alloc_init(ipfw_mutex_grp, ipfw_mutex_attr)) == NULL) {
 		printf("ipfw_init: can't alloc ipfw_mutex\n");

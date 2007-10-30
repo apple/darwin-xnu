@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002, 2007 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -74,11 +74,11 @@
 
 /*
  * Round p (pointer or byte index) up to a correctly-aligned value for all
- * data types (int, long, ...).   The result is unsigned int and must be
+ * data types (int, long, ...).   The result is unsigned long and must be
  * cast to any desired pointer type.
  */
-#define	ALIGNBYTES	3
-#define	ALIGN(p)	(((unsigned int)(p) + ALIGNBYTES) &~ ALIGNBYTES)
+#define	ALIGNBYTES	(sizeof(unsigned long) - 1)
+#define	ALIGN(p)	((unsigned long)((char *)(p) + ALIGNBYTES) &~ ALIGNBYTES)
 
 #define	NBPG		4096		/* bytes/page */
 #define	PGOFSET		(NBPG-1)	/* byte offset into page */
@@ -87,7 +87,7 @@
 #define	DEV_BSIZE	512
 #define	DEV_BSHIFT	9		/* log2(DEV_BSIZE) */
 #define BLKDEV_IOSIZE	2048
-#define	MAXPHYS		(128 * 1024)	/* max raw I/O transfer size */
+#define	MAXPHYS		(64 * 1024)	/* max raw I/O transfer size */
 
 #define	CLSIZE		1
 #define	CLSIZELOG2	0

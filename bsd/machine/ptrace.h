@@ -34,7 +34,7 @@
 
 #if defined (__ppc__) || defined(__ppc64__)
 #include "ppc/ptrace.h"
-#elif defined (__i386__) || defined(__x86_64__)
+#elif defined (__i386__)
 #include "i386/ptrace.h"
 #else
 #error architecture not supported

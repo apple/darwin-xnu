@@ -73,7 +73,9 @@
 #define EVFILT_SYSCOUNT		9
 #define EVFILT_THREADMARKER	EVFILT_SYSCOUNT /* Internal use only */
 
-#pragma pack(4)
+#if __DARWIN_ALIGN_POWER
+#pragma options align=power
+#endif
 
 struct kevent {
 	uintptr_t	ident;		/* identifier for this event */
@@ -101,7 +103,9 @@ struct user_kevent {
 
 #endif
 
-#pragma pack()
+#if __DARWIN_ALIGN_POWER
+#pragma options align=reset
+#endif
 
 #define EV_SET(kevp, a, b, c, d, e, f) do {	\
 	struct kevent *__kevp__ = (kevp);	\

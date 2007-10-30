@@ -864,32 +864,14 @@ out:
 
 /*
  * Optimistically copy in a kauth_filesec structure
- *
  * Parameters:	xsecurity		user space kauth_filesec_t
- *		xsecdstpp		pointer to kauth_filesec_t to be
- *					modified to contain the contain a
- *					pointer to an allocated copy of the
- *					user space argument
+ *		xsecdstpp		pointer to kauth_filesec_t
  *
- * Returns:	0			Success
- *		ENOMEM			Insufficient memory for the copy.
- *		EINVAL			The user space data was invalid, or
- *					there were too many ACE entries.
- *		EFAULT			The user space address was invalid;
- *					this may mean 'fsec_entrycount' in
- *					the user copy is corrupt/incorrect.
- *
- * Implicit returns: xsecdestpp, modified (only if successful!)
- *
- * Notes:	The returned kauth_filesec_t is in host byte order
- *
- *		The caller is responsible for freeing the returned
- *		kauth_filesec_t in the success case using the function
- *		kauth_filesec_free()
- *
- *		Our largest initial guess is 32; this needs to move to
- *		a manifest constant in <sys/kauth.h>.
+ * Returns: 0 on success, EINVAL or EFAULT depending on failure mode.
+ * Modifies: xsecdestpp, which contains a pointer to an allocated
+ *	     and copied-in kauth_filesec_t
  */
+
 int
 kauth_copyinfilesec(user_addr_t xsecurity, kauth_filesec_t *xsecdestpp)
 {
@@ -937,7 +919,6 @@ restart:
 	if ((fsec->fsec_entrycount != KAUTH_FILESEC_NOACL) &&
 	    (fsec->fsec_entrycount > count)) {
 		if (fsec->fsec_entrycount > KAUTH_ACL_MAX_ENTRIES) {
-			/* XXX This should be E2BIG */
 			error = EINVAL;
 			goto out;
 		}
@@ -957,23 +938,7 @@ out:
 }
 
 /*
- * Allocate a block of memory containing a filesec structure, immediately
- * followed by 'count' kauth_ace structures.
- *
- * Parameters:	count			Number of kauth_ace structures needed
- *
- * Returns:	!NULL			A pointer to the allocated block
- *		NULL			Invalid 'count' or insufficient memory
- *
- * Notes:	Returned memory area assumes that the structures are packed
- *		densely, so this function may only be used by code that also
- *		assumes no padding following structures.
- *
- *		The returned structure must be freed by the caller using the
- *		function kauth_filesec_free(), in case we decide to use an
- *		allocation mechanism that is aware of the object size at some
- *		point, since the object size is only available by introspecting
- *		the object itself.
+ * Allocate a filesec structure.
  */
 kauth_filesec_t
 kauth_filesec_alloc(int count)
@@ -995,18 +960,6 @@ kauth_filesec_alloc(int count)
 	return(fsp);
 }	
 
-/*
- * Free a kauth_filesec_t that was previous allocated, either by a direct
- * call to kauth_filesec_alloc() or by calling a function that calls it.
- *
- * Parameters:	fsp			kauth_filesec_t to free
- *
- * Returns:	(void)
- *
- * Notes:	The kauth_filesec_t to be freed is assumed to be in host
- *		byte order so that this function can introspect it in the
- *		future to determine its size, if necesssary.
- */
 void
 kauth_filesec_free(kauth_filesec_t fsp)
 {
@@ -1018,73 +971,6 @@ kauth_filesec_free(kauth_filesec_t fsp)
 #endif
 	FREE(fsp, M_KAUTH);
 }
-
-/*
- * Set the endianness of a filesec and an ACL; if 'acl' is NULL, use the 
- * ACL interior to 'fsec' instead.  If the endianness doesn't change, then
- * this function will have no effect.
- *
- * Parameters:	kendian			The endianness to set; this is either
- *					KAUTH_ENDIAN_HOST or KAUTH_ENDIAN_DISK.
- *		fsec			The filesec to convert.
- *		acl			The ACL to convert (optional)
- *
- * Returns:	(void)
- *
- * Notes:	We use ntohl() because it has a transitive property on Intel
- *		machines and no effect on PPC mancines.  This guarantees us
- *		that the swapping only occurs if the endiannes is wrong.
- */
-void
-kauth_filesec_acl_setendian(int kendian, kauth_filesec_t fsec, kauth_acl_t acl)
-{
- 	uint32_t	compare_magic = KAUTH_FILESEC_MAGIC;
-	uint32_t	invert_magic = ntohl(KAUTH_FILESEC_MAGIC);
-	uint32_t	compare_acl_entrycount;
-	uint32_t	i;
-
-	if (compare_magic == invert_magic)
-		return;
-
-	/* If no ACL, use ACL interior to 'fsec' instead */
-	if (acl == NULL)
-		acl = &fsec->fsec_acl;
-
-	compare_acl_entrycount = acl->acl_entrycount;
-
-	/*
-	 * Only convert what needs to be converted, and only if the arguments
-	 * are valid.  The following switch and tests effectively reject
-	 * conversions on invalid magic numbers as a desirable side effect.
-	 */
- 	switch(kendian) {
-	case KAUTH_ENDIAN_HOST:		/* not in host, convert to host */
-		if (fsec->fsec_magic != invert_magic)
-			return;
-		/* acl_entrycount is byteswapped */
-		compare_acl_entrycount = ntohl(acl->acl_entrycount);
-		break;
-	case KAUTH_ENDIAN_DISK:		/* not in disk, convert to disk */
-		if (fsec->fsec_magic != compare_magic)
-			return;
-		break;
-	default:			/* bad argument */
-		return;
-	}
-	
-	/* We are go for conversion */
-	fsec->fsec_magic = ntohl(fsec->fsec_magic);
-	acl->acl_entrycount = ntohl(acl->acl_entrycount);
-	if (compare_acl_entrycount != KAUTH_FILESEC_NOACL) {
-		acl->acl_flags = ntohl(acl->acl_flags);
-
-		/* swap ACE rights and flags */
-		for (i = 0; i < compare_acl_entrycount; i++) {
-			acl->acl_ace[i].ace_flags = ntohl(acl->acl_ace[i].ace_flags);
-			acl->acl_ace[i].ace_rights = ntohl(acl->acl_ace[i].ace_rights);
-		}
-	}
- }
 
 
 /*

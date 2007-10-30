@@ -747,14 +747,7 @@ overflow_extents(struct filefork *fp)
 {
 	u_long blocks;
 
-       //
-       // If the vnode pointer is NULL then we're being called
-       // from hfs_remove_orphans() with a faked-up filefork
-       // and therefore it has to be an HFS+ volume.  Otherwise
-       // we check through the volume header to see what type
-       // of volume we're on.
-       //
-       if (FTOV(fp) == NULL || VTOVCB(FTOV(fp))->vcbSigWord == kHFSPlusSigWord) {
+	if (VTOVCB(FTOV(fp))->vcbSigWord == kHFSPlusSigWord) {
 		if (fp->ff_extents[7].blockCount == 0)
 			return (0);
 
@@ -1318,7 +1311,7 @@ hfs_remove_orphans(struct hfsmount * hfsmp)
 				cnode.c_rsrcfork = NULL;
 				fsize = (u_int64_t)dfork.ff_blocks * (u_int64_t)HFSTOVCB(hfsmp)->blockSize;
 				while (fsize > 0) {
-					if (fsize > HFS_BIGFILE_SIZE && overflow_extents(&dfork)) {
+					if (fsize > HFS_BIGFILE_SIZE) {
 						fsize -= HFS_BIGFILE_SIZE;
 					} else {
 						fsize = 0;

@@ -98,12 +98,20 @@ struct iso_args {
  */
 /* LP64todo - should this move? */
 
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
 struct user_iso_args {
 	int	flags;			/* mounting flags, see below */
 	int	ssector;		/* starting sector, 0 for 1st session */
 	int	toc_length;		/* Size of *toc, including the toc.length field */
-	user_addr_t toc __attribute((aligned(8)));
+	user_addr_t toc;
 };
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
 
 #endif /* KERNEL */
 

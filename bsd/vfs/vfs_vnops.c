@@ -88,7 +88,6 @@
 #include <sys/xattr.h>
 #include <sys/ubc_internal.h>
 #include <sys/uio_internal.h>
-#include <sys/resourcevar.h>
 
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
@@ -135,51 +134,6 @@ vn_open_modflags(struct nameidata *ndp, int *fmodep, int cmode)
 	return(vn_open_auth(ndp, fmodep, &va));
 }
 
-/*
- * Open a file with authorization, updating the contents of the structures
- * pointed to by ndp, fmodep, and vap as necessary to perform the requested
- * operation.  This function is used for both opens of existing files, and
- * creation of new files.
- *
- * Parameters:	ndp			The nami data pointer describing the
- *					file
- *		fmodep			A pointer to an int containg the mode
- *					information to be used for the open
- *		vap			A pointer to the vnode attribute
- *					descriptor to be used for the open
- *
- * Indirect:	*			Contents of the data structures pointed
- *					to by the parameters are modified as
- *					necessary to the requested operation.
- *
- * Returns:	0			Success
- *		!0			errno value
- *
- * Notes:	The kauth_filesec_t in 'vap', if any, is in host byte order.
- *
- *		The contents of '*ndp' will be modified, based on the other
- *		arguments to this function, and to return file and directory
- *		data necessary to satisfy the requested operation.
- *
- *		If the file does not exist and we are creating it, then the
- *		O_TRUNC flag will be cleared in '*fmodep' to indicate to the
- *		caller that the file was not truncated.
- *
- *		If the file exists and the O_EXCL flag was not specified, then
- *		the O_CREAT flag will be cleared in '*fmodep' to indicate to
- *		the caller that the existing file was merely opened rather
- *		than created.
- *
- *		The contents of '*vap' will be modified as necessary to
- *		complete the operation, including setting of supported
- *		attribute, clearing of fields containing unsupported attributes
- *		in the request, if the request proceeds without them, etc..
- *
- * XXX:		This function is too complicated in actings on its arguments
- *
- * XXX:		We should enummerate the possible errno values here, and where
- *		in the code they originated.
- */
 int
 vn_open_auth(struct nameidata *ndp, int *fmodep, struct vnode_attr *vap)
 {
@@ -195,10 +149,6 @@ again:
 	dvp = NULL;
 	fmode = *fmodep;
 	if (fmode & O_CREAT) {
-	        if ( (fmode & O_DIRECTORY) ) {
-		        error = EINVAL;
-			goto out;
-		}
 		ndp->ni_cnd.cn_nameiop = CREATE;
 		ndp->ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF | AUDITVNPATH1;
 
@@ -287,11 +237,6 @@ badcreate:
 		vp = ndp->ni_vp;
 		nameidone(ndp);
 		ndp->ni_dvp = NULL;
-
-		if ( (fmode & O_DIRECTORY) && vp->v_type != VDIR ) {
-		        error = ENOTDIR;
-			goto bad;
-		}
 	}
 	if (vp->v_type == VSOCK && vp->v_tag != VT_FDESC) {
 		error = EOPNOTSUPP;	/* Operation not supported on socket */
@@ -846,7 +791,7 @@ vn_ioctl(fp, com, data, p)
 		return(error);
 	}
 	context.vc_proc = p;
-	context.vc_ucred = kauth_cred_proc_ref(p);	/* XXX kauth_cred_get() ??? */
+	context.vc_ucred = p->p_ucred;	/* XXX kauth_cred_get() ??? */
 
 	switch (vp->v_type) {
 
@@ -913,7 +858,6 @@ vn_ioctl(fp, com, data, p)
 	}
 out:
 	(void)vnode_put(vp);
-	kauth_cred_unref(&context.vc_ucred);
 	return(error);
 }
 
@@ -1005,14 +949,13 @@ vn_kqfilt_add(fp, kn, p)
 	
 	if ( (error = vnode_getwithref(vp)) == 0 ) {
 		context.vc_proc = p;
-		context.vc_ucred = kauth_cred_proc_ref(p);	/* XXX kauth_cred_get() ??? */
+		context.vc_ucred = p->p_ucred;	/* XXX kauth_cred_get() ??? */
 
 	        funnel_state = thread_funnel_set(kernel_flock, TRUE);
 		error = VNOP_KQFILT_ADD(vp, kn, &context);
 		thread_funnel_set(kernel_flock, funnel_state);
 
 		(void)vnode_put(vp);
-		kauth_cred_unref(&context.vc_ucred);
 	}
 	return (error);
 }
@@ -1031,14 +974,13 @@ vn_kqfilt_remove(vp, ident, p)
 	
 	if ( (error = vnode_getwithref(vp)) == 0 ) {
 	        context.vc_proc = p;
-		context.vc_ucred = kauth_cred_proc_ref(p);	/* XXX kauth_cred_get() ??? */
+		context.vc_ucred = p->p_ucred;	/* XXX kauth_cred_get() ??? */
 
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 		error = VNOP_KQFILT_REMOVE(vp, ident, &context);
 		thread_funnel_set(kernel_flock, funnel_state);
 
 		(void)vnode_put(vp);
-		kauth_cred_unref(&context.vc_ucred);
 	}
 	return (error);
 }

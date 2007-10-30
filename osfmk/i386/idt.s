@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -58,131 +58,84 @@
 #include <i386/asm.h>
 #include <assym.s>
 #include <mach_kdb.h>
-#include <i386/eflags.h>
-#include <i386/trap.h>
-
-#define HI_DATA(lo_addr)	( (EXT(lo_addr) - EXT(hi_remap_data)) + HIGH_IDT_BASE )
-#define HI_TEXT(lo_text)	( (EXT(lo_text) - EXT(hi_remap_text)) + HIGH_MEM_BASE )
 
 /*
  * Interrupt descriptor table and code vectors for it.
  */
 #define	IDT_BASE_ENTRY(vec,seg,type) \
 	.data			;\
-	.long	EXT(vec) - EXT(hi_remap_text) + HIGH_MEM_BASE ;\
-	.word	seg		;\
-	.byte	0		;\
-	.byte	type		;\
-	.text
-
-#define	IDT_BASE_ENTRY_INT(vec,seg,type) \
-	.data			;\
-	.long	vec - EXT(hi_remap_text) + HIGH_MEM_BASE ;\
-	.word	seg		;\
-	.byte	0		;\
-	.byte	type		;\
-	.text
-
-#define	IDT_BASE_ENTRY_TG(vec,seg,type) \
-	.data			;\
-	.long	0		;\
+	.long	vec		;\
 	.word	seg		;\
 	.byte	0		;\
 	.byte	type		;\
 	.text
 
 #define	IDT_ENTRY(vec,type)	IDT_BASE_ENTRY(vec,KERNEL_CS,type)
-#define	IDT_ENTRY_INT(vec,type)	IDT_BASE_ENTRY_INT(vec,KERNEL_CS,type)
 
 /*
  * No error code.  Clear error code and push trap number.
  */
 #define	EXCEPTION(n,name) \
-	IDT_ENTRY(name,K_INTR_GATE);\
+	IDT_ENTRY(EXT(name),K_TRAP_GATE);\
 Entry(name)				;\
 	pushl	$0			;\
 	pushl	$(n)			;\
-	pusha				;\
-	movl	$ EXT(lo_alltraps),%ebx	;\
-	jmp	enter_lohandler
+	jmp	EXT(alltraps)
 
-	
 /*
  * Interrupt from user.  Clear error code and push trap number.
  */
 #define	EXCEP_USR(n,name) \
-	IDT_ENTRY(name,U_INTR_GATE);\
+	IDT_ENTRY(EXT(name),U_TRAP_GATE);\
 Entry(name)				;\
 	pushl	$0			;\
 	pushl	$(n)			;\
-	pusha				;\
-	movl	$ EXT(lo_alltraps),%ebx	;\
-	jmp	enter_lohandler
-	
+	jmp	EXT(alltraps)
 
 /*
  * Special interrupt code.
  */
 #define	EXCEP_SPC(n,name)  \
-	IDT_ENTRY(name,K_INTR_GATE) 
-	
+	IDT_ENTRY(EXT(name),K_TRAP_GATE)
+
 /*
  * Special interrupt code from user.
  */
 #define EXCEP_SPC_USR(n,name)  \
-	IDT_ENTRY(name,U_INTR_GATE) 
-
+	IDT_ENTRY(EXT(name),U_TRAP_GATE)
 
 /*
  * Extra-special interrupt code.  Note that no offset may be
  * specified in a task gate descriptor, so name is ignored.
  */
 #define	EXCEP_TASK(n,name)  \
-	IDT_BASE_ENTRY_TG(0,DEBUG_TSS,K_TASK_GATE)
-
-/* Double-fault fatal handler */
-#define DF_FATAL_TASK(n,name)  \
-	IDT_BASE_ENTRY_TG(0,DF_TSS,K_TASK_GATE)
-
-/* machine-check handler */
-#define MC_FATAL_TASK(n,name)  \
-	IDT_BASE_ENTRY_TG(0,MC_TSS,K_TASK_GATE)
+	IDT_BASE_ENTRY(0,DEBUG_TSS,K_TASK_GATE)
 
 /*
  * Error code has been pushed.  Push trap number.
  */
 #define	EXCEP_ERR(n,name) \
-	IDT_ENTRY(name,K_INTR_GATE);\
+	IDT_ENTRY(EXT(name),K_TRAP_GATE);\
 Entry(name)				;\
 	pushl	$(n)			;\
-	pusha				;\
-	movl	$ EXT(lo_alltraps),%ebx	;\
-	jmp	enter_lohandler
+	jmp	EXT(alltraps)
 
-	
 /*
  * Interrupt.
  */
 #define	INTERRUPT(n) \
-	IDT_ENTRY_INT(L_ ## n,K_INTR_GATE)	;\
-	.align FALIGN				;\
-L_ ## n:					;\
-	pushl	$0				;\
-	pushl	$(n)				;\
-	pusha					;\
-	movl	$ EXT(lo_allintrs),%ebx		;\
-	jmp	enter_lohandler
-
+	IDT_ENTRY(0f,K_INTR_GATE)	;\
+0:					;\
+	pushl	%eax			;\
+	movl	$(n),%eax		;\
+	jmp	EXT(all_intrs)
 
 	.data
-	.align 12
-Entry(master_idt)
-Entry(hi_remap_data)
+Entry(idt)
 	.text
-Entry(hi_remap_text)
 
 EXCEPTION(0x00,t_zero_div)
-EXCEP_SPC(0x01,hi_debug)
+EXCEP_SPC(0x01,t_debug)
 INTERRUPT(0x02)			/* NMI */
 EXCEP_USR(0x03,t_int3)
 EXCEP_USR(0x04,t_into)
@@ -192,23 +145,23 @@ EXCEPTION(0x07,t_nofpu)
 #if	MACH_KDB
 EXCEP_TASK(0x08,db_task_dbl_fault)
 #else
-DF_FATAL_TASK(0x08,df_task_start)
+EXCEPTION(0x08,a_dbl_fault)
 #endif
 EXCEPTION(0x09,a_fpu_over)
 EXCEPTION(0x0a,a_inv_tss)
-EXCEP_SPC(0x0b,hi_segnp)
+EXCEP_SPC(0x0b,t_segnp)
 #if	MACH_KDB
 EXCEP_TASK(0x0c,db_task_stk_fault)
 #else
 EXCEP_ERR(0x0c,t_stack_fault)
 #endif
-EXCEP_SPC(0x0d,hi_gen_prot)
-EXCEP_SPC(0x0e,hi_page_fault)
+EXCEP_SPC(0x0d,t_gen_prot)
+EXCEP_SPC(0x0e,t_page_fault)
 EXCEPTION(0x0f,t_trap_0f)
 EXCEPTION(0x10,t_fpu_err)
 EXCEPTION(0x11,t_trap_11)
-MC_FATAL_TASK(0x12,mc_task_start)
-EXCEPTION(0x13,t_sse_err)
+EXCEPTION(0x12,t_trap_12)
+EXCEPTION(0x13,t_trap_13)
 EXCEPTION(0x14,t_trap_14)
 EXCEPTION(0x15,t_trap_15)
 EXCEPTION(0x16,t_trap_16)
@@ -324,11 +277,10 @@ INTERRUPT(0x7d)
 INTERRUPT(0x7e)
 INTERRUPT(0x7f)
 
-EXCEP_SPC_USR(0x80,hi_unix_scall)
-EXCEP_SPC_USR(0x81,hi_mach_scall)
-EXCEP_SPC_USR(0x82,hi_mdep_scall)
-EXCEP_SPC_USR(0x83,hi_diag_scall)
-
+EXCEP_SPC_USR(0x80,syscall_int80)
+INTERRUPT(0x81)
+INTERRUPT(0x82)
+INTERRUPT(0x83)
 INTERRUPT(0x84)
 INTERRUPT(0x85)
 INTERRUPT(0x86)
@@ -461,399 +413,3 @@ INTERRUPT(0xfd)
 INTERRUPT(0xfe)
 EXCEPTION(0xff,t_preempt)
 
-
-	.data
-Entry(lo_kernel_cr3)
-	.long 0
-	.long 0
-	
-        .text
-
-	
-/*******************************************************************************************************
- *
- * Trap/interrupt entry points.
- *
- * All traps must create the following save area on the PCB "stack":
- *
- *	gs
- *	fs
- *	es
- *	ds
- *	edi
- *	esi
- *	ebp
- *	cr2 if page fault - otherwise unused
- *	ebx
- *	edx
- *	ecx
- *	eax
- *	trap number
- *	error code
- *	eip
- *	cs
- *	eflags
- *	user esp - if from user
- *	user ss  - if from user
- */
-
-	
-Entry(hi_ret_to_user)
-	movl	%esp,%ebx
-	movl	%gs:CPU_ACTIVE_THREAD,%ecx
-	subl	ACT_PCB_ISS(%ecx),%ebx
-	movl	$(WINDOWS_CLEAN),ACT_COPYIO_STATE(%ecx)
-
-	movl	ACT_PCB_IDS(%ecx),%eax	/* get debug state struct */
-	cmpl	$0,%eax			/* is there a debug state */
-	je	1f 			/* branch if not */
-	movl	DS_DR0(%eax), %ecx	/* Load the 32 bit debug registers */
-	movl	%ecx, %db0
-	movl	DS_DR1(%eax), %ecx
-	movl	%ecx, %db1
-	movl	DS_DR2(%eax), %ecx
-	movl	%ecx, %db2
-	movl	DS_DR3(%eax), %ecx
-	movl	%ecx, %db3
-	movl	DS_DR7(%eax), %eax
-1:
-	addl	%gs:CPU_HI_ISS,%ebx	/* rebase PCB save area to high addr */
-	movl	%gs:CPU_TASK_CR3,%ecx
-	movl	%ecx,%gs:CPU_ACTIVE_CR3
-	movl	%ebx,%esp		/* switch to hi based PCB stack */
-	movl    %ecx,%cr3               /* switch to user's address space */
-
-	cmpl	$0,%eax			/* is dr7 set to something? */
-	je	2f 			/* branch if not */
-	movl	%eax,%db7		/* Set dr7 */
-2:
-
-Entry(hi_ret_to_kernel)
-
-	popl	%eax			/* ignore flavor of saved state */
-EXT(ret_popl_gs):
-	popl	%gs			/* restore segment registers */
-EXT(ret_popl_fs):
-	popl	%fs
-EXT(ret_popl_es):
-	popl	%es
-EXT(ret_popl_ds):	
-	popl	%ds
-
-        popa                            /* restore general registers */
-        addl    $8,%esp                 /* discard trap number and error code */
-
-        cmpl    $(SYSENTER_CS),4(%esp)  /* test for fast entry/exit */
-        je      fast_exit
-EXT(ret_iret):
-        iret                            /* return from interrupt */
-fast_exit:
-	popl    %edx                    /* user return eip */
-        popl    %ecx                    /* pop and toss cs */
-	andl	$(~EFL_IF),(%esp)	/* clear intrs enabled, see sti below */
-        popf                            /* flags - carry denotes failure */
-        popl    %ecx                    /* user return esp */
-	sti				/* interrupts enabled after sysexit */
-        sysexit
-
-/*******************************************************************************************************/
-
-		
-Entry(hi_unix_scall)
-	pushl   %eax                    /* save system call number */
-        pushl   $0                      /* clear trap number slot */
-        pusha                           /* save the general registers */
-	movl	$ EXT(lo_unix_scall),%ebx
-	jmp	enter_lohandler
-
-	
-Entry(hi_mach_scall)
-	pushl   %eax                    /* save system call number */
-        pushl   $0                      /* clear trap number slot */
-        pusha                           /* save the general registers */
-	movl	$ EXT(lo_mach_scall),%ebx
-	jmp	enter_lohandler
-
-	
-Entry(hi_mdep_scall)
-	pushl   %eax                    /* save system call number */
-        pushl   $0                      /* clear trap number slot */
-        pusha                           /* save the general registers */
-	movl	$ EXT(lo_mdep_scall),%ebx
-	jmp	enter_lohandler
-
-	
-Entry(hi_diag_scall)
-	pushl   %eax                    // Save sselector
-        pushl   $0                      // Clear trap number slot
-        pusha                           // save the general registers
-	movl	$EXT(lo_diag_scall),%ebx	// Get the function down low to transfer to
-	jmp	enter_lohandler			// Leap to it...
-
-	
-/*
- * sysenter entry point
- * Requires user code to set up:
- *	edx: user instruction pointer (return address)
- *	ecx: user stack pointer
- *		on which is pushed stub ret addr and saved ebx
- * Return to user-space is made using sysexit.
- * Note: sysenter/sysexit cannot be used for calls returning a value in edx,
- *       or requiring ecx to be preserved.
- */
-Entry(hi_sysenter)
-	movl	(%esp), %esp		/* switch from intr stack to pcb */
-	/*
-	 * Push values on to the PCB stack
-	 * to cons up the saved state.
-	 */
-	pushl	$(USER_DS)		/* ss */
-	pushl	%ecx			/* uesp */
-	pushf				/* flags */
-	/*
-	* Clear, among others, the Nested Task (NT) flags bit;
-	* This is cleared by INT, but not by sysenter, which only
-	* clears RF, VM and IF.
-	*/
-	pushl	$0
-	popfl
-	pushl	$(SYSENTER_CS)		/* cs */
-hi_sysenter_2:
-	pushl	%edx			/* eip */
-	pushl	%eax			/* err/eax - syscall code */
-	pushl	$0			/* clear trap number slot */
-	pusha				/* save the general registers */
-	orl	$(EFL_IF),R_EFLAGS-R_EDI(%esp)	/* (edi was last reg pushed) */
-	movl	$ EXT(lo_sysenter),%ebx
-enter_lohandler:
-	pushl   %ds
-	pushl   %es
-        pushl   %fs
-        pushl   %gs
-enter_lohandler1:
-	pushl	$(SS_32)		/* 32-bit state flavor */
-	mov	%ss,%eax
-	mov	%eax,%ds
-	mov	%eax,%fs
-	mov	%eax,%es		/* switch to kernel data seg */
-	mov	$(CPU_DATA_GS),%eax
-	mov	%eax,%gs
-	cld				/* clear direction flag */
-	/*
-	 * Switch to kernel's address space if necessary
-	 */
-	movl    HI_DATA(lo_kernel_cr3),%ecx
-	movl	%cr3,%eax
-	cmpl	%eax,%ecx
-	je	1f
-	movl	%ecx,%cr3
-	movl	%ecx,%gs:CPU_ACTIVE_CR3
-1:
-	testb	$3,R_CS(%esp)
-	jz	2f
-	movl	%esp,%edx			/* came from user mode */
-	subl	%gs:CPU_HI_ISS,%edx
-	movl	%gs:CPU_ACTIVE_THREAD,%ecx
-	addl	ACT_PCB_ISS(%ecx),%edx		/* rebase the high stack to a low address */
-	movl	%edx,%esp
-	cmpl	$0, ACT_PCB_IDS(%ecx)	/* Is there a debug register state? */
-	je	2f
-	movl	$0, %ecx		/* If so, reset DR7 (the control) */
-	movl	%ecx, %dr7
-2:
-	movl	R_TRAPNO(%esp),%ecx			// Get the interrupt vector
-	addl	$1,%gs:hwIntCnt(,%ecx,4)	// Bump the count
-	jmp	*%ebx
-
-	
-/*
- * Page fault traps save cr2.
- */
-Entry(hi_page_fault)
-	pushl	$(T_PAGE_FAULT)		/* mark a page fault trap */
-	pusha				/* save the general registers */
-	movl	%cr2,%eax		/* get the faulting address */
-	movl	%eax,R_CR2-R_EDI(%esp)	/* save in esp save slot */
-
-	movl	$ EXT(lo_alltraps),%ebx
-	jmp	enter_lohandler
-
-
-
-/*
- * Debug trap.  Check for single-stepping across system call into
- * kernel.  If this is the case, taking the debug trap has turned
- * off single-stepping - save the flags register with the trace
- * bit set.
- */
-Entry(hi_debug)
-	testb	$3,4(%esp)
-	jnz	hi_debug_trap
-					/* trap came from kernel mode */
-	cmpl	$(HI_TEXT(hi_mach_scall)),(%esp)
-	jne	6f
-	addl	$12,%esp		/* remove eip/cs/eflags from debug_trap */
-	jmp	EXT(hi_mach_scall)	/* continue system call entry */
-6:
-	cmpl	$(HI_TEXT(hi_mdep_scall)),(%esp)
-	jne	5f
-	addl	$12,%esp		/* remove eip/cs/eflags from debug_trap */
-	jmp	EXT(hi_mdep_scall)	/* continue system call entry */
-5:
-	cmpl	$(HI_TEXT(hi_unix_scall)),(%esp)
-	jne	4f
-	addl	$12,%esp		/* remove eip/cs/eflags from debug_trap */
-	jmp	EXT(hi_unix_scall)	/* continue system call entry */
-4:
-	cmpl	$(HI_TEXT(hi_sysenter)),(%esp)
-	jne	hi_debug_trap
-	/*
-	 * eip/cs/flags have been pushed on intr stack
-	 * We have to switch to pcb stack and copy eflags.
-	 * Note: setting the cs selector to SYSENTER_TF_CS
-	 * will cause the return to user path to take the iret path so
-	 * that eflags (containing the trap bit) is set atomically.
-	 * In unix_syscall this is tested so that we'll rewind the pc
-	 * to account for with sysenter or int entry.
-	 */ 
-	addl	$8,%esp			/* remove eip/cs */
-	pushl	%ecx			/* save %ecx */
-	movl	8(%esp),%ecx		/* top of intr stack -> pcb stack */
-	xchgl	%ecx,%esp		/* switch to pcb stack */
-	pushl	$(USER_DS)		/* ss */
-	pushl	%ss:(%ecx)		/* %ecx into uesp slot */
-	pushl	%ss:4(%ecx)		/* eflags */
-	movl	%ss:(%ecx),%ecx		/* restore %ecx */
-	pushl	$(SYSENTER_TF_CS)	/* cs - not SYSENTER_CS for iret path */
-	jmp	hi_sysenter_2		/* continue sysenter entry */
-hi_debug_trap:
-	pushl	$0
-	pushl	$(T_DEBUG)		/* handle as user trap */
-	pusha				/* save the general registers */
-	movl	$ EXT(lo_alltraps),%ebx
-	jmp	enter_lohandler	
-
-
-
-/*
- * General protection or segment-not-present fault.
- * Check for a GP/NP fault in the kernel_return
- * sequence; if there, report it as a GP/NP fault on the user's instruction.
- *
- * esp->     0:	trap code (NP or GP)
- *	     4:	segment number in error
- *	     8	eip
- *	    12	cs
- *	    16	eflags 
- *	    20	old registers (trap is from kernel)
- */
-Entry(hi_gen_prot)
-	pushl	$(T_GENERAL_PROTECTION)	/* indicate fault type */
-	jmp	trap_check_kernel_exit	/* check for kernel exit sequence */
-
-Entry(hi_segnp)
-	pushl	$(T_SEGMENT_NOT_PRESENT)
-					/* indicate fault type */
-trap_check_kernel_exit:
-	testb	$3,12(%esp)
-	jnz	hi_take_trap
-					/* trap was from kernel mode, so */
-					/* check for the kernel exit sequence */
-	cmpl	$(HI_TEXT(ret_iret)),8(%esp)	/* on IRET? */
-	je	fault_iret
-	cmpl	$(HI_TEXT(ret_popl_ds)),8(%esp)	/* popping DS? */
-	je	fault_popl_ds
-	cmpl	$(HI_TEXT(ret_popl_es)),8(%esp)	/* popping ES? */
-	je	fault_popl_es
-	cmpl	$(HI_TEXT(ret_popl_fs)),8(%esp)	/* popping FS? */
-	je	fault_popl_fs
-	cmpl	$(HI_TEXT(ret_popl_gs)),8(%esp)	/* popping GS? */
-	je	fault_popl_gs
-hi_take_trap:
-	pusha				/* save the general registers */
-	movl	$ EXT(lo_alltraps),%ebx
-	jmp	enter_lohandler
-
-		
-/*
- * GP/NP fault on IRET: CS or SS is in error.
- * All registers contain the user's values.
- *
- * on SP is
- *  0	trap number
- *  4	errcode
- *  8	eip
- * 12	cs		--> trapno
- * 16	efl		--> errcode
- * 20	user eip
- * 24	user cs
- * 28	user eflags
- * 32	user esp
- * 36	user ss
- */
-fault_iret:
-	movl	%eax,8(%esp)		/* save eax (we don`t need saved eip) */
-	popl	%eax			/* get trap number */
-	movl	%eax,12-4(%esp)		/* put in user trap number */
-	popl	%eax			/* get error code */
-	movl	%eax,16-8(%esp)		/* put in user errcode */
-	popl	%eax			/* restore eax */
-					/* now treat as fault from user */
-	pusha				/* save the general registers */
-	movl	$ EXT(lo_alltraps),%ebx
-	jmp	enter_lohandler
-
-/*
- * Fault restoring a segment register.  The user's registers are still
- * saved on the stack.  The offending segment register has not been
- * popped.
- */
-fault_popl_ds:
-	popl	%eax			/* get trap number */
-	popl	%edx			/* get error code */
-	addl	$12,%esp		/* pop stack to user regs */
-	jmp	push_es			/* (DS on top of stack) */
-fault_popl_es:
-	popl	%eax			/* get trap number */
-	popl	%edx			/* get error code */
-	addl	$12,%esp		/* pop stack to user regs */
-	jmp	push_fs			/* (ES on top of stack) */
-fault_popl_fs:
-	popl	%eax			/* get trap number */
-	popl	%edx			/* get error code */
-	addl	$12,%esp		/* pop stack to user regs */
-	jmp	push_gs			/* (FS on top of stack) */
-fault_popl_gs:
-	popl	%eax			/* get trap number */
-	popl	%edx			/* get error code */
-	addl	$12,%esp		/* pop stack to user regs */
-	jmp	push_none		/* (GS on top of stack) */
-
-push_es:
-	pushl	%es			/* restore es, */
-push_fs:
-	pushl	%fs			/* restore fs, */
-push_gs:
-	pushl	%gs			/* restore gs. */
-push_none:
-	movl	%eax,R_TRAPNO(%esp)	/* set trap number */
-	movl	%edx,R_ERR(%esp)	/* set error code */
-					/* now treat as fault from user */
-					/* except that segment registers are */
-					/* already pushed */
-	movl	$ EXT(lo_alltraps),%ebx
-	jmp	enter_lohandler1
-
-	
-        .text
-
-
-Entry(lo_ret_to_user)
-	jmp *1f
-1:	.long HI_TEXT(hi_ret_to_user) 
-
-Entry(lo_ret_to_kernel)
-	jmp *1f
-1:	.long HI_TEXT(hi_ret_to_kernel)
-
-Entry(hi_remap_etext)

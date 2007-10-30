@@ -119,7 +119,9 @@ struct statfs {
 
 #define	MFSTYPENAMELEN	16	/* length of fs type name including null */
 
-#pragma pack(4)
+#if __DARWIN_ALIGN_POWER
+#pragma options align=power
+#endif
 
 struct vfsstatfs {
 	uint32_t	f_bsize;	/* fundamental file system block size */
@@ -140,7 +142,9 @@ struct vfsstatfs {
 	void		*f_reserved[2];		/* For future use == 0 */
 };
 
-#pragma pack()
+#if __DARWIN_ALIGN_POWER
+#pragma options align=reset
+#endif
 
 #define VFSATTR_INIT(s)			((s)->f_supported = (s)->f_active = 0LL)
 #define VFSATTR_SET_SUPPORTED(s, a)	((s)->f_supported |= VFSATTR_ ## a)
@@ -179,7 +183,9 @@ struct vfsstatfs {
 /*
  * New VFS_STAT argument structure.
  */
-#pragma pack(4)
+#if __DARWIN_ALIGN_POWER
+#pragma options align=power
+#endif
 
 struct vfs_attr {
 	uint64_t	f_supported;
@@ -217,7 +223,9 @@ struct vfs_attr {
 	uint16_t	f_carbon_fsid;	/* same as Carbon's FSVolumeInfo.filesystemID */
 };
 
-#pragma pack()
+#if __DARWIN_ALIGN_POWER
+#pragma options align=reset
+#endif
 
 /*
  * User specifiable flags.
@@ -342,23 +350,31 @@ struct vfsidctl {
  * grow when we're dealing with a 64-bit process.
  * WARNING - keep in sync with vfsconf
  */
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
 struct user_vfsconf {
        user_addr_t 	vfc_vfsops;				/* filesystem operations vector */
        char			vfc_name[MFSNAMELEN];	/* filesystem type name */
        int			vfc_typenum;            /* historic filesystem type number */
        int			vfc_refcount;           /* number mounted of this type */
        int			vfc_flags;				/* permanent flags */
-       user_addr_t 	vfc_mountroot __attribute((aligned(8)));	/* if != NULL, routine to mount root */
+       user_addr_t 	vfc_mountroot;          /* if != NULL, routine to mount root */
        user_addr_t 	vfc_next;				/* next in list */
 };
 
 struct user_vfsidctl {
        int				vc_vers;        /* should be VFSIDCTL_VERS1 (below) */
        fsid_t			vc_fsid;		/* fsid to operate on. */
-       user_addr_t 		vc_ptr __attribute((aligned(8)));	/* pointer to data structure. */
+       user_addr_t 		vc_ptr;			/* pointer to data structure. */
        user_size_t 		vc_len;			/* sizeof said structure. */
        u_int32_t		vc_spare[12];   /* spare (must be zero). */
 };
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
 
 #endif /* KERNEL */
 

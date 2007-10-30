@@ -32,5 +32,5 @@ char *
 PE_boot_args(
 	void)
 {
-    return ((boot_args *)PE_state.bootArgs)->CommandLine;
+	return((char *)((KernelBootArgs_t *)PE_state.bootArgs)->bootString);
 }

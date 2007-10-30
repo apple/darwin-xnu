@@ -115,10 +115,3 @@ void kprintf(const char *fmt, ...)
         ml_set_interrupts_enabled(state);
     }
 }
-
-extern void kprintf_break_lock(void);
-void
-kprintf_break_lock(void)
-{
-	simple_lock_init(&kprintf_lock, 0);
-}

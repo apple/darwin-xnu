@@ -139,7 +139,7 @@ kmem_alloc_contig(
 		object = vm_object_allocate(map_size);
 	}
 
-	kr = vm_map_find_space(map, &map_addr, map_size, map_mask, 0, &entry);
+	kr = vm_map_find_space(map, &map_addr, map_size, map_mask, &entry);
 	if (KERN_SUCCESS != kr) {
 		vm_object_deallocate(object);
 		return kr;
@@ -167,7 +167,6 @@ kmem_alloc_contig(
 	for (i = 0; i < map_size; i += PAGE_SIZE) {
 		m = pages;
 		pages = NEXT_PAGE(m);
-		*(NEXT_PAGE_PTR(m)) = VM_PAGE_NULL;
 		m->busy = FALSE;
 		vm_page_insert(m, object, offset + i);
 	}
@@ -206,10 +205,6 @@ kmem_alloc_contig(
  *		  KMA_HERE		*addrp is base address, else "anywhere"
  *		  KMA_NOPAGEWAIT	don't wait for pages if unavailable
  *		  KMA_KOBJECT		use kernel_object
- *		  KMA_LOMEM		support for 32 bit devices in a 64 bit world
- *					if set and a lomemory pool is available
- *					grab pages from it... this also implies
- *					KMA_NOPAGEWAIT
  */
 
 kern_return_t
@@ -233,12 +228,6 @@ kernel_memory_allocate(
 		*addrp = 0;
 		return KERN_INVALID_ARGUMENT;
 	}
-	if (flags & KMA_LOMEM) {
-	        if ( !(flags & KMA_NOPAGEWAIT) ) {
-		        *addrp = 0;
-		        return KERN_INVALID_ARGUMENT;
-		}
-	}
 
 	map_size = vm_map_round_page(size);
 	map_mask = (vm_map_offset_t) mask;
@@ -254,11 +243,12 @@ kernel_memory_allocate(
 		object = vm_object_allocate(map_size);
 	}
 
-	kr = vm_map_find_space(map, &map_addr, map_size, map_mask, 0, &entry);
+	kr = vm_map_find_space(map, &map_addr, map_size, map_mask, &entry);
 	if (KERN_SUCCESS != kr) {
 		vm_object_deallocate(object);
 		return kr;
 	}
+
 	entry->object.vm_object = object;
 	entry->offset = offset = (object == kernel_object) ? 
 		        map_addr - VM_MIN_KERNEL_ADDRESS : 0;
@@ -270,15 +260,8 @@ kernel_memory_allocate(
 	for (i = 0; i < map_size; i += PAGE_SIZE) {
 		vm_page_t	mem;
 
-		for (;;) {
-		        if (flags & KMA_LOMEM)
-			        mem = vm_page_alloclo(object, offset + i);
-			else
-			        mem = vm_page_alloc(object, offset + i);
-
-		        if (mem != VM_PAGE_NULL)
-			        break;
-
+		while (VM_PAGE_NULL == 
+		       (mem = vm_page_alloc(object, offset + i))) {
 			if (flags & KMA_NOPAGEWAIT) {
 				if (object == kernel_object)
 					vm_object_page_remove(object, offset, offset + i);
@@ -406,7 +389,7 @@ kmem_realloc(
 	 */
 
 	kr = vm_map_find_space(map, &newmapaddr, newmapsize,
-			       (vm_map_offset_t) 0, 0, &newentry);
+			       (vm_map_offset_t) 0, &newentry);
 	if (kr != KERN_SUCCESS) {
 		vm_object_lock(object);
 		for(offset = oldmapsize; 
@@ -740,24 +723,25 @@ kmem_init(
 	map_end = vm_map_round_page(end);
 
 	kernel_map = vm_map_create(pmap_kernel(),VM_MIN_KERNEL_ADDRESS,
-			    map_end, FALSE);
+				   map_end, FALSE);
+
 	/*
 	 *	Reserve virtual memory allocated up to this time.
 	 */
 
 	if (start != VM_MIN_KERNEL_ADDRESS) {
 		vm_map_offset_t map_addr;
- 
+
 		map_addr = VM_MIN_KERNEL_ADDRESS;
 		(void) vm_map_enter(kernel_map,
-			    &map_addr, 
-			    (vm_map_size_t)(map_start - VM_MIN_KERNEL_ADDRESS),
-			    (vm_map_offset_t) 0,
-			    VM_FLAGS_ANYWHERE | VM_FLAGS_NO_PMAP_CHECK,
-			    VM_OBJECT_NULL, 
-			    (vm_object_offset_t) 0, FALSE,
-			    VM_PROT_NONE, VM_PROT_NONE,
-			    VM_INHERIT_DEFAULT);
+				    &map_addr, 
+				    (vm_map_size_t)(map_start - VM_MIN_KERNEL_ADDRESS),
+				    (vm_map_offset_t) 0,
+				    VM_FLAGS_ANYWHERE | VM_FLAGS_NO_PMAP_CHECK,
+				    VM_OBJECT_NULL, 
+				    (vm_object_offset_t) 0, FALSE,
+				    VM_PROT_DEFAULT, VM_PROT_ALL,
+				    VM_INHERIT_DEFAULT);
 	}
 
         /*

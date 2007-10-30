@@ -30,7 +30,7 @@
 
 #if defined (__ppc__) || defined (__ppc64__)
 #include "ppc/_limits.h"
-#elif defined (__i386__) || defined(__x86_64__)
+#elif defined (__i386__)
 #include "i386/_limits.h"
 #else
 #error architecture not supported

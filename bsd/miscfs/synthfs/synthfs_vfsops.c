@@ -406,13 +406,12 @@ vn_mkdir(struct proc *p, char *path, int mode)
 	int error;
 
 	context.vc_proc = p;
-	context.vc_ucred = kauth_cred_proc_ref(p);	/* XXX kauth_cred_get() ??? proxy */
+	context.vc_ucred = proc_ucred(p);	/* XXX kauth_cred_get() ??? proxy */
 
 	NDINIT(&nd, CREATE, LOCKPARENT, UIO_SYSSPACE32, CAST_USER_ADDR_T(path), &context);
 	error = namei(&nd);
 	if (error) {
 		DBG_VOP(("vn_mkdir: error from namei, error = %d.\n", error));
-		kauth_cred_unref(&context.vc_ucred);
 		return (error);
 	};
 	vp = nd.ni_vp;
@@ -434,7 +433,6 @@ vn_mkdir(struct proc *p, char *path, int mode)
 	        vnode_put(nd.ni_vp);
 	nameidone(&nd);
 
-	kauth_cred_unref(&context.vc_ucred);
 	return (error);
 }
 
@@ -448,13 +446,10 @@ vn_symlink(struct proc *p, char *path, char *link) {
 	int error;
 
 	context.vc_proc = p;
-	context.vc_ucred = kauth_cred_proc_ref(p);	/* XXX kauth_cred_get() ??? proxy */
+	context.vc_ucred = proc_ucred(p);	/* XXX kauth_cred_get() ??? proxy */
 
 	NDINIT(&nd, CREATE, LOCKPARENT, UIO_SYSSPACE32, CAST_USER_ADDR_T(link), &context);
-	if ((error = namei(&nd))) {
-		kauth_cred_unref(&context.vc_ucred);
-		return error;
-	}
+	if ((error = namei(&nd))) return error;
 
 	if (nd.ni_vp == NULL) {
 		VATTR_INIT(&va);
@@ -470,7 +465,6 @@ vn_symlink(struct proc *p, char *path, char *link) {
 		vnode_put(nd.ni_vp);
 	nameidone(&nd);
 
-	kauth_cred_unref(&context.vc_ucred);
 	return (error);
 }
 

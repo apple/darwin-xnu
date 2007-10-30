@@ -29,6 +29,8 @@
 #ifndef _TEXT_CONSOLE_H_
 #define _TEXT_CONSOLE_H_
 
+#define TEXT_MODE 0
+
 void tc_paint_char(int x, int y, unsigned char ch, int attrs, unsigned char ch_previous, int attrs_previous);
 void tc_scroll_down(int lines, int top, int bottom);
 void tc_scroll_up(int lines, int top, int bottom);

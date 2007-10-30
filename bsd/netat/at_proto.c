@@ -77,6 +77,7 @@ extern int	ddp_pru_send(struct socket *so, int flags, struct mbuf *m,
 extern int	ddp_pru_shutdown(struct socket *so);
 extern int	ddp_pru_sockaddr(struct socket *so, 
 				 struct sockaddr **nam);
+void atalk_dominit();
 
 /*
  * Dummy usrreqs struct created by Ted for FreeBSD 3.x integration. 
@@ -90,45 +91,31 @@ struct pr_usrreqs ddp_usrreqs = {
 	ddp_pru_sockaddr, sosend, soreceive, pru_sopoll_notsupp
 };
 
-extern struct domain atalkdomain;
-extern void atalk_dominit(void);
-
+struct domain atalkdomain;
 struct protosw atalksw[] = {
   { SOCK_RAW,	&atalkdomain,	/*protocol*/ 0,	PR_ATOMIC|PR_ADDR,
     /*input*/ 0, /*output*/ 0, /*clinput*/ 0, ddp_ctloutput,
     /*ousrreq*/ 0, 
     ddp_init, /*fastto*/ 0, /*slowto*/ 0, /*drain*/ 0, 
     /*sysctl*/ 0, &ddp_usrreqs,
-	0, 0, 0, /*lock, unlock, getlock */
-   {0, 0}, 0, {0} /* filters */
+	0, 0, 0
   }
 };
 
 struct domain atalkdomain =
-{ AF_APPLETALK,
-  "appletalk",
-  atalk_dominit,
-  0,
-  0, 
-  atalksw,
-  0,
-  0, /* dom_rtattach */
-  0, 0, /* dom_rtoffset, dom_maxrtkey */
-  DDP_X_HDR_SIZE, 0,
-  0, /* domain global mutex */
-  0,  /* domain flags */
-  {0, 0} /*reserved[2] */
+{ AF_APPLETALK, "appletalk", atalk_dominit, 0, 0, 
+  atalksw, 0,
+  0, 0, 0,
+  DDP_X_HDR_SIZE, 0
 };
 
 struct domain * atalkdom = &atalkdomain;
 lck_mtx_t  *atalk_mutex = NULL;
 
-static int at_saved_lock, at_saved_unlock;
-
 SYSCTL_NODE(_net, PF_APPLETALK, appletalk, CTLFLAG_RW, 0, "AppleTalk Family");
 
 void
-atalk_dominit(void)
+atalk_dominit()
 {
 	atalk_mutex = atalkdom->dom_mtx;
 }
@@ -136,22 +123,24 @@ atalk_dominit(void)
 void
 atalk_lock()
 {
-	int lr_saved;
-	lr_saved = (unsigned int) __builtin_return_address(0);
-
+	int error = 0, lr, lr_saved;
+#ifdef __ppc__
+	__asm__ volatile("mflr %0" : "=r" (lr));
+	lr_saved = lr;
+#endif 
 	lck_mtx_assert(atalkdom->dom_mtx, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(atalkdom->dom_mtx);
-	at_saved_lock = lr_saved;
 }
 	
 void
 atalk_unlock()
 {
-	int lr_saved;
-	lr_saved = (unsigned int) __builtin_return_address(0);
-
+	int error = 0, lr, lr_saved;
+#ifdef __ppc__
+	__asm__ volatile("mflr %0" : "=r" (lr));
+	lr_saved = lr;
+#endif 
 	lck_mtx_assert(atalkdom->dom_mtx, LCK_MTX_ASSERT_OWNED);
-	at_saved_unlock = lr_saved;
 	lck_mtx_unlock(atalkdom->dom_mtx);
 
 }

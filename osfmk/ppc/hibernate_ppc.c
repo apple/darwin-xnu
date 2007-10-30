@@ -119,14 +119,6 @@ hibernate_page_list_setall_machine(hibernate_page_list_t * page_list,
     save_snapshot();
 }
 
-// mark pages not to be saved and not for scratch usage during restore
-void
-hibernate_page_list_set_volatile( hibernate_page_list_t * page_list,
-				  hibernate_page_list_t * page_list_wired,
-				  uint32_t * pagesOut)
-{
-}
-
 kern_return_t 
 hibernate_processor_setup(IOHibernateImageHeader * header)
 {
@@ -204,7 +196,3 @@ void ml_ppc_sleep(void)
     }
 }
 
-void
-hibernate_newruntime_map(void * map, vm_size_t map_size, uint32_t runtime_offset)
-{
-}

@@ -33,9 +33,6 @@
  *
  *	File: misc.c
  */
- 
-#ifdef AURP_SUPPORT
-
 #include <sys/errno.h>
 #include <sys/types.h>
 #include <sys/param.h>
@@ -217,5 +214,3 @@ void AURPaccess()
 			entry->AURPFlag = net_export ? 0 : AURP_NetHiden;
 	}
 }
-
-#endif  /* AURP_SUPPORT */

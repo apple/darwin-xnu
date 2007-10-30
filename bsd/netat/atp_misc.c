@@ -54,6 +54,7 @@
 #include <netat/atp.h>
 #include <netat/debug.h>
 
+extern atlock_t atpgen_lock;
 void atp_free();
 void atp_send(struct atp_trans *);
 
@@ -66,6 +67,7 @@ void
 atp_req_timeout(trp)
 register struct atp_trans *trp;
 {
+	int s;
 	register gbuf_t *m;
 	gref_t *gref;
 	struct atp_state *atp;
@@ -73,15 +75,19 @@ register struct atp_trans *trp;
 
 	if ((atp = trp->tr_queue) == 0)
 		return;
-	if (atp->atp_flags & ATP_CLOSING)
+	ATDISABLE(s, atp->atp_lock);
+	if (atp->atp_flags & ATP_CLOSING) {
+		ATENABLE(s, atp->atp_lock);
 		return;
-	
+	}
 	for (ctrp = atp->atp_trans_wait.head; ctrp; ctrp = ctrp->tr_list.next) {
 		if (ctrp == trp)
 			break;
 	}
-	if (ctrp != trp)
+	if (ctrp != trp) {
+		ATENABLE(s, atp->atp_lock);
 		return;
+	}
 
 	if ((m = gbuf_cont(trp->tr_xmt)) == NULL)
 	        m = trp->tr_xmt;               /* issued via the new interface */
@@ -95,6 +101,7 @@ l_notify:
 				*gbuf_rptr(m) = 99;
 				gbuf_set_type(m, MSG_DATA);
 				gref = trp->tr_queue->atp_gref;
+				ATENABLE(s, atp->atp_lock);
 				atalk_putnext(gref, m);
 
 			return;
@@ -108,11 +115,13 @@ l_notify:
 			if (trp->tr_queue->dflag)
 				((ioc_t *)gbuf_rptr(m))->ioc_cmd = AT_ATP_REQUEST_COMPLETE;
 			else if (trp->tr_bdsp == NULL) {
+				ATENABLE(s, atp->atp_lock);
 				gbuf_freem(m);
 				if (trp->tr_rsp_wait)
 					wakeup(&trp->tr_event);
 				break;
 			}
+			ATENABLE(s, atp->atp_lock);
 			atp_iocnak(trp->tr_queue, m, ETIMEDOUT);
 			atp_free(trp);
 			return;
@@ -128,6 +137,7 @@ l_notify:
 
 		if (trp->tr_retry != (unsigned int) ATP_INFINITE_RETRIES)
 			trp->tr_retry--;
+		ATENABLE(s, atp->atp_lock);
 		atp_send(trp);
 	}
 }
@@ -144,10 +154,12 @@ register struct atp_trans *trp;
 {	
 	register struct atp_state *atp;
 	register int i;
+	int s;
 	
 	dPrintf(D_M_ATP_LOW, D_L_TRACE,
 		("atp_free: freeing trp 0x%x\n", (u_int) trp));
 
+	ATDISABLE(s, atpgen_lock);
 
 	if (trp->tr_state == TRANS_ABORTING) {
 		ATP_Q_REMOVE(atp_trans_abort, trp, tr_list);
@@ -179,10 +191,12 @@ register struct atp_trans *trp;
 			trp->tr_state = TRANS_ABORTING;
 			ATP_Q_APPEND(atp_trans_abort, trp, tr_list);
 			wakeup(&trp->tr_event);
+			ATENABLE(s, atpgen_lock);
 			return;
 		}
 	}
 	
+	ATENABLE(s, atpgen_lock);
 	atp_trans_free(trp);
 } /* atp_free */
 
@@ -237,8 +251,10 @@ register struct atp_rcb *rcbp;
 {
 	register struct atp_state *atp;
 	register int i;
+	int s;
 
   if ((atp = rcbp->rc_queue) != 0) {
+	ATDISABLE(s, atp->atp_lock);
 	for (i = 0; i < rcbp->rc_pktcnt; i++) {
 		if (rcbp->rc_bitmap&atp_mask[i])
 			rcbp->rc_snd[i] = 1;
@@ -248,8 +264,10 @@ register struct atp_rcb *rcbp;
         if (rcbp->rc_rep_waiting == 0) {
 	        rcbp->rc_state = RCB_SENDING;
 	        rcbp->rc_rep_waiting = 1;
+	        ATENABLE(s, atp->atp_lock);
 	        atp_send_replies(atp, rcbp);
-	}
+	} else
+	ATENABLE(s, atp->atp_lock);
   }
 }
 
@@ -260,22 +278,26 @@ register struct atp_rcb *rcbp;
 
 void atp_rcb_timer()
 {  
-    register struct atp_rcb *rcbp;
+	int s;
+        register struct atp_rcb *rcbp;
 	register struct atp_rcb *next_rcbp;
 	extern   struct atp_rcb_qhead atp_need_rel;
 	extern struct atp_trans *trp_tmo_rcb;
 	struct timeval timenow;
 
 l_again:
+	ATDISABLE(s, atpgen_lock);
 	getmicrouptime(&timenow);
 	for (rcbp = atp_need_rel.head; rcbp; rcbp = next_rcbp) {
 	        next_rcbp = rcbp->rc_tlist.next;
 
-	        if ((timenow.tv_sec - rcbp->rc_timestamp) > 30) {
+	        if (abs(timenow.tv_sec - rcbp->rc_timestamp) > 30) {
+		        ATENABLE(s, atpgen_lock);
 		        atp_rcb_free(rcbp);
 		        goto l_again;
 		}
 	}
+	ATENABLE(s, atpgen_lock);
 	atp_timout(atp_rcb_timer, trp_tmo_rcb, 10 * HZ);
 }
 
@@ -326,7 +348,9 @@ register struct atp_state *atp;
 {
 	register int i;
 	register struct atp_trans *trp;
+	int s;
 
+	ATDISABLE(s, atpgen_lock);
 	for (i = lasttid;;) {
 		i = (i+1)&0xffff;
 
@@ -336,6 +360,7 @@ register struct atp_state *atp;
 		}
 		if (trp == NULL) {
 			lasttid = i;
+			ATENABLE(s, atpgen_lock);
 			return(i);
 		}
 	}

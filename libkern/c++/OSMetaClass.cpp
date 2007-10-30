@@ -44,9 +44,6 @@
 #include <libkern/c++/OSLib.h>
 #include <libkern/OSAtomic.h>
 
-#include <IOKit/pwr_mgt/RootDomain.h>
-#include <IOKit/IOMessage.h>
-
 __BEGIN_DECLS
 
 #include <sys/systm.h>
@@ -79,7 +76,7 @@ static const int kClassCapacityIncrement = 40;
 static const int kKModCapacityIncrement = 10;
 static OSDictionary *sAllClassesDict, *sKModClassesDict, *sSortedByClassesDict;
 
-static mutex_t *loadLock = 0;
+static mutex_t *loadLock;
 static struct StalledData {
     const char *kmodName;
     OSReturn result;
@@ -89,8 +86,6 @@ static struct StalledData {
 } *sStalled;
 
 static unsigned int sConsiderUnloadDelay = 60;	/* secs */
-static bool unloadsEnabled = true;  // set to false when system going to sleep
-static thread_call_t unloadCallout = 0;
 
 static const char OSMetaClassBasePanicMsg[] =
     "OSMetaClassBase::_RESERVEDOSMetaClassBase%d called\n";
@@ -283,7 +278,7 @@ OSMetaClass::OSMetaClass(const char *inClassName,
 
 	    sStalled->capacity += kKModCapacityIncrement;
 	    memmove(sStalled->classes, oldStalled, oldSize);
-	    kfree(oldStalled, oldSize);
+	    kfree((vm_offset_t)oldStalled, oldSize);
 	    ACCUMSIZE(newSize - oldSize);
 	}
 
@@ -367,7 +362,7 @@ void *OSMetaClass::preModLoad(const char *kmodName)
 	sStalled->classes  = (OSMetaClass **)
 			kalloc(kKModCapacityIncrement * sizeof(OSMetaClass *));
 	if (!sStalled->classes) {
-	    kfree(sStalled, sizeof(*sStalled));
+	    kfree((vm_offset_t) sStalled, sizeof(*sStalled));
 	    return 0;
 	}
 	ACCUMSIZE((kKModCapacityIncrement * sizeof(OSMetaClass *)) + sizeof(*sStalled));
@@ -419,7 +414,7 @@ OSReturn OSMetaClass::postModLoad(void *loadHandle)
     case kCompletedBootstrap:
     {
         unsigned int i;
-        myname = (OSSymbol *)OSSymbol::withCStringNoCopy(sStalled->kmodName);
+        myname = OSSymbol::withCStringNoCopy(sStalled->kmodName);
 
 	if (!sStalled->count)
 	    break;	// Nothing to do so just get out
@@ -476,9 +471,9 @@ OSReturn OSMetaClass::postModLoad(void *loadHandle)
     if (sStalled) {
 	ACCUMSIZE(-(sStalled->capacity * sizeof(OSMetaClass *)
 		     + sizeof(*sStalled)));
-	kfree(sStalled->classes,
+	kfree((vm_offset_t) sStalled->classes,
 	      sStalled->capacity * sizeof(OSMetaClass *));
-	kfree(sStalled, sizeof(*sStalled));
+	kfree((vm_offset_t) sStalled, sizeof(*sStalled));
 	sStalled = 0;
     }
 
@@ -569,34 +564,6 @@ void OSMetaClass::reportModInstances(const char *kmodName)
     iter->release();
 }
 
-
-extern "C" {
-
-IOReturn OSMetaClassSystemSleepOrWake(UInt32 messageType)
-{
-    mutex_lock(loadLock);
-
-   /* If the system is going to sleep, cancel the reaper thread timer
-    * and mark unloads disabled in case it just fired but hasn't
-    * taken the lock yet. If we are coming back from sleep, just
-    * set unloads enabled; IOService's normal operation will cause
-    * unloads to be considered soon enough.
-    */
-    if (messageType == kIOMessageSystemWillSleep) {
-        if (unloadCallout) {
-            thread_call_cancel(unloadCallout);
-        }
-        unloadsEnabled = false;
-    } else if (messageType == kIOMessageSystemHasPoweredOn) {
-        unloadsEnabled = true;
-    }
-    mutex_unlock(loadLock);
-
-    return kIOReturnSuccess;
-}
-
-};
-
 extern "C" kern_return_t kmod_unload_cache(void);
 
 static void _OSMetaClassConsiderUnloads(thread_call_param_t p0,
@@ -613,11 +580,6 @@ static void _OSMetaClassConsiderUnloads(thread_call_param_t p0,
 
     mutex_lock(loadLock);
 
-    if (!unloadsEnabled) {
-        mutex_unlock(loadLock);
-        return;
-    }
-
     do {
 
 	kmods = OSCollectionIterator::withCollection(sKModClassesDict);
@@ -628,7 +590,7 @@ static void _OSMetaClassConsiderUnloads(thread_call_param_t p0,
         while ( (kmodName = (OSSymbol *) kmods->getNextObject()) ) {
 
             if (ki) {
-                kfree(ki, sizeof(kmod_info_t));
+                kfree((vm_offset_t) ki, sizeof(kmod_info_t));
                 ki = 0;
             }
 
@@ -670,6 +632,7 @@ static void _OSMetaClassConsiderUnloads(thread_call_param_t p0,
 
 void OSMetaClass::considerUnloads()
 {
+    static thread_call_t unloadCallout;
     AbsoluteTime when;
 
     mutex_lock(loadLock);
@@ -823,7 +786,7 @@ const OSMetaClass *OSMetaClass::getSuperClass() const
 
 const OSSymbol *OSMetaClass::getKmodName() const
 {	
-    return (const OSSymbol *)sSortedByClassesDict->getObject((OSSymbol *)this);
+    return sSortedByClassesDict->getObject((const OSSymbol *)this);
 }
 
 unsigned int OSMetaClass::getInstanceCount() const

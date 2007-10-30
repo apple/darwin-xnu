@@ -114,7 +114,9 @@ typedef struct host_basic_info_old	*host_basic_info_old_t;
 		(sizeof(host_basic_info_data_old_t)/sizeof(integer_t)))
 #endif
 
-#pragma pack(4)
+#if __DARWIN_ALIGN_POWER
+#pragma options align=power
+#endif
 
 struct host_basic_info {
 	integer_t		max_cpus;		/* max number of CPUs possible */
@@ -130,7 +132,9 @@ struct host_basic_info {
 	uint64_t		max_mem;		/* actual size of physical memory */
 };
 
-#pragma pack()
+#if __DARWIN_ALIGN_POWER
+#pragma options align=reset
+#endif
 
 typedef	struct host_basic_info	host_basic_info_data_t;
 typedef struct host_basic_info	*host_basic_info_t;

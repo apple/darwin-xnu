@@ -101,7 +101,7 @@ typedef natural_t	ipc_kobject_type_t;
 #define IKOT_HOST_SECURITY		17
 #define	IKOT_LEDGER				18
 #define IKOT_MASTER_DEVICE		19
-#define IKOT_TASK_NAME			20
+/* (unused)						20	*/
 #define IKOT_SUBSYSTEM			21
 #define IKOT_IO_DONE_QUEUE		22
 #define IKOT_SEMAPHORE			23
@@ -113,14 +113,11 @@ typedef natural_t	ipc_kobject_type_t;
 #define IKOT_IOKIT_CONNECT		29
 #define IKOT_IOKIT_OBJECT		30
 #define IKOT_UPL				31
-#define IKOT_MEM_OBJ_CONTROL		32
-/*
- * Add new entries here and adjust IKOT_UNKNOWN.
- * Please keep ipc/ipc_object.c:ikot_print_array up to date.
- */
-#define	IKOT_UNKNOWN			33	/* magic catchall	*/
-#define	IKOT_MAX_TYPE	(IKOT_UNKNOWN+1)	/* # of IKOT_ types	*/
+								/* << new entries here	*/
+#define	IKOT_UNKNOWN			32	/* magic catchall	*/
+#define	IKOT_MAX_TYPE			33	/* # of IKOT_ types	*/
 
+/* Please keep ipc/ipc_object.c:ikot_print_array up to date	*/
 
 #define is_ipc_kobject(ikot)	((ikot) != IKOT_NONE)
 

@@ -29,7 +29,6 @@
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IORegistryEntry.h>
 #include <IOKit/IOCatalogue.h>
-#include <IOKit/IOKitKeysPrivate.h>
 #include <libkern/c++/OSUnserialize.h>
 #include <libkern/OSByteOrder.h>
 #include <libsa/catalogue.h>
@@ -118,7 +117,6 @@ bool validateExtensionDict(OSDictionary * extension, int index) {
     bool id_missing = false;
     bool is_kernel_resource = false;
     bool has_executable = false;
-    bool ineligible_for_safe_boot = false;
     OSString * bundleIdentifier = NULL;    // do not release
     OSObject * rawValue = NULL;            // do not release
     OSString * stringValue = NULL;         // do not release
@@ -129,7 +127,6 @@ bool validateExtensionDict(OSDictionary * extension, int index) {
     OSString * key = NULL;                 // do not release
     VERS_version vers;
     VERS_version compatible_vers;
-    char namep[16];      // unused but needed for PE_parse_boot_arg()
 
     // Info dict is a dictionary
     if (!OSDynamicCast(OSDictionary, extension)) {
@@ -352,10 +349,9 @@ bool validateExtensionDict(OSDictionary * extension, int index) {
         keyIterator = NULL;
     }
 
-    // OSBundleRequired, if present, must have a legal value.
-    // If it is not present and if we are safe-booting,
-    // then the kext is not eligible.
-    //
+    // OSBundleRequired is a legal value - *not* required at boot time
+    // so we can do install CDs and the like with mkext files containing
+    // all normally-used drivers.
     rawValue = extension->getObject("OSBundleRequired");
     if (rawValue) {
         stringValue = OSDynamicCast(OSString, rawValue);
@@ -373,10 +369,6 @@ bool validateExtensionDict(OSDictionary * extension, int index) {
             goto finish;
         }
 
-    } else if (PE_parse_boot_arg("-x", namep)) { /* safe boot */
-        ineligible_for_safe_boot = true;
-        result = false;
-        goto finish;
     }
 
 
@@ -384,24 +376,19 @@ finish:
     if (keyIterator)   keyIterator->release();
 
     if (!result) {
-        if (ineligible_for_safe_boot) {
-            IOLog(VTYELLOW "Skipping extension \"%s\" during safe boot "
-                "(no OSBundleRequired property)\n"
-                VTRESET,
-                bundleIdentifier->getCStringNoCopy());
-        } else if (not_a_dict) {
+        if (not_a_dict) {
             if (index > -1) {
-                IOLog(VTYELLOW "mkext entry %d: " VTRESET, index);
+                IOLog(VTYELLOW "mkext entry %d:." VTRESET, index);
             } else {
-                IOLog(VTYELLOW "kernel extension " VTRESET);
+                IOLog(VTYELLOW "kernel extension" VTRESET);
             }
             IOLog(VTYELLOW "info dictionary isn't a dictionary\n"
                 VTRESET);
         } else if (id_missing) {
             if (index > -1) {
-                IOLog(VTYELLOW "mkext entry %d: " VTRESET, index);
+                IOLog(VTYELLOW "mkext entry %d:." VTRESET, index);
             } else {
-                IOLog(VTYELLOW "kernel extension " VTRESET);
+                IOLog(VTYELLOW "kernel extension" VTRESET);
             }
             IOLog(VTYELLOW "\"CFBundleIdentifier\" property is "
                 "missing or not a string\n"
@@ -725,12 +712,13 @@ OSDictionary * readExtension(OSDictionary * propertyDict,
         bootxDriverDataObject->getBytesNoCopy(0,
         sizeof(MemoryMapFileInfo));
 #if defined (__ppc__)
-    dataBuffer = (BootxDriverInfo *)ml_static_ptovirt(driverInfo->paddr);
+    dataBuffer = (BootxDriverInfo *)ml_static_ptovirt(
+      driverInfo->paddr);
 #elif defined (__i386__)
-    dataBuffer = (BootxDriverInfo *)ml_boot_ptovirt(driverInfo->paddr);
-    dataBuffer->plistAddr = (char *)ml_boot_ptovirt((vm_address_t)dataBuffer->plistAddr);
+    dataBuffer = (BootxDriverInfo *)driverInfo->paddr;
+    dataBuffer->plistAddr = ml_static_ptovirt(dataBuffer->plistAddr);
     if (dataBuffer->moduleAddr)
-      dataBuffer->moduleAddr = (void *)ml_boot_ptovirt((vm_address_t)dataBuffer->moduleAddr);
+      dataBuffer->moduleAddr = ml_static_ptovirt(dataBuffer->moduleAddr);
 #else
 #error unsupported architecture
 #endif
@@ -819,7 +807,7 @@ OSDictionary * readExtension(OSDictionary * propertyDict,
 finish:
 
     if (loaded_kmod) {
-        kfree(loaded_kmod, sizeof(kmod_info_t));
+        kfree((unsigned int)loaded_kmod, sizeof(kmod_info_t));
     }
 
     // do not release bootxDriverDataObject
@@ -969,7 +957,7 @@ bool extractExtensionsFromArchive(MemoryMapFileInfo * mkext_file_info,
 #if defined (__ppc__)
     mkext_data = (mkext_header *)mkext_file_info->paddr;
 #elif defined (__i386__)
-    mkext_data = (mkext_header *)ml_boot_ptovirt(mkext_file_info->paddr);
+    mkext_data = (mkext_header *)ml_static_ptovirt(mkext_file_info->paddr);
 #else
 #error unsupported architecture
 #endif
@@ -999,16 +987,6 @@ bool extractExtensionsFromArchive(MemoryMapFileInfo * mkext_file_info,
         LOG_DELAY();
         result = false;
         goto finish;
-    }
-
-    IORegistryEntry * root = IORegistryEntry::getRegistryRoot();
-    assert(root);
-    OSData * checksumObj = OSData::withBytes((void *)&checksum,
-        sizeof(checksum));
-    assert(checksumObj);
-    if (checksumObj) {
-        root->setProperty(kIOStartupMkextCRC, checksumObj);
-        checksumObj->release();
     }
 
    /* If the MKEXT archive isn't fat, check that the CPU type & subtype
@@ -1052,7 +1030,7 @@ bool extractExtensionsFromArchive(MemoryMapFileInfo * mkext_file_info,
          i++) {
 
         if (loaded_kmod) {
-            kfree(loaded_kmod, sizeof(kmod_info_t));
+            kfree((unsigned int)loaded_kmod, sizeof(kmod_info_t));
             loaded_kmod = 0;
         }
 
@@ -1230,7 +1208,7 @@ bool extractExtensionsFromArchive(MemoryMapFileInfo * mkext_file_info,
 
 finish:
 
-    if (loaded_kmod) kfree(loaded_kmod, sizeof(kmod_info_t));
+    if (loaded_kmod) kfree((unsigned int)loaded_kmod, sizeof(kmod_info_t));
     if (driverPlistDataObject) {
         kmem_free(kernel_map,
             (unsigned int)driverPlistDataObject->getBytesNoCopy(),

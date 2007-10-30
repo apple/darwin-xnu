@@ -1554,7 +1554,7 @@ noPerfMonSave32:
 			lwz		r25,traceMask(0)				; Get the trace mask
 			li		r0,SAVgeneral					; Get the savearea type value
 			lhz		r19,PP_CPU_NUMBER(r2)			; Get the logical processor number											
-			rlwinm	r22,r11,30,0,31					; Divide interrupt code by 4
+			rlwinm	r22,r11,30,0,31					; Divide interrupt code by 2
 			stb		r0,SAVflags+2(r13)				; Mark valid context
 			addi	r22,r22,10						; Adjust code so we shift into CR5
 			li		r23,trcWork						; Get the trace work area address
@@ -3965,12 +3965,7 @@ EXT(killresv):
 			.long	0								; 5470 reserved			
 			.long	0								; 5474 reserved			
 			.long	0								; 5478 reserved			
-			.long	0								; 547C reserved
-			.long	EXT(kmod)							; 5480 Pointer to kmod, debugging aid
-			.long	EXT(kdp_trans_off)						; 5484 Pointer to kdp_trans_off, debugging aid
-			.long	EXT(kdp_read_io)						; 5488 Pointer to kdp_read_io, debugging aid
-			.long	0								; 548C Reserved for developer use
-			.long	0								; 5490 Reserved for developer use
+			.long	0								; 547C reserved	
 ;
 ;	The "shared page" is used for low-level debugging
 ;

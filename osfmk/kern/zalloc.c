@@ -113,7 +113,7 @@
 #else /* !defined(__alpha) */
 
 #define is_kernel_data_addr(a)						\
-  (!(a) || ((a) >= vm_min_kernel_address && !((a) & 0x3)))
+  (!(a) || ((a) >= VM_MIN_KERNEL_ADDRESS && !((a) & 0x3)))
 
 #endif /* defined(__alpha) */
 
@@ -1233,7 +1233,7 @@ zone_gc(void)
 		 */
 
 		scan = (void *)z->free_elements;
-		z->free_elements = 0;
+		(void *)z->free_elements = NULL;
 
 		unlock_zone(z);
 
@@ -1277,7 +1277,7 @@ zone_gc(void)
 
 					if (keep != NULL) {
 						tail->next = (void *)z->free_elements;
-						z->free_elements = (vm_offset_t) keep;
+						(void *)z->free_elements = keep;
 						tail = keep = NULL;
 					} else {
 						m =0;
@@ -1289,7 +1289,7 @@ zone_gc(void)
 						}
 						if (m !=0 ) {
 							prev->next = (void *)z->free_elements;
-							z->free_elements = (vm_offset_t) base_elt;
+							(void *)z->free_elements = (void *)base_elt;
 							base_prev->next = elt;
 							prev = base_prev;
 						}
@@ -1314,7 +1314,7 @@ zone_gc(void)
 			lock_zone(z);
 
 			tail->next = (void *)z->free_elements;
-			z->free_elements = (vm_offset_t) keep;
+			(void *)z->free_elements = keep;
 
 			unlock_zone(z);
 		}
@@ -1367,7 +1367,7 @@ zone_gc(void)
 
 				if (keep != NULL) {
 					tail->next = (void *)z->free_elements;
-					z->free_elements = (vm_offset_t) keep;
+					(void *)z->free_elements = keep;
 				}
 
 				if (z->waiting) {
@@ -1394,7 +1394,7 @@ zone_gc(void)
 
 			if (keep != NULL) {
 				tail->next = (void *)z->free_elements;
-				z->free_elements = (vm_offset_t) keep;
+				(void *)z->free_elements = keep;
 			}
 
 		}
@@ -1480,7 +1480,7 @@ host_zone_info(
 #ifdef ppc
 	max_zones = num_zones + 4;
 #else
-	max_zones = num_zones + 3; /* ATN: count the number below!! */
+	max_zones = num_zones + 2;
 #endif
 	z = first_zone;
 	simple_unlock(&all_zones_lock);
@@ -1564,15 +1564,6 @@ host_zone_info(
 	zn++;
 	zi++;
 #endif
-
-#ifdef i386
-	strcpy(zn->zn_name, "page_tables");
-	pt_fake_zone_info(&zi->zi_count, &zi->zi_cur_size, &zi->zi_max_size, &zi->zi_elem_size,
-			  &zi->zi_alloc_size, &zi->zi_collectable, &zi->zi_exhaustible);
-	zn++;
-	zi++;
-#endif
-
 	strcpy(zn->zn_name, "kalloc.large");
 	kalloc_fake_zone_info(&zi->zi_count, &zi->zi_cur_size, &zi->zi_max_size, &zi->zi_elem_size,
 			       &zi->zi_alloc_size, &zi->zi_collectable, &zi->zi_exhaustible);

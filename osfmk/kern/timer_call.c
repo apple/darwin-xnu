@@ -43,8 +43,6 @@
 #include <kern/timer_call.h>
 #include <kern/call_entry.h>
 
-#include <sys/kdebug.h>
-
 decl_simple_lock_data(static,timer_call_lock)
 
 static struct {
@@ -127,7 +125,7 @@ void
 _set_delayed_call_timer(
 	timer_call_t			call)
 {
-	etimer_set_deadline(call->deadline);
+	clock_set_timer_deadline(call->deadline);
 }
 
 boolean_t
@@ -292,7 +290,6 @@ timer_call_interrupt(
 	call = TC(queue_first(queue));
 
 	while (!queue_end(queue, qe(call))) {
-
 		if (call->deadline <= timestamp) {
 			timer_call_func_t		func;
 			timer_call_param_t		param0, param1;
@@ -305,11 +302,7 @@ timer_call_interrupt(
 
 			simple_unlock(&timer_call_lock);
 
-			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI, 2) | DBG_FUNC_START, (int)func, param0, param1, 0, 0);
-
 			(*func)(param0, param1);
-
-			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI, 2) | DBG_FUNC_END, (int)func, param0, param1, 0, 0);
 
 			simple_lock(&timer_call_lock);
 		}
@@ -323,5 +316,4 @@ timer_call_interrupt(
 		_set_delayed_call_timer(call);
 
 	simple_unlock(&timer_call_lock);
-
 }

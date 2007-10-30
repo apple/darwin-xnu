@@ -154,13 +154,7 @@ protected:
     virtual void free();
 
 /*! @function threadMain
-    @discussion Work loop threads main function.  This function consists of 3
-    loops: the outermost loop is the semaphore clear and wait loop, the middle
-    loop terminates when there is no more work, and the inside loop walks the
-    event list calling the checkForWork method in each event source.  If an
-    event source has more work to do, it can set the more flag and the middle
-    loop will repeat.  When no more work is outstanding the outermost will
-    sleep until an event is signalled.
+    @discussion Work loop threads main function.  This function consists of 3 loops: the outermost loop is the semaphore clear and wait loop, the middle loop terminates when there is no more work, and the inside loop walks the event list calling the checkForWork method in each event source.  If an event source has more work to do, it can set the more flag and the middle loop will repeat.  When no more work is outstanding the outermost will sleep until an event is signalled or the least wakeupTime, whichever occurs first.  If the event source does not require the semaphore wait to time out, it must set the provided wakeupTime parameter to zero.
 */
     virtual void threadMain();
 
@@ -243,7 +237,7 @@ protected:
     virtual void openGate();
     virtual void closeGate();
     virtual bool tryCloseGate();
-    virtual int  sleepGate(void *event, UInt32 interuptibleType);
+    virtual int sleepGate(void *event, UInt32 interuptibleType);
     virtual void wakeupGate(void *event, bool oneThread);
 
 public:
@@ -251,7 +245,9 @@ public:
 
 /*! @function runAction
     @abstract Single thread a call to an action with the work-loop.
-    @discussion Client function that causes the given action to be called in a single threaded manner.  Beware: the work-loop's gate is recursive and runAction can cause direct or indirect re-entrancy.  When executing on a client's thread, runAction will sleep until the work-loop's gate opens for execution of client actions, the action is single threaded against all other work-loop event sources.
+    @discussion Client function that causes the given action to be called in
+a single threaded manner.  Beware: the work-loop's gate is recursive and runAction can cause direct or indirect re-entrancy.  When executing on a client's thread, runAction will sleep until the work-loop's gate opens for
+execution of client actions, the action is single threaded against all other work-loop event sources.
     @param action Pointer to function to be executed in work-loop context.
     @param arg0 Parameter for action parameter, defaults to 0.
     @param arg1 Parameter for action parameter, defaults to 0.
@@ -259,40 +255,14 @@ public:
     @param arg3 Parameter for action parameter, defaults to 0.
     @result Returns the value of the Action callout.
 */
-    OSMetaClassDeclareReservedUsed(IOWorkLoop, 0);
     virtual IOReturn runAction(Action action, OSObject *target,
 			       void *arg0 = 0, void *arg1 = 0,
 			       void *arg2 = 0, void *arg3 = 0);
 
-#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
-/*! @function runEventSources
-    @discussion Consists of the inner 2 loops of the threadMain function(qv).
-    The outer loop terminates when there is no more work, and the inside loop
-    walks the event list calling the checkForWork method in each event source.
-    If an event source has more work to do, it can set the more flag and the
-    outer loop will repeat.
-<br><br>
-    This function can be used to clear a priority inversion between the normal
-    workloop thread and multimedia's real time threads.  The problem is that
-    the interrupt action routine is often held off by high priority threads.
-    So if they want to get their data now they will have to call us and ask if
-    any data is available.  The multi-media user client will arrange for this
-    function to be called, which causes any pending interrupts to be processed
-    and the completion routines called.  By the time the function returns all
-    outstanding work will have been completed at the real time threads
-    priority.
-
-    @result Return false if the work loop is shutting down, true otherwise.
-*/
-    OSMetaClassDeclareReservedUsed(IOWorkLoop, 1);
-    virtual bool runEventSources();
-#endif
-
 protected:
+    OSMetaClassDeclareReservedUsed(IOWorkLoop, 0);
 
-#if (defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
     OSMetaClassDeclareReservedUnused(IOWorkLoop, 1);
-#endif
     OSMetaClassDeclareReservedUnused(IOWorkLoop, 2);
     OSMetaClassDeclareReservedUnused(IOWorkLoop, 3);
     OSMetaClassDeclareReservedUnused(IOWorkLoop, 4);

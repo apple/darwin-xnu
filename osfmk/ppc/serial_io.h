@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -118,6 +118,21 @@ extern int		scc_getc(
 				boolean_t		wait,
 				boolean_t		raw);
 
+/* Functions in serial_console.c for switching between serial and video
+   consoles.  */
+extern boolean_t	console_is_serial(void);
+extern int		switch_to_serial_console(
+				void);
+
+extern int		switch_to_video_console(
+				void);
+
+extern void		switch_to_old_console(
+				int			old_console);
+
+void serial_keyboard_init(void);
+void serial_keyboard_start(void);
+void serial_keyboard_poll(void);
 
 
 /*

@@ -51,6 +51,12 @@
 #include <mach/machine/thread_status.h>
 
 /*
+ * XXX historically, we have not included this header.  Continue to not do so.
+ *
+ * #include <architecture/byte_order.h>
+ */
+
+/*
  * The mach header appears at the very beginning of the object file; it
  * is the same for both 32-bit and 64-bit architectures.
  */
@@ -66,11 +72,11 @@ struct mach_header {
 
 /* Constant for the magic field of the mach_header (32-bit architectures) */
 #define	MH_MAGIC	0xfeedface	/* the mach magic number */
-#define MH_CIGAM	0xcefaedfe	
+#define MH_CIGAM	NXSwapInt(MH_MAGIC)
 
 /* Constant for the magic field of the mach_header_64 (64-bit architectures) */
 #define MH_MAGIC_64	0xfeedfacf	/* the 64-bit mach magic number */
-#define MH_CIGAM_64	0xcffaedfe	
+#define MH_CIGAM_64	NXSwapInt(MH_MAGIC_64)
 
 /* Constants for the cmd field of new load commands, the type */
 #define LC_SEGMENT_64	0x19	/* 64-bit segment of this file to be mapped */

@@ -33,9 +33,6 @@
  *
  *	File: zi.c
  */
- 
-#ifdef AURP_SUPPORT
-
 #include <sys/errno.h>
 #include <sys/types.h>
 #include <sys/param.h>
@@ -620,5 +617,3 @@ AURPsetzi(node, m, sub_code, tuples_cnt)
 			buf += zname->len+1;
 	}
 }
-
-#endif /* AURP_SUPPORT */

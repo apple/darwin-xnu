@@ -133,12 +133,14 @@ static int devfs_ready = 0;
 int
 devfs_sinit(void)
 {
-    int error;
+        int error;
 
-    devfs_lck_grp_attr = lck_grp_attr_alloc_init();
+        devfs_lck_grp_attr = lck_grp_attr_alloc_init();
+	lck_grp_attr_setstat(devfs_lck_grp_attr);
 	devfs_lck_grp = lck_grp_alloc_init("devfs_lock", devfs_lck_grp_attr);
 
 	devfs_lck_attr = lck_attr_alloc_init();
+	//lck_attr_setdebug(devfs_lck_attr);
 
 	lck_mtx_init(&devfs_mutex, devfs_lck_grp, devfs_lck_attr);
 

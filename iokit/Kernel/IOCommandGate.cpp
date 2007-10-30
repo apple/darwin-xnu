@@ -25,8 +25,6 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-#include <libkern/OSDebug.h>
-
 #include <IOKit/IOCommandGate.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOReturn.h>
@@ -64,98 +62,71 @@ IOCommandGate::commandGate(OSObject *inOwner, Action inAction)
     return me;
 }
 
-/* virtual */ void IOCommandGate::disable()
-{
-    if (workLoop && !workLoop->inGate())
-	OSReportWithBacktrace("IOCommandGate::disable() called when not gated");
-
-    super::disable();
-}
-
-/* virtual */ void IOCommandGate::enable()
-{
-    if (workLoop) {
-	closeGate();
-	super::enable();
-	wakeupGate(&enabled, /* oneThread */ false); // Unblock sleeping threads
-	openGate();
-    }
-}
-
-/* virtual */ void IOCommandGate::free()
-{
-    setWorkLoop(0);
-    super::free();
-}
-
-/* virtual */ void IOCommandGate::setWorkLoop(IOWorkLoop *inWorkLoop)
-{
-    uintptr_t *sleepersP = (uintptr_t *) &reserved;
-    if (!inWorkLoop && workLoop) {		// tearing down
-	closeGate();
-	*sleepersP |= 1;
-	while (*sleepersP >> 1) {
-	    thread_wakeup_with_result(&enabled, THREAD_INTERRUPTED);
-	    sleepGate(sleepersP, THREAD_UNINT);
-	}
-	*sleepersP = 0;
-	openGate();
-    }
-    else
-
-    super::setWorkLoop(inWorkLoop);
-}
-
 IOReturn IOCommandGate::runCommand(void *arg0, void *arg1,
                                    void *arg2, void *arg3)
 {
-    return runAction((Action) action, arg0, arg1, arg2, arg3);
-}
+    IOReturn res;
 
-IOReturn IOCommandGate::attemptCommand(void *arg0, void *arg1,
-                                       void *arg2, void *arg3)
-{
-    return attemptAction((Action) action, arg0, arg1, arg2, arg3);
+    if (!enabled)
+        return kIOReturnNotPermitted;
+
+    if (!action)
+        return kIOReturnNoResources;
+
+    // closeGate is recursive so don't worry if we already hold the lock.
+    IOTimeStampConstant(IODBG_CMDQ(IOCMDQ_ACTION),
+			(unsigned int) action, (unsigned int) owner);
+
+    closeGate();
+    res = (*(Action) action)(owner, arg0, arg1, arg2, arg3);
+    openGate();
+
+    return res;
 }
 
 IOReturn IOCommandGate::runAction(Action inAction,
                                   void *arg0, void *arg1,
                                   void *arg2, void *arg3)
 {
+    IOReturn res;
+
+    if (!enabled)
+        return kIOReturnNotPermitted;
+
     if (!inAction)
         return kIOReturnBadArgument;
 
     IOTimeStampConstant(IODBG_CMDQ(IOCMDQ_ACTION),
 			(unsigned int) inAction, (unsigned int) owner);
 
-    // closeGate is recursive needn't worry if we already hold the lock.
+    // closeGate is recursive so don't worry if we already hold the lock.
     closeGate();
-
-    // If the command gate is disabled and we aren't on the workloop thread
-    // itself then sleep until we get enabled.
-    IOReturn res;
-    if (!workLoop->onThread()) {
-	while (!enabled) {
-	    uintptr_t *sleepersP = (uintptr_t *) &reserved;
-
-	    *sleepersP += 2;
-	    IOReturn res = sleepGate(&enabled, THREAD_ABORTSAFE);
-	    *sleepersP -= 2;
-
-	    bool wakeupTearDown = (*sleepersP & 1);
-	    if (res || wakeupTearDown) {
-		openGate();
-
-		 if (wakeupTearDown)
-		     commandWakeup(sleepersP);	// No further resources used
-
-		return kIOReturnAborted;
-	    }
-	}
-    }
-
-    // Must be gated and on the work loop or enabled
     res = (*inAction)(owner, arg0, arg1, arg2, arg3);
+    openGate();
+
+    return res;
+}
+
+IOReturn IOCommandGate::attemptCommand(void *arg0, void *arg1,
+                                       void *arg2, void *arg3)
+{
+    IOReturn res;
+
+    if (!enabled)
+        return kIOReturnNotPermitted;
+
+    if (!action)
+        return kIOReturnNoResources;
+
+    // Try to hold the lock if can't get return immediately.
+    if (!tryCloseGate())
+        return kIOReturnCannotLock;
+
+    // closeGate is recursive so don't worry if we already hold the lock.
+    IOTimeStampConstant(IODBG_CMDQ(IOCMDQ_ACTION),
+			(unsigned int) action, (unsigned int) owner);
+
+    res = (*(Action) action)(owner, arg0, arg1, arg2, arg3);
     openGate();
 
     return res;
@@ -167,6 +138,9 @@ IOReturn IOCommandGate::attemptAction(Action inAction,
 {
     IOReturn res;
 
+    if (!enabled)
+        return kIOReturnNotPermitted;
+
     if (!inAction)
         return kIOReturnBadArgument;
 
@@ -174,16 +148,10 @@ IOReturn IOCommandGate::attemptAction(Action inAction,
     if (!tryCloseGate())
         return kIOReturnCannotLock;
 
-    // If the command gate is disabled then sleep until we get a wakeup
-    if (!workLoop->onThread() && !enabled)
-        res = kIOReturnNotPermitted;
-    else {
-	IOTimeStampConstant(IODBG_CMDQ(IOCMDQ_ACTION),
-			    (unsigned int) inAction, (unsigned int) owner);
+    IOTimeStampConstant(IODBG_CMDQ(IOCMDQ_ACTION),
+			(unsigned int) inAction, (unsigned int) owner);
 
-	res = (*inAction)(owner, arg0, arg1, arg2, arg3);
-    }
-
+    res = (*inAction)(owner, arg0, arg1, arg2, arg3);
     openGate();
 
     return res;

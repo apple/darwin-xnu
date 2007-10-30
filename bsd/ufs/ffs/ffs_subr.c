@@ -82,6 +82,7 @@
 #include <ufs/ffs/ffs_extern.h>
 #if REV_ENDIAN_FS
 #include <ufs/ufs/ufs_byte_order.h>
+#include <architecture/byte_order.h>
 #endif /* REV_ENDIAN_FS */
 
 /*

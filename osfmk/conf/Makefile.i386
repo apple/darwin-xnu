@@ -11,8 +11,6 @@ CWARNFLAGS= $(filter-out -Wbad-function-cast, $(CWARNFLAGS_STD))
 
 # Objects that don't compile cleanly:
 OBJS_NO_WERROR=				\
-	pms.o				\
-	etimer.o			\
 	ioconf.o			\
 	UNDRequest.o			\
 	KUNCUserNotifications.o		\
@@ -30,84 +28,7 @@ OBJS_NO_WERROR=				\
 	mk_sp.o				\
 	printf.o			\
 	syscall_emulation.o		\
-	UNDReplyServer.o	\
-	ipc_kobject.o		\
-	ipc_tt.o			\
-	machine.o			\
-	processor.o			\
-	stack.o				\
-	sched_prim.o		\
-	sync_lock.o			\
-	task.o				\
-	syscall_subr.o		\
-	thread.o			\
-	thread_call.o		\
-	timer_call.o		\
-	hibernate.o			\
-	clock_server.o		\
-	clock_priv_server.o	\
-	exc_user.o			\
-	wait_queue.o		\
-	exc_server.o		\
-	host_priv_server.o	\
-	host_priv_server.o	\
-	ledger_server.o		\
-	host_security_server.o \
-	lock_set_server.o	\
-	mach_host_server.o	\
-	mach_port_server.o	\
-	processor_server.o	\
-	processor_set_server.o \
-	semaphore_server.o	\
-	task_server.o		\
-	thread_act_server.o	\
-	device_server.o		\
-	pmap.o				\
-	cpuid.o				\
-	bsd_i386.o			\
-	loose_ends.o		\
-	mp_desc.o			\
-	perfmon.o			\
-	pcb.o				\
-	rtclock.o			\
-	trap.o				\
-	bbclock.o			\
-	mp.o				\
-	acpi.o				\
-	serial_console.o	\
-	text_console.o		\
-	mtrr.o				\
-	hibernate_i386.o	\
-	mach_msg.o	\
-	mach_header.o \
-	chud_osfmk_callback_i386.o \
-	chud_thread.o 		   \
-	chud_thread_i386.o 	   \
-	chud_cpu.o 		   \
-	db_access.o 		   \
-	db_aout.o		   \
-	db_break.o 		   \
-	db_command.o 		   \
-	db_cond.o 		   \
-	db_disasm.o		   \
-	db_examine.o 		   \
-	db_expr.o 		   \
-	db_ext_symtab.o 	   \
-	db_input.o 		   \
-	db_interface.o		   \
-	db_lex.o 		   \
-	db_macro.o 		   \
-	db_output.o 		   \
-	db_print.o 		   \
-	db_run.o 		   \
-	db_sym.o 		   \
-	db_task_thread.o 	   \
-	db_trace.o		   \
-	db_trap.o 		   \
-	db_variables.o 		   \
-	db_watch.o 		   \
-	db_write_cmd.o		   \
-	xpr.o
+	mach_header.o
 
 OBJS_WERROR=$(filter-out $(OBJS_NO_WERROR),$(OBJS))
 

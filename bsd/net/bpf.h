@@ -109,10 +109,18 @@ struct bpf_program {
  * grow when we're dealing with a 64-bit process.
  * WARNING - keep in sync with bpf_program
  */
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
 struct user_bpf_program {
 	u_int		bf_len;
-	user_addr_t	bf_insns __attribute__((aligned(8)));
+	user_addr_t	bf_insns;
 };
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
 
 #endif // KERNEL
 

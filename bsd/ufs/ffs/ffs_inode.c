@@ -90,7 +90,7 @@
 
 #if REV_ENDIAN_FS
 #include <ufs/ufs/ufs_byte_order.h>
-#include <libkern/OSByteOrder.h>
+#include <architecture/byte_order.h>
 #endif /* REV_ENDIAN_FS */
 
 static int ffs_indirtrunc(struct inode *, ufs_daddr_t, ufs_daddr_t,
@@ -549,7 +549,7 @@ ffs_indirtrunc(ip, lbn, dbn, lastbn, level, countp)
 	    i--, nlbn += factor) {
 #if	REV_ENDIAN_FS
 		if (rev_endian)
-			nb = OSSwapInt32(bap[i]);
+			nb = NXSwapLong(bap[i]);
 		else {
 #endif	/* REV_ENDIAN_FS */
 			nb = bap[i];
@@ -575,7 +575,7 @@ ffs_indirtrunc(ip, lbn, dbn, lastbn, level, countp)
 		last = lastbn % factor;
 #if	REV_ENDIAN_FS
 		if (rev_endian)
-			nb = OSSwapInt32(bap[i]);
+			nb = NXSwapLong(bap[i]);
 		else {
 #endif	/* REV_ENDIAN_FS */
 			nb = bap[i];

@@ -203,7 +203,6 @@ acct_process(p)
 	int t;
 	int error;
 	struct vnode *vp;
-	kauth_cred_t safecred;
 
 	/* If accounting isn't enabled, don't bother */
 	vp = acctp;
@@ -254,17 +253,15 @@ acct_process(p)
 	/* (8) The boolean flags that tell how the process terminated, etc. */
 	an_acct.ac_flag = p->p_acflag;
 
-	safecred = kauth_cred_proc_ref(p);
 	/*
 	 * Now, just write the accounting information to the file.
 	 */
 	if ((error = vnode_getwithref(vp)) == 0) {
 	        error = vn_rdwr(UIO_WRITE, vp, (caddr_t)&an_acct, sizeof (an_acct),
-				(off_t)0, UIO_SYSSPACE32, IO_APPEND|IO_UNIT, safecred,
+				(off_t)0, UIO_SYSSPACE32, IO_APPEND|IO_UNIT, p->p_ucred,
 				(int *)0, p);
 		vnode_put(vp);
 	}
-	kauth_cred_unref(&safecred);
 	return (error);
 }
 

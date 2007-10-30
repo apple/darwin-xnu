@@ -69,7 +69,6 @@ DATAFILES = \
 	gettimeofday.2	\
 	getuid.2	\
 	getxattr.2	\
-	i386_get_ldt.2	\
 	intro.2	\
 	ioctl.2	\
 	issetugid.2	\
@@ -175,7 +174,7 @@ DATAFILES = \
 
 # List of source/target hard link pairs for installed manual pages; source
 # names may be repeated
-MLINKS= kqueue.2 kevent.2 i386_get_ldt.2 i386_set_ldt.2
+MLINKS= kqueue.2 kevent.2
 
 INSTALL_MAN_LIST = ${DATAFILES}
 INSTALL_MAN_LINKS = ${MLINKS}

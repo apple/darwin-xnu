@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -32,13 +32,7 @@
 #include <stdint.h>
 
 #if !defined(OS_INLINE)
-# if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
 #        define OS_INLINE static inline
-# elif defined(__MWERKS__) || defined(__cplusplus)
-#        define OS_INLINE static inline
-# else
-#        define OS_INLINE static __inline__
-# endif
 #endif
 
 /* Generic byte swapping functions. */
@@ -49,7 +43,8 @@ _OSSwapInt16(
     uint16_t        data
 )
 {
-    return ((data << 8) | (data >> 8));
+    __asm__ ("xchgb %b0, %h0" : "+q" (data));
+    return data;
 }
 
 OS_INLINE
@@ -58,36 +53,28 @@ _OSSwapInt32(
     uint32_t        data
 )
 {
-    __asm__ ("bswap   %0" : "+r" (data));
+    __asm__ ("bswap %0" : "+r" (data));
     return data;
 }
 
-#if defined(__i386__)
 OS_INLINE
 uint64_t
 _OSSwapInt64(
     uint64_t        data
 )
 {
-    __asm__ ("bswap   %%eax\n\t"
-             "bswap   %%edx\n\t" 
-             "xchgl   %%eax, %%edx"
-             : "+A" (data));
-    return data;
+    union {
+        uint64_t ull;
+        uint32_t ul[2];
+    } u;
+
+    /* This actually generates the best code */
+    u.ul[0] = data >> 32;
+    u.ul[1] = data & 0xffffffff;
+    u.ul[0] = _OSSwapInt32(u.ul[0]);
+    u.ul[1] = _OSSwapInt32(u.ul[1]);
+    return u.ull;
 }
-#elif defined(__x86_64__)
-OS_INLINE
-uint64_t
-_OSSwapInt64(
-    uint64_t        data
-)
-{
-    __asm__ ("bswap   %0" : "+r" (data));
-    return data;
-}
-#else
-#error Unknown architecture
-#endif
 
 /* Functions for byte reversed loads. */
 
@@ -95,12 +82,12 @@ OS_INLINE
 uint16_t
 OSReadSwapInt16(
     const volatile void   * base,
-    uintptr_t       byteOffset
+    uintptr_t       offset
 )
 {
     uint16_t result;
 
-    result = *(volatile uint16_t *)((uintptr_t)base + byteOffset);
+    result = *(volatile uint16_t *)((uintptr_t)base + offset);
     return _OSSwapInt16(result);
 }
 
@@ -108,12 +95,12 @@ OS_INLINE
 uint32_t
 OSReadSwapInt32(
     const volatile void   * base,
-    uintptr_t       byteOffset
+    uintptr_t       offset
 )
 {
     uint32_t result;
 
-    result = *(volatile uint32_t *)((uintptr_t)base + byteOffset);
+    result = *(volatile uint32_t *)((uintptr_t)base + offset);
     return _OSSwapInt32(result);
 }
 
@@ -121,13 +108,21 @@ OS_INLINE
 uint64_t
 OSReadSwapInt64(
     const volatile void   * base,
-    uintptr_t       byteOffset
+    uintptr_t       offset
 )
 {
-    uint64_t result;
+    const volatile uint32_t * inp;
+    union ullc {
+        uint64_t     ull;
+        uint32_t     ul[2];
+    } outv;
 
-    result = *(volatile uint64_t *)((uintptr_t)base + byteOffset);
-    return _OSSwapInt64(result);
+    inp = (const volatile uint32_t *)((uintptr_t)base + offset);
+    outv.ul[0] = inp[1];
+    outv.ul[1] = inp[0];
+    outv.ul[0] = _OSSwapInt32(outv.ul[0]);
+    outv.ul[1] = _OSSwapInt32(outv.ul[1]);
+    return outv.ull;
 }
 
 /* Functions for byte reversed stores. */
@@ -136,33 +131,33 @@ OS_INLINE
 void
 OSWriteSwapInt16(
     volatile void   * base,
-    uintptr_t       byteOffset,
+    uintptr_t       offset,
     uint16_t        data
 )
 {
-    *(volatile uint16_t *)((uintptr_t)base + byteOffset) = _OSSwapInt16(data);
+    *(volatile uint16_t *)((uintptr_t)base + offset) = _OSSwapInt16(data);
 }
 
 OS_INLINE
 void
 OSWriteSwapInt32(
     volatile void   * base,
-    uintptr_t       byteOffset,
+    uintptr_t       offset,
     uint32_t        data
 )
 {
-    *(volatile uint32_t *)((uintptr_t)base + byteOffset) = _OSSwapInt32(data);
+    *(volatile uint32_t *)((uintptr_t)base + offset) = _OSSwapInt32(data);
 }
 
 OS_INLINE
 void
 OSWriteSwapInt64(
     volatile void    * base,
-    uintptr_t        byteOffset,
+    uintptr_t        offset,
     uint64_t         data
 )
 {
-    *(volatile uint64_t *)((uintptr_t)base + byteOffset) = _OSSwapInt64(data);
+    *(volatile uint64_t *)((uintptr_t)base + offset) = _OSSwapInt64(data);
 }
 
 #endif /* ! _OS_OSBYTEORDERI386_H */

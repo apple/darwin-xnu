@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -25,63 +25,25 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+/*
+ * Copyright (c) 1999 Apple Computer, Inc.  All rights reserved.
+ *
+ * HISTORY
+ *
+ */
 
 #ifndef _OS_OSBYTEORDER_H
 #define _OS_OSBYTEORDER_H
 
 #include <stdint.h>
 
-/* Macros for swapping constant values in the preprocessing stage. */
-#define OSSwapConstInt16(x) \
-    ((uint16_t)((((uint16_t)(x) & 0xff00) >> 8) | \
-                (((uint16_t)(x) & 0x00ff) << 8)))
-
-#define OSSwapConstInt32(x) \
-    ((uint32_t)((((uint32_t)(x) & 0xff000000) >> 24) | \
-                (((uint32_t)(x) & 0x00ff0000) >>  8) | \
-                (((uint32_t)(x) & 0x0000ff00) <<  8) | \
-                (((uint32_t)(x) & 0x000000ff) << 24)))
-
-#define OSSwapConstInt64(x) \
-    ((uint64_t)((((uint64_t)(x) & 0xff00000000000000ULL) >> 56) | \
-                (((uint64_t)(x) & 0x00ff000000000000ULL) >> 40) | \
-                (((uint64_t)(x) & 0x0000ff0000000000ULL) >> 24) | \
-                (((uint64_t)(x) & 0x000000ff00000000ULL) >>  8) | \
-                (((uint64_t)(x) & 0x00000000ff000000ULL) <<  8) | \
-                (((uint64_t)(x) & 0x0000000000ff0000ULL) << 24) | \
-                (((uint64_t)(x) & 0x000000000000ff00ULL) << 40) | \
-                (((uint64_t)(x) & 0x00000000000000ffULL) << 56)))
-
-#if defined(__GNUC__)
-
-#if (defined(__ppc__) || defined(__ppc64__))
+#if defined(__GNUC__) && defined(__ppc__)
 #include <libkern/ppc/OSByteOrder.h>
-#elif (defined(__i386__) || defined(__x86_64__))
+#elif defined(__GNUC__) && defined(__i386__)
 #include <libkern/i386/OSByteOrder.h>
 #else
 #include <libkern/machine/OSByteOrder.h>
 #endif
-
-#define OSSwapInt16(x) \
-    (__builtin_constant_p(x) ? OSSwapConstInt16(x) : _OSSwapInt16(x))
-
-#define OSSwapInt32(x) \
-    (__builtin_constant_p(x) ? OSSwapConstInt32(x) : _OSSwapInt32(x))
-
-#define OSSwapInt64(x) \
-    (__builtin_constant_p(x) ? OSSwapConstInt64(x) : _OSSwapInt64(x))
-
-#else /* ! __GNUC__ */
-
-#include <libkern/machine/OSByteOrder.h>
-
-#define OSSwapInt16(x) OSSwapConstInt16(x)
-
-#define OSSwapInt32(x) OSSwapConstInt32(x)
-
-#define OSSwapInt64(x) OSSwapConstInt64(x)
-
-#endif /* __GNUC__ */
 
 enum {
     OSUnknownByteOrder,
@@ -101,6 +63,37 @@ OSHostByteOrder(void) {
 #endif
 }
 
+/* Macros for swapping constant values in the preprocessing stage. */
+#define OSSwapConstInt16(x) ((((uint16_t)(x) & 0xff00) >> 8) | \
+                             (((uint16_t)(x) & 0x00ff) << 8))
+
+#define OSSwapConstInt32(x) ((((uint32_t)(x) & 0xff000000) >> 24) | \
+                             (((uint32_t)(x) & 0x00ff0000) >>  8) | \
+                             (((uint32_t)(x) & 0x0000ff00) <<  8) | \
+                             (((uint32_t)(x) & 0x000000ff) << 24))
+
+#define OSSwapConstInt64(x) ((((uint64_t)(x) & 0xff00000000000000ULL) >> 56) | \
+                             (((uint64_t)(x) & 0x00ff000000000000ULL) >> 40) | \
+                             (((uint64_t)(x) & 0x0000ff0000000000ULL) >> 24) | \
+                             (((uint64_t)(x) & 0x000000ff00000000ULL) >>  8) | \
+                             (((uint64_t)(x) & 0x00000000ff000000ULL) <<  8) | \
+                             (((uint64_t)(x) & 0x0000000000ff0000ULL) << 24) | \
+                             (((uint64_t)(x) & 0x000000000000ff00ULL) << 40) | \
+                             (((uint64_t)(x) & 0x00000000000000ffULL) << 56))
+
+#if !defined(__GNUC__)
+#define __builtin_constant_p(x) (0)
+#endif
+
+#define OSSwapInt16(x) \
+    (__builtin_constant_p(x) ? OSSwapConstInt16(x) : _OSSwapInt16(x))
+
+#define OSSwapInt32(x) \
+    (__builtin_constant_p(x) ? OSSwapConstInt32(x) : _OSSwapInt32(x))
+
+#define OSSwapInt64(x) \
+    (__builtin_constant_p(x) ? OSSwapConstInt64(x) : _OSSwapInt64(x))
+
 #define OSReadBigInt(x, y)		OSReadBigInt32(x, y)
 #define OSWriteBigInt(x, y, z)		OSWriteBigInt32(x, y, z)
 #define OSSwapBigToHostInt(x)		OSSwapBigToHostInt32(x)
@@ -110,98 +103,141 @@ OSHostByteOrder(void) {
 #define OSSwapHostToLittleInt(x)	OSSwapHostToLittleInt32(x)
 #define OSSwapLittleToHostInt(x)	OSSwapLittleToHostInt32(x)
 
-/* Functions for loading native endian values. */
-
-OS_INLINE
-uint16_t
-_OSReadInt16(
-    const volatile void               * base,
-    uintptr_t                     byteOffset
-)
-{
-    return *(volatile uint16_t *)((uintptr_t)base + byteOffset);
-}
-
-OS_INLINE
-uint32_t
-_OSReadInt32(
-    const volatile void               * base,
-    uintptr_t                     byteOffset
-)
-{
-    return *(volatile uint32_t *)((uintptr_t)base + byteOffset);
-}
-
-OS_INLINE
-uint64_t
-_OSReadInt64(
-    const volatile void               * base,
-    uintptr_t                     byteOffset
-)
-{
-    return *(volatile uint64_t *)((uintptr_t)base + byteOffset);
-}
-
-/* Functions for storing native endian values. */
-
-OS_INLINE
-void
-_OSWriteInt16(
-    volatile void               * base,
-    uintptr_t                     byteOffset,
-    uint16_t                      data
-)
-{
-    *(volatile uint16_t *)((uintptr_t)base + byteOffset) = data;
-}
-
-OS_INLINE
-void
-_OSWriteInt32(
-    volatile void               * base,
-    uintptr_t                     byteOffset,
-    uint32_t                      data
-)
-{
-    *(volatile uint32_t *)((uintptr_t)base + byteOffset) = data;
-}
-
-OS_INLINE
-void
-_OSWriteInt64(
-    volatile void               * base,
-    uintptr_t                     byteOffset,
-    uint64_t                      data
-)
-{
-    *(volatile uint64_t *)((uintptr_t)base + byteOffset) = data;
-}
-
 #if		defined(__BIG_ENDIAN__)
 
 /* Functions for loading big endian to host endianess. */
 
-#define OSReadBigInt16(base, byteOffset) _OSReadInt16(base, byteOffset)
-#define OSReadBigInt32(base, byteOffset) _OSReadInt32(base, byteOffset)
-#define OSReadBigInt64(base, byteOffset) _OSReadInt64(base, byteOffset)
+OS_INLINE
+uint16_t
+OSReadBigInt16(
+    const volatile void               * base,
+    uintptr_t                     offset
+)
+{
+    return *(volatile uint16_t *)((uintptr_t)base + offset);
+}
+
+OS_INLINE
+uint32_t
+OSReadBigInt32(
+    const volatile void               * base,
+    uintptr_t                     offset
+)
+{
+    return *(volatile uint32_t *)((uintptr_t)base + offset);
+}
+
+OS_INLINE
+uint64_t
+OSReadBigInt64(
+    const volatile void               * base,
+    uintptr_t                     offset
+)
+{
+    return *(volatile uint64_t *)((uintptr_t)base + offset);
+}
 
 /* Functions for storing host endianess to big endian. */
 
-#define OSWriteBigInt16(base, byteOffset, data) _OSWriteInt16(base, byteOffset, data)
-#define OSWriteBigInt32(base, byteOffset, data) _OSWriteInt32(base, byteOffset, data)
-#define OSWriteBigInt64(base, byteOffset, data) _OSWriteInt64(base, byteOffset, data)
+OS_INLINE
+void
+OSWriteBigInt16(
+    volatile void               * base,
+    uintptr_t                     offset,
+    uint16_t                      data
+)
+{
+    *(volatile uint16_t *)((uintptr_t)base + offset) = data;
+}
+
+OS_INLINE
+void
+OSWriteBigInt32(
+    volatile void               * base,
+    uintptr_t                     offset,
+    uint32_t                      data
+)
+{
+    *(volatile uint32_t *)((uintptr_t)base + offset) = data;
+}
+
+OS_INLINE
+void
+OSWriteBigInt64(
+    volatile void               * base,
+    uintptr_t                     offset,
+    uint64_t                      data
+)
+{
+    *(volatile uint64_t *)((uintptr_t)base + offset) = data;
+}
 
 /* Functions for loading little endian to host endianess. */
 
-#define OSReadLittleInt16(base, byteOffset) OSReadSwapInt16(base, byteOffset)
-#define OSReadLittleInt32(base, byteOffset) OSReadSwapInt32(base, byteOffset)
-#define OSReadLittleInt64(base, byteOffset) OSReadSwapInt64(base, byteOffset)
+OS_INLINE
+uint16_t
+OSReadLittleInt16(
+    volatile void               * base,
+    uintptr_t                     offset
+)
+{
+    return OSReadSwapInt16(base, offset);
+}
+
+OS_INLINE
+uint32_t
+OSReadLittleInt32(
+    volatile void               * base,
+    uintptr_t                     offset
+)
+{
+    return OSReadSwapInt32(base, offset);
+}
+
+OS_INLINE
+uint64_t
+OSReadLittleInt64(
+    volatile void               * base,
+    uintptr_t                     offset
+)
+{
+    return OSReadSwapInt64(base, offset);
+}
 
 /* Functions for storing host endianess to little endian. */
 
-#define OSWriteLittleInt16(base, byteOffset, data) OSWriteSwapInt16(base, byteOffset, data)
-#define OSWriteLittleInt32(base, byteOffset, data) OSWriteSwapInt32(base, byteOffset, data)
-#define OSWriteLittleInt64(base, byteOffset, data) OSWriteSwapInt64(base, byteOffset, data)
+OS_INLINE
+void
+OSWriteLittleInt16(
+    volatile void               * base,
+    uintptr_t                     offset,
+    uint16_t                      data
+)
+{
+    OSWriteSwapInt16(base, offset, data);
+}
+
+OS_INLINE
+void
+OSWriteLittleInt32(
+    volatile void               * base,
+    uintptr_t                     offset,
+    uint32_t                      data
+)
+{
+    OSWriteSwapInt32(base, offset, data);
+}
+
+OS_INLINE
+void
+OSWriteLittleInt64(
+    volatile void               * base,
+    uintptr_t                     offset,
+    uint64_t                      data
+)
+{
+    OSWriteSwapInt64(base, offset, data);
+}
 
 /* Host endianess to big endian byte swapping macros for constants. */
 
@@ -211,9 +247,32 @@ _OSWriteInt64(
 
 /* Generic host endianess to big endian byte swapping functions. */
 
-#define OSSwapHostToBigInt16(x) ((uint16_t)(x))
-#define OSSwapHostToBigInt32(x) ((uint32_t)(x))
-#define OSSwapHostToBigInt64(x) ((uint64_t)(x))
+OS_INLINE
+uint16_t
+OSSwapHostToBigInt16(
+    uint16_t                        data
+)
+{
+    return data;
+}
+
+OS_INLINE
+uint32_t
+OSSwapHostToBigInt32(
+    uint32_t                        data
+)
+{
+    return data;
+}
+
+OS_INLINE
+uint64_t
+OSSwapHostToBigInt64(
+    uint64_t                        data
+)
+{
+    return data;
+}
 
 /* Host endianess to little endian byte swapping macros for constants. */
 
@@ -235,9 +294,32 @@ _OSWriteInt64(
 
 /* Generic big endian to host endianess byte swapping functions. */
 
-#define OSSwapBigToHostInt16(x) ((uint16_t)(x))
-#define OSSwapBigToHostInt32(x) ((uint32_t)(x))
-#define OSSwapBigToHostInt64(x) ((uint64_t)(x))
+OS_INLINE
+uint16_t
+OSSwapBigToHostInt16(
+    uint16_t                        data
+)
+{
+    return data;
+}
+
+OS_INLINE
+uint32_t
+OSSwapBigToHostInt32(
+    uint32_t                        data
+)
+{
+    return data;
+}
+
+OS_INLINE
+uint64_t
+OSSwapBigToHostInt64(
+    uint64_t                        data
+)
+{
+    return data;
+}
 
 /* Little endian to host endianess byte swapping macros for constants. */
    
@@ -255,27 +337,137 @@ _OSWriteInt64(
 
 /* Functions for loading big endian to host endianess. */
 
-#define OSReadBigInt16(base, byteOffset) OSReadSwapInt16(base, byteOffset)
-#define OSReadBigInt32(base, byteOffset) OSReadSwapInt32(base, byteOffset)
-#define OSReadBigInt64(base, byteOffset) OSReadSwapInt64(base, byteOffset)
+OS_INLINE
+uint16_t
+OSReadBigInt16(
+    const volatile void               * base,
+    uintptr_t                     offset
+)
+{
+    return OSReadSwapInt16(base, offset);
+}
+
+OS_INLINE
+uint32_t
+OSReadBigInt32(
+    const volatile void               * base,
+    uintptr_t                     offset
+)
+{
+    return OSReadSwapInt32(base, offset);
+}
+
+OS_INLINE
+uint64_t
+OSReadBigInt64(
+    const volatile void               * base,
+    uintptr_t                     offset
+)
+{
+    return OSReadSwapInt64(base, offset);
+}
 
 /* Functions for storing host endianess to big endian. */
 
-#define OSWriteBigInt16(base, byteOffset, data) OSWriteSwapInt16(base, byteOffset, data)
-#define OSWriteBigInt32(base, byteOffset, data) OSWriteSwapInt32(base, byteOffset, data)
-#define OSWriteBigInt64(base, byteOffset, data) OSWriteSwapInt64(base, byteOffset, data)
+OS_INLINE
+void
+OSWriteBigInt16(
+    volatile void               * base,
+    uintptr_t                     offset,
+    uint16_t                      data
+)
+{
+    OSWriteSwapInt16(base, offset, data);
+}
+
+OS_INLINE
+void
+OSWriteBigInt32(
+    volatile void               * base,
+    uintptr_t                     offset,
+    uint32_t                      data
+)
+{
+    OSWriteSwapInt32(base, offset, data);
+}
+
+OS_INLINE
+void
+OSWriteBigInt64(
+    volatile void               * base,
+    uintptr_t                     offset,
+    uint64_t                      data
+)
+{
+    OSWriteSwapInt64(base, offset, data);
+}
 
 /* Functions for loading little endian to host endianess. */
 
-#define OSReadLittleInt16(base, byteOffset) _OSReadInt16(base, byteOffset)
-#define OSReadLittleInt32(base, byteOffset) _OSReadInt32(base, byteOffset)
-#define OSReadLittleInt64(base, byteOffset) _OSReadInt64(base, byteOffset)
+OS_INLINE
+uint16_t
+OSReadLittleInt16(
+    const volatile void               * base,
+    uintptr_t                     offset
+)
+{
+    return *(volatile uint16_t *)((uintptr_t)base + offset);
+}
+
+OS_INLINE
+uint32_t
+OSReadLittleInt32(
+    const volatile void               * base,
+    uintptr_t                     offset
+)
+{
+    return *(volatile uint32_t *)((uintptr_t)base + offset);
+}
+
+OS_INLINE
+uint64_t
+OSReadLittleInt64(
+    const volatile void               * base,
+    uintptr_t                     offset
+)
+{
+    return *(volatile uint64_t *)((uintptr_t)base + offset);
+}
 
 /* Functions for storing host endianess to little endian. */
 
-#define OSWriteLittleInt16(base, byteOffset, data) _OSWriteInt16(base, byteOffset, data)
-#define OSWriteLittleInt32(base, byteOffset, data) _OSWriteInt32(base, byteOffset, data)
-#define OSWriteLittleInt64(base, byteOffset, data) _OSWriteInt64(base, byteOffset, data)
+OS_INLINE
+void
+OSWriteLittleInt16(
+    volatile void               * base,
+    uintptr_t                     offset,
+    uint16_t                        data
+)
+{
+    *(volatile uint16_t *)((uintptr_t)base + offset) = data;
+}
+
+OS_INLINE
+void
+OSWriteLittleInt32(
+    volatile void               * base,
+    uintptr_t                     offset,
+    uint32_t                        data
+)
+{
+    *(volatile uint32_t *)((uintptr_t)base + offset) = data;
+}
+
+OS_INLINE
+void
+OSWriteLittleInt64(
+    volatile void               * base,
+    uintptr_t                     offset,
+    uint64_t                      data
+)
+{
+    *(volatile uint64_t *)((uintptr_t)base + offset) = data;
+}
 
 /* Host endianess to big endian byte swapping macros for constants. */
 
@@ -297,9 +489,32 @@ _OSWriteInt64(
 
 /* Generic host endianess to little endian byte swapping functions. */
 
-#define OSSwapHostToLittleInt16(x) ((uint16_t)(x))
-#define OSSwapHostToLittleInt32(x) ((uint32_t)(x))
-#define OSSwapHostToLittleInt64(x) ((uint64_t)(x))
+OS_INLINE
+uint16_t
+OSSwapHostToLittleInt16(
+    uint16_t                        data
+)
+{
+    return data;
+}
+
+OS_INLINE
+uint32_t
+OSSwapHostToLittleInt32(
+    uint32_t                        data
+)
+{
+    return data;
+}
+
+OS_INLINE
+uint64_t
+OSSwapHostToLittleInt64(
+    uint64_t                        data
+)
+{
+    return data;
+}
 
 /* Big endian to host endianess byte swapping macros for constants. */
 
@@ -321,9 +536,32 @@ _OSWriteInt64(
 
 /* Generic little endian to host endianess byte swapping functions. */
 
-#define OSSwapLittleToHostInt16(x) ((uint16_t)(x))
-#define OSSwapLittleToHostInt32(x) ((uint32_t)(x))
-#define OSSwapLittleToHostInt64(x) ((uint64_t)(x))
+OS_INLINE
+uint16_t
+OSSwapLittleToHostInt16(
+    uint16_t                        data
+)
+{
+    return data;
+}
+
+OS_INLINE
+uint32_t
+OSSwapLittleToHostInt32(
+    uint32_t                        data
+)
+{
+    return data;
+}
+
+OS_INLINE
+uint64_t
+OSSwapLittleToHostInt64(
+    uint64_t                        data
+)
+{
+    return data;
+}
 
 #else
 #error Unknown endianess.

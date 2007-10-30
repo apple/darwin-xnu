@@ -29,16 +29,10 @@
 #include <IOKit/IOMapper.h>
 #include <libkern/c++/OSData.h>
 
-#include "IOCopyMapper.h"
-
-__BEGIN_DECLS
-extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
-__END_DECLS
-
 #define super IOService
 OSDefineMetaClassAndAbstractStructors(IOMapper, IOService);
 
-OSMetaClassDefineReservedUsed(IOMapper, 0);
+OSMetaClassDefineReservedUnused(IOMapper, 0);
 OSMetaClassDefineReservedUnused(IOMapper, 1);
 OSMetaClassDefineReservedUnused(IOMapper, 2);
 OSMetaClassDefineReservedUnused(IOMapper, 3);
@@ -142,44 +136,98 @@ void IOMapper::iovmInsert(ppnum_t addr, IOItemCount offset,
         iovmInsert(addr, offset + i, pageList[i].phys_addr);
 }
 
-OSData * IOMapper::
-NewARTTable(IOByteCount size, void ** virtAddrP, ppnum_t *physAddrP)
+struct ARTTableData {
+    void *v;
+    upl_t u[0];
+};
+#define getARTDataP(data) ((ARTTableData *) (data)->getBytesNoCopy())
+
+OSData *
+IOMapper::NewARTTable(IOByteCount size,
+                      void ** virtAddrP, ppnum_t *physAddrP)
 {
-    if (!virtAddrP || !physAddrP)
-	return 0;
-
+    OSData *ret;
     kern_return_t kr;
-    vm_address_t address;
+    vm_address_t startUpl;
+    ARTTableData *dataP;
+    unsigned int dataSize;
+    upl_page_info_t *pl = 0;
 
+    // Each UPL can deal with about one meg at the moment
     size = round_page_32(size);
-    kr = kmem_alloc_contig(kernel_map, &address, size, PAGE_MASK, 0);
+    dataSize = sizeof(ARTTableData) + sizeof(upl_t) * size / (1024 * 1024);
+    ret = OSData::withCapacity(dataSize);
+    if (!ret)
+        return 0;
+
+    // Append 0's to the buffer, in-other-words reset to nulls.
+    ret->appendBytes(NULL, sizeof(ARTTableData));
+    dataP = getARTDataP(ret);
+
+    kr = kmem_alloc_contig(kernel_map, &startUpl, size, PAGE_MASK, 0);
     if (kr)
         return 0;
 
-    ppnum_t pagenum = pmap_find_phys(kernel_pmap, (addr64_t) address);
-    if (pagenum)
-	*physAddrP = pagenum;
-    else {
-	FreeARTTable((OSData *) address, size);
-	address = 0;
-    }
+    dataP->v = (void *) startUpl;
 
-    *virtAddrP = (void *) address;
+    do {
+        upl_t iopl;
+        int upl_flags = UPL_SET_INTERNAL | UPL_SET_LITE
+                      | UPL_SET_IO_WIRE | UPL_COPYOUT_FROM;
+        vm_size_t iopl_size = size;
 
-    return (OSData *) address;
+        kr = vm_map_get_upl(kernel_map,
+                            (vm_map_offset_t)startUpl,
+                            &iopl_size,
+                            &iopl,
+                            0,
+                            0,
+                            &upl_flags,
+                            0);
+        if (kr) {
+            panic("IOMapper:vm_map_get_upl returned 0x%x\n");
+            goto bail;
+        }
+
+        if (!ret->appendBytes(&iopl, sizeof(upl_t)))
+            goto bail;
+            
+        startUpl += iopl_size;
+        size -= iopl_size;
+    } while(size);
+
+    // Need to re-establish the dataP as the OSData may have grown.
+    dataP = getARTDataP(ret);
+
+    // Now grab the page entry of the first page and get its phys addr
+    pl = UPL_GET_INTERNAL_PAGE_LIST(dataP->u[0]);
+    *physAddrP = pl->phys_addr;
+    *virtAddrP = dataP->v;
+
+    return ret;
+
+bail:
+    FreeARTTable(ret, size);
+    return 0;
 }
 
 void IOMapper::FreeARTTable(OSData *artHandle, IOByteCount size)
 {
-    vm_address_t address = (vm_address_t) artHandle;
+    assert(artHandle);
 
-    size = round_page_32(size);
-    kmem_free(kernel_map, address, size);	// Just panic if address is 0
-}
+    ARTTableData *dataP = getARTDataP(artHandle);
 
-bool IOMapper::getBypassMask(addr64_t *maskP) const
-{
-    return false;
+    int numupls = ((artHandle->getLength() - sizeof(*dataP)) / sizeof(upl_t));
+    for (int i = 0; i < numupls; i++) {
+        upl_abort(dataP->u[i], 0);
+        upl_deallocate(dataP->u[i]);
+    }
+
+    if (dataP->v) {
+        size = round_page_32(size);
+        kmem_free(kernel_map, (vm_address_t) dataP->v, size);
+    }
+    artHandle->release();
 }
 
 __BEGIN_DECLS
@@ -342,25 +390,5 @@ void IOMappedWrite64(IOPhysicalAddress address, UInt64 value)
     else
         ml_phys_write_double((vm_offset_t) address, value);
 }
-
-mach_vm_address_t IOMallocPhysical(mach_vm_size_t size, mach_vm_address_t mask)
-{
-    mach_vm_address_t address = 0;
-    if (gIOCopyMapper)
-    {
-	address = ptoa_64(gIOCopyMapper->iovmAlloc(atop_64(round_page(size))));
-    }
-
-    return (address);
-}
-
-void IOFreePhysical(mach_vm_address_t address, mach_vm_size_t size)
-{
-    if (gIOCopyMapper)
-    {
-	gIOCopyMapper->iovmFree(atop_64(address), atop_64(round_page(size)));
-    }
-}
-
 
 __END_DECLS

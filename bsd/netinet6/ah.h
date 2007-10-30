@@ -88,4 +88,4 @@ extern int ah4_calccksum(struct mbuf *, caddr_t, size_t,
 	const struct ah_algorithm *, struct secasvar *);
 #endif KERNEL_PRIVATE
 
-#endif /* _NETINET6_AH_H_ */
+#endif _NETINET6_AH_H_

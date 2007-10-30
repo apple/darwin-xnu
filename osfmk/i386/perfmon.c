@@ -36,23 +36,12 @@
 #include <i386/cpuid.h>
 #include <i386/lock.h>
 #include <vm/vm_kern.h>
-#include <kern/task.h>
 
-#if DEBUG
+#ifdef DEBUG
 #define	DBG(x...)	kprintf(x)
 #else
 #define	DBG(x...)
 #endif
-
-decl_simple_lock_data(,pmc_lock)
-static task_t	pmc_owner = TASK_NULL;
-static int	pmc_thread_count = 0;
-
-/* PMC Facility Owner:
- * TASK_NULL - no one owns it
- * kernel_task - owned by pmc
- * other task - owned by another task
- */
 
 /*
  * Table of ESCRs and addresses associated with performance counters/CCCRs.
@@ -291,18 +280,24 @@ pmc_p6_intr(void *state)
 			(*pmc_table->ovf_func[id])(id, state);
 }
 
-void *
-pmc_alloc(void)
+int
+pmc_init(void)
 {
 	int		ret;
+	cpu_core_t	*my_core;
 	pmc_table_t	*pmc_table;
 	pmc_machine_t	pmc_type;
 
+	my_core = cpu_core();
+	assert(my_core);
+
 	pmc_type = _pmc_machine_type();
 	if (pmc_type == pmc_none) {
-		return NULL;
+		return KERN_FAILURE;
 	}
 	
+	pmc_table = (pmc_table_t *) my_core->pmc;
+	if (pmc_table == NULL) {
 		ret = kmem_alloc(kernel_map,
 			(void *) &pmc_table, sizeof(pmc_table_t));
 		if (ret != KERN_SUCCESS)
@@ -326,9 +321,17 @@ pmc_alloc(void)
 		default:
 			break;
 		}
-	return (void *) pmc_table;
-}
+		if (!atomic_cmpxchg((uint32_t *) &my_core->pmc,
+				    0, (uint32_t) pmc_table)) {
+			kmem_free(kernel_map,
+				  (vm_offset_t) pmc_table, sizeof(pmc_table_t));
+		}
+	}
+	DBG("pmc_init() done for cpu %d my_core->pmc=0x%x type=%d\n",
+		cpu_number(), my_core->pmc, pmc_type);
 
+	return KERN_SUCCESS;
+}
 
 static inline pmc_table_t *
 pmc_table_valid(pmc_id_t id)
@@ -553,81 +556,3 @@ pmc_set_ovf_func(pmc_id_t id, pmc_ovf_func_t func)
 
 	return KERN_SUCCESS;
 }
-
-int
-pmc_acquire(task_t task)
-{
-	kern_return_t retval = KERN_SUCCESS;
-  
-	simple_lock(&pmc_lock);
-  
-	if(pmc_owner == task) {
-		DBG("pmc_acquire - "
-		    "ACQUIRED: already owner\n");
-		retval = KERN_SUCCESS;
-		/* already own it */
-	} else if(pmc_owner == TASK_NULL) { /* no one owns it */
-		pmc_owner = task;
-		pmc_thread_count = 0;
-		DBG("pmc_acquire - "
-		    "ACQUIRED: no current owner - made new owner\n");
-		retval = KERN_SUCCESS;
-	} else { /* someone already owns it */
-		if(pmc_owner == kernel_task) {
-			if(pmc_thread_count == 0) {
-				/* kernel owns it but no threads using it */
-				pmc_owner = task;
-				pmc_thread_count = 0;
-				DBG("pmc_acquire - "
-				    "ACQUIRED: owned by kernel, no threads\n");
-				retval = KERN_SUCCESS;
-			} else {
-				DBG("pmc_acquire - "
-				    "DENIED: owned by kernel, in use\n");
-				retval = KERN_RESOURCE_SHORTAGE;
-			}
-		} else { /* non-kernel owner */
-			DBG("pmc_acquire - "	
-			    "DENIED: owned by another task\n");
-			retval = KERN_RESOURCE_SHORTAGE;
-		}
-	}
-  
-	simple_unlock(&pmc_lock);
-	return retval;
-}
-
-int
-pmc_release(task_t task)
-{
-	kern_return_t retval = KERN_SUCCESS;
-	task_t old_pmc_owner = pmc_owner;
-  
-	simple_lock(&pmc_lock);
-  
-	if(task != pmc_owner) {
-		retval = KERN_NO_ACCESS;
-	} else {
-		if(old_pmc_owner == kernel_task) {
-			if(pmc_thread_count>0) {
-				DBG("pmc_release - "
-				    "NOT RELEASED: owned by kernel, in use\n");
-				retval = KERN_NO_ACCESS;
-			} else {
-				DBG("pmc_release - "
-				    "RELEASED: was owned by kernel\n");
-				pmc_owner = TASK_NULL;
-				retval = KERN_SUCCESS;
-			}
-		} else {
-			DBG("pmc_release - "
-			    "RELEASED: was owned by user\n");
-			pmc_owner = TASK_NULL;
-			retval = KERN_SUCCESS;
-		}
-	}
-
-	simple_unlock(&pmc_lock);
-	return retval;
-}
-

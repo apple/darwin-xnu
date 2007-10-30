@@ -102,6 +102,7 @@
 
 #include <vm/vm_pageout.h>
 
+#include <architecture/byte_order.h>
 #include <libkern/OSAtomic.h>
 
 
@@ -733,17 +734,16 @@ safedounmount(mp, flags, p)
 	if (mp->mnt_flag & MNT_ROOTFS)
 		return (EBUSY); /* the root is always busy */
 
-	return (dounmount(mp, flags, NULL, p));
+	return (dounmount(mp, flags, p));
 }
 
 /*
  * Do the actual file system unmount.
  */
 int
-dounmount(mp, flags, skiplistrmp, p)
+dounmount(mp, flags, p)
 	register struct mount *mp;
 	int flags;
-	int * skiplistrmp;
 	struct proc *p;
 {
 	struct vnode *coveredvp = (vnode_t)0;
@@ -771,8 +771,6 @@ dounmount(mp, flags, skiplistrmp, p)
 		 * The prior unmount attempt has probably succeeded.
 		 * Do not dereference mp here - returning EBUSY is safest.
 		 */
-		if (skiplistrmp != NULL)
-			*skiplistrmp = 1;
 		return (EBUSY);
 	}
 	mp->mnt_kern_flag |= MNTK_UNMOUNT;
@@ -1530,30 +1528,6 @@ bad:
 
 }
 
-/*
- * An open system call using an extended argument list compared to the regular
- * system call 'open'.
- *
- * Parameters:	p			Process requesting the open
- *		uap			User argument descriptor (see below)
- *		retval			Pointer to an area to receive the
- *					return calue from the system call
- *
- * Indirect:	uap->path		Path to open (same as 'open')
- *		uap->flags		Flags to open (same as 'open'
- *		uap->uid		UID to set, if creating
- *		uap->gid		GID to set, if creating
- *		uap->mode		File mode, if creating (same as 'open')
- *		uap->xsecurity		ACL to set, if creating
- *
- * Returns:	0			Success
- *		!0			errno value
- *
- * Notes:	The kauth_filesec_t in 'va', if any, is in host byte order.
- *
- * XXX:		We should enummerate the possible errno values here, and where
- *		in the code they originated.
- */
 int
 open_extended(struct proc *p, struct open_extended_args *uap, register_t *retval)
 {
@@ -1755,29 +1729,6 @@ out:
 	return error;
 }
 
-
-/*
- * A mkfifo system call using an extended argument list compared to the regular
- * system call 'mkfifo'.
- *
- * Parameters:	p			Process requesting the open
- *		uap			User argument descriptor (see below)
- *		retval			(Ignored)
- *
- * Indirect:	uap->path		Path to fifo (same as 'mkfifo')
- *		uap->uid		UID to set
- *		uap->gid		GID to set
- *		uap->mode		File mode to set (same as 'mkfifo')
- *		uap->xsecurity		ACL to set, if creating
- *
- * Returns:	0			Success
- *		!0			errno value
- *
- * Notes:	The kauth_filesec_t in 'va', if any, is in host byte order.
- *
- * XXX:		We should enummerate the possible errno values here, and where
- *		in the code they originated.
- */
 int
 mkfifo_extended(struct proc *p, struct mkfifo_extended_args *uap, __unused register_t *retval)
 {
@@ -2489,8 +2440,8 @@ out:
 		vnode_put(vp);
 	if (dvp)
 		vnode_put(dvp);
-	if (IS_VALID_CRED(context.vc_ucred))
- 		kauth_cred_unref(&context.vc_ucred);
+	if (context.vc_ucred)
+ 		kauth_cred_rele(context.vc_ucred);
 	return(error);
 }
 
@@ -2528,7 +2479,7 @@ access(__unused struct proc *p, register struct access_args *uap, __unused regis
   	nameidone(&nd);
   
 out:
- 	kauth_cred_unref(&context.vc_ucred);
+ 	kauth_cred_rele(context.vc_ucred);
  	return(error);
 }
 
@@ -2870,28 +2821,6 @@ chmod1(vfs_context_t ctx, user_addr_t path, struct vnode_attr *vap)
 	return(error);
 }
 
-/*
- * A chmod system call using an extended argument list compared to the regular
- * system call 'mkfifo'.
- *
- * Parameters:	p			Process requesting the open
- *		uap			User argument descriptor (see below)
- *		retval			(ignored)
- *
- * Indirect:	uap->path		Path to object (same as 'chmod')
- *		uap->uid		UID to set
- *		uap->gid		GID to set
- *		uap->mode		File mode to set (same as 'chmod')
- *		uap->xsecurity		ACL to set (or delete)
- *
- * Returns:	0			Success
- *		!0			errno value
- *
- * Notes:	The kauth_filesec_t in 'va', if any, is in host byte order.
- *
- * XXX:		We should enummerate the possible errno values here, and where
- *		in the code they originated.
- */
 int
 chmod_extended(struct proc *p, struct chmod_extended_args *uap, __unused register_t *retval)
 {
@@ -4674,11 +4603,10 @@ checkuseraccess (struct proc *p, register struct checkuseraccess_args *uap, __un
 	register struct vnode *vp;
 	int error;
 	struct nameidata nd;
-	struct ucred template_cred;
+	struct ucred cred;	/* XXX ILLEGAL */
 	int flags;		/*what will actually get passed to access*/
 	u_long nameiflags;
 	struct vfs_context context;
-	kauth_cred_t my_cred;
 
 	/* Make sure that the number of groups is correct before we do anything */
 
@@ -4690,18 +4618,16 @@ checkuseraccess (struct proc *p, register struct checkuseraccess_args *uap, __un
 	if ((error = suser(kauth_cred_get(), &p->p_acflag)))
 		return(error);
 
-	/*
-	 * Fill in the template credential structure; we use a template because
-	 * lookup can attempt to take a persistent reference.
-	 */
-	template_cred.cr_uid = uap->userid;
-	template_cred.cr_ngroups = uap->ngroups;
-	if ((error = copyin(CAST_USER_ADDR_T(uap->groups), (caddr_t) &(template_cred.cr_groups), (sizeof(gid_t))*uap->ngroups)))
+	/* Fill in the credential structure */
+
+	cred.cr_ref = 0;
+	cred.cr_uid = uap->userid;
+	cred.cr_ngroups = uap->ngroups;
+	if ((error = copyin(CAST_USER_ADDR_T(uap->groups), (caddr_t) &(cred.cr_groups), (sizeof(gid_t))*uap->ngroups)))
 		return (error);
 
-	my_cred = kauth_cred_create(&template_cred);
 	context.vc_proc = p;
-	context.vc_ucred = my_cred;
+	context.vc_ucred = &cred;
 
 	/* Get our hands on the file */
 	nameiflags = 0;
@@ -4709,10 +4635,8 @@ checkuseraccess (struct proc *p, register struct checkuseraccess_args *uap, __un
 	NDINIT(&nd, LOOKUP, nameiflags | AUDITVNPATH1, 
 		UIO_USERSPACE, CAST_USER_ADDR_T(uap->path), &context);
 
-	if ((error = namei(&nd))) {
-		kauth_cred_unref(&context.vc_ucred);
+	if ((error = namei(&nd)))
        		 return (error);
-	}
 	nameidone(&nd);
 	vp = nd.ni_vp;
 	
@@ -4732,8 +4656,11 @@ checkuseraccess (struct proc *p, register struct checkuseraccess_args *uap, __un
 		    	
 	vnode_put(vp);
 
-	kauth_cred_unref(&context.vc_ucred);
-	return (error);
+	if (error) 
+ 		return (error);
+	
+	return (0); 
+
 } /* end of checkuseraccess system call */
 
 /************************************************/
@@ -4780,8 +4707,7 @@ searchfs (struct proc *p, register struct searchfs_args *uap, __unused register_
         searchblock.returnbuffer = CAST_USER_ADDR_T(tmp_searchblock.returnbuffer);
         searchblock.returnbuffersize = tmp_searchblock.returnbuffersize;
         searchblock.maxmatches = tmp_searchblock.maxmatches;
-        searchblock.timelimit.tv_sec = tmp_searchblock.timelimit.tv_sec;
-        searchblock.timelimit.tv_usec = tmp_searchblock.timelimit.tv_usec;
+        searchblock.timelimit = tmp_searchblock.timelimit;
         searchblock.searchparams1 = CAST_USER_ADDR_T(tmp_searchblock.searchparams1);
         searchblock.sizeofsearchparams1 = tmp_searchblock.sizeofsearchparams1;
         searchblock.searchparams2 = CAST_USER_ADDR_T(tmp_searchblock.searchparams2);
@@ -5513,8 +5439,6 @@ munge_statfs(struct mount *mp, struct vfsstatfs *sfsp,
  */
 void munge_stat(struct stat *sbp, struct user_stat *usbp)
 {
-        bzero(usbp, sizeof(struct user_stat));
-
 	usbp->st_dev = sbp->st_dev;
 	usbp->st_ino = sbp->st_ino;
 	usbp->st_mode = sbp->st_mode;

@@ -203,6 +203,9 @@ journal_init()
 	jnl_lock_attr    = lck_attr_alloc_init();
 	jnl_group_attr   = lck_grp_attr_alloc_init();
 	jnl_mutex_group  = lck_grp_alloc_init("jnl-mutex", jnl_group_attr);
+
+	/* Turn on lock debugging */
+	//lck_attr_setdebug(jnl_lock_attr);
 }
 
 static __inline__ void

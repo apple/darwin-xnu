@@ -74,6 +74,45 @@ static lck_attr_t		*ctl_lck_attr = 0;
 static lck_grp_t		*ctl_lck_grp = 0;
 static lck_mtx_t 		*ctl_mtx;
 
+/*
+ * internal structure maintained for each register controller 
+ */
+
+struct ctl_cb;
+
+struct kctl
+{
+	TAILQ_ENTRY(kctl) 	next;		/* controller chain */
+	
+	/* controller information provided when registering */
+	char 				name[MAX_KCTL_NAME]; /* unique nke identifier, provided by DTS */
+	u_int32_t			id;
+	u_int32_t			reg_unit;
+	
+	/* misc communication information */
+	u_int32_t	flags;			/* support flags */
+	u_int32_t	recvbufsize;		/* request more than the default buffer size */
+	u_int32_t	sendbufsize;		/* request more than the default buffer size */
+	
+	/* Dispatch functions */
+	ctl_connect_func	connect;	/* Make contact */
+	ctl_disconnect_func	disconnect;	/* Break contact */
+	ctl_send_func		send;		/* Send data to nke */
+	ctl_setopt_func		setopt;		/* set kctl configuration */
+	ctl_getopt_func		getopt;		/* get kctl configuration */
+	
+	TAILQ_HEAD(, ctl_cb) 	kcb_head;
+	u_int32_t 				lastunit;
+};
+
+struct ctl_cb {
+	TAILQ_ENTRY(ctl_cb) 	next;		/* controller chain */
+	lck_mtx_t				*mtx;
+	struct socket			*so; 		/* controlling socket */
+	struct kctl				*kctl; 		/* back pointer to controller */
+	u_int32_t 				unit;
+	void					*userdata;
+};
 
 /* all the controllers are chained */
 TAILQ_HEAD(, kctl) 	ctl_head;
@@ -146,6 +185,7 @@ kern_control_init(void)
 			error = ENOMEM;
 			goto done;
 	}
+	lck_grp_attr_setdefault(ctl_lck_grp_attr);
 			
 	ctl_lck_grp = lck_grp_alloc_init("Kernel Control Protocol", ctl_lck_grp_attr);
 	if (ctl_lck_grp == 0) {
@@ -160,6 +200,7 @@ kern_control_init(void)
 			error = ENOMEM;
 			goto done;
 	}
+	lck_attr_setdefault(ctl_lck_attr);
 	
 	ctl_mtx = lck_mtx_alloc_init(ctl_lck_grp, ctl_lck_attr);
 	if (ctl_mtx == 0) {
@@ -885,9 +926,12 @@ static int
 ctl_lock(struct socket *so, int refcount, int lr)
  {
 	int lr_saved;
-	if (lr == 0) 
-		lr_saved = (unsigned int) __builtin_return_address(0);
+#ifdef __ppc__
+	if (lr == 0) {
+			__asm__ volatile("mflr %0" : "=r" (lr_saved));
+	}
 	else lr_saved = lr;
+#endif
 	
 	if (so->so_pcb) {
 		lck_mtx_lock(((struct ctl_cb *)so->so_pcb)->mtx);
@@ -902,9 +946,7 @@ ctl_lock(struct socket *so, int refcount, int lr)
 	
 	if (refcount)
 		so->so_usecount++;
-
-	so->lock_lr[so->next_lock_lr] = (void *)lr_saved;
-	so->next_lock_lr = (so->next_lock_lr+1) % SO_LCKDBG_MAX;
+	so->reserved3 = (void *)lr_saved;
 	return (0);
 }
 
@@ -914,9 +956,12 @@ ctl_unlock(struct socket *so, int refcount, int lr)
 	int lr_saved;
 	lck_mtx_t * mutex_held;
 	
-	if (lr == 0) 
-		lr_saved = (unsigned int) __builtin_return_address(0);
+#ifdef __ppc__
+	if (lr == 0) {
+		__asm__ volatile("mflr %0" : "=r" (lr_saved));
+	}
 	else lr_saved = lr;
+#endif
 	
 #ifdef MORE_KCTLLOCK_DEBUG
 	printf("ctl_unlock: so=%x sopcb=%x lock=%x ref=%x lr=%x\n",
@@ -934,9 +979,8 @@ ctl_unlock(struct socket *so, int refcount, int lr)
 		mutex_held = ((struct ctl_cb *)so->so_pcb)->mtx;
 	}
 	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
-	so->unlock_lr[so->next_unlock_lr] = (void *)lr_saved;
-	so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
 	lck_mtx_unlock(mutex_held);
+	so->reserved4 = (void *)lr_saved;
 	
 	if (so->so_usecount == 0)
 		ctl_sofreelastref(so);

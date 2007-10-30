@@ -41,9 +41,8 @@
 #include <i386/pmap.h>
 #include <i386/misc_protos.h>
 #include <i386/cpu_threads.h>
-#include <i386/rtclock.h>
 #include <vm/vm_kern.h>
-#include "cpuid.h"
+
 
 struct processor	processor_master;
 
@@ -87,8 +86,6 @@ cpu_sleep(void)
 {
 	cpu_data_t	*proc_info = current_cpu_datap();
 
-	proc_info->cpu_running = FALSE;
-
 	PE_cpu_machine_quiesce(proc_info->cpu_id);
 
 	cpu_thread_halt();
@@ -99,13 +96,14 @@ cpu_init(void)
 {
 	cpu_data_t	*cdp = current_cpu_datap();
 
-	/* be sure cpuid is initialized */
-	cpuid_set_info();
-
-	/* and allow it to be authoritative */
-	cdp->cpu_type = cpuid_cputype();
-	cdp->cpu_subtype = cpuid_cpusubtype();
-
+#ifdef	MACH_BSD
+	/* FIXME */
+	cdp->cpu_type = CPU_TYPE_I386;
+	cdp->cpu_subtype = CPU_SUBTYPE_PENTPRO;
+#else
+	cdp->cpu_type = cpuid_cputype(0);
+	cdp->cpu_subtype = CPU_SUBTYPE_AT386;
+#endif
 	cdp->cpu_running = TRUE;
 }
 
@@ -138,11 +136,10 @@ void
 cpu_machine_init(
 	void)
 {
-	cpu_data_t	*cdp = current_cpu_datap();
+	int	cpu;
 
-	PE_cpu_machine_init(cdp->cpu_id, !cdp->cpu_boot_complete);
-	cdp->cpu_boot_complete = TRUE;
-	cdp->cpu_running = TRUE;
+	cpu = get_cpu_number();
+	PE_cpu_machine_init(cpu_datap(cpu)->cpu_id, TRUE);
 #if 0
 	if (cpu_datap(cpu)->hibernate)
 	{

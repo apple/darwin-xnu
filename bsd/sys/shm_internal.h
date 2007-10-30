@@ -95,15 +95,13 @@ struct user_shmid_ds {
  * might be of interest to user programs.  Also part of the ipcs interface.
  * Note: use of user_ssize_t intentional: permits 32 bit ipcs to provide
  * information about 64 bit programs shared segments.
- * Note 2: user_ssize_t is not that useful if it's not 64-bit,
- * so let's use int64_t explicitely...
  */
 struct shminfo {
-	int64_t	shmmax;		/* max shm segment size (bytes) */
-	int64_t	shmmin;		/* min shm segment size (bytes) */
-	int64_t	shmmni;		/* max number of shm identifiers */
-	int64_t	shmseg;		/* max shm segments per process */
-	int64_t	shmall;		/* max amount of shm (pages) */
+	user_ssize_t	shmmax;		/* max shm segment size (bytes) */
+	user_ssize_t	shmmin;		/* min shm segment size (bytes) */
+	user_ssize_t	shmmni;		/* max number of shm identifiers */
+	user_ssize_t	shmseg;		/* max shm segments per process */
+	user_ssize_t	shmall;		/* max amount of shm (pages) */
 };
 
 #ifdef KERNEL

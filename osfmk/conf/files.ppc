@@ -64,6 +64,7 @@ osfmk/ppc/Diagnostics.c		standard
 osfmk/ppc/PPCcalls.c		standard
 osfmk/ppc/vmachmon.c		standard
 osfmk/ppc/vmachmon_asm.s	standard
+osfmk/ppc/pms.c				standard
 osfmk/ppc/pmsCPU.c			standard
 
 osfmk/ppc/Firmware.s		standard
@@ -93,10 +94,12 @@ osfmk/ppc/commpage/memset_g3.s  standard
 osfmk/ppc/commpage/memset_g4.s  standard
 osfmk/ppc/commpage/memset_g5.s  standard
 
-osfmk/chud/ppc/chud_cpu_asm.s			standard
-osfmk/chud/ppc/chud_cpu_ppc.c			standard
-osfmk/chud/ppc/chud_osfmk_callback_ppc.c	standard
-osfmk/chud/ppc/chud_thread_ppc.c		standard
+osfmk/ppc/chud/chud_osfmk_callback.c	standard
+osfmk/ppc/chud/chud_cpu.c		standard
+osfmk/ppc/chud/chud_cpu_asm.s	standard
+osfmk/ppc/chud/chud_memory.c	standard
+osfmk/ppc/chud/chud_thread.c	standard
+osfmk/ppc/chud/chud_glue.c		standard
 
 osfmk/kdp/ml/ppc/kdp_machdep.c        optional mach_kdp
 osfmk/kdp/ml/ppc/kdp_vm.c             optional mach_kdp

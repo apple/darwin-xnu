@@ -63,36 +63,29 @@
 /*
  * User LDT management.
  *
- * Each task may have its own LDT.
+ * Each thread in a task may have its own LDT.
  */
 
-#define	LDT_AUTO_ALLOC	0xffffffff
-
-#ifdef KERNEL
 #include <i386/seg.h>
 
 struct user_ldt {
-	unsigned int start;		/* first descriptor in table */
-	unsigned int count;		/* how many descriptors in table */
-	struct real_descriptor	ldt[0];	/* descriptor table (variable) */
+	struct real_descriptor	desc;	/* descriptor for self */
+	struct real_descriptor	ldt[1];	/* descriptor table (variable) */
 };
 typedef struct user_ldt *	user_ldt_t;
 
-extern user_ldt_t	user_ldt_copy(
-			user_ldt_t	uldt);
+/*
+ * Check code/stack/data selector values against LDT if present.
+ */
+#define	S_CODE	0		/* code segment */
+#define	S_STACK	1		/* stack segment */
+#define	S_DATA	2		/* data segment */
+
+extern boolean_t selector_check(
+			thread_t	thread,
+			int		sel,
+			int		type);
 extern void	user_ldt_free(
 			user_ldt_t	uldt);
-extern void	user_ldt_set(
-			thread_t	thread);
-#else /* !KERNEL */
-#include <sys/cdefs.h>
-
-union ldt_entry;
-
-__BEGIN_DECLS
-int i386_get_ldt(int, union ldt_entry *, int);
-int i386_set_ldt(int, const union ldt_entry *, int);
-__END_DECLS
-#endif /* KERNEL */
 
 #endif	/* _I386_USER_LDT_H_ */

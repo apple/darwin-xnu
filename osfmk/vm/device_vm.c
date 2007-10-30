@@ -63,27 +63,12 @@
 
 
 /* until component support available */
-const struct memory_object_pager_ops device_pager_ops = {
-	device_pager_reference,
-	device_pager_deallocate,
-	device_pager_init,
-	device_pager_terminate,
-	device_pager_data_request,
-	device_pager_data_return,
-	device_pager_data_initialize,
-	device_pager_data_unlock,
-	device_pager_synchronize,
-	device_pager_unmap,
-	"device pager"
-};
+int	device_pager_workaround;
 
 typedef int device_port_t;
 
-/*
- * The start of "struct device_pager" MUST match a "struct memory_object".
- */
 typedef struct device_pager {
-	memory_object_pager_ops_t pager_ops; /* == &device_pager_ops	*/
+	int 		*pager;		/* pager workaround pointer	*/
 	unsigned int	pager_ikot;	/* fake ip_kotype() 		*/
 	unsigned int	ref_count;	/* reference count		*/
 	memory_object_control_t	control_handle;	/* mem object's cntrl handle */
@@ -182,7 +167,7 @@ device_pager_populate_object(
 		return kr;
 
 	if(!vm_object->phys_contiguous) {
-		unsigned int null_size = 0;
+		int null_size = 0;
         	kr = vm_object_upl_request(vm_object,
              		(vm_object_offset_t)offset, size, &upl,  NULL,
 			&null_size, (UPL_NO_SYNC | UPL_CLEAN_IN_PLACE)); 
@@ -208,7 +193,7 @@ device_pager_lookup(
 	device_pager_t	device_object;
 
 	device_object = (device_pager_t)name;
-	assert(device_object->pager_ops == &device_pager_ops);
+	assert(device_object->pager == &device_pager_workaround);
 	return (device_object);
 }
 
@@ -275,11 +260,9 @@ device_pager_init(
 /*ARGSUSED6*/
 kern_return_t
 device_pager_data_return(
-	memory_object_t			mem_obj,
-	memory_object_offset_t		offset,
-	vm_size_t			data_cnt,
-	__unused memory_object_offset_t	*resid_offset,
-	__unused int			*io_error,
+	memory_object_t		mem_obj,
+	memory_object_offset_t	offset,
+	vm_size_t		data_cnt,
 	__unused boolean_t		dirty,
 	__unused boolean_t		kernel_copy,
 	__unused int			upl_flags)  
@@ -359,7 +342,7 @@ device_pager_deallocate(
 			 * We still have to release the "memory object control"
 			 * handle.
 			 */
-			assert(device_control->moc_object == VM_OBJECT_NULL);
+			assert(device_control->object == VM_OBJECT_NULL);
 			memory_object_control_deallocate(device_control);
 			device_object->control_handle =
 				MEMORY_OBJECT_CONTROL_NULL;
@@ -442,7 +425,7 @@ device_object_create()
 	device_object = (struct device_pager *) zalloc(device_pager_zone);
 	if (device_object == DEVICE_PAGER_NULL)
 		return(DEVICE_PAGER_NULL);
-	device_object->pager_ops = &device_pager_ops;
+	device_object->pager = &device_pager_workaround;
 	device_object->pager_ikot = IKOT_MEMORY_OBJECT;
 	device_object->ref_count = 1;
 	device_object->control_handle = MEMORY_OBJECT_CONTROL_NULL;

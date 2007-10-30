@@ -39,6 +39,7 @@
  */
 
 extern void		i386_init(void);
+extern void		i386_vm_init(unsigned int maxmem, KernelBootArgs_t *args);
 extern void		machine_init(void);
 extern void		machine_startup(void);
 
@@ -48,6 +49,13 @@ extern void		machine_startup(void);
 
 extern void		cninit(void);
 extern void		kdreboot(void);
+
+/*
+ * i386/locore.s
+ */
+
+extern void		kdb_kintr(void);
+extern void		kgdb_kintr(void);
 
 /*
  * i386/db_interface.c

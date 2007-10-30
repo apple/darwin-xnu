@@ -36,8 +36,9 @@
 #ifndef	_PPC_AST_H_
 #define	_PPC_AST_H_
 
-#define AST_PPC_CHUD_URGENT     AST_CHUD_URGENT
-#define AST_PPC_CHUD            AST_CHUD
-#define AST_PPC_CHUD_ALL        AST_CHUD_ALL
+#define AST_PPC_CHUD_URGENT     0x80000000
+#define AST_PPC_CHUD            0x40000000
+
+#define AST_PPC_CHUD_ALL        (AST_PPC_CHUD_URGENT|AST_PPC_CHUD)
 
 #endif	/* _PPC_AST_H_ */

@@ -1342,6 +1342,7 @@ static struct vnodeopv_entry_desc devfs_spec_vnodeop_entries[] = {
 	{ &vnop_pathconf_desc, (VOPFUNC)spec_pathconf },		/* pathconf */
 	{ &vnop_advlock_desc, (VOPFUNC)spec_advlock },		/* advlock */
 	{ &vnop_bwrite_desc, (VOPFUNC)vn_bwrite },
+	{ &vnop_devblocksize_desc, (VOPFUNC)spec_devblocksize },	/* devblocksize */
 	{ &vnop_pagein_desc, (VOPFUNC)err_pagein },		/* Pagein */
 	{ &vnop_pageout_desc, (VOPFUNC)err_pageout },		/* Pageout */
 	{ &vnop_copyfile_desc, (VOPFUNC)err_copyfile },		/* Copyfile */

@@ -117,7 +117,7 @@ routine	mach_ports_lookup(
  *      Returns information about the target task.
  */
 routine task_info(
-                target_task     : task_name_t;
+                target_task     : task_t;
                 flavor          : task_flavor_t;
         out     task_info_out   : task_info_t, CountInOut);
 

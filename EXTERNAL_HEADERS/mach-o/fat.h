@@ -45,9 +45,10 @@
  * and contains the constants for the possible values of these types.
  */
 #include <mach/machine.h>
+#include <architecture/byte_order.h>
 
 #define FAT_MAGIC	0xcafebabe
-#define FAT_CIGAM	0xbebafeca	
+#define FAT_CIGAM	NXSwapLong(FAT_MAGIC)
 
 struct fat_header {
 	unsigned long	magic;		/* FAT_MAGIC */

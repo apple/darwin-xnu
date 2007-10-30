@@ -12,6 +12,7 @@ INSTINC_SUBDIRS_PPC =
 EXPORT_FILES = 		\
 	asm_help.h	\
 	basic_regs.h	\
+	byte_order.h	\
 	cframe.h	\
 	fp_regs.h	\
 	macro_help.h	\

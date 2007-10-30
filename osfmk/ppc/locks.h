@@ -140,8 +140,7 @@ typedef struct {
 	union {
 		struct {
 			unsigned int			lck_rwd_shared_cnt:16,	/* No. of shared granted request */
-									lck_rwd_priv_excl:1,	/* priority for Writer */
-									lck_rwd_pad17:11,		/* padding */
+									lck_rwd_pad16:12,		/* padding */
 									lck_rwd_want_excl:1,	/* Writer is waiting, or locked for write */
 									lck_rwd_want_upgrade:1,	/* Read-to-write upgrade waiting */
 									lck_rwd_waiting:1,		/* Someone is sleeping on lock */
@@ -161,7 +160,6 @@ typedef struct {
 #define	lck_rw_want_upgrade		lck_rw_sw.lck_rwd.lck_rwd_want_upgrade
 #define	lck_rw_want_excl		lck_rw_sw.lck_rwd.lck_rwd_want_excl
 #define	lck_rw_waiting			lck_rw_sw.lck_rwd.lck_rwd_waiting
-#define	lck_rw_priv_excl		lck_rw_sw.lck_rwd.lck_rwd_priv_excl
 #define	lck_rw_shared_cnt		lck_rw_sw.lck_rwd.lck_rwd_shared_cnt
 
 #define lck_rw_tag				lck_rw_sw.lck_rwi.lck_rwi_tag

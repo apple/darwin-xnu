@@ -1706,6 +1706,8 @@ selthreadclear(sip)
 
 
 
+#define DBG_EVENT	0x10
+
 #define DBG_POST	0x10
 #define DBG_WATCH	0x11
 #define DBG_WAIT	0x12

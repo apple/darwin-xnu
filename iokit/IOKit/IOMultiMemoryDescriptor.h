@@ -126,11 +126,6 @@ public:
     virtual IOPhysicalAddress getPhysicalSegment( IOByteCount   offset,
                                                   IOByteCount * length );
 
-#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
-    virtual addr64_t getPhysicalSegment64(        IOByteCount   offset,
-                                                  IOByteCount * length );
-#endif
-
 /*! @function prepare
     @abstract Prepare the memory for an I/O transfer.
     @discussion This involves paging in the memory, if necessary, and wiring it down for the duration of the transfer.  The complete() method completes the processing of the memory after the I/O transfer finishes.  This method needn't called for non-pageable memory.

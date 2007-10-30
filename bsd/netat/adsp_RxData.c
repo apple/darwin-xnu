@@ -113,18 +113,20 @@ void CheckRecvSeq(sp, f)	/* (CCBPtr sp, ADSP_FRAMEPtr f) */
     register CCBPtr sp;
     register ADSP_FRAMEPtr f;
 {
+    int s;
     int pktNextRecvSeq;
     int sendWdwSeq;
     int eom;
     int hlen;
     register gbuf_t *mp;
 	
+    ATDISABLE(s, sp->lock);
     if (f->descriptor & ADSP_ACK_REQ_BIT) { /* He wants an Ack */
 	sp->sendDataAck = 1;
 	sp->callSend = 1;
     }
 	
-    pktNextRecvSeq = UAL_VALUE_NTOH(f->pktNextRecvSeq); /* Local copy */
+    pktNextRecvSeq = netdw(UAL_VALUE(f->pktNextRecvSeq)); /* Local copy */
 
     /*
      * Make sure the sequence number corresponds to reality -- i.e. for 
@@ -239,7 +241,7 @@ void CheckRecvSeq(sp, f)	/* (CCBPtr sp, ADSP_FRAMEPtr f) */
 	sp->callSend = 1;
 
 noack:
-    sendWdwSeq = UAS_VALUE_NTOH(f->pktRecvWdw) - 1 + pktNextRecvSeq;
+    sendWdwSeq = netw(UAS_VALUE(f->pktRecvWdw)) - 1 + pktNextRecvSeq;
 
     if (GT(sendWdwSeq, sp->sendWdwSeq))	/* Don't make send window smaller */
     {
@@ -247,6 +249,7 @@ noack:
 				/* if we can send more data */
 	sp->sendWdwSeq	= sendWdwSeq;
     }
+    ATENABLE(s, sp->lock);
 }
 
 /*
@@ -272,7 +275,7 @@ int RXData(sp, mp, f, len)	/* (CCBPtr sp, ADSP_FRAMEPtr f, word len) */
     ADSP_FRAMEPtr f;
     int len;
 {
-    int offset;
+    int s, offset;
     int PktFirstByteSeq;
     short cnt;
     char eom;
@@ -290,12 +293,14 @@ int RXData(sp, mp, f, len)	/* (CCBPtr sp, ADSP_FRAMEPtr f, word len) */
 
     trace_mbufs(D_M_ADSP, "  mp", mp);
 
-    PktFirstByteSeq = UAL_VALUE_NTOH(f->pktFirstByteSeq); /* Local copy */
+    PktFirstByteSeq = netdw(UAL_VALUE(f->pktFirstByteSeq)); /* Local copy */
 
+    ATDISABLE(s, sp->lock);
     if (GT(PktFirstByteSeq, sp->recvSeq)) /* missed a packet (out of order) */
     {
 	if (sp->badSeqCnt++ > sp->badSeqCnt) /* Need to send rexmit advice */
 	    sp->sendCtl |= B_CTL_RETRANSMIT;
+	ATENABLE(s, sp->lock);
 	CheckRecvSeq(sp, f);	/* Will set send ACK flag if requested */
 	CheckReadQueue(sp);
 	gbuf_freem(mp);
@@ -308,6 +313,7 @@ int RXData(sp, mp, f, len)	/* (CCBPtr sp, ADSP_FRAMEPtr f, word len) */
     }
 	
     if (LTE(PktFirstByteSeq + len + eom, sp->recvSeq)) { /* duplicate data? */
+	ATENABLE(s, sp->lock);
 	CheckRecvSeq(sp, f);	/* Will set send ACK flag if requested */
 	CheckReadQueue(sp);
 	gbuf_freem(mp);
@@ -382,6 +388,7 @@ int RXData(sp, mp, f, len)	/* (CCBPtr sp, ADSP_FRAMEPtr f, word len) */
      * doing anything that might take a long while
      */
 
+    ATENABLE(s, sp->lock);
     CheckRecvSeq(sp, f);	/* Will set send ACK flag if requested */
     CheckReadQueue(sp);
     KERNEL_DEBUG(DBG_ADSP_RCV, 5, sp, sp->rbuf_mb, 0, 0);

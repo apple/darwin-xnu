@@ -50,7 +50,9 @@
 
 #include <sys/cdefs.h>
 
-#pragma pack(4)
+#if __DARWIN_ALIGN_POWER
+#pragma options align=power
+#endif
 
 /*
  *	Types defined:
@@ -255,6 +257,8 @@ struct vm_read_entry {
 typedef struct mach_vm_read_entry	mach_vm_read_entry_t[VM_MAP_ENTRY_MAX];
 typedef struct vm_read_entry		vm_read_entry_t[VM_MAP_ENTRY_MAX];
 
-#pragma pack()
+#if __DARWIN_ALIGN_POWER
+#pragma options align=reset
+#endif
 
 #endif	/*_MACH_VM_REGION_H_*/

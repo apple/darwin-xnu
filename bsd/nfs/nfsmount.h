@@ -96,7 +96,6 @@ struct	nfsmount {
 	int	nm_timeouts;		/* Request timeouts */
 	int	nm_rsize;		/* Max size of read rpc */
 	int	nm_wsize;		/* Max size of write rpc */
-	int	nm_biosize;		/* buffer I/O size */
 	int	nm_readdirsize;		/* Size of a readdir rpc */
 	int	nm_readahead;		/* Num. of blocks to readahead */
 	int	nm_acregmin;		/* reg file min attr cache timeout */

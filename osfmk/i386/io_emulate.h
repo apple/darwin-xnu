@@ -64,7 +64,7 @@
  * Return codes from IO emulation.
  */
 extern int	emulate_io(
-			x86_saved_state32_t	*regs,
+			struct i386_saved_state	*regs,
 			int			opcode,
 			int			io_port);
 

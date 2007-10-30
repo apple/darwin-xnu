@@ -102,37 +102,15 @@ u_long	nchash;				/* size of hash table - 1 */
 long	numcache;			/* number of cache entries allocated */
 int 	desiredNodes;
 int 	desiredNegNodes;
-int	ncs_negtotal;
 TAILQ_HEAD(, namecache) nchead;		/* chain of all name cache entries */
 TAILQ_HEAD(, namecache) neghead;	/* chain of only negative cache entries */
-
-
-#if COLLECT_STATS
-
 struct	nchstats nchstats;		/* cache effectiveness statistics */
-
-#define	NCHSTAT(v) {		\
-        nchstats.v++;		\
-}
-#define NAME_CACHE_LOCK()		name_cache_lock()
-#define NAME_CACHE_UNLOCK()		name_cache_unlock()
-#define	NAME_CACHE_LOCK_SHARED()	name_cache_lock()
-
-#else
-
-#define NCHSTAT(v)
-#define NAME_CACHE_LOCK()		name_cache_lock()
-#define NAME_CACHE_UNLOCK()		name_cache_unlock()
-#define	NAME_CACHE_LOCK_SHARED()	name_cache_lock_shared()
-
-#endif
-
 
 /* vars for name cache list lock */
 lck_grp_t * namecache_lck_grp;
 lck_grp_attr_t * namecache_lck_grp_attr;
 lck_attr_t * namecache_lck_attr;
-lck_rw_t * namecache_rw_lock;
+lck_mtx_t * namecache_mtx_lock;
 
 static vnode_t cache_lookup_locked(vnode_t dvp, struct componentname *cnp);
 static int  remove_name_locked(const char *);
@@ -185,7 +163,7 @@ build_path(vnode_t first_vp, char *buff, int buflen, int *outlen)
 		        vp = vp->v_mount->mnt_vnodecovered;
 		}
 	}
-	NAME_CACHE_LOCK_SHARED();
+	name_cache_lock();
 
 	while (vp && vp->v_parent != vp) {
 	        /*
@@ -246,7 +224,7 @@ build_path(vnode_t first_vp, char *buff, int buflen, int *outlen)
 		        vp = vp->v_mount->mnt_vnodecovered;
 		}
 	}
-	NAME_CACHE_UNLOCK();
+	name_cache_unlock();
 out:
 	/*
 	 * slide it down to the beginning of the buffer
@@ -270,7 +248,7 @@ vnode_getparent(vnode_t vp)
         vnode_t pvp = NULLVP;
 	int	pvid;
 
-	NAME_CACHE_LOCK_SHARED();
+        name_cache_lock();
 	/*
 	 * v_parent is stable behind the name_cache lock
 	 * however, the only thing we can really guarantee
@@ -281,12 +259,13 @@ vnode_getparent(vnode_t vp)
 	if ( (pvp = vp->v_parent) != NULLVP ) {
 	        pvid = pvp->v_id;
 
-		NAME_CACHE_UNLOCK();
+		name_cache_unlock();
 
 		if (vnode_getwithvid(pvp, pvid) != 0)
 		        pvp = NULL;
 	} else
-	        NAME_CACHE_UNLOCK();
+	        name_cache_unlock();
+
 	return (pvp);
 }
 
@@ -295,11 +274,11 @@ vnode_getname(vnode_t vp)
 {
         char *name = NULL;
 
-	NAME_CACHE_LOCK();
+        name_cache_lock();
 	
 	if (vp->v_name)
 	        name = add_name_locked(vp->v_name, strlen(vp->v_name), 0, 0);
-	NAME_CACHE_UNLOCK();
+	name_cache_unlock();
 
 	return (name);
 }
@@ -307,11 +286,11 @@ vnode_getname(vnode_t vp)
 void
 vnode_putname(char *name)
 {
-        NAME_CACHE_LOCK();
+	name_cache_lock();
 
 	remove_name_locked(name);
 
-	NAME_CACHE_UNLOCK();
+	name_cache_unlock();
 }
 
 
@@ -340,7 +319,7 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, char *name, int name_len, int nam
 		        dvp = NULLVP;
 	} else
 	        dvp = NULLVP;
-	NAME_CACHE_LOCK();
+	name_cache_lock();
 
 	if ( (flags & VNODE_UPDATE_NAME) && (name != vp->v_name) ) {
 	        if (vp->v_name != NULL) {
@@ -367,7 +346,7 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, char *name, int name_len, int nam
 	        while ( (ncp = LIST_FIRST(&vp->v_nclinks)) )
 		        cache_delete(ncp, 1);
 	}
-	NAME_CACHE_UNLOCK();
+	name_cache_unlock();
 	
 	if (dvp != NULLVP)
 	        vnode_rele(dvp);
@@ -420,10 +399,10 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, char *name, int name_len, int nam
 				 * vnode_reclaim for each of the vnodes in the uu_vreclaims
 				 * list, we won't recurse back through here
 				 */
-			        NAME_CACHE_LOCK();
+			        name_cache_lock();
 				old_parentvp = vp->v_parent;
 				vp->v_parent = NULLVP;
-				NAME_CACHE_UNLOCK();
+				name_cache_unlock();
 			} else {
 			        /*
 				 * we're done... we ran into a vnode that isn't
@@ -480,17 +459,19 @@ void vnode_set_hard_link(vnode_t vp)
 
 void vnode_uncache_credentials(vnode_t vp)
 {
-        kauth_cred_t ucred = NOCRED;
+        kauth_cred_t ucred = NULL;
 
-	vnode_lock(vp);
-        if (IS_VALID_CRED(vp->v_cred)) {
+        if (vp->v_cred) {
+	        vnode_lock(vp);
+
 		ucred = vp->v_cred;
-		vp->v_cred = NOCRED;
-	}
-	vnode_unlock(vp);
+		vp->v_cred = NULL;
 
-	if (ucred != NOCRED)
-		kauth_cred_unref(&ucred);
+		vnode_unlock(vp);
+
+		if (ucred)
+		        kauth_cred_rele(ucred);
+	}
 }
 
 
@@ -502,8 +483,8 @@ void vnode_cache_credentials(vnode_t vp, vfs_context_t context)
 
 	ucred = vfs_context_ucred(context);
 
-	vnode_lock(vp);
-	if (IS_VALID_CRED(ucred) && (vp->v_cred != ucred || (vp->v_mount->mnt_kern_flag & MNTK_AUTH_OPAQUE))) {
+	if (vp->v_cred != ucred || (vp->v_mount->mnt_kern_flag & MNTK_AUTH_OPAQUE)) {
+		vnode_lock(vp);
 
 		microuptime(&tv);
 		vp->v_cred_timestamp = tv.tv_sec;
@@ -514,11 +495,11 @@ void vnode_cache_credentials(vnode_t vp, vfs_context_t context)
 			tcred = vp->v_cred;
 			vp->v_cred = ucred;
 		}
+		vnode_unlock(vp);
+	
+		if (tcred)
+			kauth_cred_rele(tcred);
 	}
-	vnode_unlock(vp);
-
-	if (IS_VALID_CRED(tcred))
-		kauth_cred_unref(&tcred);
 }
 
 /*	reverse_lookup - lookup by walking back up the parent chain while leveraging
@@ -540,7 +521,7 @@ reverse_lookup(vnode_t start_vp, vnode_t *lookup_vpp, struct filedesc *fdp, vfs_
 	ucred = vfs_context_ucred(context);
 	*lookup_vpp = start_vp;
 
-	NAME_CACHE_LOCK_SHARED();
+	name_cache_lock();
 
 	if ( dp->v_mount && (dp->v_mount->mnt_kern_flag & MNTK_AUTH_OPAQUE) ) {
 		auth_opaque = 1;
@@ -551,7 +532,6 @@ reverse_lookup(vnode_t start_vp, vnode_t *lookup_vpp, struct filedesc *fdp, vfs_
 
 		if (auth_opaque && ((tv.tv_sec - dp->v_cred_timestamp) > VCRED_EXPIRED))
 			break;
-		/* XXX should be safe without vnode_lock() */
 		if (dp->v_cred != ucred)
 			break;
 		/*
@@ -577,7 +557,7 @@ reverse_lookup(vnode_t start_vp, vnode_t *lookup_vpp, struct filedesc *fdp, vfs_
 
 	vid = dp->v_id;
 	
-	NAME_CACHE_UNLOCK();
+	name_cache_unlock();
 	
 	if (done == 0 && dp != start_vp) {
 		if (vnode_getwithvid(dp, vid) != 0) {
@@ -603,7 +583,8 @@ cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp, 
 	ucred = vfs_context_ucred(context);
 	*trailing_slash = 0;
 
-	NAME_CACHE_LOCK_SHARED();
+	name_cache_lock();
+
 
 	if ( dp->v_mount && (dp->v_mount->mnt_kern_flag & MNTK_AUTH_OPAQUE) ) {
 		auth_opaque = 1;
@@ -667,7 +648,6 @@ cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp, 
 		if (auth_opaque && ((tv.tv_sec - dp->v_cred_timestamp) > VCRED_EXPIRED))
 		        break;
 
-		/* XXX should be safe without vnode_lock() */
 		if (dp->v_cred != ucred)
 		        break;
 		/*
@@ -734,7 +714,7 @@ cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp, 
 	        vvid = vp->v_id;
 	vid = dp->v_id;
 	
-	NAME_CACHE_UNLOCK();
+	name_cache_unlock();
 
 
 	if ((vp != NULLVP) && (vp->v_type != VLNK) &&
@@ -820,14 +800,11 @@ cache_lookup_locked(vnode_t dvp, struct componentname *cnp)
 			        break;
 		}
 	}
-	if (ncp == 0) {
+	if (ncp == 0)
 		/*
 		 * We failed to find an entry
 		 */
-		NCHSTAT(ncs_miss);
 		return (NULL);
-	}
-	NCHSTAT(ncs_goodhits);
 
 	vp = ncp->nc_vp;
 	if (vp && (vp->v_flag & VISHARDLINK)) {
@@ -896,14 +873,12 @@ cache_lookup(dvp, vpp, cnp)
 	register long namelen = cnp->cn_namelen;
 	char *nameptr = cnp->cn_nameptr;
 	unsigned int hashval = (cnp->cn_hash & NCHASHMASK);
-	boolean_t	have_exclusive = FALSE;
 	uint32_t vid;
 	vnode_t	 vp;
 
-	NAME_CACHE_LOCK_SHARED();
+	name_cache_lock();
 
 	ncpp = NCHHASH(dvp, cnp->cn_hash);
-relook:
 	LIST_FOREACH(ncp, ncpp, nc_hash) {
 	        if ((ncp->nc_dvp == dvp) && (ncp->nc_hashval == hashval)) {
 		        if (memcmp(ncp->nc_name, nameptr, namelen) == 0 && ncp->nc_name[namelen] == 0)
@@ -912,39 +887,31 @@ relook:
 	}
 	/* We failed to find an entry */
 	if (ncp == 0) {
-		NCHSTAT(ncs_miss);
-		NAME_CACHE_UNLOCK();
+		nchstats.ncs_miss++;
+		name_cache_unlock();
 		return (0);
 	}
 
 	/* We don't want to have an entry, so dump it */
 	if ((cnp->cn_flags & MAKEENTRY) == 0) {
-	        if (have_exclusive == TRUE) {
-		        NCHSTAT(ncs_badhits);
-			cache_delete(ncp, 1);
-			NAME_CACHE_UNLOCK();
-			return (0);
-		}
-		NAME_CACHE_UNLOCK();
-		NAME_CACHE_LOCK();
-		have_exclusive = TRUE;
-		goto relook;
+		nchstats.ncs_badhits++;
+		cache_delete(ncp, 1);
+		name_cache_unlock();
+		return (0);
 	} 
 	vp = ncp->nc_vp;
 
 	/* We found a "positive" match, return the vnode */
         if (vp) {
-		NCHSTAT(ncs_goodhits);
+		nchstats.ncs_goodhits++;
 
 		vid = vp->v_id;
-		NAME_CACHE_UNLOCK();
+		name_cache_unlock();
 
 		if (vnode_getwithvid(vp, vid)) {
-#if COLLECT_STATS
-		        NAME_CACHE_LOCK();
-			NCHSTAT(ncs_badvid);
-			NAME_CACHE_UNLOCK();
-#endif
+		        name_cache_lock();
+			nchstats.ncs_badvid++;
+			name_cache_unlock();
 			return (0);
 		}
 		*vpp = vp;
@@ -953,27 +920,21 @@ relook:
 
 	/* We found a negative match, and want to create it, so purge */
 	if (cnp->cn_nameiop == CREATE || cnp->cn_nameiop == RENAME) {
-	        if (have_exclusive == TRUE) {
-		        NCHSTAT(ncs_badhits);
-			cache_delete(ncp, 1);
-			NAME_CACHE_UNLOCK();
-			return (0);
-		}
-		NAME_CACHE_UNLOCK();
-		NAME_CACHE_LOCK();
-		have_exclusive = TRUE;
-		goto relook;
+		nchstats.ncs_badhits++;
+		cache_delete(ncp, 1);
+		name_cache_unlock();
+		return (0);
 	}
 
 	/*
 	 * We found a "negative" match, ENOENT notifies client of this match.
 	 * The nc_whiteout field records whether this is a whiteout.
 	 */
-	NCHSTAT(ncs_neghits);
+	nchstats.ncs_neghits++;
 
 	if (ncp->nc_whiteout)
 	        cnp->cn_flags |= ISWHITEOUT;
-	NAME_CACHE_UNLOCK();
+	name_cache_unlock();
 	return (ENOENT);
 }
 
@@ -992,7 +953,7 @@ cache_enter(dvp, vp, cnp)
         if (cnp->cn_hash == 0)
 	        cnp->cn_hash = hash_string(cnp->cn_nameptr, cnp->cn_namelen);
 
-	NAME_CACHE_LOCK();
+	name_cache_lock();
 
 	/* if the entry is for -ve caching vp is null */
 	if ((vp != NULLVP) && (LIST_FIRST(&vp->v_nclinks))) {
@@ -1000,8 +961,8 @@ cache_enter(dvp, vp, cnp)
 		 * someone beat us to the punch..
 		 * this vnode is already in the cache
 		 */
-	        NAME_CACHE_UNLOCK();
-		return;
+	        name_cache_unlock();
+			return;
 	}
 	/*
 	 * We allocate a new entry if we are less than the maximum
@@ -1028,11 +989,11 @@ cache_enter(dvp, vp, cnp)
 			* still in use... we need to
 			* delete it before re-using it
 			*/
-			NCHSTAT(ncs_stolen);
+			nchstats.ncs_stolen++;
 			cache_delete(ncp, 0);
 		}
 	}
-	NCHSTAT(ncs_enters);
+	nchstats.ncs_enters++;
 
 	/*
 	 * Fill in cache info, if vp is NULL this is a "negative" cache entry.
@@ -1080,9 +1041,9 @@ cache_enter(dvp, vp, cnp)
 	  
 		if (cnp->cn_flags & ISWHITEOUT)
 		        ncp->nc_whiteout = TRUE;
-		ncs_negtotal++;
+		nchstats.ncs_negtotal++;
 
-		if (ncs_negtotal > desiredNegNodes) {
+		if (nchstats.ncs_negtotal > desiredNegNodes) {
 		       /*
 			* if we've reached our desired limit
 			* of negative cache entries, delete
@@ -1100,7 +1061,7 @@ cache_enter(dvp, vp, cnp)
 	 */
 	LIST_INSERT_HEAD(&dvp->v_ncchildren, ncp, nc_child);
 
-	NAME_CACHE_UNLOCK();
+	name_cache_unlock();
 }
 
 
@@ -1156,34 +1117,31 @@ nchinit(void)
 	
 	/* Allocate mount list lock group attribute and group */
 	namecache_lck_grp_attr= lck_grp_attr_alloc_init();
+	lck_grp_attr_setstat(namecache_lck_grp_attr);
 
 	namecache_lck_grp = lck_grp_alloc_init("Name Cache",  namecache_lck_grp_attr);
 	
 	/* Allocate mount list lock attribute */
 	namecache_lck_attr = lck_attr_alloc_init();
+	//lck_attr_setdebug(namecache_lck_attr);
 
 	/* Allocate mount list lock */
-	namecache_rw_lock = lck_rw_alloc_init(namecache_lck_grp, namecache_lck_attr);
+	namecache_mtx_lock = lck_mtx_alloc_init(namecache_lck_grp, namecache_lck_attr);
 
 
-}
-
-void
-name_cache_lock_shared(void)
-{
-	lck_rw_lock_shared(namecache_rw_lock);
 }
 
 void
 name_cache_lock(void)
 {
-	lck_rw_lock_exclusive(namecache_rw_lock);
+	lck_mtx_lock(namecache_mtx_lock);
 }
 
 void
 name_cache_unlock(void)
 {
-	lck_rw_done(namecache_rw_lock);
+	lck_mtx_unlock(namecache_mtx_lock);
+
 }
 
 
@@ -1212,7 +1170,7 @@ resize_namecache(u_int newsize)
 	return ENOMEM;
     }
 
-    NAME_CACHE_LOCK();
+    name_cache_lock();
     // do the switch!
     old_table = nchashtbl;
     nchashtbl = new_table;
@@ -1240,7 +1198,7 @@ resize_namecache(u_int newsize)
     desiredNodes = dNodes;
     desiredNegNodes = dNegNodes;
     
-    NAME_CACHE_UNLOCK();
+    name_cache_unlock();
     FREE(old_table, M_CACHE);
 
     return 0;
@@ -1249,13 +1207,13 @@ resize_namecache(u_int newsize)
 static void
 cache_delete(struct namecache *ncp, int age_entry)
 {
-        NCHSTAT(ncs_deletes);
+        nchstats.ncs_deletes++;
 
         if (ncp->nc_vp) {
 	        LIST_REMOVE(ncp, nc_un.nc_link);
 	} else {
 	        TAILQ_REMOVE(&neghead, ncp, nc_un.nc_negentry);
-	        ncs_negtotal--;
+	        nchstats.ncs_negtotal--;
 	}
         LIST_REMOVE(ncp, nc_child);
 
@@ -1293,7 +1251,7 @@ cache_purge(vnode_t vp)
 	if ((LIST_FIRST(&vp->v_nclinks) == NULL) && (LIST_FIRST(&vp->v_ncchildren) == NULL))
 	        return;
 
-	NAME_CACHE_LOCK();
+	name_cache_lock();
 
 	while ( (ncp = LIST_FIRST(&vp->v_nclinks)) )
 	        cache_delete(ncp, 1);
@@ -1301,7 +1259,7 @@ cache_purge(vnode_t vp)
 	while ( (ncp = LIST_FIRST(&vp->v_ncchildren)) )
 	        cache_delete(ncp, 1);
 
-	NAME_CACHE_UNLOCK();
+	name_cache_unlock();
 }
 
 /*
@@ -1316,13 +1274,13 @@ cache_purge_negatives(vnode_t vp)
 {
 	struct namecache *ncp;
 
-	NAME_CACHE_LOCK();
+	name_cache_lock();
 
 	LIST_FOREACH(ncp, &vp->v_ncchildren, nc_child)
 		if (ncp->nc_vp == NULL)
 			cache_delete(ncp , 1);
 
-	NAME_CACHE_UNLOCK();
+	name_cache_unlock();
 }
 
 /*
@@ -1338,7 +1296,7 @@ cache_purgevfs(mp)
 	struct nchashhead *ncpp;
 	struct namecache *ncp;
 
-	NAME_CACHE_LOCK();
+	name_cache_lock();
 	/* Scan hash tables for applicable entries */
 	for (ncpp = &nchashtbl[nchash - 1]; ncpp >= nchashtbl; ncpp--) {
 restart:	  
@@ -1349,7 +1307,7 @@ restart:
 			}
 		}
 	}
-	NAME_CACHE_UNLOCK();
+	name_cache_unlock();
 }
 
 
@@ -1435,9 +1393,9 @@ vfs_addname(const char *name, size_t len, u_int hashval, u_int flags)
 {
         char * ptr;
 
-	NAME_CACHE_LOCK();
+	name_cache_lock();
 	ptr = add_name_locked(name, len, hashval, flags);
-	NAME_CACHE_UNLOCK();
+	name_cache_unlock();
 
 	return(ptr);
 }
@@ -1504,9 +1462,9 @@ vfs_removename(const char *nameref)
 {
 	int i;
 
-	NAME_CACHE_LOCK();
+	name_cache_lock();
 	i = remove_name_locked(nameref);
-	NAME_CACHE_UNLOCK();
+	name_cache_unlock();
 
 	return(i);
 	
@@ -1555,13 +1513,12 @@ dump_string_table(void)
     string_t          *entry;
     u_long            i;
     
-    NAME_CACHE_LOCK_SHARED();
-
+    name_cache_lock();
     for (i = 0; i <= string_table_mask; i++) {
 	head = &string_ref_table[i];
 	for (entry=head->lh_first; entry != NULL; entry=entry->hash_chain.le_next) {
 	    printf("%6d - %s\n", entry->refcount, entry->str);
 	}
     }
-    NAME_CACHE_UNLOCK();
+    name_cache_unlock();
 }

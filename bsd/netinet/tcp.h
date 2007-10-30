@@ -114,7 +114,7 @@ struct tcphdr {
 #define TCPOPT_WINDOW		3
 #define TCPOLEN_WINDOW		3
 #define TCPOPT_SACK_PERMITTED	4		/* Experimental */
-#define    TCPOLEN_SACK_PERMITTED	2
+#define TCPOLEN_SACK_PERMITTED	2
 #define TCPOPT_SACK		5		/* Experimental */
 #define TCPOLEN_SACK		8		/* len of sack block */
 #define TCPOPT_TIMESTAMP	8
@@ -201,6 +201,7 @@ struct tcphdr {
 #define TCP_NOPUSH		0x04	/* don't push last block of write */
 #define TCP_NOOPT		0x08	/* don't use TCP options */
 #define TCP_KEEPALIVE	0x10	/* idle time used when SO_KEEPALIVE is enabled */
+
 #endif /* _POSIX_C_SOURCE */
 
 #endif

@@ -149,9 +149,4 @@ extern void GratefulDebInit(void);
 extern void GratefulDebDisp(unsigned int coord, unsigned int data);
 extern void checkNMI(void);
 
-#ifndef VM_WIMG_IO
-#define VM_WIMG_IO		(VM_MEM_COHERENT | 	\
-				VM_MEM_NOT_CACHEABLE | VM_MEM_GUARDED)
-#endif
-
 #endif /* _PEXPERT_PPC_PROTOS_H_ */

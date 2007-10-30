@@ -83,10 +83,9 @@
 typedef	natural_t	*thread_state_t;	/* Variable-length array */
 
 /* THREAD_STATE_MAX is now defined in <mach/machine/thread_state.h> */
-typedef	natural_t	thread_state_data_t[THREAD_STATE_MAX];
+typedef	int	thread_state_data_t[THREAD_STATE_MAX];
 
 #define	THREAD_STATE_FLAVOR_LIST	0	/* List of valid flavors */
-#define THREAD_STATE_FLAVOR_LIST_NEW	128
 
 typedef	int			thread_state_flavor_t;
 typedef thread_state_flavor_t	*thread_state_flavor_array_t;

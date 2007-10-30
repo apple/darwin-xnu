@@ -52,14 +52,15 @@ extern vm_offset_t	virtual_avail;
  * Note, this will onl
  */
 vm_offset_t
-io_map(vm_offset_t phys_addr, vm_size_t size, unsigned int flags)
+io_map(phys_addr, size)
+	vm_offset_t	phys_addr;
+	vm_size_t	size;
 {
 	vm_offset_t	start;
 	int		i;
-	unsigned int    j, mflags;
+	unsigned int j;
 	vm_page_t 	m;
 
-	mflags = mmFlgBlock | mmFlgUseAttr | (flags & VM_MEM_GUARDED) | ((flags & VM_MEM_NOT_CACHEABLE) >> 1);	/* Convert to our mapping_make flags */
 
 #if DEBUG
 	assert (kernel_map != VM_MAP_NULL);			/* VM must be initialised */
@@ -72,7 +73,7 @@ io_map(vm_offset_t phys_addr, vm_size_t size, unsigned int flags)
 		(void) kmem_alloc_pageable(kernel_map, &start, size);	/* Get some virtual addresses to use */
 		
 		(void)mapping_make(kernel_pmap, (addr64_t)start, (ppnum_t)(phys_addr >> 12), 
-			mflags,					/* Map with requested cache mode */
+			(mmFlgBlock | mmFlgUseAttr | mmFlgCInhib | mmFlgGuarded),	/* Map as I/O page */
 			(size >> 12), VM_PROT_READ|VM_PROT_WRITE);
 
 		return (start + (phys_addr & PAGE_MASK));	/* Pass back the physical address */
@@ -92,7 +93,7 @@ io_map(vm_offset_t phys_addr, vm_size_t size, unsigned int flags)
 			
 			(void)mapping_make(kernel_pmap, 
 				(addr64_t)(start + i), m->phys_page, 
-				mflags,					/* Map with requested cache mode */
+				(mmFlgBlock | mmFlgUseAttr | mmFlgCInhib | mmFlgGuarded),	/* Map as I/O page */
 				1, VM_PROT_READ|VM_PROT_WRITE);	
 			
 		}
@@ -107,24 +108,21 @@ io_map(vm_offset_t phys_addr, vm_size_t size, unsigned int flags)
  * Allocate and map memory for devices before the VM system comes alive.
  */
 
-vm_offset_t io_map_spec(vm_offset_t phys_addr, vm_size_t size, unsigned int flags)
+vm_offset_t io_map_spec(vm_offset_t phys_addr, vm_size_t size)
 {
 	vm_offset_t	start;
-	unsigned int    mflags;
 
 	if(kernel_map != VM_MAP_NULL) {				/* If VM system is up, redirect to normal routine */
 		
-		return io_map(phys_addr, size, flags);			/* Map the address */
+		return io_map(phys_addr, size);			/* Map the address */
 	
 	}
-
-	mflags = mmFlgBlock | mmFlgUseAttr | (flags & VM_MEM_GUARDED) | ((flags & VM_MEM_NOT_CACHEABLE) >> 1);	/* Convert to our mapping_make flags */
 	
 	size = round_page(size + (phys_addr - (phys_addr & -PAGE_SIZE)));	/* Extend the length to include it all */
 	start = pmap_boot_map(size);				/* Get me some virtual address */
 
 	(void)mapping_make(kernel_pmap, (addr64_t)start, (ppnum_t)(phys_addr >> 12), 
-		mflags,					/* Map with requested cache mode */
+		(mmFlgBlock | mmFlgUseAttr | mmFlgCInhib | mmFlgGuarded),	/* Map as I/O page */
 		(size >> 12), VM_PROT_READ|VM_PROT_WRITE);
 
 	return (start + (phys_addr & PAGE_MASK));

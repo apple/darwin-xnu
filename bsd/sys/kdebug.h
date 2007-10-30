@@ -73,31 +73,29 @@ __BEGIN_DECLS
 
 
 /* The Kernel Debug Classes  */
-#define DBG_MACH			1
-#define DBG_NETWORK			2	
-#define DBG_FSYSTEM			3
-#define DBG_BSD				4
-#define DBG_IOKIT			5
-#define DBG_DRIVERS			6
-#define DBG_TRACE           7
+#define DBG_MACH		1
+#define DBG_NETWORK		2	
+#define DBG_FSYSTEM		3
+#define DBG_BSD			4
+#define DBG_IOKIT		5
+#define DBG_DRIVERS		6
+#define DBG_TRACE               7
 #define DBG_DLIL	        8
 #define DBG_SECURITY		9
-#define DBG_MISC			20
-#define DBG_DYLD            31
-#define DBG_QT              32
-#define DBG_APPS            33
-#define DBG_MIG				255
+#define DBG_MISC		20
+#define DBG_DYLD                31
+#define DBG_QT                  32
+#define DBG_APPS                33
+#define DBG_MIG			255
 
 /* **** The Kernel Debug Sub Classes for Mach (DBG_MACH) **** */
-#define	DBG_MACH_EXCP_KTRAP_x86	0x02	/* Kernel Traps on x86 */
 #define	DBG_MACH_EXCP_DFLT	0x03	/* Data Translation Fault */
 #define	DBG_MACH_EXCP_IFLT	0x04	/* Inst Translation Fault */
 #define	DBG_MACH_EXCP_INTR	0x05	/* Interrupts */
 #define	DBG_MACH_EXCP_ALNG	0x06	/* Alignment Exception */
-#define	DBG_MACH_EXCP_UTRAP_x86	0x07	/* User Traps on x86 */
+#define	DBG_MACH_EXCP_TRAP	0x07	/* Traps */
 #define	DBG_MACH_EXCP_FP	0x08	/* FP Unavail */
 #define	DBG_MACH_EXCP_DECI	0x09	/* Decrementer Interrupt */
-#define	DBG_MACH_CHUD		0x0A	/* CHUD */
 #define	DBG_MACH_EXCP_SC	0x0C	/* System Calls */
 #define	DBG_MACH_EXCP_TRACE	0x0D	/* Trace exception */
 #define	DBG_MACH_EXCP_EMUL	0x0E	/* Instruction emulated */
@@ -147,60 +145,33 @@ __BEGIN_DECLS
 #define	DBG_NETIPSEC	128	/* IPsec Protocol  */
 
 /* **** The Kernel Debug Sub Classes for IOKIT (DBG_IOKIT) **** */
-#define DBG_IOWORKLOOP		1	/* Work from work loop */
-#define DBG_IOINTES			2	/* Interrupt event source */
-#define DBG_IOCLKES			3	/* Clock event source */
-#define DBG_IOCMDQ			4	/* Command queue latencies */
-#define DBG_IOMCURS			5	/* Memory Cursor */
-#define DBG_IOMDESC			6	/* Memory Descriptors */
-#define DBG_IOPOWER			7	/* Power Managerment */
-
-/* **** 8-32 reserved for internal IOKit usage **** */
-
-#define DBG_IOSTORAGE		32	/* Storage layers */
-#define	DBG_IONETWORK		33	/* Network layers */
-#define	DBG_IOKEYBOARD		34	/* Keyboard */
-#define	DBG_IOHID			35	/* HID Devices */
-#define	DBG_IOAUDIO			36	/* Audio */
-#define	DBG_IOSERIAL		37	/* Serial */
-#define	DBG_IOTTY			38	/* TTY layers */
-#define DBG_IOSAM			39	/* SCSI Architecture Model layers */
-#define DBG_IOPARALLELATA   40	/* Parallel ATA */
-#define DBG_IOPARALLELSCSI	41	/* Parallel SCSI */
-#define DBG_IOSATA			42	/* Serial-ATA */
-#define DBG_IOSAS			43	/* SAS */
-#define DBG_IOFIBRECHANNEL	44	/* FiberChannel */
-#define DBG_IOUSB			45	/* USB */
-#define DBG_IOBLUETOOTH		46	/* Bluetooth */
-#define DBG_IOFIREWIRE		47	/* FireWire */
-#define DBG_IOINFINIBAND	48	/* Infiniband */
-#define DBG_IOCPUPM		49	/* CPU Power Management */
-
-/* Backwards compatibility */
-#define	DBG_IOPOINTING		DBG_IOHID			/* OBSOLETE: Use DBG_IOHID instead */
-#define DBG_IODISK			DBG_IOSTORAGE		/* OBSOLETE: Use DBG_IOSTORAGE instead */
+#define DBG_IOSCSI	1	/* SCSI */
+#define DBG_IODISK	2	/* Disk layers */
+#define	DBG_IONETWORK	3	/* Network layers */
+#define	DBG_IOKEYBOARD	4	/* Keyboard */
+#define	DBG_IOPOINTING	5	/* Pointing Devices */
+#define	DBG_IOAUDIO	6	/* Audio */
+#define	DBG_IOFLOPPY	7	/* Floppy */
+#define	DBG_IOSERIAL	8	/* Serial */
+#define	DBG_IOTTY	9	/* TTY layers */
+#define DBG_IOWORKLOOP	10	/* Work from work loop */
+#define DBG_IOINTES	11	/* Interrupt event source */
+#define DBG_IOCLKES	12	/* Clock event source */
+#define DBG_IOCMDQ	13	/* Command queue latencies */
+#define DBG_IOMCURS	14	/* Memory Cursor */
+#define DBG_IOMDESC	15	/* Memory Descriptors */
+#define DBG_IOPOWER	16	/* Power Managerment */
 
 /* **** The Kernel Debug Sub Classes for Device Drivers (DBG_DRIVERS) **** */
-#define DBG_DRVSTORAGE		1	/* Storage layers */
-#define	DBG_DRVNETWORK		2	/* Network layers */
-#define	DBG_DRVKEYBOARD		3	/* Keyboard */
-#define	DBG_DRVHID			4	/* HID Devices */
-#define	DBG_DRVAUDIO		5	/* Audio */
-#define	DBG_DRVSERIAL		7	/* Serial */
-#define DBG_DRVSAM			8	/* SCSI Architecture Model layers */
-#define DBG_DRVPARALLELATA  9	/* Parallel ATA */
-#define DBG_DRVPARALLELSCSI	10	/* Parallel SCSI */
-#define DBG_DRVSATA			11	/* Serial ATA */
-#define DBG_DRVSAS			12	/* SAS */
-#define DBG_DRVFIBRECHANNEL	13	/* FiberChannel */
-#define DBG_DRVUSB			14	/* USB */
-#define DBG_DRVBLUETOOTH	15	/* Bluetooth */
-#define DBG_DRVFIREWIRE		16	/* FireWire */
-#define DBG_DRVINFINIBAND	17	/* Infiniband */
-
-/* Backwards compatibility */
-#define	DBG_DRVPOINTING		DBG_DRVHID		/* OBSOLETE: Use DBG_DRVHID instead */
-#define DBG_DRVDISK			DBG_DRVSTORAGE	/* OBSOLETE: Use DBG_DRVSTORAGE instead */
+#define DBG_DRVSCSI	1	/* SCSI */
+#define DBG_DRVDISK	2	/* Disk layers */
+#define	DBG_DRVNETWORK	3	/* Network layers */
+#define	DBG_DRVKEYBOARD	4	/* Keyboard */
+#define	DBG_DRVPOINTING	5	/* Pointing Devices */
+#define	DBG_DRVAUDIO	6	/* Audio */
+#define	DBG_DRVFLOPPY	7	/* Floppy */
+#define	DBG_DRVSERIAL	8	/* Serial */
+#define DBG_DRVSPLT     9
 
 /* **** The Kernel Debug Sub Classes for the DLIL Layer (DBG_DLIL) **** */
 #define DBG_DLIL_STATIC 1       /* Static DLIL code */
@@ -224,10 +195,6 @@ __BEGIN_DECLS
 #define DBG_TRACE_DATA      0
 #define DBG_TRACE_STRING    1
 
-/* The Kernel Debug Sub Classes for DBG_MISC */
-#define DBG_EVENT	0x10
-#define	DBG_BUFFER	0x20
-
 /* The Kernel Debug Sub Classes for DBG_DYLD */
 #define DBG_DYLD_STRING   5
 
@@ -237,12 +204,6 @@ __BEGIN_DECLS
 #define DKIO_ASYNC	0x04
 #define DKIO_META	0x08
 #define DKIO_PAGING	0x10
-
-/* The Kernel Debug Modifiers for the DBG_IOCPUPM sub-class */
-#define DCPM_PSTATE		0x0001
-#define DCPM_IDLE_CSTATE	0x0002
-#define DCPM_IDLE_HALT		0x0003
-#define DCPM_IDLE_LOOP		0x0004
 
 /**********************************************************************/
 
@@ -263,7 +224,6 @@ __BEGIN_DECLS
 #define DYLDDBG_CODE(SubClass,code) KDBG_CODE(DBG_DYLD, SubClass, code)
 #define QTDBG_CODE(SubClass,code) KDBG_CODE(DBG_QT, SubClass, code)
 #define APPSDBG_CODE(SubClass,code) KDBG_CODE(DBG_APPS, SubClass, code)
-#define CPUPM_CODE(code) IOKDBG_CODE(DBG_IOCPUPM, code)
 
 /*   Usage:
 * kernel_debug((KDBG_CODE(DBG_NETWORK, DNET_PROTOCOL, 51) | DBG_FUNC_START), 
@@ -316,7 +276,6 @@ extern void kernel_debug1(unsigned int debugid, unsigned int arg1, unsigned int 
 /*
  * LP64todo - for some reason these are problematic
  */
-struct proc;
 extern void kdbg_trace_data(struct proc *proc, long *arg_pid);
 
 extern void kdbg_trace_string(struct proc *proc, long *arg1, long *arg2, long *arg3, long *arg4);

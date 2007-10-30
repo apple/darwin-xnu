@@ -1065,11 +1065,7 @@ wait_queue_wakeup64_all_locked(
 	queue_t q = &wake_queue_head;
 	kern_return_t res;
 
-//	assert(wait_queue_held(wq));
-	if(!wq->wq_interlock.lock_data) {		/* (BRINGUP */
-		panic("wait_queue_wakeup64_all_locked: lock not held on %08X\n", wq);	/* (BRINGUP) */
-	}
-
+	assert(wait_queue_held(wq));
 	queue_init(q);
 
 	/*
@@ -1121,9 +1117,6 @@ wait_queue_wakeup_all(
 
 	s = splsched();
 	wait_queue_lock(wq);
-	if(!wq->wq_interlock.lock_data) {		/* (BRINGUP */
-		panic("wait_queue_wakeup_all: we did not get the lock on %08X\n", wq);	/* (BRINGUP) */
-	}
 	ret = wait_queue_wakeup64_all_locked(
 				wq, (event64_t)((uint32_t)event),
 				result, TRUE);

@@ -471,14 +471,6 @@ kern_return_t IOFindBSDRoot( char * rootName,
 
     do {
 	if( (regEntry = IORegistryEntry::fromPath( "/chosen", gIODTPlane ))) {
-            data = OSDynamicCast(OSData, regEntry->getProperty( "root-matching" ));
-            if (data) {
-               matching = OSDynamicCast(OSDictionary, OSUnserializeXML((char *)data->getBytesNoCopy()));
-                if (matching) {
-                    continue;
-                }
-            }
-
 	    data = (OSData *) regEntry->getProperty( "boot-uuid" );
 	    if( data) {
 		uuidStr = (const char*)data->getBytesNoCopy();
@@ -578,12 +570,10 @@ kern_return_t IOFindBSDRoot( char * rootName,
 	// from OpenFirmware path
 	IOLog("From path: \"%s\", ", look);
 
-        if (!matching) {
-            if( forceNet || (0 == strncmp( look, "enet", strlen( "enet" ))) ) {
-                matching = IONetworkMatching( look, str, kMaxPathBuf );
-            } else {
-                matching = IODiskMatching( look, str, kMaxPathBuf );
-            }
+	if( forceNet || (0 == strncmp( look, "enet", strlen( "enet" ))) ) {
+            matching = IONetworkMatching( look, str, kMaxPathBuf );
+        } else {
+            matching = IODiskMatching( look, str, kMaxPathBuf );
         }
     }
     
@@ -685,7 +675,7 @@ kern_return_t IOFindBSDRoot( char * rootName,
         IOService * subservice = IOFindMatchingChild( service );
         if ( subservice ) service = subservice;
     } else if ( service && mediaProperty ) {
-        service = (IOService *)service->getProperty(mediaProperty);
+        service = service->getProperty(mediaProperty);
     }
 
     major = 0;

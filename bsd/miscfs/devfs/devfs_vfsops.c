@@ -77,7 +77,6 @@ static int devfs_statfs( struct mount *mp, struct vfsstatfs *sbp, vfs_context_t 
 static int devfs_vfs_getattr(mount_t mp, struct vfs_attr *fsap, vfs_context_t context);
 
 static struct vfstable * devfs_vfsp = 0;
-extern int setup_kmem;
 
 
 /*-
@@ -99,9 +98,10 @@ devfs_init(struct vfsconf *vfsp)
 		    UID_ROOT, GID_WHEEL, 0622, "console");
     devfs_make_node(makedev(2, 0), DEVFS_CHAR, 
 		    UID_ROOT, GID_WHEEL, 0666, "tty");
-    if (setup_kmem) {
-    	devfs_setup_kmem();
-    }
+    devfs_make_node(makedev(3, 0), DEVFS_CHAR, 
+		    UID_ROOT, GID_KMEM, 0640, "mem");
+    devfs_make_node(makedev(3, 1), DEVFS_CHAR, 
+		    UID_ROOT, GID_KMEM, 0640, "kmem");
     devfs_make_node(makedev(3, 2), DEVFS_CHAR, 
 		    UID_ROOT, GID_WHEEL, 0666, "null");
     devfs_make_node(makedev(3, 3), DEVFS_CHAR, 
@@ -110,16 +110,6 @@ devfs_init(struct vfsconf *vfsp)
 		    UID_ROOT, GID_WHEEL, 0600, "klog");
     return 0;
 }
-
-__private_extern__ void
-devfs_setup_kmem(void)
-{
-    	devfs_make_node(makedev(3, 0), DEVFS_CHAR, 
-		    UID_ROOT, GID_KMEM, 0640, "mem");
-    	devfs_make_node(makedev(3, 1), DEVFS_CHAR, 
-		    UID_ROOT, GID_KMEM, 0640, "kmem");
-}
-
 
 /*-
  *  mp	 - pointer to 'mount' structure

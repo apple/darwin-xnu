@@ -139,15 +139,6 @@ pager_return_t	vnode_pageout(struct vnode *, upl_t,
 extern vm_object_offset_t vnode_pager_get_filesize(
 	struct vnode *vp);
 
-extern kern_return_t vnode_pager_get_pathname(
-	struct vnode	*vp,
-	char		*pathname,
-	vm_size_t	*length_p);
-
-extern kern_return_t vnode_pager_get_filename(
-	struct vnode	*vp,
-	char		**filename);
-
 #endif	/* KERNEL */
 
 #endif	/* _VNODE_PAGER_ */

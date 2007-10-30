@@ -147,10 +147,9 @@ IOCommandPool::getCommand(bool blockForCommand)
     IOReturn	 result  = kIOReturnSuccess;
     IOCommand *command = 0;
 
-    IOCommandGate::Action func = OSMemberFunctionCast(
-	    IOCommandGate::Action, this, &IOCommandPool::gatedGetCommand);
-    result = fSerializer->
-	runAction(func, (void *) &command, (void *) blockForCommand);
+    result = fSerializer->runAction((IOCommandGate::Action)
+        &IOCommandPool::gatedGetCommand, 
+            (void *) &command, (void *) blockForCommand);
     if (kIOReturnSuccess == result)
         return command;
     else
@@ -187,9 +186,8 @@ gatedGetCommand(IOCommand **command, bool blockForCommand)
 void IOCommandPool::
 returnCommand(IOCommand *command)
 {
-    IOCommandGate::Action func = OSMemberFunctionCast(
-	    IOCommandGate::Action, this, &IOCommandPool::gatedReturnCommand);
-    (void) fSerializer->runAction(func, (void *) command);
+    (void) fSerializer->runAction((IOCommandGate::Action)
+        &IOCommandPool::gatedReturnCommand, (void *) command);
 }
 
 
@@ -201,7 +199,7 @@ returnCommand(IOCommand *command)
 IOReturn IOCommandPool::
 gatedReturnCommand(IOCommand *command)
 {
-    queue_enter_first(&fQueueHead, command, IOCommand *, fCommandChain);
+    queue_enter(&fQueueHead, command, IOCommand *, fCommandChain);
     if (fSleepers) {
         fSerializer->commandWakeup(&fSleepers, /* oneThread */ true);
         fSleepers--;

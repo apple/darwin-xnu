@@ -268,8 +268,8 @@ union_mount(mount_t mp, __unused vnode_t devvp, user_addr_t data, vfs_context_t 
 bad:
 	if (um)
 		_FREE(um, M_UFSMNT);
-	if (IS_VALID_CRED(cred))
-		kauth_cred_unref(&cred);
+	if (cred != NOCRED)
+		kauth_cred_rele(cred);
 	if (upperrootvp)
 		vnode_put(upperrootvp);
 	if (lowerrootvp)
@@ -360,8 +360,10 @@ union_unmount(mount_t mp, int mntflags, __unused vfs_context_t context)
 	if (um->um_lowervp)
 		vnode_put(um->um_lowervp);
 	vnode_put(um->um_uppervp);
-	if (IS_VALID_CRED(um->um_cred)) {
-		kauth_cred_unref(&um->um_cred);
+	cred = um->um_cred;
+	if (cred != NOCRED) {
+		um->um_cred = NOCRED;
+		kauth_cred_rele(cred);
 	}
 	/*
 	 * Release reference on underlying root vnode

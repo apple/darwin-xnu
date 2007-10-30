@@ -203,7 +203,7 @@ static zone_t		vm_object_zone;		/* vm backing store zone */
  *	memory object (kernel_object) to avoid wasting data structures.
  */
 static struct vm_object			kernel_object_store;
-vm_object_t						kernel_object;
+__private_extern__ vm_object_t		kernel_object = &kernel_object_store;
 
 /*
  *	The submap object is used as a placeholder for vm_map_submap
@@ -552,7 +552,7 @@ vm_object_reaper_init(void)
 		BASEPRI_PREEMPT - 1,
 		&thread);
 	if (kr != KERN_SUCCESS) {
-		panic("failed to launch vm_object_reaper_thread kr=0x%x\n", kr);
+		panic("failed to launch vm_object_reaper_thread kr=0x%x", kr);
 	}
 	thread_deallocate(thread);
 }
@@ -680,22 +680,15 @@ vm_object_deallocate(
 			if (object->ref_count == 1 &&
 			    object->shadow != VM_OBJECT_NULL) {
 				/*
-				 * There's only one reference left on this
-				 * VM object.  We can't tell if it's a valid
-				 * one (from a mapping for example) or if this
-				 * object is just part of a possibly stale and
-				 * useless shadow chain.
-				 * We would like to try and collapse it into
-				 * its parent, but we don't have any pointers
-				 * back to this parent object.
+				 * We don't use this VM object anymore.  We
+				 * would like to collapse it into its parent(s),
+				 * but we don't have any pointers back to these
+				 * parent object(s).
 				 * But we can try and collapse this object with
 				 * its own shadows, in case these are useless
 				 * too...
-				 * We can't bypass this object though, since we
-				 * don't know if this last reference on it is
-				 * meaningful or not.
 				 */
-				vm_object_collapse(object, 0, FALSE);
+				vm_object_collapse(object, 0);
 			}
 
 			vm_object_unlock(object); 
@@ -1096,7 +1089,6 @@ vm_object_terminate(
 		vm_object_unlock(object);
 		return KERN_SUCCESS;
 	}
-
 	/* complete the VM object termination */
 	vm_object_reap(object);
 	object = VM_OBJECT_NULL;
@@ -3431,8 +3423,7 @@ static unsigned long vm_object_collapse_do_bypass = 0;
 __private_extern__ void
 vm_object_collapse(
 	register vm_object_t			object,
-	register vm_object_offset_t		hint_offset,
-	boolean_t				can_bypass)
+	register vm_object_offset_t		hint_offset)
 {
 	register vm_object_t			backing_object;
 	register unsigned int			rcount;
@@ -3444,8 +3435,7 @@ vm_object_collapse(
 
 	vm_object_collapse_calls++;
 
-	if (! vm_object_collapse_allowed &&
-	    ! (can_bypass && vm_object_bypass_allowed)) {
+	if (! vm_object_collapse_allowed && ! vm_object_bypass_allowed) {
 		return;
 	}
 
@@ -3628,7 +3618,7 @@ vm_object_collapse(
 		 *	or permitted, so let's try bypassing it.
 		 */
 
-		if (! (can_bypass && vm_object_bypass_allowed)) {
+		if (! vm_object_bypass_allowed) {
 			/* try and collapse the rest of the shadow chain */
 			if (object != original_object) {
 				vm_object_unlock(object);
@@ -3956,7 +3946,7 @@ vm_object_coalesce(
 	/*
 	 *	Try to collapse the object first
 	 */
-	vm_object_collapse(prev_object, prev_offset, TRUE);
+	vm_object_collapse(prev_object, prev_offset);
 
 	/*
 	 *	Can't coalesce if pages not mapped to
@@ -4496,7 +4486,7 @@ vm_object_populate_with_private(
  *	memory_object_free_from_cache:
  *
  *	Walk the vm_object cache list, removing and freeing vm_objects 
- *	which are backed by the pager identified by the caller, (pager_ops).  
+ *	which are backed by the pager identified by the caller, (pager_id).  
  *	Remove up to "count" objects, if there are that may available
  *	in the cache.
  *
@@ -4507,7 +4497,7 @@ vm_object_populate_with_private(
 __private_extern__ kern_return_t
 memory_object_free_from_cache(
 	__unused host_t		host,
-	memory_object_pager_ops_t pager_ops,
+	int		*pager_id,
 	int		*count)
 {
 
@@ -4526,8 +4516,7 @@ memory_object_free_from_cache(
 
 	queue_iterate(&vm_object_cached_list, object, 
 					vm_object_t, cached_list) {
-		if (object->pager &&
-		    (pager_ops == object->pager->mo_pager_ops)) {
+		if (object->pager && (pager_id == object->pager->pager)) {
 			vm_object_lock(object);
 			queue_remove(&vm_object_cached_list, object, 
 					vm_object_t, cached_list);
@@ -5597,239 +5586,4 @@ done:
 	}
 
 	return retval;
-}
-
-
-/* Allow manipulation of individual page state.  This is actually part of */
-/* the UPL regimen but takes place on the VM object rather than on a UPL */
-
-kern_return_t
-vm_object_page_op(
-	vm_object_t		object,
-	vm_object_offset_t	offset,
-	int			ops,
-	ppnum_t			*phys_entry,
-	int			*flags)
-{
-	vm_page_t		dst_page;
-
-	vm_object_lock(object);
-
-	if(ops & UPL_POP_PHYSICAL) {
-		if(object->phys_contiguous) {
-			if (phys_entry) {
-				*phys_entry = (ppnum_t)
-					(object->shadow_offset >> 12);
-			}
-			vm_object_unlock(object);
-			return KERN_SUCCESS;
-		} else {
-			vm_object_unlock(object);
-			return KERN_INVALID_OBJECT;
-		}
-	}
-	if(object->phys_contiguous) {
-		vm_object_unlock(object);
-		return KERN_INVALID_OBJECT;
-	}
-
-	while(TRUE) {
-		if((dst_page = vm_page_lookup(object,offset)) == VM_PAGE_NULL) {
-			vm_object_unlock(object);
-			return KERN_FAILURE;
-		}
-
-		/* Sync up on getting the busy bit */
-		if((dst_page->busy || dst_page->cleaning) && 
-			   (((ops & UPL_POP_SET) && 
-			   (ops & UPL_POP_BUSY)) || (ops & UPL_POP_DUMP))) {
-			/* someone else is playing with the page, we will */
-			/* have to wait */
-			PAGE_SLEEP(object, dst_page, THREAD_UNINT);
-			continue;
-		}
-
-		if (ops & UPL_POP_DUMP) {
-		        vm_page_lock_queues();
-
-			if (dst_page->no_isync == FALSE)
-			        pmap_disconnect(dst_page->phys_page);
-			vm_page_free(dst_page);
-
-			vm_page_unlock_queues();
-			break;
-		}
-
-		if (flags) {
-		        *flags = 0;
-
-			/* Get the condition of flags before requested ops */
-			/* are undertaken */
-
-			if(dst_page->dirty) *flags |= UPL_POP_DIRTY;
-			if(dst_page->pageout) *flags |= UPL_POP_PAGEOUT;
-			if(dst_page->precious) *flags |= UPL_POP_PRECIOUS;
-			if(dst_page->absent) *flags |= UPL_POP_ABSENT;
-			if(dst_page->busy) *flags |= UPL_POP_BUSY;
-		}
-
-		/* The caller should have made a call either contingent with */
-		/* or prior to this call to set UPL_POP_BUSY */
-		if(ops & UPL_POP_SET) {
-			/* The protection granted with this assert will */
-			/* not be complete.  If the caller violates the */
-			/* convention and attempts to change page state */
-			/* without first setting busy we may not see it */
-			/* because the page may already be busy.  However */
-			/* if such violations occur we will assert sooner */
-			/* or later. */
-			assert(dst_page->busy || (ops & UPL_POP_BUSY));
-			if (ops & UPL_POP_DIRTY) dst_page->dirty = TRUE;
-			if (ops & UPL_POP_PAGEOUT) dst_page->pageout = TRUE;
-			if (ops & UPL_POP_PRECIOUS) dst_page->precious = TRUE;
-			if (ops & UPL_POP_ABSENT) dst_page->absent = TRUE;
-			if (ops & UPL_POP_BUSY) dst_page->busy = TRUE;
-		}
-
-		if(ops & UPL_POP_CLR) {
-			assert(dst_page->busy);
-			if (ops & UPL_POP_DIRTY) dst_page->dirty = FALSE;
-			if (ops & UPL_POP_PAGEOUT) dst_page->pageout = FALSE;
-			if (ops & UPL_POP_PRECIOUS) dst_page->precious = FALSE;
-			if (ops & UPL_POP_ABSENT) dst_page->absent = FALSE;
-			if (ops & UPL_POP_BUSY) {
-			        dst_page->busy = FALSE;
-				PAGE_WAKEUP(dst_page);
-			}
-		}
-
-		if (dst_page->encrypted) {
-			/*
-			 * ENCRYPTED SWAP:
-			 * We need to decrypt this encrypted page before the
-			 * caller can access its contents.
-			 * But if the caller really wants to access the page's
-			 * contents, they have to keep the page "busy".
-			 * Otherwise, the page could get recycled or re-encrypted
-			 * at any time.
-			 */
-			if ((ops & UPL_POP_SET) && (ops & UPL_POP_BUSY) &&
-			    dst_page->busy) {
-				/*
-				 * The page is stable enough to be accessed by
-				 * the caller, so make sure its contents are
-				 * not encrypted.
-				 */
-				vm_page_decrypt(dst_page, 0);
-			} else {
-				/*
-				 * The page is not busy, so don't bother
-				 * decrypting it, since anything could
-				 * happen to it between now and when the
-				 * caller wants to access it.
-				 * We should not give the caller access
-				 * to this page.
-				 */
-				assert(!phys_entry);
-			}
-		}
-
-		if (phys_entry) {
-			/*
-			 * The physical page number will remain valid
-			 * only if the page is kept busy.
-			 * ENCRYPTED SWAP: make sure we don't let the
-			 * caller access an encrypted page.
-			 */
-			assert(dst_page->busy);
-			assert(!dst_page->encrypted);
-			*phys_entry = dst_page->phys_page;
-		}
-
-		break;
-	}
-
-	vm_object_unlock(object);
-	return KERN_SUCCESS;
-				
-}
-
-/*
- * vm_object_range_op offers performance enhancement over 
- * vm_object_page_op for page_op functions which do not require page 
- * level state to be returned from the call.  Page_op was created to provide 
- * a low-cost alternative to page manipulation via UPLs when only a single 
- * page was involved.  The range_op call establishes the ability in the _op 
- * family of functions to work on multiple pages where the lack of page level
- * state handling allows the caller to avoid the overhead of the upl structures.
- */
-
-kern_return_t
-vm_object_range_op(
-	vm_object_t		object,
-	vm_object_offset_t	offset_beg,
-	vm_object_offset_t	offset_end,
-	int                     ops,
-	int                     *range)
-{
-        vm_object_offset_t	offset;
-	vm_page_t		dst_page;
-
-	if (object->resident_page_count == 0) {
-	        if (range) {
-		        if (ops & UPL_ROP_PRESENT)
-			        *range = 0;
-			else
-			        *range = offset_end - offset_beg;
-		}
-		return KERN_SUCCESS;
-	}
-	vm_object_lock(object);
-
-	if (object->phys_contiguous) {
-		vm_object_unlock(object);
-	        return KERN_INVALID_OBJECT;
-	}
-	
-	offset = offset_beg;
-
-	while (offset < offset_end) {
-		dst_page = vm_page_lookup(object, offset);
-		if (dst_page != VM_PAGE_NULL) {
-			if (ops & UPL_ROP_DUMP) {
-				if (dst_page->busy || dst_page->cleaning) {
-				        /*
-					 * someone else is playing with the 
-					 * page, we will have to wait
-					 */
-				        PAGE_SLEEP(object,
-						dst_page, THREAD_UNINT);
-					/*
-					 * need to relook the page up since it's
-					 * state may have changed while we slept
-					 * it might even belong to a different object
-					 * at this point
-					 */
-					continue;
-				}
-				vm_page_lock_queues();
-
-				if (dst_page->no_isync == FALSE)
-				        pmap_disconnect(dst_page->phys_page);
-				vm_page_free(dst_page);
-
-				vm_page_unlock_queues();
-			} else if (ops & UPL_ROP_ABSENT)
-			        break;
-		} else if (ops & UPL_ROP_PRESENT)
-		        break;
-
-		offset += PAGE_SIZE;
-	}
-	vm_object_unlock(object);
-
-	if (range)
-	        *range = offset - offset_beg;
-
-	return KERN_SUCCESS;
 }

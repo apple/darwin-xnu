@@ -100,7 +100,7 @@ extern void	panic_init(void);
 
 __BEGIN_DECLS
 
-extern void	panic(const char *string, ...) __dead2;
+extern void	panic(const char	*string, ...);
 
 __END_DECLS
 

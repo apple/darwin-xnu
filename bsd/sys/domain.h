@@ -84,7 +84,9 @@
 struct	mbuf;
 #define DOM_REENTRANT	0x01
 
-#pragma pack(4)
+#if __DARWIN_ALIGN_POWER
+#pragma options align=power
+#endif
 
 struct	domain {
 	int	dom_family;		/* AF_xxx */
@@ -111,7 +113,9 @@ struct	domain {
 	u_long		reserved[2];
 };
 
-#pragma pack()
+#if __DARWIN_ALIGN_POWER
+#pragma options align=reset
+#endif
 
 #ifdef KERNEL
 extern struct	domain *domains;

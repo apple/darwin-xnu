@@ -34,6 +34,7 @@ enum {
 };
 #define	NULL 0L
 
+
 /*
  * atomic operations
  *	these are _the_ atomic operations, currently cast atop CompareAndSwap,
@@ -76,7 +77,6 @@ SInt32	OSDecrementAtomic(SInt32 * value)
 	return OSAddAtomic(-1, value);
 }
 
-#ifdef CMPXCHG8B
 void *	OSDequeueAtomic(void ** inList, SInt32 inOffset)
 {
 	void *	oldListHead;
@@ -91,6 +91,7 @@ void *	OSDequeueAtomic(void ** inList, SInt32 inOffset)
 		newListHead = *(void **) (((char *) oldListHead) + inOffset);
 	} while (! OSCompareAndSwap((UInt32)oldListHead,
 					(UInt32)newListHead, (UInt32 *)inList));
+	
 	return oldListHead;
 }
 
@@ -106,7 +107,7 @@ void	OSEnqueueAtomic(void ** inList, void * inNewLink, SInt32 inOffset)
 	} while (! OSCompareAndSwap((UInt32)oldListHead, (UInt32)newListHead,
 					(UInt32 *)inList));
 }
-#endif /* CMPXCHG8B */
+
 #endif	/* !__ppc__ */
 
 static UInt32	OSBitwiseAtomic(UInt32 and_mask, UInt32 or_mask, UInt32 xor_mask, UInt32 * value)

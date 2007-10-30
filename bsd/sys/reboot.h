@@ -86,7 +86,6 @@
 #define RB_DFLTROOT	0x20	/* use compiled-in rootdev */
 #define RB_ALTBOOT	0x40	/* use /boot.old vs /boot */
 #define RB_UNIPROC	0x80	/* don't start slaves */
-#define RB_UPSDELAY 0x200   /* Delays restart by 5 minutes */
 #define RB_PANIC	0	/* reboot due to panic */
 #define RB_BOOT		1	/* reboot due to boot() */
 

@@ -143,6 +143,7 @@ kmstartup(void)
 	
 	mcount_lock_grp = lck_grp_alloc_init("MCOUNT", LCK_GRP_ATTR_NULL);
 	mcount_lock_attr = lck_attr_alloc_init();
+	//lck_attr_setdebug(mcount_lock_attr);
 	mcount_lock = lck_spin_alloc_init(mcount_lock_grp, mcount_lock_attr);
 
 }

@@ -43,7 +43,6 @@
 #include <mach/shared_memory_server.h>
 
 #include <kern/kern_types.h>
-#include <kern/macro_help.h>
 
 #if DEBUG
 extern int shared_region_debug;
@@ -57,17 +56,8 @@ extern int shared_region_debug;
 #define SHARED_REGION_DEBUG(args)
 #endif /* DEBUG */
 
-extern int shared_region_trace_level;
-#define SHARED_REGION_TRACE_NONE	0	/* no trace */
-#define SHARED_REGION_TRACE_ERROR	1	/* trace abnormal events */
-#define SHARED_REGION_TRACE_CONFLICT	2	/* trace library conflicts */
-#define SHARED_REGION_TRACE_INFO	3	/* trace all events */
-#define SHARED_REGION_TRACE(level, args)		\
-	MACRO_BEGIN					\
-	if (level <= shared_region_trace_level) {	\
-		printf args;				\
-	}						\
-	MACRO_END
+extern mach_port_t      shared_text_region_handle;
+extern mach_port_t      shared_data_region_handle;
 
 struct shared_region_task_mappings {
 	mach_port_t		text_region;
@@ -156,7 +146,7 @@ typedef struct shared_region_object_chain *shared_region_object_chain_t;
 /* address space shared region descriptor */
 struct shared_region_mapping {
         decl_mutex_data(,       Lock)   /* Synchronization */
-	unsigned int		ref_count;
+	int			ref_count;
 	unsigned int		fs_base;
 	unsigned int		system;
 	mach_port_t		text_region;
@@ -227,9 +217,7 @@ extern kern_return_t shared_region_mapping_create(
 				vm_offset_t		client_base,
 				shared_region_mapping_t	*shared_region,
 				vm_offset_t		alt_base,
-				vm_offset_t		alt_next,
-				int			fs_base,
-				int			system);
+				vm_offset_t		alt_next);
 
 extern kern_return_t shared_region_mapping_ref(
 				shared_region_mapping_t	shared_region);
@@ -275,9 +263,7 @@ __private_extern__ struct load_struct *lsf_remove_regions_mappings_lock(
 extern unsigned int lsf_mapping_pool_gauge(void);
 
 extern kern_return_t shared_file_create_system_region(
-	shared_region_mapping_t	*shared_region,
-	int			fs_base,
-	int			system);
+	shared_region_mapping_t	*shared_region);
 
 extern void remove_all_shared_regions(void);
 
@@ -296,20 +282,6 @@ extern kern_return_t mach_memory_entry_purgable_control(
 	ipc_port_t	entry_port,
 	vm_purgable_t	control,
 	int		*state);
-
-extern kern_return_t mach_memory_entry_page_op(
-	ipc_port_t		entry_port,
-	vm_object_offset_t	offset,
-	int			ops,
-	ppnum_t			*phys_entry,
-	int			*flags);
-
-extern kern_return_t mach_memory_entry_range_op(
-	ipc_port_t		entry_port,
-	vm_object_offset_t	offset_beg,
-	vm_object_offset_t	offset_end,
-	int                     ops,
-	int                     *range);
 
 #endif /* KERNEL_PRIVATE */
 

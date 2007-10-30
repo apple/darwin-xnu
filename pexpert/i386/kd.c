@@ -87,6 +87,8 @@
 
 extern void cpu_shutdown(void);
 
+int	cngetc(void);
+int	cnmaygetc(void);
 void	kdreboot(void);
 
 /*
@@ -119,6 +121,35 @@ void	kdreboot(void);
 #define K_CMD_RDKBD     0xc4    /* read keyboard ID */
 #define K_CMD_ECHO      0xee    /* used for diagnostic testing */
 #define K_CMD_RESET     0xfe    /* issue a system reset */
+
+/* 
+ * cngetc / cnmaygetc
+ * 
+ * Get one character using polling, rather than interrupts.
+ * Used by the kernel debugger.
+ */
+
+int
+cngetc(void)
+{
+    char c;
+
+    if ( 0 == (*PE_poll_input)(0, &c) )
+        return ( c );
+    else
+        return ( 0 );
+}
+
+int
+cnmaygetc(void)
+{
+    char c;
+
+    if ( 0 == (*PE_poll_input)(0, &c) )
+        return ( c );
+    else
+        return ( 0 );
+}
 
 /*
  * kd_sendcmd

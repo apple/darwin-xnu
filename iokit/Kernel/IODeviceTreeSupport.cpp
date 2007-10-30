@@ -308,11 +308,7 @@ static void FreePhysicalMemory( vm_offset_t * range )
 {
     vm_offset_t	virt;
 
-#if defined (__i386__)
-    virt = ml_boot_ptovirt( range[0] );
-#else
     virt = ml_static_ptovirt( range[0] );
-#endif
     if( virt) {
         ml_static_mfree( virt, range[1] );
     }

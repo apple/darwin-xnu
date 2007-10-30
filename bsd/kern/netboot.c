@@ -813,7 +813,7 @@ netboot_setup(struct proc * p)
 	struct vfs_context context;
 
 	context.vc_proc = p;
-	context.vc_ucred = kauth_cred_proc_ref(p);	/* XXX kauth_cred_get() ??? proxy */
+	context.vc_ucred = proc_ucred(p);	/* XXX kauth_cred_get() ??? proxy */
 
 	/* Get the vnode for '/'.  Set fdp->fd_fd.fd_cdir to reference it. */
 	if (VFS_ROOT(mountlist.tqh_last, &newdp, &context))
@@ -828,7 +828,6 @@ netboot_setup(struct proc * p)
 	TAILQ_REMOVE(&mountlist, TAILQ_FIRST(&mountlist), mnt_list);
 	mount_list_unlock();
 	mountlist.tqh_first->mnt_flag |= MNT_ROOTFS;
-	kauth_cred_unref(&context.vc_ucred);
     }
  done:
     netboot_info_free(&S_netboot_info_p);

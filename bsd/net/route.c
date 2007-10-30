@@ -117,9 +117,13 @@ route_init()
 {
 	rt_mtx_grp_attr = lck_grp_attr_alloc_init();
 
+	lck_grp_attr_setdefault(rt_mtx_grp_attr);
+
 	rt_mtx_grp = lck_grp_alloc_init("route", rt_mtx_grp_attr);
 
 	rt_mtx_attr = lck_attr_alloc_init();
+
+	lck_attr_setdefault(rt_mtx_attr);
 
 	if ((rt_mtx = lck_mtx_alloc_init(rt_mtx_grp, rt_mtx_attr)) == NULL) {
 		printf("route_init: can't alloc rt_mtx\n");

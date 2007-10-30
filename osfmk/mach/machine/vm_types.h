@@ -31,7 +31,7 @@
 
 #if defined (__ppc__) || defined(__ppc64__)
 #include "mach/ppc/vm_types.h"
-#elif defined (__i386__) || defined(__x86_64__)
+#elif defined (__i386__)
 #include "mach/i386/vm_types.h"
 #else
 #error architecture not supported

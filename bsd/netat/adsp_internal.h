@@ -250,6 +250,9 @@ typedef struct ccb {
     ADSP_OPEN_DATA of;		/* Holds the data for the open exchange */
     gref_t *gref;			/* The queue associated with the CCB */
     gbuf_t *sp_mp;
+    atlock_t lock;
+    atlock_t lockClose;
+    atlock_t lockRemove;
 } CCB, *CCBPtr;
 
 

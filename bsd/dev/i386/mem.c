@@ -85,9 +85,8 @@
 #include <mach/vm_param.h>
 #include <vm/vm_kern.h>		/* for kernel_map */
 
-extern addr64_t  kvtophys(vm_offset_t va); 
+extern vm_offset_t kvtophys(vm_offset_t va); 
 extern boolean_t kernacc(off_t, size_t );
-extern int setup_kmem;
 
 static caddr_t devzerobuf;
 
@@ -111,14 +110,9 @@ mmwrite(dev_t dev, struct uio *uio)
 }
 
 int
-mmioctl(dev_t dev, u_long cmd, __unused caddr_t data, 
+mmioctl(__unused dev_t dev, u_long cmd, __unused caddr_t data, 
 		__unused int flag, __unused struct proc *p)
 {
-	int minnum = minor(dev);
-
-	if ((setup_kmem == 0) && ((minnum == 0) || (minnum == 1)))
-		return(EINVAL);
-
 	switch (cmd) {
 	case FIONBIO:
 	case FIOASYNC:
@@ -140,7 +134,6 @@ mmrw(dev_t dev, struct uio *uio, enum uio_rw rw)
 	vm_offset_t	where;
 	vm_size_t size;
 
-
 	while (uio_resid(uio) > 0 && error == 0) {
 		if (uio_iov_len(uio) == 0) {
 			uio_next_iov(uio);
@@ -153,9 +146,6 @@ mmrw(dev_t dev, struct uio *uio, enum uio_rw rw)
 
 		/* minor device 0 is physical memory */
 		case 0:
-			if (setup_kmem == 0)
-				return(ENODEV);
-
 			v = trunc_page(uio->uio_offset);
 			if (uio->uio_offset >= mem_size)
 				goto fault;
@@ -174,8 +164,6 @@ mmrw(dev_t dev, struct uio *uio, enum uio_rw rw)
 
 		/* minor device 1 is kernel memory */
 		case 1:
-			if (setup_kmem == 0)
-				return(ENODEV);
 			/* Do some sanity checking */
 			if (((vm_address_t)uio->uio_offset >= VM_MAX_KERNEL_ADDRESS) ||
 				((vm_address_t)uio->uio_offset <= VM_MIN_KERNEL_ADDRESS))

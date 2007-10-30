@@ -2208,8 +2208,10 @@ aio_init( void )
 	int			i;
 	
 	aio_lock_grp_attr = lck_grp_attr_alloc_init();
+	lck_grp_attr_setstat(aio_lock_grp_attr);
 	aio_lock_grp = lck_grp_alloc_init("aio", aio_lock_grp_attr);
 	aio_lock_attr = lck_attr_alloc_init();
+	//lck_attr_setdebug(aio_lock_attr);
 
 	aio_lock = lck_mtx_alloc_init(aio_lock_grp, aio_lock_attr);
 

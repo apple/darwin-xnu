@@ -104,7 +104,9 @@ int		sflt_attach_private(struct socket *so, struct socket_filter *filter, sflt_h
  *  the 'where' NKE.  If the latter is NULL, the flags indicate "first"
  *  or "last"
  */
-#pragma pack(4)
+#if __DARWIN_ALIGN_POWER
+#pragma options align=power
+#endif
 
 struct so_nke
 {	unsigned int nke_handle;
@@ -113,7 +115,9 @@ struct so_nke
 	unsigned long reserved[4];	/* for future use */
 };
 
-#pragma pack()
+#if __DARWIN_ALIGN_POWER
+#pragma options align=reset
+#endif
 
 #endif /* NET_KEXT_NET_H */
 

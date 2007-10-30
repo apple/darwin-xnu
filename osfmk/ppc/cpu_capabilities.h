@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -96,17 +96,6 @@ static __inline__ int _NumCPUs( void ) { return (_cpu_capabilities & kNumCPUs) >
 #define _COMM_PAGE_BASE_ADDRESS			(-8*4096)						// start at page -8, ie 0xFFFF8000
 #define	_COMM_PAGE_AREA_LENGTH			( 7*4096)						// reserved length of entire comm area
 #define	_COMM_PAGE_AREA_USED			( 2*4096)						// we use two pages so far
-
-/* The following set of definitions are used in the kernel, which needs to distinguish between
- * the 32 and 64-bit commpage addresses and lengths.  On PPC they are the same, but on Imtel
- * they are not.
- */
-#define _COMM_PAGE32_BASE_ADDRESS		( _COMM_PAGE_BASE_ADDRESS )
-#define _COMM_PAGE64_BASE_ADDRESS		( _COMM_PAGE_BASE_ADDRESS )
-#define	_COMM_PAGE32_AREA_LENGTH		( _COMM_PAGE_AREA_LENGTH )
-#define	_COMM_PAGE64_AREA_LENGTH		( _COMM_PAGE_AREA_LENGTH )
-#define	_COMM_PAGE32_AREA_USED			( _COMM_PAGE_AREA_USED )
-#define	_COMM_PAGE64_AREA_USED			( _COMM_PAGE_AREA_USED )
 
 /* The Objective-C runtime fixed address page to optimize message dispatch */
 #define _OBJC_PAGE_BASE_ADDRESS			(-20*4096)						// start at page -20, ie 0xFFFEC000

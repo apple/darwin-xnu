@@ -97,7 +97,7 @@ type io_done_queue_t	= mach_port_t
 #if	KERNEL_SERVER
 		intran: io_done_queue_t io_done_queue_port_lookup(mach_port_t)
 		outtran: mach_port_t convert_io_done_queue_to_port(io_done_queue_t)
-#endif	/* KERNEL_SERVER */
+#endif	KERNEL_SERVER
 		;
 
 import <device/device_types.h>;

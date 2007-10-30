@@ -41,7 +41,8 @@
 #include	<mach/boolean.h>
 #include	<mach/vm_param.h>
 #include	<kern/cpu_number.h>
-#include	<machine/exec.h>
+
+int grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype);
 
 /*
  * Routine: grade_binary()
@@ -226,6 +227,8 @@ grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype)
 	/* NOTREACHED */
 }
 
+extern vm_map_offset_t kvtophys64(vm_map_offset_t);
+
 boolean_t
 kernacc(
     off_t 	start,
@@ -239,7 +242,7 @@ kernacc(
 	end = start + len;
 	
 	while (base < end) {
-		if(kvtophys((vm_offset_t)base) == NULL)
+		if(kvtophys64((vm_map_offset_t)base) == (vm_map_offset_t)0)
 			return(FALSE);
 		base += page_size;
 	}   

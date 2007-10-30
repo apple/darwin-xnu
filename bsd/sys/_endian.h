@@ -95,10 +95,25 @@
 /*
  * Macros for network/external number representation conversion.
  */
+#if __DARWIN_BYTE_ORDER == __DARWIN_BIG_ENDIAN && !defined(lint)
+#define	ntohl(x)	(x)
+#define	ntohs(x)	(x)
+#define	htonl(x)	(x)
+#define	htons(x)	(x)
+
+#if	defined(KERNEL) || !defined(_POSIX_C_SOURCE)
+#define	NTOHL(x)	(x)
+#define	NTOHS(x)	(x)
+#define	HTONL(x)	(x)
+#define	HTONS(x)	(x)
+#endif /* defined(KERNEL) || !defined(_POSIX_C_SOURCE) */
+
+#else
+
 #if !defined(__ASSEMBLER__) 
 
 #include <stdint.h>
-#include <libkern/OSByteOrder.h>
+#include <machine/byte_order.h>
  
 __BEGIN_DECLS
 uint16_t	ntohs(uint16_t);
@@ -108,11 +123,16 @@ uint32_t	htonl(uint32_t);
 __END_DECLS
 #endif /* !defined(__ASSEMBLER__) */
 
-#define ntohs(x)	OSSwapBigToHostInt16(x)
-#define htons(x)	OSSwapHostToBigInt16(x)
+#define ntohs(x)	NXSwapBigShortToHost(x)
+#define htons(x)	NXSwapHostShortToBig(x)
 
-#define ntohl(x)	OSSwapBigToHostInt32(x)
-#define htonl(x)	OSSwapHostToBigInt32(x)
+#if defined(__LP64__)
+#define ntohl(x)	NXSwapBigIntToHost(x)
+#define htonl(x)	NXSwapHostIntToBig(x)
+#else 
+#define ntohl(x)	NXSwapBigLongToHost(x)
+#define htonl(x)	NXSwapHostLongToBig(x)
+#endif /* defined(__LP64__) */
 
 #if	defined(KERNEL) || !defined(_POSIX_C_SOURCE)
 #define	NTOHL(x)	(x) = ntohl((u_long)x)
@@ -120,4 +140,5 @@ __END_DECLS
 #define	HTONL(x)	(x) = htonl((u_long)x)
 #define	HTONS(x)	(x) = htons((u_short)x)
 #endif /* defined(KERNEL) || !defined(_POSIX_C_SOURCE) */
+#endif /* __DARWIN_BYTE_ORDER != __DARWIN_BIG_ENDIAN || defined(lint) */ 
 #endif /* !_SYS__ENDIAN_H_ */

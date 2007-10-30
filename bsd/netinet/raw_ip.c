@@ -150,6 +150,7 @@ rip_init()
 	 * allocate lock group attribute and group for udp pcb mutexes
 	 */
 	pcbinfo->mtx_grp_attr = lck_grp_attr_alloc_init();
+	lck_grp_attr_setdefault(pcbinfo->mtx_grp_attr);
 
 	pcbinfo->mtx_grp = lck_grp_alloc_init("ripcb", pcbinfo->mtx_grp_attr);
 		
@@ -157,6 +158,7 @@ rip_init()
 	 * allocate the lock attribute for udp pcb mutexes
 	 */
 	pcbinfo->mtx_attr = lck_attr_alloc_init();
+	lck_attr_setdefault(pcbinfo->mtx_attr);
 
 	if ((pcbinfo->mtx = lck_rw_alloc_init(pcbinfo->mtx_grp, pcbinfo->mtx_attr)) == NULL)
 		return;	/* pretty much dead if this fails... */
@@ -740,25 +742,22 @@ rip_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 	return rip_output(m, so, dst);
 }
 
-/* note: rip_unlock is called from different protos  instead of the generic socket_unlock,
- * it will handle the socket dealloc on last reference 
- * */
 int
 rip_unlock(struct socket *so, int refcount, int debug)
 {
 	int lr_saved;
 	struct inpcb *inp = sotoinpcb(so);
-
-	if (debug == 0) 
-		lr_saved = (unsigned int) __builtin_return_address(0);
+#ifdef __ppc__
+	if (debug == 0) {
+		__asm__ volatile("mflr %0" : "=r" (lr_saved));
+	}
 	else lr_saved = debug;
-
+#endif
 	if (refcount) {
 		if (so->so_usecount <= 0)
 			panic("rip_unlock: bad refoucnt so=%x val=%x\n", so, so->so_usecount);
 		so->so_usecount--;
 		if (so->so_usecount == 0 && (inp->inp_wantcnt == WNT_STOPUSING)) {
-			/* cleanup after last reference */
 			lck_mtx_unlock(so->so_proto->pr_domain->dom_mtx);
 			lck_rw_lock_exclusive(ripcbinfo.mtx);
 			in_pcbdispose(inp);
@@ -766,8 +765,6 @@ rip_unlock(struct socket *so, int refcount, int debug)
 			return(0);
 		}
 	}
-	so->unlock_lr[so->next_unlock_lr] = (u_int *)lr_saved;
-	so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
 	lck_mtx_unlock(so->so_proto->pr_domain->dom_mtx);
 	return(0);
 }

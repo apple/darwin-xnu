@@ -44,8 +44,8 @@ OSDefineMetaClassAndStructors(IOWorkLoop, OSObject);
 
 // Block of unused functions intended for future use
 OSMetaClassDefineReservedUsed(IOWorkLoop, 0);
-OSMetaClassDefineReservedUsed(IOWorkLoop, 1);
 
+OSMetaClassDefineReservedUnused(IOWorkLoop, 1);
 OSMetaClassDefineReservedUnused(IOWorkLoop, 2);
 OSMetaClassDefineReservedUnused(IOWorkLoop, 3);
 OSMetaClassDefineReservedUnused(IOWorkLoop, 4);
@@ -76,8 +76,7 @@ bool IOWorkLoop::init()
         return false;
 
     controlG = IOCommandGate::
-	commandGate(this, OSMemberFunctionCast(IOCommandGate::Action,
-					this, &IOWorkLoop::_maintRequest));
+	commandGate(this, (IOCommandGate::Action) &IOWorkLoop::_maintRequest);
     if ( !controlG )
         return false;
 
@@ -91,9 +90,7 @@ bool IOWorkLoop::init()
     if (addEventSource(controlG) != kIOReturnSuccess)
         return false;
 
-    IOThreadFunc cptr =
-	OSMemberFunctionCast(IOThreadFunc, this, &IOWorkLoop::threadMain);
-    workThread = IOCreateThread(cptr, this);
+    workThread = IOCreateThread((thread_continue_t)threadMainContinuation, this);
     if (!workThread)
         return false;
 
@@ -249,55 +246,52 @@ do {									\
 
 #endif /* KDEBUG */
 
-/* virtual */ bool IOWorkLoop::runEventSources()
+void IOWorkLoop::threadMainContinuation(IOWorkLoop *self)
 {
-    bool res = false;
-    closeGate();
-    if (ISSETP(&fFlags, kLoopTerminate))
-	goto abort;
-
-    IOTimeWorkS();
-    bool more;
-    do {
-	CLRP(&fFlags, kLoopRestart);
-	workToDo = more = false;
-	for (IOEventSource *evnt = eventChain; evnt; evnt = evnt->getNext()) {
-
-	    IOTimeClientS();
-	    more |= evnt->checkForWork();
-	    IOTimeClientE();
-
-	    if (ISSETP(&fFlags, kLoopTerminate))
-		goto abort;
-	    else if (fFlags & kLoopRestart) {
-		more = true;
-		break;
-	    }
-	}
-    } while (more);
-
-    res = true;
-    IOTimeWorkE();
-
-abort:
-    openGate();
-    return res;
+	self->threadMain();
 }
 
-/* virtual */ void IOWorkLoop::threadMain()
+void IOWorkLoop::threadMain()
 {
-    do {
-	if ( !runEventSources() )
+    CLRP(&fFlags, kLoopRestart);
+
+    for (;;) {
+        bool more;
+	IOInterruptState is;
+
+    IOTimeWorkS();
+
+        closeGate();
+        if (ISSETP(&fFlags, kLoopTerminate))
 	    goto exitThread;
 
-	IOInterruptState is = IOSimpleLockLockDisableInterrupt(workToDoLock);
+        do {
+            workToDo = more = false;
+            for (IOEventSource *event = eventChain; event; event = event->getNext()) {
+
+            IOTimeClientS();
+                more |= event->checkForWork();
+            IOTimeClientE();
+
+		if (ISSETP(&fFlags, kLoopTerminate))
+		    goto exitThread;
+                else if (fFlags & kLoopRestart) {
+		    CLRP(&fFlags, kLoopRestart);
+                    continue;
+                }
+            }
+        } while (more);
+
+    IOTimeWorkE();
+
+        openGate();
+
+	is = IOSimpleLockLockDisableInterrupt(workToDoLock);
         if ( !ISSETP(&fFlags, kLoopTerminate) && !workToDo) {
 	    assert_wait((void *) &workToDo, false);
 	    IOSimpleLockUnlockEnableInterrupt(workToDoLock, is);
 
-	    thread_continue_t cptr = OSMemberFunctionCast(
-		    thread_continue_t, this, &IOWorkLoop::threadMain);
-	    thread_block_parameter(cptr, this);
+	    thread_block_parameter((thread_continue_t)threadMainContinuation, this);
 	    /* NOTREACHED */
 	}
 
@@ -305,7 +299,11 @@ abort:
 	// to commit suicide.  But no matter 
 	// Clear the simple lock and retore the interrupt state
 	IOSimpleLockUnlockEnableInterrupt(workToDoLock, is);
-    } while(workToDo);
+	if (workToDo)
+	    continue;
+	else
+	    break;
+    }
 
 exitThread:
     workThread = 0;	// Say we don't have a loop and free ourselves

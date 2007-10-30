@@ -160,6 +160,7 @@ int	spec_pathconf (struct vnop_pathconf_args *);
 #define spec_valloc (int (*) (struct  vnop_access_args *))err_valloc
 #define spec_vfree (int (*) (struct  vnop_access_args *))err_vfree
 #define spec_bwrite (int (*) (struct  vnop_bwrite_args *))nop_bwrite
+int     spec_devblocksize (struct vnop_devblocksize_args *);
 int spec_blktooff (struct  vnop_blktooff_args *);
 int spec_offtoblk (struct  vnop_offtoblk_args *);
 int spec_blockmap (struct  vnop_blockmap_args *);

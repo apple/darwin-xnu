@@ -483,11 +483,6 @@ loopit:
 				
 				lck_mtx_unlock(ip_mutex);
 				ipf_ref();
-				
-				/* 4135317 - always pass network byte order to filter */
-				HTONS(ip->ip_len);
-				HTONS(ip->ip_off);
-				
 				TAILQ_FOREACH(filter, &ipv4_filters, ipf_link) {
 					if (seen == 0) {
 						if ((struct ipfilter *)inject_filter_ref == filter)
@@ -506,11 +501,6 @@ loopit:
 						}
 					}
 				}
-				
-				/* set back to host byte order */
-				NTOHS(ip->ip_len);
-				NTOHS(ip->ip_off);
-				
 				lck_mtx_lock(ip_mutex);
 				ipf_unref();
 				didfilter = 1;
@@ -624,11 +614,6 @@ injectit:
 		
 		lck_mtx_unlock(ip_mutex);
 		ipf_ref();
-		
-		/* 4135317 - always pass network byte order to filter */
-		HTONS(ip->ip_len);
-		HTONS(ip->ip_off);
-		
 		TAILQ_FOREACH(filter, &ipv4_filters, ipf_link) {
 			if (seen == 0) {
 				if ((struct ipfilter *)inject_filter_ref == filter)
@@ -647,11 +632,6 @@ injectit:
 				}
 			}
 		}
-		
-		/* set back to host byte order */
-		NTOHS(ip->ip_len);
-		NTOHS(ip->ip_off);
-		
 		ipf_unref();
 		lck_mtx_lock(ip_mutex);
 	}
@@ -829,11 +809,6 @@ injectit:
 		
 		lck_mtx_unlock(ip_mutex);
 		ipf_ref();
-		
-		/* 4135317 - always pass network byte order to filter */
-		HTONS(ip->ip_len);
-		HTONS(ip->ip_off);
-		
 		TAILQ_FOREACH(filter, &ipv4_filters, ipf_link) {
 			if (filter->ipf_filter.ipf_output) {
 				errno_t result;
@@ -849,11 +824,6 @@ injectit:
 				}
 			}
 		}
-		
-		/* set back to host byte order */
-		NTOHS(ip->ip_len);
-		NTOHS(ip->ip_off);
-		
 		ipf_unref();
 		lck_mtx_lock(ip_mutex);
 	}

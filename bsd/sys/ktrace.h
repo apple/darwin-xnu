@@ -69,8 +69,8 @@
 
 #ifdef MACH_KERNEL_PRIVATE
 
-void ktrsyscall(void *, int, int, void *);
-void ktrsysret(void *, int, int, int);
+void ktrsyscall(void *, int, int, u_int64_t *, int);
+void ktrsysret(void *, int, int, int, int);
 
 #else
 #ifdef __APPLE_API_UNSTABLE
@@ -203,7 +203,7 @@ void	ktrnamei(struct vnode *,char *);
 void	ktrcsw(struct vnode *, int, int);
 void	ktrpsig(struct vnode *, int, sig_t, sigset_t *, int);
 void	ktrgenio(struct vnode *, int, enum uio_rw, struct uio *, int);
-void	ktrsyscall(struct proc *, int, int, syscall_arg_t args[]);
+void	ktrsyscall(struct proc *, int, int, u_int64_t args[]);
 void	ktrsysret(struct proc *, int, int, register_t);
 #endif /* __APPLE_API_PRIVATE */
 #else

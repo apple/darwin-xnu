@@ -150,4 +150,4 @@ int	arpresolve(struct ifnet *, struct rtentry *, struct mbuf *,
 void	arp_ifinit(struct ifnet *, struct ifaddr *);
 #endif KERNEL_PRIVATE
 
-#endif /* _NETINET_IF_ETHER_H_ */
+#endif _NETINET_IF_ETHER_H_

@@ -1168,6 +1168,7 @@ bool IOCatalogue::addExtensionsFromArchive(OSData * mkext)
     return result;
 }
 
+
 /*********************************************************************
 * This function clears out all references to the in-kernel linker,
 * frees the list of startup extensions in extensionDict, and
@@ -1177,13 +1178,10 @@ bool IOCatalogue::addExtensionsFromArchive(OSData * mkext)
 *********************************************************************/
 kern_return_t IOCatalogue::removeKernelLinker(void) {
     kern_return_t result = KERN_SUCCESS;
-    struct segment_command * segmentLE, *segmentKLD;
-    boolean_t	keepsyms = FALSE;
-#if __ppc__
+    struct segment_command * segment;
     char * dt_segment_name;
     void * segment_paddress;
     int    segment_size;
-#endif
 
    /* This must be the very first thing done by this function.
     */
@@ -1198,8 +1196,6 @@ kern_return_t IOCatalogue::removeKernelLinker(void) {
         goto finish;
     }
 
-    PE_parse_boot_arg("keepsyms", &keepsyms);
- 
     IOLog("Jettisoning kernel linker.\n");
 
     kernelLinkerPresent = 0;
@@ -1219,24 +1215,25 @@ kern_return_t IOCatalogue::removeKernelLinker(void) {
     * memory so that any cross-dependencies (not that there
     * should be any) are handled.
     */
-    segmentKLD = getsegbyname("__KLD");
-    if (!segmentKLD) {
+    segment = getsegbyname("__KLD");
+    if (!segment) {
         IOLog("error removing kernel linker: can't find %s segment\n",
             "__KLD");
         result = KERN_FAILURE;
         goto finish;
     }
-    OSRuntimeUnloadCPPForSegment(segmentKLD);
+    OSRuntimeUnloadCPPForSegment(segment);
 
-    segmentLE = getsegbyname("__LINKEDIT");
-    if (!segmentLE) {
+    segment = getsegbyname("__LINKEDIT");
+    if (!segment) {
         IOLog("error removing kernel linker: can't find %s segment\n",
             "__LINKEDIT");
         result = KERN_FAILURE;
         goto finish;
     }
-    OSRuntimeUnloadCPPForSegment(segmentLE);
-#if __ppc__
+    OSRuntimeUnloadCPPForSegment(segment);
+
+
    /* Free the memory that was set up by bootx.
     */
     dt_segment_name = "Kernel-__KLD";
@@ -1244,29 +1241,12 @@ kern_return_t IOCatalogue::removeKernelLinker(void) {
         IODTFreeLoaderInfo(dt_segment_name, (void *)segment_paddress,
             (int)segment_size);
     }
-#elif __i386__
-    /* On x86, use the mapping data from the segment load command to
-     * unload KLD and LINKEDIT directly, unless the keepsyms boot-arg
-     * was enabled. This may invalidate any assumptions about 
-     * "avail_start" defining the lower bound for valid physical addresses.
-     */
-    if (!keepsyms && segmentKLD->vmaddr && segmentKLD->vmsize)
-	    ml_static_mfree(segmentKLD->vmaddr, segmentKLD->vmsize);
-#else
-#error arch
-#endif
-#if __ppc__
+
     dt_segment_name = "Kernel-__LINKEDIT";
     if (0 == IODTGetLoaderInfo(dt_segment_name, &segment_paddress, &segment_size)) {
         IODTFreeLoaderInfo(dt_segment_name, (void *)segment_paddress,
             (int)segment_size);
     }
-#elif __i386__
-    if (!keepsyms && segmentLE->vmaddr && segmentLE->vmsize)
-	    ml_static_mfree(segmentLE->vmaddr, segmentLE->vmsize);
-#else
-#error arch
-#endif
 
     struct section * sect;
     sect = getsectbyname("__PRELINK", "__symtab");

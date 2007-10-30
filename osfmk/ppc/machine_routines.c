@@ -45,7 +45,7 @@
 
 #include <vm/vm_page.h>
 
-unsigned int		LockTimeOut = 1250000000;
+unsigned int		LockTimeOut = 12500000;
 unsigned int		MutexSpin = 0;
 
 decl_mutex_data(static,mcpus_lock);
@@ -148,16 +148,8 @@ ml_io_map(
 	vm_offset_t phys_addr, 
 	vm_size_t size)
 {
-	return(io_map(phys_addr,size,VM_WIMG_IO));
+	return(io_map(phys_addr,size));
 }
-
-
-void ml_get_bouncepool_info(vm_offset_t *phys_addr, vm_size_t *size)
-{
-        *phys_addr = 0;
-	*size      = 0;
-}
-
 
 /*
  *	Routine:        ml_static_malloc

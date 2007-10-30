@@ -548,8 +548,6 @@ bsd/kern/posix_shm.c			standard
 bsd/kern/qsort.c			standard
 bsd/kern/kpi_socket.c		standard
 bsd/kern/kpi_socketfilter.c	standard
-bsd/kern/proc_info.c			standard
-bsd/kern/socket_info.c			standard
 
 bsd/vm/vnode_pager.c			standard
 bsd/vm/vm_unix.c			standard
@@ -559,6 +557,3 @@ bsd/uxkern/ux_exception.c		standard
 
 bsd/conf/param.c			standard
 ./ioconf.c				standard
-
-bsd/dev/chud/chud_bsd_callback.c	standard
-bsd/dev/chud/chud_process.c		standard

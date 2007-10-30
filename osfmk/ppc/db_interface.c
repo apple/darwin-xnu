@@ -591,3 +591,15 @@ void db_reboot(
 	db_printf("Sorry, system can't reboot automatically yet...  You need to do it by hand...\n");
 
 }
+
+/*
+ * Switch to gdb
+ */
+void
+db_to_gdb(
+	void)
+{
+	extern unsigned int switch_debugger;
+
+	switch_debugger=1;
+}

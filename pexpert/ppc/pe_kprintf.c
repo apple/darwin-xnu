@@ -37,7 +37,6 @@
 #include <pexpert/device_tree.h>
 #include <kern/debug.h>
 #include <kern/simple_lock.h>
-#include <vm/pmap.h>
 
 /* extern references */
 extern void init_display_putc(unsigned char*, int, int);
@@ -100,7 +99,7 @@ void PE_init_kprintf(boolean_t vm_initialized)
 		if (serial_baud != -1) gPESerialBaud = serial_baud; 
 
 	if( (scc = PE_find_scc())) {				/* See if we can find the serial port */
-		scc = io_map_spec(scc, 0x1000, VM_WIMG_IO);	/* Map it in */
+		scc = io_map_spec(scc, 0x1000);				 /* Map it in */
 		initialize_serial((void *)scc, gPESerialBaud); /* Start up the serial driver */
 		PE_kputc = serial_putc;
 

@@ -42,24 +42,6 @@
 
 __BEGIN_DECLS
 
-/* are we a 64 bit platform ? */
-
-boolean_t ml_is64bit(void);
-
-/* is this a 64bit thread? */
-
-boolean_t ml_thread_is64bit(thread_t);
-
-/* is this a 64bit thread? */
-
-boolean_t ml_state_is64bit(void *);
-
-/* set state of fpu save area for signal handling */
-
-void	ml_fp_setvalid(boolean_t);
-
-void	ml_cpu_set_ldt(int);
-
 /* Interrupt handling */
 
 /* Initialize Interrupts */
@@ -78,7 +60,6 @@ boolean_t ml_at_interrupt_context(void);
 void ml_cause_interrupt(void);
 
 void ml_get_timebase(unsigned long long *timestamp);
-void ml_init_lock_timeout(void); 
 
 /* Type for the Time Base Enable function */
 typedef void (*time_base_enable_t)(cpu_id_t cpu_id, boolean_t enable);
@@ -119,12 +100,6 @@ void ml_install_interrupt_handler(
 vm_offset_t
 ml_static_ptovirt(
 	vm_offset_t);
-
-#ifdef	XNU_KERNEL_PRIVATE
-vm_offset_t
-ml_boot_ptovirt(
-	vm_offset_t);
-#endif
 
 /* PCI config cycle probing */
 boolean_t ml_probe_read(
@@ -230,15 +205,6 @@ vm_offset_t ml_io_map(
 vm_offset_t ml_static_malloc(
 	vm_size_t size);
 
-
-extern uint32_t	bounce_pool_base;
-extern uint32_t	bounce_pool_size;
-
-void	ml_get_bouncepool_info(
-			       vm_offset_t *phys_addr,
-			       vm_size_t   *size);
-
-
 #endif /* PEXPERT_KERNEL_PRIVATE || MACH_KERNEL_PRIVATE  */
 
 /* Zero bytes starting at a physical address */
@@ -270,14 +236,6 @@ extern void	ml_cpu_down(void);
 extern int	set_be_bit(void);
 extern int	clr_be_bit(void);
 extern int	be_tracing(void);
-
-extern void ml_set_maxsnoop(uint32_t maxdelay);
-extern unsigned ml_get_maxsnoop(void);
-extern void ml_set_maxbusdelay(uint32_t mdelay);
-extern uint32_t ml_get_maxbusdelay(void);
-extern void ml_hpet_cfg(uint32_t cpu, uint32_t hpetVect);
-
-extern uint64_t tmrCvt(uint64_t time, uint64_t conversion);
 
 #endif /* __APPLE_API_PRIVATE */
 

@@ -10,33 +10,18 @@ CWARNFLAGS= $(filter-out -Wbad-function-cast, $(CWARNFLAGS_STD))
 OBJS_NO_WERROR=				\
 	ioconf.o			\
 	UNDRequest.o			\
-	IOLib.cpo				\
+	IOLib.o				\
 	IOStringFuncs.o			\
-	IOCatalogue.cpo		\
 	IOCPU.cpo			\
-	IOCommandGate.cpo		\
 	IOCommandPool.cpo		\
 	IOCommandQueue.cpo		\
-	IOConditionLock.cpo		\
-	IOFilterInterruptEventSource.cpo	\
-	IOHibernateIO.cpo		\
+	IOKitBSDInit.cpo		\
 	IOInterruptController.cpo	\
 	IOInterruptEventSource.cpo	\
-	IOKitBSDInit.cpo		\
-	IOMapper.cpo			\
-	IOMemoryCursor.cpo		\
-	IOMemoryDescriptor.cpo	\
-	IOPlatformExpert.cpo	\
 	IOPMPowerStateQueue.cpo		\
 	IOPMchangeNoteList.cpo		\
 	IOPMrootDomain.cpo		\
-	IORangeAllocator.cpo	\
-	IORegistryEntry.cpo		\
-	IOService.cpo			\
 	IOServicePM.cpo			\
-	IOSyncer.cpo			\
-	IOTimerEventSource.cpo	\
-	IOUserClient.cpo		\
 	IOWorkLoop.cpo			\
 	RootDomainUserClient.cpo
  

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -89,6 +89,14 @@ static void		setthetime(
 
 void time_zone_slock_init(void);
 
+int gettimeofday(struct proc *p,
+#ifdef __ppc__
+			 struct ppc_gettimeofday_args *uap, 
+#else			 
+			 struct gettimeofday_args *uap, 
+#endif
+			 register_t *retval);
+
 /* 
  * Time of day and interval timer support.
  *
@@ -97,29 +105,52 @@ void time_zone_slock_init(void);
  * here provide support for adding and subtracting timeval structures
  * and decrementing interval timers, optionally reloading the interval
  * timers when they expire.
+ *
+ * XXX Y2038 bug because of clock_get_calendar_microtime() first argument
  */
 /* ARGSUSED */
 int
-gettimeofday(
-__unused	struct proc	*p,
-			struct gettimeofday_args *uap, 
-			register_t *retval)
+gettimeofday(__unused struct proc *p,
+#ifdef __ppc__
+			 register struct ppc_gettimeofday_args *uap, 
+#else			 
+			 register struct gettimeofday_args *uap, 
+#endif
+			 __unused register_t *retval)
 {
+	struct timeval atv;
 	int error = 0;
 	struct timezone ltz; /* local copy */
 
-	if (uap->tp)
-		clock_gettimeofday(&retval[0], &retval[1]);
+/*  NOTE THIS implementation is for non ppc architectures only */
+
+	if (uap->tp) {
+		clock_get_calendar_microtime((uint32_t *)&atv.tv_sec, &atv.tv_usec);
+		if (IS_64BIT_PROCESS(p)) {
+			struct user_timeval user_atv;
+			user_atv.tv_sec = atv.tv_sec;
+			user_atv.tv_usec = atv.tv_usec;
+			/*
+			 * This cast is not necessary for PPC, but is
+			 * mostly harmless.
+			 */
+			error = copyout(&user_atv, CAST_USER_ADDR_T(uap->tp), sizeof(struct user_timeval));
+		} else {
+			error = copyout(&atv, CAST_USER_ADDR_T(uap->tp), sizeof(struct timeval));
+		}
+		if (error)
+			return(error);
+	}
 	
 	if (uap->tzp) {
 		lck_spin_lock(tz_slock);
 		ltz = tz;
 		lck_spin_unlock(tz_slock);
-
-		error = copyout((caddr_t)&ltz, CAST_USER_ADDR_T(uap->tzp), sizeof (tz));
+		error = copyout((caddr_t)&ltz, CAST_USER_ADDR_T(uap->tzp),
+		    sizeof (tz));
 	}
 
-	return (error);
+	return(error);
 }
 
 /*
@@ -580,11 +611,13 @@ time_zone_slock_init(void)
 {
 	/* allocate lock group attribute and group */
 	tz_slock_grp_attr = lck_grp_attr_alloc_init();
+	lck_grp_attr_setstat(tz_slock_grp_attr);
 
 	tz_slock_grp =  lck_grp_alloc_init("tzlock", tz_slock_grp_attr);
 
 	/* Allocate lock attribute */
 	tz_slock_attr = lck_attr_alloc_init();
+	//lck_attr_setdebug(tz_slock_attr);
 
 	/* Allocate the spin lock */
 	tz_slock = lck_spin_alloc_init(tz_slock_grp, tz_slock_attr);

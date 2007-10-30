@@ -126,17 +126,13 @@ pmap_copy_part_page(
 	vm_offset_t	dst_offset,
 	vm_size_t	len)
 {
-        pmap_paddr_t src, dst;
-
+        vm_offset_t  src, dst;
 	assert(psrc != vm_page_fictitious_addr);
 	assert(pdst != vm_page_fictitious_addr);
-
-	src = i386_ptob(psrc);
-	dst = i386_ptob(pdst);
-
-	assert((((uint32_t)dst & PAGE_MASK) + dst_offset + len) <= PAGE_SIZE);
-	assert((((uint32_t)src & PAGE_MASK) + src_offset + len) <= PAGE_SIZE);
-
+	src = (vm_offset_t)i386_ptob(psrc);
+	dst = (vm_offset_t)i386_ptob(pdst);
+	assert(((dst & PAGE_MASK) + dst_offset + len) <= PAGE_SIZE);
+	assert(((src & PAGE_MASK) + src_offset + len) <= PAGE_SIZE);
 	bcopy_phys((addr64_t)src + (src_offset & INTEL_OFFMASK),
 		   (addr64_t)dst + (dst_offset & INTEL_OFFMASK),
 		   len);
@@ -153,24 +149,21 @@ pmap_copy_part_lpage(
 	vm_offset_t	dst_offset,
 	vm_size_t	len)
 {
-        mapwindow_t *map;
+	pt_entry_t *ptep;
+	thread_t	thr_act = current_thread();
 
 	assert(pdst != vm_page_fictitious_addr);
-	assert((dst_offset + len) <= PAGE_SIZE);
-
-        mp_disable_preemption();
-
-        map = pmap_get_mapwindow(INTEL_PTE_VALID | INTEL_PTE_RW | (i386_ptob(pdst) & PG_FRAME) | 
-                                 INTEL_PTE_REF | INTEL_PTE_MOD);
-	if (map == 0) {
-	        panic("pmap_copy_part_lpage");
-        }
-	invlpg((uintptr_t)map->prv_CADDR);
-
-	memcpy((void *) (map->prv_CADDR + (dst_offset & INTEL_OFFMASK)), (void *) src, len);
-	*map->prv_CMAP = 0;
-
-	mp_enable_preemption();
+	ptep = pmap_pte(thr_act->map->pmap, i386_ptob(pdst));
+	if (0 == ptep)
+		panic("pmap_copy_part_lpage ptep");
+	assert(((pdst & PAGE_MASK) + dst_offset + len) <= PAGE_SIZE);
+	if (*(pt_entry_t *) CM2)
+	  panic("pmap_copy_part_lpage");
+	*(int *) CM2 = INTEL_PTE_VALID | INTEL_PTE_RW | (*ptep & PG_FRAME) | 
+	  INTEL_PTE_REF | INTEL_PTE_MOD;
+	invlpg((unsigned int) CA2);
+	memcpy((void *) (CA2 + (dst_offset & INTEL_OFFMASK)), (void *) src, len);
+	*(pt_entry_t *) CM2 = 0;
 }
 
 /*
@@ -184,24 +177,21 @@ pmap_copy_part_rpage(
 	vm_offset_t	dst,
 	vm_size_t	len)
 {
-        mapwindow_t *map;
+  pt_entry_t *ptep;
+  thread_t thr_act = current_thread();
 
 	assert(psrc != vm_page_fictitious_addr);
-	assert((src_offset + len) <= PAGE_SIZE);
-
-        mp_disable_preemption();
-
-        map = pmap_get_mapwindow(INTEL_PTE_VALID | INTEL_PTE_RW | (i386_ptob(psrc) & PG_FRAME) | 
-                                 INTEL_PTE_REF);
-	if (map == 0) {
-	        panic("pmap_copy_part_rpage");
-        }
-	invlpg((uintptr_t) map->prv_CADDR);
-
-	memcpy((void *) dst, (void *) (map->prv_CADDR + (src_offset & INTEL_OFFMASK)), len);
-	*map->prv_CMAP = 0;
-
-	mp_enable_preemption();
+	ptep = pmap_pte(thr_act->map->pmap, i386_ptob(psrc));
+	if (0 == ptep)
+		panic("pmap_copy_part_rpage ptep");
+	assert(((psrc & PAGE_MASK) + src_offset + len) <= PAGE_SIZE);
+	if (*(pt_entry_t *) CM2)
+	  panic("pmap_copy_part_rpage");
+	*(pt_entry_t *) CM2 = INTEL_PTE_VALID | INTEL_PTE_RW | (*ptep & PG_FRAME) | 
+	  INTEL_PTE_REF;
+	invlpg((unsigned int) CA2);
+	memcpy((void *) dst, (void *) (CA2 + (src_offset & INTEL_OFFMASK)), len);
+	*(pt_entry_t *) CM2 = 0;
 }
 
 /*
@@ -209,20 +199,19 @@ pmap_copy_part_rpage(
  *
  *	Convert a kernel virtual address to a physical address
  */
-addr64_t
+vm_offset_t
 kvtophys(
 	vm_offset_t addr)
 {
         pt_entry_t *ptep;
 	pmap_paddr_t pa;
-	
-	mp_disable_preemption();
-	if ((ptep = pmap_pte(kernel_pmap, (vm_map_offset_t)addr)) == PT_ENTRY_NULL) {
-	        pa = 0;
-	} else {
-	        pa =  pte_to_pa(*ptep) | (addr & INTEL_OFFMASK);
-	}
-	mp_enable_preemption_no_check();
-	return ((addr64_t)pa);
-}
 
+	if ((ptep = pmap_pte(kernel_pmap, addr)) == PT_ENTRY_NULL) {
+	  pa = 0;
+	} else {
+	  pa =  pte_to_pa(*ptep) | (addr & INTEL_OFFMASK);
+	}
+	if (0 == pa)
+		kprintf("kvtophys ret 0!\n");
+	return (pa);
+}

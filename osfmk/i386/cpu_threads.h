@@ -53,10 +53,10 @@ typedef struct {
 
 #define cpu_is_same_core(cpu1,cpu2)	(cpu_to_core(cpu1) == cpu_to_core(cpu2))
 
-extern void *cpu_thread_alloc(int);
 extern void cpu_thread_init(void);
 extern void cpu_thread_halt(void);
 
 extern int idlehalt;
 
+extern int ncore;
 #endif /* _I386_CPU_THREADS_H_ */

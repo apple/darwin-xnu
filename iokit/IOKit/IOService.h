@@ -382,8 +382,6 @@ private:
     OSMetaClassDeclareReservedUnused(IOService, 45);
     OSMetaClassDeclareReservedUnused(IOService, 46);
     OSMetaClassDeclareReservedUnused(IOService, 47);
-
-#ifdef __ppc__
     OSMetaClassDeclareReservedUnused(IOService, 48);
     OSMetaClassDeclareReservedUnused(IOService, 49);
     OSMetaClassDeclareReservedUnused(IOService, 50);
@@ -400,7 +398,6 @@ private:
     OSMetaClassDeclareReservedUnused(IOService, 61);
     OSMetaClassDeclareReservedUnused(IOService, 62);
     OSMetaClassDeclareReservedUnused(IOService, 63);
-#endif
 
 public:
 /*! @function getState
@@ -983,7 +980,7 @@ public:
 
 /*! @function disableInterrupt
     @abstract Disable a device interrupt.
-    @discussion Synchronously disable a device interrupt.  If the interrupt routine is running, the call will block until the routine completes.  It is the callers responsiblity to keep track of the enable state of the interrupt source.
+    @discussion Disable a device interrupt. It is the callers responsiblity to keep track of the enable state of the interrupt source.
     @param source The index of the interrupt source in the device.
     @result An IOReturn code.<br>kIOReturnNoInterrupt is returned if the source is not valid. */
 
@@ -1167,15 +1164,10 @@ public:
     static void actionFinalize( IOService * victim, IOOptionBits options );
     static void actionStop( IOService * client, IOService * provider );
 
+    void PMfree( void );
+
     virtual IOReturn resolveInterrupt(IOService *nub, int source);
     virtual IOReturn lookupInterrupt(int source, bool resolve, IOInterruptController **interruptController);
-
-    // SPI to control CPU low power modes
-    void  setCPUSnoopDelay(UInt32 ns);
-    UInt32 getCPUSnoopDelay();
-    void   requireMaxBusStall(UInt32 ns);
-
-    void PMfree( void );
 
     /* power management */
     
@@ -1855,7 +1847,6 @@ private:
     void driver_acked ( void );
     void start_ack_timer ( void );
     void stop_ack_timer ( void );
-
     unsigned long compute_settle_time ( void );
     IOReturn startSettleTimer ( unsigned long delay );
     IOReturn changeState ( void );
@@ -1871,7 +1862,6 @@ private:
     IOReturn allowCancelCommon ( void );
     void computeDesiredState ( void );
     void rebuildChildClampBits ( void );
-    IOReturn temporaryMakeUsable ( void );
 };
 
 #endif /* ! _IOKIT_IOSERVICE_H */

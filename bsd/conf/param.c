@@ -85,9 +85,8 @@
 struct	timezone tz = { TIMEZONE, PST };
 
 #define	NPROC (20 + 16 * MAXUSERS)
-#define HNPROC 2500	/* based on thread_max */
+#define HNPROC (20 + 64 * MAXUSERS)
 int	maxproc = NPROC;
-int	maxprocperuid = NPROC/2;
 __private_extern__ int hard_maxproc = HNPROC;	/* hardcoded limit */
 int nprocs = 0; /* XXX */
 

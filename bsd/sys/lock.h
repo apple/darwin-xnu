@@ -76,6 +76,13 @@
 
 #include <kern/locks.h>
 
+
+#if defined(thread_sleep_simple_lock)
+#undef thread_sleep_simple_lock
+#endif
+#define thread_sleep_simple_lock(l, e, i) thread_sleep_funnel((e), (i))
+
+
 #endif /* KERNEL */
 
 #ifdef BSD_KERNEL_PRIVATE
@@ -104,6 +111,10 @@ struct lock__bsd__ {
  * WARNING - keep in sync with lock__bsd__
  */
 
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
 struct user_lock__bsd__ {
 	user_addr_t	lk_interlock[10];   /* lock on remaining fields */
 	u_int		lk_flags;			/* see below */
@@ -116,6 +127,10 @@ struct user_lock__bsd__ {
 	pid_t		lk_lockholder;		/* pid of exclusive lock holder */
 	user_addr_t	lk_lockthread;		/* thread which acquired excl lock */
 };
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
 
 /*
  * Lock request types:

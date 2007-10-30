@@ -1776,7 +1776,6 @@ sendfile(struct proc *p, struct sendfile_args *uap)
 	struct sf_hdtr hdtr;
 	off_t off, xfsize, sbytes = 0;
 	int error = 0, s;
-	kauth_cred_t safecred;
 
 	if (sf_bufs == NULL) {
 		/* Fail if initialization failed */
@@ -1931,10 +1930,8 @@ retry_lookup:
 			auio.uio_segflg = UIO_NOCOPY;
 			auio.uio_rw = UIO_READ;
 			uio_setresid(&auio, MAXBSIZE);
-			safecred = kauth_cred_proc_ref(p);
 			error = VOP_READ(vp, &auio, IO_VMIO | ((MAXBSIZE / bsize) << 16),
-			        safecred);
-			kauth_cred_unref(&safecred);
+			        p->p_ucred);
 			vm_page_flag_clear(pg, PG_ZERO);
 			vm_page_io_finish(pg);
 			if (error) {

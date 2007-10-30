@@ -109,8 +109,6 @@ struct xucred {
 #define NOCRED ((kauth_cred_t )0)	/* no credential available */
 #define FSCRED ((kauth_cred_t )-1)	/* filesystem credential */
 
-#define IS_VALID_CRED(_cr)	((_cr) != NOCRED && (_cr) != FSCRED)
-
 #ifdef KERNEL
 #ifdef __APPLE_API_OBSOLETE
 __BEGIN_DECLS

@@ -110,7 +110,7 @@ CCBPtr FindSender(f, a)		/* (ADSP_FRAMEPtr f, AddrUnion a) */
     MATCH_SENDER m;
 
     m.addr = a;
-    m.srcCID = UAS_VALUE_NTOH(f->CID);
+    m.srcCID = UAS_VALUE(f->CID);
     return (CCBPtr)qfind_m(AT_ADSP_STREAMS, &m, (ProcPtr)MatchSender);
 }
 
@@ -147,7 +147,7 @@ int RXAttention(sp, mp, f, len)	/* (CCBPtr sp, ADSP_FRAMEPtr f, word len) */
 	 (char)(ADSP_ATTENTION_BIT | ADSP_ACK_REQ_BIT)) && /* Attention Data */
 	((sp->userFlags & eAttention) == 0)) /* & he read the previous */
     {
-	diff = UAL_VALUE_NTOH(f->pktFirstByteSeq) - sp->attnRecvSeq;
+	diff = netdw(UAL_VALUE(f->pktFirstByteSeq)) - sp->attnRecvSeq;
 	if (diff > 0)		/* Hey, he missed one */
 	    return 1;
 
@@ -183,7 +183,7 @@ int RXAttention(sp, mp, f, len)	/* (CCBPtr sp, ADSP_FRAMEPtr f, word len) */
      * Interrupts are OFF here, otherwise we have to do this atomically
      */
     /* Check to see if this acknowledges anything */
-    if ((sp->attnSendSeq + 1) == UAL_VALUE_NTOH(f->pktNextRecvSeq)) {
+    if ((sp->attnSendSeq + 1) == netdw(UAL_VALUE(f->pktNextRecvSeq))) {
 	sp->attnSendSeq++;
 	if ((pb = sp->sapb) == 0) { /* We never sent data ? !!! */
 	    if (mp)
