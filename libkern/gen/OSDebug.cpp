@@ -50,9 +50,6 @@ extern vm_offset_t max_valid_stack_address(void);
 extern void kmod_dump_log(vm_offset_t *addr, unsigned int cnt);
 
 extern addr64_t kvtophys(vm_offset_t va);
-#if __arm__
-extern int copyinframe(vm_address_t fp, uint32_t *frame);
-#endif
 
 __END_DECLS
 
@@ -222,30 +219,6 @@ pad:
 
     for ( ; frame_index < maxAddrs; frame_index++)
 	    bt[frame_index] = (void *) 0;
-#elif __arm__
-    uint32_t i= 0;
-    uint32_t frameb[2];
-    uint32_t fp= 0;
-    
-    // get the current frame pointer for this thread
-    __asm__ volatile("mov %0,r7" : "=r" (fp)); 
-    
-    // now crawl up the stack recording the link value of each frame
-    do {
-      // check bounds
-      if ((fp == 0) || ((fp & 3) != 0) || (fp > VM_MAX_KERNEL_ADDRESS) || (fp < VM_MIN_KERNEL_ADDRESS)) {
-	break;
-      }
-      // safely read frame
-      if (copyinframe(fp, frameb) != 0) {
-	break;
-      }
-      
-      // No need to use copyin as this is always a kernel address, see check above
-      bt[i] = (void*)frameb[1];        // link register
-      fp = frameb[0]; 
-    } while (++i < maxAddrs);
-    frame= i;
 #else
 #error arch
 #endif

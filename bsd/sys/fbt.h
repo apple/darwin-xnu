@@ -33,8 +33,6 @@
 typedef uint32_t machine_inst_t;
 #elif defined(__i386__) || defined (__x86_64__)
 typedef uint8_t machine_inst_t;
-#elif defined(__arm__)
-typedef uint32_t machine_inst_t; /* XXX is this correct? Thumb? */
 #else
 #error Unknown Architecture
 #endif

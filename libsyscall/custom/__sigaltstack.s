@@ -36,10 +36,6 @@ __SYSCALL(__sigaltstack, sigaltstack, 3)
 
 __SYSCALL_INT(__sigaltstack, sigaltstack, 3)
 
-#elif defined(__arm__)
-
-__SYSCALL(__sigaltstack, sigaltstack, 3)
-
 #else
 #error Unsupported architecture
 #endif

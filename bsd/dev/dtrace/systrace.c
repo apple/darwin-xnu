@@ -54,8 +54,6 @@
 #define I386_SYSCALL_NUMBER_MASK (0xFFFF)
 
 typedef x86_saved_state_t savearea_t;
-#elif defined(__arm__)
-typedef struct arm_saved_state savearea_t;
 #endif
 
 #include <sys/param.h>
@@ -81,9 +79,6 @@ typedef struct arm_saved_state savearea_t;
 #elif defined(__i386__) || defined (__x86_64__)
 #define	SYSTRACE_ARTIFICIAL_FRAMES	2
 #define MACHTRACE_ARTIFICIAL_FRAMES 3
-#elif defined(__arm__)
-#define	SYSTRACE_ARTIFICIAL_FRAMES	2 /* XXX ARMTODO */
-#define MACHTRACE_ARTIFICIAL_FRAMES 3 /* XXX ARMTODO */
 #else
 #error Unknown Architecture
 #endif
@@ -159,8 +154,6 @@ dtrace_systrace_syscall(struct proc *pp, void *uap, int *rv)
 			 */
 		}
 	}
-#elif defined(__arm__)
-	do {} while(0); /* XXX what is the right ABI */
 #else
 #error Unknown Architecture
 #endif
@@ -868,8 +861,6 @@ dtrace_machtrace_syscall(struct mach_call_args *args)
 			code = -saved_state32(tagged_regs)->eax;
 		}
 	}
-#elif defined(__arm__)
-	do {} while(0); /* XXX ARMTODO */
 #else
 #error Unknown Architecture
 #endif

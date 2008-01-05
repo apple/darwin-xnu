@@ -819,8 +819,6 @@ bsdthread_create(__unused struct proc *p, struct bsdthread_create_args  *uap, us
 	stackaddr = 0xF0000000;
 #elif defined(__i386__)
 	stackaddr = 0xB0000000;
-#elif defined(__arm__)
-	stackaddr = 0xB0000000; /* XXX ARM */
 #else
 #error Need to define a stack address hint for this architecture
 #endif
@@ -942,24 +940,6 @@ bsdthread_create(__unused struct proc *p, struct bsdthread_create_args  *uap, us
 
 		thread_set_wq_state64(th, (thread_state_t)ts64);
 	}
-	}
-#elif defined(__arm__)
-	{
-	int flavor=0, count=0;
-	void * state;
-
-	kret = thread_getstatus(th, flavor, (thread_state_t)&state, &count);
-	if (kret != KERN_SUCCESS) {
-		error = EINVAL;
-		goto out1;
-	}
-
-	/* XXX ARM TODO */
-
-	kret = thread_setstatus(th, flavor, (thread_state_t)&state, count);
-	if (kret != KERN_SUCCESS)
-		error = EINVAL;
-		goto out1;
 	}
 #else
 #error bsdthread_create  not defined for this architecture
@@ -1385,8 +1365,6 @@ workqueue_addnewthread(struct workqueue *wq)
 	stackaddr = 0xF0000000;
 #elif defined(__i386__)
 	stackaddr = 0xB0000000;
-#elif defined(__arm__)
-	stackaddr = 0xB0000000; /* XXX ARM */
 #else
 #error Need to define a stack address hint for this architecture
 #endif
@@ -2070,15 +2048,6 @@ setup_wqthread(proc_t p, thread_t th, user_addr_t item, int reuse_thread, struct
 
 		thread_set_wq_state64(th, (thread_state_t)ts64);
 	}
-#elif defined(__arm__)
-	arm_thread_state_t state;
-	arm_thread_state_t *ts = &state;
-
-	/* XXX ARM add more */
-	ts->pc = p->p_wqthread;
-	ts->sp = tl->th_stackaddr + PTH_DEFAULT_GUARDSIZE;
-
-	thread_set_wq_state32(th, (thread_state_t)ts);
 #else
 #error setup_wqthread  not defined for this architecture
 #endif

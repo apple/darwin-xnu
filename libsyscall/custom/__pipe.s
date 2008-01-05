@@ -56,16 +56,6 @@ PSEUDO(__pipe, pipe, 0)
 	xorl	%eax, %eax
 	ret
 
-#elif defined(__arm__)
-
-MI_ENTRY_POINT(_pipe)
-	mov		r3,r0              // save fildes across syscall
-	SYSCALL_NONAME(pipe, 0)
-	str     r0, [r3, #0]
-	str     r1, [r3, #4]
-	mov		r0,#0
-	bx		lr
-
 #else
 #error Unsupported architecture
 #endif

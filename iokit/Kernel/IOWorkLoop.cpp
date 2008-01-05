@@ -301,7 +301,10 @@ do {									\
     bool more;
     do {
 	CLRP(&fFlags, kLoopRestart);
-	workToDo = more = false;
+	more = false;
+	IOInterruptState is = IOSimpleLockLockDisableInterrupt(workToDoLock);
+	workToDo = false;
+	IOSimpleLockUnlockEnableInterrupt(workToDoLock, is);
 	for (IOEventSource *evnt = eventChain; evnt; evnt = evnt->getNext()) {
 
 	    IOTimeClientS();

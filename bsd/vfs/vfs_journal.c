@@ -1104,7 +1104,11 @@ replay_journal(journal *jnl)
 		    goto bad_txn_handling;
 		}
 
-		if (blhdr->binfo[0].b.sequence_num < last_sequence_num) {
+		if (   (last_sequence_num != 0)
+		    && (blhdr->binfo[0].b.sequence_num != 0)
+		    && (blhdr->binfo[0].b.sequence_num != last_sequence_num)
+		    && (blhdr->binfo[0].b.sequence_num != last_sequence_num+1)) {
+
 		    txn_start_offset = jnl->jhdr->end = blhdr_offset;
 
 		    if (check_past_jnl_end) {

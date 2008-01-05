@@ -553,9 +553,6 @@ ppnum_t IOGetLastPageNumber(void)
     for (idx = 0; idx < pmap_memory_region_count; idx++)
     {
 	lastPage = pmap_memory_regions[idx].end - 1;
-#elif __arm__
-    if (0) /* XXX */
-    {
 #else
 #error arch
 #endif

@@ -149,14 +149,6 @@ struct ether_desc_blk_str {
 __private_extern__ u_char	etherbroadcastaddr[ETHER_ADDR_LEN] =
 								{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 
-#if defined (__arm__)
-static __inline__ int
-_ether_cmp(const void * a, const void * b)
-{
-	return (memcmp(a, b, ETHER_ADDR_LEN));
-}
-
-#else
 static __inline__ int
 _ether_cmp(const void * a, const void * b)
 {
@@ -170,7 +162,6 @@ _ether_cmp(const void * a, const void * b)
 	}
 	return (0);
 }
-#endif
 
 /*
  * Release all descriptor entries owned by this protocol (there may be several).

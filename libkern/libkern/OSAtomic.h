@@ -341,10 +341,6 @@ static __inline__ void OSSynchronizeIO(void)
 #if defined(__ppc__)
         __asm__ ("eieio");
 #endif
-#if defined(__arm__)
-	UInt32 temp = 0;
-	__asm__ volatile("mcr p15, 0, %0, c7, c10, 4" : : "r" (temp));
-#endif
 }
 #endif
 

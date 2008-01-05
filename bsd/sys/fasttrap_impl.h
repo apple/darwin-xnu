@@ -204,8 +204,6 @@ extern int fasttrap_return_probe(ppc_saved_state_t* regs);
 #elif defined (__i386__) || defined(__x86_64__)
 extern int fasttrap_pid_probe(x86_saved_state_t *regs);
 extern int fasttrap_return_probe(x86_saved_state_t* regs);
-#elif defined(__arm__)
-extern int fasttrap_pid_probe(struct arm_saved_state *rp); /* so very, very, very broken... */
 #else
 #error architecture not supported
 #endif

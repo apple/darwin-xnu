@@ -14836,13 +14836,6 @@ dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	    dtrace_provider, NULL, NULL, "END", 0, NULL);
 	dtrace_probeid_error = dtrace_probe_create((dtrace_provider_id_t)
 	    dtrace_provider, NULL, NULL, "ERROR", 3, NULL);
-#elif defined(__arm__)
-	dtrace_probeid_begin = dtrace_probe_create((dtrace_provider_id_t)
-	    dtrace_provider, NULL, NULL, "BEGIN", 2, NULL);
-	dtrace_probeid_end = dtrace_probe_create((dtrace_provider_id_t)
-	    dtrace_provider, NULL, NULL, "END", 1, NULL);
-	dtrace_probeid_error = dtrace_probe_create((dtrace_provider_id_t)
-	    dtrace_provider, NULL, NULL, "ERROR", 4, NULL);
 #else
 #error Unknown Architecture
 #endif /* __APPLE__ */

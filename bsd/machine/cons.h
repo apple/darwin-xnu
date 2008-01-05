@@ -32,8 +32,6 @@
 #include <dev/ppc/cons.h>
 #elif defined (__i386__) || defined(__x86_64__)
 #include <dev/i386/cons.h>
-#elif defined (__arm__)
-#include <dev/arm/cons.h>
 #else
 #error architecture not supported
 #endif

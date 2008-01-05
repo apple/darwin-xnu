@@ -112,22 +112,12 @@ extern void *kdp_get_interface(void);
 extern void kdp_set_ip_and_mac_addresses(struct in_addr *ipaddr,
 										 struct ether_addr *macaddr);
 
-#if defined (__arm__)
-static __inline__ void
-_ip_copy(struct in_addr * dst, const struct in_addr * src)
-{
-	memcpy(dst, src, sizeof(*dst));
-	return;
-}
-
-#else
 static __inline__ void
 _ip_copy(struct in_addr * dst, const struct in_addr * src)
 {
 	*dst = *src;
 	return;
 }
-#endif
 
 static void
 ether_inet_arp_input(

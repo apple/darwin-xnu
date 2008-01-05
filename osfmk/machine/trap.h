@@ -32,8 +32,6 @@
 #include "ppc/trap.h"
 #elif defined (__i386__)
 #include "i386/trap.h"
-#elif defined (__arm__)
-#include "arm/trap.h"
 #else
 #error architecture not supported
 #endif

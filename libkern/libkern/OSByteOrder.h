@@ -43,8 +43,6 @@
 #include <libkern/ppc/OSByteOrder.h>
 #elif (defined(__i386__) || defined(__x86_64__))
 #include <libkern/i386/OSByteOrder.h>
-#elif defined(__arm__)
-#include <libkern/arm/OSByteOrder.h>
 #else
 #include <libkern/machine/OSByteOrder.h>
 #endif

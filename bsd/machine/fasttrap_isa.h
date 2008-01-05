@@ -32,8 +32,6 @@
 #include "ppc/fasttrap_isa.h"
 #elif defined (__i386__) || defined(__x86_64__)
 #include "i386/fasttrap_isa.h"
-#elif defined (__arm__)
-#include "arm/fasttrap_isa.h"
 #else
 #error architecture not supported
 #endif

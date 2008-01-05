@@ -66,9 +66,6 @@
 #include <libkern/i386/_OSByteOrder.h>
 #endif
 
-#if defined(__arm__)
-#include <libkern/arm/OSByteOrder.h>
-#endif
 
 
 #define __DARWIN_OSSwapInt16(x) \

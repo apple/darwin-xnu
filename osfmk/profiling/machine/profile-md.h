@@ -32,8 +32,6 @@
 #include "profiling/ppc/profile-md.h"
 #elif defined (__i386__)
 #include "profiling/i386/profile-md.h"
-#elif defined (__arm__)
-#include "profiling/arm/profile-md.h"
 #else
 #error architecture not supported
 #endif

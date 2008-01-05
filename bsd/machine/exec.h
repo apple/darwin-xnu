@@ -55,8 +55,6 @@ int grade_binary(cpu_type_t, cpu_subtype_t);
 #include "ppc/exec.h"
 #elif defined (__i386__) || defined(__x86_64__)
 #include "i386/exec.h"
-#elif defined (__arm__)
-#include "arm/exec.h"
 #else
 #error architecture not supported
 #endif

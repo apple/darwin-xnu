@@ -33,8 +33,6 @@
 #include "ppc/commpage/commpage.h"
 #elif defined (__i386__)
 #include "i386/commpage/commpage.h"
-#elif defined (__arm__)
-#include "arm/commpage/commpage.h"
 #else
 #error architecture not supported
 #endif

@@ -35,8 +35,6 @@
 #include "ppc/cpu_capabilities.h"
 #elif defined (__i386__)
 #include "i386/cpu_capabilities.h"
-#elif defined (__arm__)
-#include "arm/cpu_capabilities.h"
 #else
 #error architecture not supported
 #endif
@@ -46,8 +44,6 @@
 #include <System/ppc/cpu_capabilities.h>
 #elif defined (__i386__) || defined(__x86_64__)
 #include <System/i386/cpu_capabilities.h>
-#elif defined (__arm__)
-#include <System/arm/cpu_capabilities.h>
 #else
 #error architecture not supported
 #endif

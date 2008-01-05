@@ -32,8 +32,6 @@
 #include "ppc/xpr.h"
 #elif defined (__i386__)
 #include "i386/xpr.h"
-#elif defined (__arm__)
-#include "arm/xpr.h"
 #else
 #error architecture not supported
 #endif

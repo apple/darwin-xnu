@@ -519,9 +519,6 @@ hibernate_kernel_entrypoint(IOHibernateImageHeader * header,
     // flush caches
     __asm__("wbinvd");
     proc();
-#elif __arm__
-    proc = (ResetProc)0x00000000;
-    proc();
 #endif
   
     return -1;

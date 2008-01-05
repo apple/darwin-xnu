@@ -942,14 +942,15 @@ if (vars->position & (vars->blockSize - 1)) HIBLOG("misaligned file pos %qx\n", 
                 }
 	    }
 
-	    if (vars->extentRemaining <= vars->bufferSize)
-		vars->lastRead = vars->extentRemaining;
-	    else
-		vars->lastRead = vars->bufferSize;
-
+	    uint64_t length;
+	    uint64_t lastReadLength = vars->lastRead;
 	    uint64_t offset = (vars->position 
 				- vars->extentPosition + vars->currentExtent->start);
-	    uint64_t length = (vars->lastRead);
+	    if (vars->extentRemaining <= vars->bufferSize)
+		length = vars->extentRemaining;
+	    else
+		length = vars->bufferSize;
+	    vars->lastRead = length;
 
 //if (length != vars->bufferSize) HIBLOG("short read of %qx ends@ %qx\n", length, offset + length);
 
@@ -967,12 +968,12 @@ if (vars->position & (vars->blockSize - 1)) HIBLOG("misaligned file pos %qx\n", 
                 uint8_t thisVector[AES_BLOCK_SIZE];
                 // save initial vector for following decrypts
                 bcopy(&cryptvars->aes_iv[0], &thisVector[0], AES_BLOCK_SIZE);
-                bcopy(vars->buffer + vars->bufferHalf + vars->lastRead - AES_BLOCK_SIZE, 
+                bcopy(vars->buffer + vars->bufferHalf + lastReadLength - AES_BLOCK_SIZE, 
                         &cryptvars->aes_iv[0], AES_BLOCK_SIZE);
                 // decrypt the buffer
                 aes_decrypt_cbc(vars->buffer + vars->bufferHalf,
                                 &thisVector[0],
-                                vars->lastRead / AES_BLOCK_SIZE,
+                                lastReadLength / AES_BLOCK_SIZE,
                                 vars->buffer + vars->bufferHalf,
                                 &cryptvars->ctx.decrypt);
             }
@@ -2306,7 +2307,9 @@ hibernate_machine_init(void)
         uint32_t     tag;
 	vm_offset_t  ppnum, compressedSize;
 
-	IOPolledFileRead(vars->fileVars, src, 8, cryptvars);
+	err = IOPolledFileRead(vars->fileVars, src, 8, cryptvars);
+	if (kIOReturnSuccess != err)
+	    break;
 
 	ppnum = header[0];
 	count = header[1];
@@ -2318,9 +2321,17 @@ hibernate_machine_init(void)
 
 	for (page = 0; page < count; page++)
 	{
-	    IOPolledFileRead(vars->fileVars, (uint8_t *) &tag, 4, cryptvars);
+	    err = IOPolledFileRead(vars->fileVars, (uint8_t *) &tag, 4, cryptvars);
+	    if (kIOReturnSuccess != err)
+		break;
 
 	    compressedSize = kIOHibernateTagLength & tag;
+	    if (kIOHibernateTagSignature != (tag & ~kIOHibernateTagLength))
+	    {
+		err = kIOReturnIPCError;
+		break;
+	    }
+
 	    if (!compressedSize)
 	    {
 		ppnum++;
@@ -2328,9 +2339,11 @@ hibernate_machine_init(void)
 		continue;
 	    }
 
-	    IOPolledFileRead(vars->fileVars, src, (compressedSize + 3) & ~3, cryptvars);
-   
-	    if (compressedSize != page_size)
+	    err = IOPolledFileRead(vars->fileVars, src, (compressedSize + 3) & ~3, cryptvars);
+   	    if (kIOReturnSuccess != err)
+		break;
+
+	    if (compressedSize < page_size)
 	    {
 		decoOffset = page_size;
 		WKdm_decompress((WK_word*) src, (WK_word*) (src + decoOffset), PAGE_SIZE_IN_WORDS);
@@ -2342,7 +2355,10 @@ hibernate_machine_init(void)
 
 	    err = IOMemoryDescriptorReadToPhysical(vars->srcBuffer, decoOffset, ptoa_64(ppnum), page_size);
 	    if (err)
+	    {
 		HIBLOG("IOMemoryDescriptorReadToPhysical [%d] %x\n", ppnum, err);
+		break;
+	    }
 
 	    ppnum++;
 	    pagesDone++;
@@ -2374,6 +2390,9 @@ hibernate_machine_init(void)
 	}
     }
     while (true);
+
+    if (kIOReturnSuccess != err)
+	panic("Hibernate restore error %x", err);
 
     gIOHibernateCurrentHeader->actualImage2Sum = sum;
 

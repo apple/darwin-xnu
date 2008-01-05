@@ -30,8 +30,6 @@
 #include "IOKit/ppc/IOSharedLockImp.h"
 #elif defined (__i386__)
 #include "IOKit/i386/IOSharedLockImp.h"
-#elif defined (__arm__)
-#include "IOKit/arm/IOSharedLockImp.h"
 #else
 #error architecture not supported
 #endif

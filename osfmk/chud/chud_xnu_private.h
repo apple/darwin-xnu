@@ -37,8 +37,6 @@
 #include "chud/ppc/chud_xnu_private.h"
 #elif defined (__i386__)
 #include "chud/i386/chud_xnu_private.h"
-#elif defined (__arm__)
-#include "chud/arm/chud_xnu_private.h"
 #else
 #error architecture not supported
 #endif

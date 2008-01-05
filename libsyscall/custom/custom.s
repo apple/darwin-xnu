@@ -101,20 +101,6 @@ LABEL(cerror)
 	movq	$-1,%rdx /* in case a 128-bit value is returned */
 	ret
 
-#elif defined(__arm__)
-
-	.globl	_errno
-
-MI_ENTRY_POINT(cerror)
-	stmfd	sp!, {r7, lr}
-	mov		r7, sp
-	MI_GET_ADDRESS(r3,_errno)
-	str		r0, [r3]
-	MI_CALL_EXTERNAL(_cthread_set_errno_self)
-	mov		r0, #-1
-	mov		r1, #-1
-	ldmfd	sp!, {r7, pc}
-
 #else
 #error Unsupported architecture
 #endif

@@ -32,8 +32,6 @@
 #include "ppc/machparam.h"
 #elif defined (__i386__)
 #include "i386/machparam.h"
-#elif defined (__arm__)
-#include "arm/machparam.h"
 #else
 #error architecture not supported
 #endif

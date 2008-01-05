@@ -59,8 +59,6 @@ extern "C" {
 
 #if defined(__ppc__)
 #define	CPU_CACHE_SIZE	128
-#elif defined(__arm__)
-#define	CPU_CACHE_SIZE	32
 #else
 #define	CPU_CACHE_SIZE	64
 #endif

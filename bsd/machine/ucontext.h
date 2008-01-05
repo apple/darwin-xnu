@@ -32,8 +32,6 @@
 #include "ppc/ucontext.h"
 #elif defined (__i386__) || defined(__x86_64__)
 #include "i386/ucontext.h"
-#elif defined (__arm__)
-#include "arm/ucontext.h"
 #else
 #error architecture not supported
 #endif

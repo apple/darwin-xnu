@@ -32,8 +32,6 @@
 #include "pexpert/ppc/boot.h"
 #elif defined (__i386__)
 #include "pexpert/i386/boot.h"
-#elif defined (__arm__)
-#include "pexpert/arm/boot.h"
 #else
 #error architecture not supported
 #endif

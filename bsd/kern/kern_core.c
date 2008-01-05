@@ -92,14 +92,6 @@ mythread_state_flavor_t thread_flavor_array [] = {
 		{x86_EXCEPTION_STATE, x86_EXCEPTION_STATE_COUNT},
 		};
 int mynum_flavors=3;
-#elif defined (__arm__)
-mythread_state_flavor_t thread_flavor_array[]={
-		{ARM_THREAD_STATE , ARM_THREAD_STATE_COUNT},
-		{ARM_VFP_STATE, ARM_VFP_STATE_COUNT}, 
-		{ARM_EXCEPTION_STATE, ARM_EXCEPTION_STATE_COUNT}
-		};
-int mynum_flavors=3;
-
 #else
 #error architecture not supported
 #endif

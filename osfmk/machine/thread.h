@@ -32,8 +32,6 @@
 #include "ppc/thread.h"
 #elif defined (__i386__)
 #include "i386/thread.h"
-#elif defined (__arm__)
-#include "arm/thread.h"
 #else
 #error architecture not supported
 #endif

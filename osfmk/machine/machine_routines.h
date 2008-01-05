@@ -32,8 +32,6 @@
 #include "ppc/machine_routines.h"
 #elif defined (__i386__)
 #include "i386/machine_routines.h"
-#elif defined (__arm__)
-#include "arm/machine_routines.h"
 #else
 #error architecture not supported
 #endif

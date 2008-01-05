@@ -68,17 +68,6 @@ LABEL(___gettimeofday)
     xorl	%eax, %eax
     ret
 
-#elif defined(__arm__)
-/*
- * This syscall is special cased: the timeval is returned in r0/r1.
- */
-MI_ENTRY_POINT(___gettimeofday)
-    mov     r3, r0                  // save ptr to timeval
-    SYSCALL_NONAME(gettimeofday,2)
-    stmia   r3, { r0, r1 }
-    mov     r0, #0
-    bx      lr
-
 #else
 #error Unsupported architecture
 #endif

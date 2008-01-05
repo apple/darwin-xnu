@@ -32,8 +32,6 @@
 #include "ppc/machine_rpc.h"
 #elif defined (__i386__)
 #include "i386/machine_rpc.h"
-#elif defined (__arm__)
-#include "arm/machine_rpc.h"
 #else
 #error architecture not supported
 #endif

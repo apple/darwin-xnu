@@ -69,8 +69,6 @@
 extern struct savearea *find_kern_regs(thread_t);
 #elif defined(__i386__) || defined(__x86_64__)
 extern x86_saved_state32_t *find_kern_regs(thread_t);
-#elif defined (__arm__)
-extern struct arm_saved_state *find_kern_regs(thread_t);
 #else
 #error Unknown architecture
 #endif
@@ -139,8 +137,6 @@ static dtrace_provider_id_t profile_id;
 #define PROF_ARTIFICIAL_FRAMES 8
 #elif defined(__i386__) || defined(__x86_64__)
 #define PROF_ARTIFICIAL_FRAMES  9
-#elif defined(__arm__)
-#define PROF_ARTIFICIAL_FRAMES 3 /* XXX BOGUS ARMTODO */
 #else
 #error Unknown architecture
 #endif

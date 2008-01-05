@@ -76,9 +76,6 @@
 #include <sys/cdefs.h>
 #include <sys/types.h>
 #include <mach/vm_param.h>
-#if __arm__
-#include <arm/arch.h> /* for _ARM_ARCH_* */
-#endif
 
 #ifdef __APPLE_API_OBSOLETE
 /* BCD conversions. */

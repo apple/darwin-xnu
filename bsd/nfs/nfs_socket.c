@@ -263,11 +263,7 @@ nfs_connect(struct nfsmount *nmp)
 			}
 			if ((error = nfs_sigintr(nmp, NULL, current_thread(), 1)))
 				break;
-			error = msleep(&nmp->nm_so, &nmp->nm_lock, PSOCK, "nfs_socket_connect", &ts);
-			if (error == EWOULDBLOCK)
-				error = 0;
-			if (error)
-				break;
+			msleep(&nmp->nm_so, &nmp->nm_lock, PSOCK, "nfs_socket_connect", &ts);
 		}
 		if (tocnt > 15)
 			log(LOG_INFO, "nfs_connect: socket connect %s for %s\n",
@@ -692,7 +688,7 @@ nfs_send(struct nfsreq *req, int wait)
 {
 	struct nfsmount *nmp;
 	socket_t so;
-	int error, error2, sotype, rexmit, slpflag = PSOCK, needrecon;
+	int error, error2, sotype, rexmit, slpflag = 0, needrecon;
 	struct msghdr msg;
 	struct sockaddr *sendnam;
 	mbuf_t mreqcopy;
@@ -750,11 +746,8 @@ again:
 			nfs_mount_sock_thread_wake(nmp);
 			if ((error = nfs_sigintr(req->r_nmp, req, req->r_thread, 1)))
 				break;
-			error = msleep(req, &nmp->nm_lock, slpflag, "nfsconnectwait", &ts);
-			if (error == EWOULDBLOCK)
-				error = 0;
-			if ((error == EINTR) || (error == ERESTART))
-				break;
+			msleep(req, &nmp->nm_lock, slpflag|PSOCK, "nfsconnectwait", &ts);
+			slpflag = 0;
 		}
 		lck_mtx_unlock(&nmp->nm_lock);
 		if (error)
@@ -793,17 +786,14 @@ again:
 				if ((error = nfs_sigintr(req->r_nmp, req, req->r_thread, 1)))
 					break;
 				TAILQ_INSERT_TAIL(&nmp->nm_cwndq, req, r_cchain);
-				error = msleep(req, &nmp->nm_lock, slpflag | (PZERO - 1), "nfswaitcwnd", &ts);
+				msleep(req, &nmp->nm_lock, slpflag | (PZERO - 1), "nfswaitcwnd", &ts);
+				slpflag = 0;
 				if ((req->r_cchain.tqe_next != NFSREQNOLIST)) {
 					TAILQ_REMOVE(&nmp->nm_cwndq, req, r_cchain);
 					req->r_cchain.tqe_next = NFSREQNOLIST;
 				}
-				if ((error == EINTR) || (error == ERESTART))
-					break;
 			}
 			lck_mtx_unlock(&nmp->nm_lock);
-			if ((error == EINTR) || (error == ERESTART))
-				return (error);
 			goto again;
 		}
 		/*
@@ -1333,11 +1323,8 @@ nfs_wait_reply(struct nfsreq *req)
 		/* need to poll if we're P_NOREMOTEHANG */
 		if (nfs_noremotehang(req->r_thread))
 			ts.tv_sec = 1;
-		error = msleep(req, &req->r_mtx, slpflag | (PZERO - 1), "nfswaitreply", &ts);
-		if (error == EWOULDBLOCK)
-			error = 0;
-		if ((error == EINTR) || (error == ERESTART))
-			break;
+		msleep(req, &req->r_mtx, slpflag | (PZERO - 1), "nfswaitreply", &ts);
+		slpflag = 0;
 	}
 	lck_mtx_unlock(&req->r_mtx);
 
@@ -2018,12 +2005,11 @@ nfs_request_async(
 			/* make sure to wait until this async I/O request gets sent */
 			int slpflag = (req->r_nmp && (req->r_nmp->nm_flag & NFSMNT_INT) && req->r_thread) ? PCATCH : 0;
 			struct timespec ts = { 2, 0 };
-			while (!error && !(req->r_flags & R_SENT)) {
+			while (!(req->r_flags & R_SENT)) {
 				if ((error = nfs_sigintr(req->r_nmp, req, req->r_thread, 0)))
 					break;
-				error = msleep(req, &req->r_mtx, slpflag | (PZERO - 1), "nfswaitsent", &ts);
-				if (error == EWOULDBLOCK)
-					error = 0;
+				msleep(req, &req->r_mtx, slpflag | (PZERO - 1), "nfswaitsent", &ts);
+				slpflag = 0;
 			}
 		}
 		sent = req->r_flags & R_SENT;
@@ -2480,15 +2466,13 @@ nfs_sndlock(struct nfsreq *req)
 
 	if ((nmp->nm_flag & NFSMNT_INT) && req->r_thread)
 		slpflag = PCATCH;
-	while (!error && (*statep & NFSSTA_SNDLOCK)) {
+	while (*statep & NFSSTA_SNDLOCK) {
 		if ((error = nfs_sigintr(nmp, req, req->r_thread, 1)))
 			break;
 		*statep |= NFSSTA_WANTSND;
 		if (nfs_noremotehang(req->r_thread))
 			ts.tv_sec = 1;
-		error = msleep(statep, &nmp->nm_lock, slpflag | (PZERO - 1), "nfsndlck", &ts);
-		if (error == EWOULDBLOCK)
-			error = 0;
+		msleep(statep, &nmp->nm_lock, slpflag | (PZERO - 1), "nfsndlck", &ts);
 		if (slpflag == PCATCH) {
 			slpflag = 0;
 			ts.tv_sec = 2;

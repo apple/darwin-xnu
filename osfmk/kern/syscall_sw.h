@@ -73,16 +73,12 @@ typedef struct {
 	int			(*mach_trap_function)(void);
 #if defined(__i386__)
 	boolean_t		mach_trap_stack;
-#elif defined(__arm__)
-	/* no space */
 #else
 	mach_munge_t		*mach_trap_arg_munge32; /* system call arguments for 32-bit */
 	mach_munge_t		*mach_trap_arg_munge64; /* system call arguments for 64-bit */
 #endif
 #if	!MACH_ASSERT
-#if !defined(__arm__)
 	int			mach_trap_unused;
-#endif
 #else
 	const char*		mach_trap_name;
 #endif /* !MACH_ASSERT */
@@ -101,14 +97,6 @@ extern int			mach_trap_count;
 #else
 #define MACH_TRAP(name, arg_count, munge32, munge64)		\
 		{ (arg_count), (int (*)(void)) (name), FALSE, #name }
-#endif /* !MACH_ASSERT */
-#elif defined(__arm__)
-#if	!MACH_ASSERT
-#define	MACH_TRAP(name, arg_count, munge32, munge64)	\
-		{ (arg_count), (int (*)(void)) (name) }
-#else
-#define MACH_TRAP(name, arg_count, munge32, munge64)		\
-		{ (arg_count), (int (*)(void)) (name), #name }
 #endif /* !MACH_ASSERT */
 #else  /* !defined(__i386__) */
 #if	!MACH_ASSERT

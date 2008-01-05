@@ -32,8 +32,6 @@
 #include "ppc/endian.h"
 #elif defined (__i386__)
 #include "i386/endian.h"
-#elif defined (__arm__)
-#include "arm/endian.h"
 #else
 #error architecture not supported
 #endif

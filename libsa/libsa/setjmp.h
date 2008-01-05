@@ -32,8 +32,6 @@
 #include "ppc/setjmp.h"
 #elif defined (__i386__)
 #include "i386/setjmp.h"
-#elif defined (__arm__)
-#include "arm/setjmp.h"
 #else
 #error architecture not supported
 #endif

@@ -689,13 +689,11 @@ loop:
 
 			ts.tv_sec = 2;
 			ts.tv_nsec = 0;
-			error = msleep(bp, nfs_buf_mutex, slpflag|(PRIBIO+1)|PDROP,
+			msleep(bp, nfs_buf_mutex, slpflag|(PRIBIO+1)|PDROP,
 					"nfsbufget", (slpflag == PCATCH) ? NULL : &ts);
-			if (error == EWOULDBLOCK)
-				error = 0;
 			slpflag = 0;
 			FSDBG_BOT(543, np, blkno, bp, bp->nb_flags);
-			if (error || ((error = nfs_sigintr(VTONMP(vp), NULL, thd, 0)))) {
+			if ((error = nfs_sigintr(VTONMP(vp), NULL, thd, 0))) {
 				FSDBG_BOT(541, np, blkno, 0, error);
 				return (error);
 			}
@@ -847,9 +845,9 @@ loop:
 			nfs_buf_delwri_push(1);
 
 			nfsneedbuffer = 1;
-			error = msleep(&nfsneedbuffer, nfs_buf_mutex, PCATCH|PDROP, "nfsbufget", NULL);
+			msleep(&nfsneedbuffer, nfs_buf_mutex, PCATCH|PDROP, "nfsbufget", NULL);
 			FSDBG_BOT(546, np, blkno, nfsbufcnt, nfsbufmax);
-			if (error || ((error = nfs_sigintr(VTONMP(vp), NULL, thd, 0)))) {
+			if ((error = nfs_sigintr(VTONMP(vp), NULL, thd, 0))) {
 				FSDBG_BOT(541, np, blkno, 0, error);
 				return (error);
 			}
@@ -2334,12 +2332,11 @@ nfs_async_write_start(struct nfsmount *nmp)
 	if (nfs_max_async_writes <= 0)
 		return (0);
 	lck_mtx_lock(&nmp->nm_lock);
-	while (!error && (nfs_max_async_writes > 0) && (nmp->nm_asyncwrites >= nfs_max_async_writes)) {
+	while ((nfs_max_async_writes > 0) && (nmp->nm_asyncwrites >= nfs_max_async_writes)) {
 		if ((error = nfs_sigintr(nmp, NULL, current_thread(), 1)))
 			break;
-		error = msleep(&nmp->nm_asyncwrites, &nmp->nm_lock, slpflag|(PZERO-1), "nfsasyncwrites", &ts);
-		if (error == EWOULDBLOCK)
-			error = 0;
+		msleep(&nmp->nm_asyncwrites, &nmp->nm_lock, slpflag|(PZERO-1), "nfsasyncwrites", &ts);
+		slpflag = 0;
 	}
 	if (!error)
 		nmp->nm_asyncwrites++;

@@ -33,8 +33,6 @@
 #include "mach/ppc/vm_param.h"
 #elif defined (__i386__) || defined(__x86_64__)
 #include "mach/i386/vm_param.h"
-#elif defined (__arm__)
-#include "mach/arm/vm_param.h"
 #else
 #error architecture not supported
 #endif
