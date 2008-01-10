@@ -551,7 +551,6 @@ dlil_init(void)
 	
 	/* Setup the lock groups we will use */
 	grp_attributes = lck_grp_attr_alloc_init();
-	lck_grp_attr_setdefault(grp_attributes);
 
 	dlil_lock_group = lck_grp_alloc_init("dlil internal locks", grp_attributes);
 #if IFNET_RW_LOCK
@@ -566,10 +565,8 @@ dlil_init(void)
 	
 	/* Setup the lock attributes we will use */
 	lck_attributes = lck_attr_alloc_init();
-	lck_attr_setdefault(lck_attributes);
 	
 	ifnet_lock_attr = lck_attr_alloc_init();
-	lck_attr_setdefault(ifnet_lock_attr);
 	
 	dlil_input_lock = lck_spin_alloc_init(input_lock_grp, lck_attributes);
 	input_lock_grp = 0;
@@ -1089,7 +1086,6 @@ dlil_output_list(
 					filter->filt_output) {
 					retval = filter->filt_output(filter->filt_cookie, ifp, proto_family, &m);
 					if (retval) {
-						printf("dlil_output_list %p filt_output %d\n", m, retval);
 						if (retval != EJUSTRETURN)
 							m_freem(m);
 						goto next;
@@ -2370,9 +2366,8 @@ dlil_if_attach_with_address(
 			DLIL_PRINTF("dlil_if_attach -- init_if failed with %d\n", stat);
 		}
 	}
-
-	ifnet_lock_done(ifp);
     
+	ifnet_lock_done(ifp);
     dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_IF_ATTACHED, 0, 0);
 
     return 0;

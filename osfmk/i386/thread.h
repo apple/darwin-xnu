@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -83,119 +83,77 @@
  *	For performance, it is also used directly in syscall exceptions
  *	if the server has requested i386_THREAD_STATE flavor for the exception
  *	port.
- *
- *	We define the following as an alias for the "esp" field of the
- *	structure, because we actually save cr2 here, not the kernel esp.
  */
-#define cr2	esp
 
 /*
  *	Save area for user floating-point state.
  *	Allocated only when necessary.
  */
 
-struct i386_fpsave_state {
+struct x86_fpsave_state {
 	boolean_t		fp_valid;
-	struct i386_fp_save	fp_save_state;
-	struct i386_fp_regs	fp_regs;
-        struct i386_fx_save 	fx_save_state __attribute__ ((aligned (16)));
-	int			fp_save_flavor;
+	enum {
+		FXSAVE32 = 1,
+		FXSAVE64 = 2
+	} fp_save_layout;
+        struct x86_fx_save 	fx_save_state __attribute__ ((aligned (16)));
 };
 
-/*
- *	v86_assist_state:
- *
- *	This structure provides data to simulate 8086 mode
- *	interrupts.  It lives in the pcb.
- */
-
-struct v86_assist_state {
-	vm_offset_t		int_table;
-	unsigned short		int_count;
-	unsigned short		flags;	/* 8086 flag bits */
-};
-#define	V86_IF_PENDING		0x8000	/* unused bit */
 
 /*
- *	i386_interrupt_state:
- *
- *	This structure describes the set of registers that must
- *	be pushed on the current ring-0 stack by an interrupt before
- *	we can switch to the interrupt stack.
- */
-
-struct i386_interrupt_state {
-        int     gs;
-        int     fs;
-	int	es;
-	int	ds;
-	int	edx;
-	int	ecx;
-	int	eax;
-	int	eip;
-	int	cs;
-	int	efl;
-};
-
-/*
- *	i386_kernel_state:
+ *	x86_kernel_state32:
  *
  *	This structure corresponds to the state of kernel registers
  *	as saved in a context-switch.  It lives at the base of the stack.
+ *      kernel only runs in 32 bit mode for now
  */
 
-struct i386_kernel_state {
+struct x86_kernel_state32 {
 	int			k_ebx;	/* kernel context */
 	int			k_esp;
 	int			k_ebp;
 	int			k_edi;
 	int			k_esi;
 	int			k_eip;
+	/*
+	 * Kernel stacks are 16-byte aligned with a 4-byte i386_exception_link at
+	 * the top, followed by an x86_kernel_state32.  After both structs have
+	 * been pushed, we want to be 16-byte aligned.  A dummy int gets us there.
+	 */
+	int			dummy;
 };
 
-/*
- *	i386_machine_state:
- *
- *	This structure corresponds to special machine state.
- *	It lives in the pcb.  It is not saved by default.
- */
-
-struct i386_machine_state {
-	iopb_tss_t		io_tss;
-	struct user_ldt	*	ldt;
-	struct i386_fpsave_state *ifps;
-	struct v86_assist_state	v86s;
-};
 
 typedef struct pcb {
-	struct i386_interrupt_state iis[2];	/* interrupt and NMI */
-	struct i386_saved_state iss;
-	struct i386_machine_state ims;
+	void			*sf;
+	x86_saved_state_t	*iss;
+	struct x86_fpsave_state	*ifps;
 #ifdef	MACH_BSD
-	unsigned long	cthread_self;		/* for use of cthread package */
+	uint64_t	cthread_self;		/* for use of cthread package */
         struct real_descriptor cthread_desc;
-	unsigned long  uldt_selector;          /* user ldt selector to set */
-	struct real_descriptor uldt_desc;      /* the actual user setable ldt data */
+	unsigned long	uldt_selector;		/* user ldt selector to set */
+	struct real_descriptor uldt_desc;	/* the actual user setable ldt data */
 #endif
-	decl_simple_lock_data(,lock)
+	decl_simple_lock_data(,lock);
+	uint64_t	iss_pte0;
+	uint64_t	iss_pte1;
+	void		*ids;
 } *pcb_t;
+
 
 /*
  * Maps state flavor to number of words in the state:
  */
 __private_extern__ unsigned int _MachineStateCount[];
 
-#define USER_REGS(ThrAct)	(&(ThrAct)->machine.pcb->iss)
+#define USER_STATE(ThrAct)	((ThrAct)->machine.pcb->iss)
+#define USER_REGS32(ThrAct)	(saved_state32(USER_STATE(ThrAct)))
+#define USER_REGS64(ThrAct)	(saved_state64(USER_STATE(ThrAct)))
 
-#define act_machine_state_ptr(ThrAct)	(thread_state_t)USER_REGS(ThrAct)
+#define	user_pc(ThrAct)		(is_saved_state32(USER_STATE(ThrAct)) ?	\
+					USER_REGS32(ThrAct)->eip :	\
+					USER_REGS64(ThrAct)->isf.rip )
 
-
-#define	is_user_thread(ThrAct)	\
-  	((USER_REGS(ThrAct)->efl & EFL_VM) \
-	 || ((USER_REGS(ThrAct)->cs & 0x03) != 0))
-
-#define	user_pc(ThrAct)		(USER_REGS(ThrAct)->eip)
-#define	user_sp(ThrAct)		(USER_REGS(ThrAct)->uesp)
 
 struct machine_thread {
 	/*
@@ -205,9 +163,24 @@ struct machine_thread {
 	struct pcb xxx_pcb;
 	pcb_t pcb;
 
+	uint32_t	specFlags;
+#define		OnProc	0x1
+  
+        struct {
+	        user_addr_t	user_base;
+	} copy_window[NCOPY_WINDOWS];
+        int		nxt_window;
+        int		copyio_state;
+#define		WINDOWS_DIRTY	0
+#define		WINDOWS_CLEAN	1
+#define		WINDOWS_CLOSED	2
+#define		WINDOWS_OPENED	3
+        uint64_t	physwindow_pte;
+        int		physwindow_busy;
 };
 
-extern struct i386_saved_state *get_user_regs(thread_t);
+
+extern void *get_user_regs(thread_t);
 
 extern void *act_thread_csave(void);
 extern void act_thread_catt(void *ctx);
@@ -220,7 +193,7 @@ extern void act_thread_cfree(void *ctx);
  *	It points to the current thread`s user registers.
  */
 struct i386_exception_link {
-	struct i386_saved_state *saved_state;
+	x86_saved_state_t	*saved_state;
 };
 
 
@@ -233,7 +206,7 @@ struct i386_exception_link {
  */
 
 #define STACK_IKS(stack)	\
-	((struct i386_kernel_state *)((stack) + KERNEL_STACK_SIZE) - 1)
+	((struct x86_kernel_state32 *)((stack) + KERNEL_STACK_SIZE) - 1)
 #define STACK_IEL(stack)	\
 	((struct i386_exception_link *)STACK_IKS(stack) - 1)
 

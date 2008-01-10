@@ -55,7 +55,8 @@ public:
 
     virtual bool start( IOService * provider );
 
-    virtual bool initWithTask(task_t owningTask, void *security_id, UInt32);
+    virtual bool initWithTask(task_t owningTask, void *security_id, 
+					UInt32 type, OSDictionary * properties);
 
     void setPreventative(UInt32 on_off, UInt32 types_of_sleep);
 

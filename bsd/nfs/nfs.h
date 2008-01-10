@@ -94,6 +94,7 @@
 #ifndef NFS_MAXDIRATTRTIMO
 #define	NFS_MAXDIRATTRTIMO 60
 #endif
+#define	NFS_IOSIZE	(256 * 1024)	/* suggested I/O size */
 #define	NFS_WSIZE	16384		/* Def. write data size <= 16K */
 #define	NFS_RSIZE	16384		/* Def. read data size <= 16K */
 #define	NFS_DGRAM_WSIZE	8192		/* UDP Def. write data size <= 8K */
@@ -215,17 +216,13 @@ struct nfs_args3 {
  * grow when we're dealing with a 64-bit process.
  * WARNING - keep in sync with nfs_args
  */
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
-
 struct user_nfs_args {
 	int		version;	/* args structure version number */
-	user_addr_t	addr;		/* file server address */
+	user_addr_t	addr __attribute((aligned(8)));		/* file server address */
 	int		addrlen;	/* length of address */
 	int		sotype;		/* Socket type */
 	int		proto;		/* and Protocol */
-	user_addr_t	fh;		/* File handle to be mounted */
+	user_addr_t	fh __attribute((aligned(8)));		/* File handle to be mounted */
 	int		fhsize;		/* Size, in bytes, of fh */
 	int		flags;		/* flags */
 	int		wsize;		/* write size in bytes */
@@ -237,7 +234,7 @@ struct user_nfs_args {
 	int		readahead;	/* # of blocks to readahead */
 	int		leaseterm;	/* obsolete: Term (sec) of lease */
 	int		deadthresh;	/* obsolete: Retrans threshold */
-	user_addr_t	hostname;	/* server's name */
+	user_addr_t	hostname __attribute((aligned(8)));	/* server's name */
 	/* NFS_ARGSVERSION 3 ends here */
 	int		acregmin;	/* reg file min attr cache timeout */
 	int		acregmax;	/* reg file max attr cache timeout */
@@ -246,11 +243,11 @@ struct user_nfs_args {
 };
 struct user_nfs_args3 {
 	int		version;	/* args structure version number */
-	user_addr_t	addr;		/* file server address */
+	user_addr_t	addr __attribute((aligned(8)));		/* file server address */
 	int		addrlen;	/* length of address */
 	int		sotype;		/* Socket type */
 	int		proto;		/* and Protocol */
-	user_addr_t	fh;		/* File handle to be mounted */
+	user_addr_t	fh __attribute((aligned(8)));		/* File handle to be mounted */
 	int		fhsize;		/* Size, in bytes, of fh */
 	int		flags;		/* flags */
 	int		wsize;		/* write size in bytes */
@@ -262,12 +259,8 @@ struct user_nfs_args3 {
 	int		readahead;	/* # of blocks to readahead */
 	int		leaseterm;	/* obsolete: Term (sec) of lease */
 	int		deadthresh;	/* obsolete: Retrans threshold */
-	user_addr_t	hostname;	/* server's name */
+	user_addr_t	hostname __attribute((aligned(8)));	/* server's name */
 };
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
-#endif
 
 #endif // KERNEL
 
@@ -340,19 +333,11 @@ struct nfsd_args {
  * grow when we're dealing with a 64-bit process.
  * WARNING - keep in sync with nfsd_args
  */
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
-
 struct user_nfsd_args {
 	int	        sock;		/* Socket to serve */
-	user_addr_t	name;		/* Client addr for connection based sockets */
+	user_addr_t	name __attribute((aligned(8)));		/* Client addr for connection based sockets */
 	int	        namelen;	/* Length of name */
 };
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
-#endif
 
 #endif // KERNEL
 
@@ -433,10 +418,6 @@ struct nfs_export_args {
 #ifdef KERNEL
 /* LP64 version of export_args */
 
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
-
 struct user_nfs_export_args {
 	uint32_t		nxa_fsid;	/* export FS ID */
 	uint32_t		nxa_expid;	/* export ID */
@@ -446,10 +427,6 @@ struct user_nfs_export_args {
 	uint32_t		nxa_netcount;	/* #entries in ex_nets array */
 	user_addr_t		nxa_nets;	/* array of net args */
 };
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
-#endif
 
 #endif /* KERNEL */
 

@@ -78,7 +78,7 @@
 
 #if REV_ENDIAN_FS
 #include <ufs/ufs/ufs_byte_order.h>
-#include <architecture/byte_order.h>
+#include <libkern/OSByteOrder.h>
 #endif /* REV_ENDIAN_FS */
 
 extern u_long nextgennumber;
@@ -134,7 +134,7 @@ ffs_alloc(ip, lbn, bpref, size, cred, bnp)
 		    ip->i_dev, fs->fs_bsize, size, fs->fs_fsmnt);
 		panic("ffs_alloc: bad size");
 	}
-	if (cred == NOCRED)
+	if (!IS_VALID_CRED(cred))
 		panic("ffs_alloc: missing credential\n");
 #endif /* DIAGNOSTIC */
 	if (size == fs->fs_bsize && fs->fs_cstotal.cs_nbfree == 0)
@@ -204,7 +204,7 @@ ffs_realloccg(ip, lbprev, bpref, osize, nsize, cred, bpp)
 		    ip->i_dev, fs->fs_bsize, osize, nsize, fs->fs_fsmnt);
 		panic("ffs_realloccg: bad size");
 	}
-	if (cred == NOCRED)
+	if (!IS_VALID_CRED(cred))
 		panic("ffs_realloccg: missing credential\n");
 #endif /* DIAGNOSTIC */
 	if (suser(cred, NULL) != 0 && freespace(fs, fs->fs_minfree) <= 0)
@@ -593,7 +593,7 @@ ffs_blkpref(ip, lbn, indx, bap)
 	if (indx && bap) {
 	if (rev_endian) {
 		if (bap != &ip->i_db[0])
-			prev = NXSwapLong(bap[indx - 1]);
+			prev = OSSwapInt32(bap[indx - 1]);
 		else
 			prev = bap[indx - 1];
 	} else prev = bap[indx - 1];
@@ -651,7 +651,7 @@ ffs_blkpref(ip, lbn, indx, bap)
 			return (nextblk);
 		}
 		if (bap != &ip->i_db[0])
-			prev = NXSwapLong(bap[indx - fs->fs_maxcontig]);
+			prev = OSSwapInt32(bap[indx - fs->fs_maxcontig]);
 		else
 			prev = bap[indx - fs->fs_maxcontig];
 		if (prev + blkstofrags(fs, fs->fs_maxcontig) != nextblk)

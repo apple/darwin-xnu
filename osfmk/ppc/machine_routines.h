@@ -212,6 +212,11 @@ extern vm_offset_t		ml_io_map(
 							vm_offset_t			phys_addr, 
 							vm_size_t			size);
 
+void	ml_get_bouncepool_info(
+        vm_offset_t *phys_addr,
+	vm_size_t   *size);
+
+
 /* boot memory allocation */
 extern vm_offset_t		ml_static_malloc(
 							vm_size_t			size);

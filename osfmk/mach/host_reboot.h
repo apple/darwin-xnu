@@ -26,7 +26,8 @@
 #ifndef _MACH_HOST_REBOOT_
 #define _MACH_HOST_REBOOT_
 
-#define HOST_REBOOT_HALT	0x8
+#define HOST_REBOOT_HALT        0x0008
+#define HOST_REBOOT_UPSDELAY    0x0100
 #define	HOST_REBOOT_DEBUGGER	0x1000
 
 #endif	/* _MACH_HOST_REBOOT_ */

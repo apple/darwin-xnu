@@ -73,6 +73,7 @@
 #include <sys/sysproto.h>
 #include <sys/user.h>
 #include <string.h>
+#include <sys/proc_info.h>
 
 #include <kern/lock.h>
 #include <kern/clock.h>
@@ -403,12 +404,12 @@ filt_procattach(struct knote *kn)
 	int funnel_state;
 	
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
-	
+
 	if ((kn->kn_sfflags & (NOTE_TRACK | NOTE_TRACKERR | NOTE_CHILD)) != 0) {
 		thread_funnel_set(kernel_flock, funnel_state);
 		return (ENOTSUP);
 	}
-
+		
 	p = pfind(kn->kn_id);
 	if (p == NULL) {
 		thread_funnel_set(kernel_flock, funnel_state);
@@ -416,6 +417,7 @@ filt_procattach(struct knote *kn)
 	}
 
 	kn->kn_flags |= EV_CLEAR;		/* automatically set */
+	kn->kn_hookid = 1;			/* mark exit not seen */
 
 	/* XXX lock the proc here while adding to the list? */
 	KNOTE_ATTACH(&p->p_klist, kn);
@@ -427,11 +429,12 @@ filt_procattach(struct knote *kn)
 
 /*
  * The knote may be attached to a different process, which may exit,
- * leaving nothing for the knote to be attached to.  So when the process
- * exits, the knote is marked as DETACHED and also flagged as ONESHOT so
- * it will be deleted when read out.  However, as part of the knote deletion,
- * this routine is called, so a check is needed to avoid actually performing
- * a detach, because the original process does not exist any more.
+ * leaving nothing for the knote to be attached to.  In that case,
+ * we wont be able to find the process from its pid.  But the exit
+ * code may still be processing the knote list for the target process.
+ * We may have to wait for that processing to complete before we can
+ * return (and presumably free the knote) without actually removing
+ * it from the dead process' knote list.
  */
 static void
 filt_procdetach(struct knote *kn)
@@ -442,44 +445,58 @@ filt_procdetach(struct knote *kn)
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	p = pfind(kn->kn_id);
 
-	if (p != (struct proc *)NULL)
+	if (p != (struct proc *)NULL) {
 		KNOTE_DETACH(&p->p_klist, kn);
-
+	} else if (kn->kn_hookid != 0) {	/* if not NOTE_EXIT yet */
+		kn->kn_hookid = -1;	/* we are detaching but... */
+		assert_wait(&kn->kn_hook, THREAD_UNINT); /* have to wait */
+		thread_block(THREAD_CONTINUE_NULL);
+	}
 	thread_funnel_set(kernel_flock, funnel_state);
 }
 
 static int
 filt_proc(struct knote *kn, long hint)
 {
-	u_int event;
-	int funnel_state;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	if (hint != 0) {
+		u_int event;
 
-	/*
-	 * mask off extra data
-	 */
-	event = (u_int)hint & NOTE_PCTRLMASK;
+		/* must hold the funnel when coming from below */
+		assert(thread_funnel_get() != (funnel_t)0);
 
-	/*
-	 * if the user is interested in this event, record it.
-	 */
-	if (kn->kn_sfflags & event)
-		kn->kn_fflags |= event;
+		/*
+		 * mask off extra data
+		 */
+		event = (u_int)hint & NOTE_PCTRLMASK;
 
-	/*
-	 * process is gone, so flag the event as finished.
-	 */
-	if (event == NOTE_EXIT) {
-		kn->kn_flags |= (EV_EOF | EV_ONESHOT); 
-		thread_funnel_set(kernel_flock, funnel_state);
-		return (1);
+		/*
+		 * if the user is interested in this event, record it.
+		 */
+		if (kn->kn_sfflags & event)
+			kn->kn_fflags |= event;
+
+		/*
+		 * process is gone, so flag the event as finished.
+		 *
+		 * If someone was trying to detach, but couldn't
+		 * find the proc to complete the detach, wake them
+		 * up (nothing will ever need to walk the per-proc
+		 * knote list again - so its safe for them to dump
+		 * the knote now).
+		 */
+		if (event == NOTE_EXIT) {
+			boolean_t detaching = (kn->kn_hookid == -1);
+
+			kn->kn_hookid = 0;
+			kn->kn_flags |= (EV_EOF | EV_ONESHOT); 
+			if (detaching)
+				thread_wakeup(&kn->kn_hookid);
+			return (1);
+		}
 	}
 
-	event = kn->kn_fflags;
-	thread_funnel_set(kernel_flock, funnel_state);
-
-	return (event != 0);
+	return (kn->kn_fflags != 0); /* atomic check - no funnel needed from above */
 }
 
 /*
@@ -1325,41 +1342,45 @@ kevent_process(struct kqueue *kq,
 	       (kn = TAILQ_FIRST(&kq->kq_head)) != NULL) {
 
 		/*
-		 * move knote to the processed queue.
-		 * this is also protected by the kq lock.
-		 */
-		assert(kn->kn_tq == &kq->kq_head);
-		TAILQ_REMOVE(&kq->kq_head, kn, kn_tqe);
-		kn->kn_tq = &kq->kq_inprocess;
-		TAILQ_INSERT_TAIL(&kq->kq_inprocess, kn, kn_tqe);
-
-		/*
+		 * Take note off the active queue.
+		 *
 		 * Non-EV_ONESHOT events must be re-validated.
 		 *
 		 * Convert our lock to a use-count and call the event's
 		 * filter routine to update.
 		 *
-		 * If the event is dropping (or no longer valid), we
-		 * already have it off the active queue, so just
-		 * finish the job of deactivating it.
+		 * If the event is valid, or triggered while the kq
+		 * is unlocked, move to the inprocess queue for processing.
 		 */
+
 		if ((kn->kn_flags & EV_ONESHOT) == 0) {
 			int result;
+			knote_deactivate(kn);
 
 			if (kqlock2knoteuse(kq, kn)) {
 				
 				/* call the filter with just a ref */
 				result = kn->kn_fop->f_event(kn, 0);
 
-				if (!knoteuse2kqlock(kq, kn) || result == 0) {
-					knote_deactivate(kn);
+				/* if it's still alive, make sure it's active */
+				if (knoteuse2kqlock(kq, kn) && result) {
+					/* may have been reactivated in filter*/
+					if (!(kn->kn_status & KN_ACTIVE)) {
+						knote_activate(kn);
+					}
+				} else {
 					continue;
 				}
 			} else {
-				knote_deactivate(kn);
 				continue;
 			}
 		}
+
+		/* knote is active: move onto inprocess queue */
+		assert(kn->kn_tq == &kq->kq_head);
+		TAILQ_REMOVE(&kq->kq_head, kn, kn_tqe);
+		kn->kn_tq = &kq->kq_inprocess;
+		TAILQ_INSERT_TAIL(&kq->kq_inprocess, kn, kn_tqe);
 
 		/*
 		 * Got a valid triggered knote with the kqueue
@@ -1921,13 +1942,11 @@ knote_init(void)
 
 	/* allocate kq lock group attribute and group */
 	kq_lck_grp_attr= lck_grp_attr_alloc_init();
-	lck_grp_attr_setstat(kq_lck_grp_attr);
 
 	kq_lck_grp = lck_grp_alloc_init("kqueue",  kq_lck_grp_attr);
 
 	/* Allocate kq lock attribute */
 	kq_lck_attr = lck_attr_alloc_init();
-	lck_attr_setdefault(kq_lck_attr);
 
 	/* Initialize the timer filter lock */
 	lck_mtx_init(&_filt_timerlock, kq_lck_grp, kq_lck_attr);
@@ -2021,7 +2040,6 @@ kern_event_init(void)
 	 * allocate the lock attribute for mutexes
 	 */
 	evt_mtx_attr = lck_attr_alloc_init();
-	lck_attr_setdefault(evt_mtx_attr);
   	evt_mutex = lck_mtx_alloc_init(evt_mtx_grp, evt_mtx_attr);
 	if (evt_mutex == NULL)
 			return (ENOMEM);
@@ -2246,4 +2264,23 @@ kev_control(struct socket *so,
 
 
 
+int
+fill_kqueueinfo(struct kqueue *kq, struct kqueue_info * kinfo)
+{
+	struct stat * st;
+
+	/* No need for the funnel as fd is kept alive */
+	
+	st = &kinfo->kq_stat;
+
+	st->st_size = kq->kq_count;
+	st->st_blksize = sizeof(struct kevent);
+	st->st_mode = S_IFIFO;
+	if (kq->kq_state & KQ_SEL)
+		kinfo->kq_state |=  PROC_KQUEUE_SELECT;
+	if (kq->kq_state & KQ_SLEEP)
+		kinfo->kq_state |= PROC_KQUEUE_SLEEP;
+
+	return(0);
+}
 

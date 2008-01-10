@@ -76,6 +76,10 @@
 // IOService default user client class, for loadable user clients
 #define kIOUserClientClassKey		"IOUserClientClass"
 
+#define kIOUserClientCrossEndianKey		"IOUserClientCrossEndian"
+#define kIOUserClientCrossEndianCompatibleKey	"IOUserClientCrossEndianCompatible"
+#define kIOUserClientSharedInstanceKey		"IOUserClientSharedInstance"
+
 // IOService notification types
 #define kIOPublishNotification		"IOServicePublish"
 #define kIOFirstPublishNotification	"IOServiceFirstPublish"
@@ -89,6 +93,8 @@
 #define kIOAppPowerStateInterest	"IOAppPowerStateInterest"
 #define kIOPriorityPowerStateInterest	"IOPriorityPowerStateInterest"
 
+#define kIOPlatformDeviceMessageKey     "IOPlatformDeviceMessage"
+
 // IOService interest notification types
 #define kIOCFPlugInTypesKey		"IOCFPlugInTypes"
 
@@ -96,14 +102,16 @@
 #define kIOCommandPoolSizeKey	       "IOCommandPoolSize"          // (OSNumber)
 
 // properties found in services that have transfer constraints
-#define kIOMaximumBlockCountReadKey        "IOMaximumBlockCountRead"        // (OSNumber)
-#define kIOMaximumBlockCountWriteKey       "IOMaximumBlockCountWrite"       // (OSNumber)
-#define kIOMaximumByteCountReadKey         "IOMaximumByteCountRead"         // (OSNumber)
-#define kIOMaximumByteCountWriteKey        "IOMaximumByteCountWrite"        // (OSNumber)
-#define kIOMaximumSegmentCountReadKey      "IOMaximumSegmentCountRead"      // (OSNumber)
-#define kIOMaximumSegmentCountWriteKey     "IOMaximumSegmentCountWrite"     // (OSNumber)
-#define kIOMaximumSegmentByteCountReadKey  "IOMaximumSegmentByteCountRead"  // (OSNumber)
-#define kIOMaximumSegmentByteCountWriteKey "IOMaximumSegmentByteCountWrite" // (OSNumber)
+#define kIOMaximumBlockCountReadKey             "IOMaximumBlockCountRead"             // (OSNumber)
+#define kIOMaximumBlockCountWriteKey            "IOMaximumBlockCountWrite"            // (OSNumber)
+#define kIOMaximumByteCountReadKey              "IOMaximumByteCountRead"              // (OSNumber)
+#define kIOMaximumByteCountWriteKey             "IOMaximumByteCountWrite"             // (OSNumber)
+#define kIOMaximumSegmentCountReadKey           "IOMaximumSegmentCountRead"           // (OSNumber)
+#define kIOMaximumSegmentCountWriteKey          "IOMaximumSegmentCountWrite"          // (OSNumber)
+#define kIOMaximumSegmentByteCountReadKey       "IOMaximumSegmentByteCountRead"       // (OSNumber)
+#define kIOMaximumSegmentByteCountWriteKey      "IOMaximumSegmentByteCountWrite"      // (OSNumber)
+#define kIOMinimumSegmentAlignmentByteCountKey  "IOMinimumSegmentAlignmentByteCount"  // (OSNumber)
+#define kIOMaximumSegmentAddressableBitCountKey "IOMaximumSegmentAddressableBitCount" // (OSNumber)
 
 // properties found in services that wish to describe an icon
 //

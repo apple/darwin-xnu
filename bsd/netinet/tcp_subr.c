@@ -317,14 +317,12 @@ tcp_init()
 	 * allocate lock group attribute and group for tcp pcb mutexes
 	 */
      pcbinfo->mtx_grp_attr = lck_grp_attr_alloc_init();
-	lck_grp_attr_setdefault(pcbinfo->mtx_grp_attr);
 	pcbinfo->mtx_grp = lck_grp_alloc_init("tcppcb", pcbinfo->mtx_grp_attr);
 		
 	/*
 	 * allocate the lock attribute for tcp pcb mutexes
 	 */
 	pcbinfo->mtx_attr = lck_attr_alloc_init();
-	lck_attr_setdefault(pcbinfo->mtx_attr);
 
 	if ((pcbinfo->mtx = lck_rw_alloc_init(pcbinfo->mtx_grp, pcbinfo->mtx_attr)) == NULL) {
 		printf("tcp_init: mutex not alloced!\n");
@@ -1669,12 +1667,9 @@ tcp_lock(so, refcount, lr)
 	int lr;
 {
 	int lr_saved;
-#ifdef __ppc__
-	if (lr == 0) {
-		__asm__ volatile("mflr %0" : "=r" (lr_saved));
-	}
+	if (lr == 0) 
+		lr_saved = (unsigned int) __builtin_return_address(0);
 	else lr_saved = lr;
-#endif
 
 	if (so->so_pcb) {
 		lck_mtx_lock(((struct inpcb *)so->so_pcb)->inpcb_mtx);
@@ -1690,7 +1685,8 @@ tcp_lock(so, refcount, lr)
 
 	if (refcount)
 		so->so_usecount++;
-	so->reserved3 = (void *)lr_saved;
+	so->lock_lr[so->next_lock_lr] = (u_int32_t *)lr_saved;
+	so->next_lock_lr = (so->next_lock_lr+1) % SO_LCKDBG_MAX;
 	return (0);
 }
 
@@ -1701,12 +1697,9 @@ tcp_unlock(so, refcount, lr)
 	int lr;
 {
 	int lr_saved;
-#ifdef __ppc__
-	if (lr == 0) {
-		__asm__ volatile("mflr %0" : "=r" (lr_saved));
-	}
+	if (lr == 0) 
+		lr_saved = (unsigned int) __builtin_return_address(0);
 	else lr_saved = lr;
-#endif
 
 #ifdef MORE_TCPLOCK_DEBUG
 	printf("tcp_unlock: so=%x sopcb=%x lock=%x ref=%x lr=%x\n", 
@@ -1717,15 +1710,14 @@ tcp_unlock(so, refcount, lr)
 
 	if (so->so_usecount < 0)
 		panic("tcp_unlock: so=%x usecount=%x\n", so, so->so_usecount);	
-	if (so->so_pcb == NULL) {
+	if (so->so_pcb == NULL) 
 		panic("tcp_unlock: so=%x NO PCB usecount=%x lr=%x\n", so, so->so_usecount, lr_saved);
-		lck_mtx_unlock(so->so_proto->pr_domain->dom_mtx);
-	}
 	else {
 		lck_mtx_assert(((struct inpcb *)so->so_pcb)->inpcb_mtx, LCK_MTX_ASSERT_OWNED);
+		so->unlock_lr[so->next_unlock_lr] = (u_int *)lr_saved;
+		so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
 		lck_mtx_unlock(((struct inpcb *)so->so_pcb)->inpcb_mtx);
 	}
-	so->reserved4 = (void *)lr_saved;
 	return (0);
 }
 

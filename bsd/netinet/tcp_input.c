@@ -1226,6 +1226,7 @@ findpcb:
 	if (tp->t_state != TCPS_LISTEN && optp)
 		tcp_dooptions(tp, optp, optlen, th, &to);
 
+
 	if (tp->t_state == TCPS_SYN_SENT && (thflags & TH_SYN)) {
 		if (to.to_flags & TOF_SCALE) {
 			tp->t_flags |= TF_RCVD_SCALE;
@@ -1784,11 +1785,17 @@ trimthenstep6:
 	 *    TIME_WAIT STATE:
 	 *	Drop the segment - see Stevens, vol. 2, p. 964 and
 	 *      RFC 1337.
+	 *
+	 *      Radar 4776325: Allows for the case where we ACKed the FIN but
+	 *      	       there is already a RST in flight from the peer.
+	 *      	       In that case, accept the RST for non-established
+	 *      	       state if it's one off from last_ack_sent.
 	 */
 	if (thflags & TH_RST) {
 		if ((SEQ_GEQ(th->th_seq, tp->last_ack_sent) &&
 		    SEQ_LT(th->th_seq, tp->last_ack_sent + tp->rcv_wnd)) ||
-		    (tp->rcv_wnd == 0 && tp->last_ack_sent == th->th_seq)) {
+		    (tp->rcv_wnd == 0 && 
+		     	(tp->last_ack_sent == th->th_seq)) || ((tp->last_ack_sent - 1) == th->th_seq)) {
 			switch (tp->t_state) {
 
 			case TCPS_SYN_RECEIVED:

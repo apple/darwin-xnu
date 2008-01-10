@@ -600,5 +600,4 @@ errno_t	sockopt_copyin(sockopt_t sopt, void *data, size_t length);
 	@result An errno error or zero upon success.
  */
 errno_t	sockopt_copyout(sockopt_t sopt, void *data, size_t length);
-#endif
 

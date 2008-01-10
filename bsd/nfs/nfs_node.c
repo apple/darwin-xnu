@@ -93,7 +93,6 @@ nfs_nhinit(void)
 	nfsnodehashtbl = hashinit(desiredvnodes, M_NFSNODE, &nfsnodehash);
 
 	nfs_node_hash_lck_grp_attr = lck_grp_attr_alloc_init();
-	lck_grp_attr_setstat(nfs_node_hash_lck_grp_attr);
 	nfs_node_hash_lck_grp = lck_grp_alloc_init("nfs_node_hash", nfs_node_hash_lck_grp_attr);
 
 	nfs_node_hash_lck_attr = lck_attr_alloc_init();
@@ -311,7 +310,6 @@ nfs_inactive(ap)
 {
 	register struct nfsnode *np;
 	register struct sillyrename *sp;
-	kauth_cred_t cred;
 
 	np = VTONFS(ap->a_vp);
 	if (vnode_vtype(ap->a_vp) != VDIR) {
@@ -342,10 +340,8 @@ nfs_inactive(ap)
 		LIST_REMOVE(np, n_hash);
 		np->n_flag &= ~NHASHED;
 		lck_mtx_unlock(nfs_node_hash_mutex);
-		cred = sp->s_cred;
-		if (cred != NOCRED) {
-			sp->s_cred = NOCRED;
-			kauth_cred_rele(cred);
+		if (IS_VALID_CRED(sp->s_cred)) {
+			kauth_cred_unref(&sp->s_cred);
 		}
 		vnode_rele(sp->s_dvp);
 		FREE_ZONE((caddr_t)sp, sizeof (struct sillyrename), M_NFSREQ);

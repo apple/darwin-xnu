@@ -348,13 +348,10 @@ ip_init()
 		ipf_init();
 
 		ip_mutex_grp_attr  = lck_grp_attr_alloc_init();
-		lck_grp_attr_setdefault(ip_mutex_grp_attr);
 
 		ip_mutex_grp = lck_grp_alloc_init("ip", ip_mutex_grp_attr);
 
 		ip_mutex_attr = lck_attr_alloc_init();
-
-		lck_attr_setdefault(ip_mutex_attr);
 
 		if ((ip_mutex = lck_mtx_alloc_init(ip_mutex_grp, ip_mutex_attr)) == NULL) {
 			printf("ip_init: can't alloc ip_mutex\n");

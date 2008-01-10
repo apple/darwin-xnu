@@ -73,4 +73,8 @@ void abort_panic_transfer (void);
 
 struct corehdr *create_panic_header(unsigned int request, const char *corename, unsigned length, unsigned block);
 
-int kdp_send_panic_pkt (unsigned int request, char *corename, unsigned int length, void *panic_data);
+int 	kdp_send_crashdump_pkt(unsigned int request, char *corename,
+				unsigned int length, void *panic_data);
+
+int	kdp_send_crashdump_data(unsigned int request, char *corename,
+				unsigned int length, caddr_t txstart);

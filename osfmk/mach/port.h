@@ -93,7 +93,7 @@
 typedef natural_t mach_port_name_t;
 typedef mach_port_name_t *mach_port_name_array_t;
 
-#ifdef	KERNEL_PRIVATE
+#ifdef	KERNEL
 
 /* 
  *	mach_port_t - a named port right
@@ -134,7 +134,7 @@ typedef struct ipc_port	        *ipc_port_t;
 
 typedef ipc_port_t 		mach_port_t;
 
-#else	/* KERNEL_PRIVATE */
+#else	/* KERNEL */
 
 /* 
  *	mach_port_t - a named port right
@@ -157,7 +157,7 @@ typedef ipc_port_t 		mach_port_t;
 typedef mach_port_name_t 		mach_port_t;
 #endif
 
-#endif	/* KERNEL_PRIVATE */
+#endif	/* KERNEL */
 
 typedef mach_port_t			*mach_port_array_t;
 

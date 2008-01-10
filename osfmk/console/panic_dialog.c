@@ -22,6 +22,7 @@
 
 #include <vc.h>
 #include <console/video_console.h>
+#include <libkern/OSByteOrder.h>
 #include <kdp/kdp_udp.h>
 #include <kern/debug.h>
 #include <mach/mach_time.h>
@@ -517,9 +518,9 @@ blit_digit( int digit )
 		for( j=FONT_WIDTH-1; j>=0; j--) {
 
 			if ( bits & 0x80 )
-				rendered_font[row][j] = 0x0100 | panic_dialog->pd_info_color[0];
+				rendered_font[row][j] = OSSwapBigToHostInt16(0x0100 | panic_dialog->pd_info_color[0]);
 			else
-				rendered_font[row][j] = 0x0100 | panic_dialog->pd_info_color[1];
+				rendered_font[row][j] = OSSwapBigToHostInt16(0x0100 | panic_dialog->pd_info_color[1]);
 			bits <<= 1;
 		}
 	}
@@ -878,16 +879,16 @@ findbestgray( unsigned int color24 )
 static unsigned char
 color24togray8( unsigned int color24 )
 {       
-    float R, G, B;
-    float Gray;
+    int R, G, B;
+    int Gray;
     unsigned char gray8;
     
     R = (color24 & 0xFF0000) >> 16 ;
     G = (color24 & 0xFF00) >> 8 ;
     B = (color24 & 0xFF);
     
-    Gray = (R*.30) + (G*.59) + (B*.11);
-    gray8 = (unsigned char) ( Gray + .5);
+    Gray = (R*30) + (G*59) + (B*11);
+    gray8 = (unsigned char) ((Gray + 50) / 100);
     return gray8;
 }       
 

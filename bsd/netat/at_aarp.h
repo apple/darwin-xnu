@@ -103,7 +103,7 @@ typedef struct {
 /*************************************************/
 
 typedef struct {
-	struct atalk_addr	dest_at_addr;
+	struct atalk_addr	dest_at_addr;		/* net# in network byte order */
 	struct etalk_addr	dest_addr;
 	char                    dummy[2];       /* pad out to struct size of 32 */
 	time_t			last_time;	/* the last time that this addr
@@ -128,19 +128,22 @@ typedef struct {
 #define	AMT_HASH(a) 								\
 	((NET_VALUE(((struct atalk_addr *)&a)->atalk_net) + ((struct atalk_addr *)&a)->atalk_node) % AMT_NB)
 
+/* at_addr - net # in network byte order */
 #define	AMT_LOOK(at, at_addr, elapp) {							\
 	register n; 								\
 	at = &aarp_table[elapp->ifPort]->et_aarp_amt[AMT_HASH(at_addr) * AMT_BSIZ];	 		\
 	for (n = 0 ; ; at++) {					                \
-	    if (ATALK_EQUAL(at->dest_at_addr, at_addr))	                        \
+	    if (at->dest_at_addr.atalk_node == (at_addr).atalk_node &&									\
+	    	NET_EQUAL(at->dest_at_addr.atalk_net, (at_addr).atalk_net))	                        \
 		break; 							        \
 	    if (++n >= AMT_BSIZ) {					        \
 	        at = NULL;                                                      \
 		break;                                                          \
             }									\
 	}                                                                       \
-        }
+}
 
+/* at_addr - net # in network byte order */
 #define	NEW_AMT(at, at_addr, elapp) {							\
 	register n; 								\
 	register aarp_amt_t *myat;                                              \
@@ -153,7 +156,7 @@ typedef struct {
 		break;                                                          \
             }                                                                   \
 	}                                                                       \
-	}
+}
 
 #define	AARP_NET_MCAST(p, elapp)						\
  	(NET_VALUE((p)->dst_net) == elapp->ifThisNode.s_net)		\

@@ -36,7 +36,7 @@
 	.long	address - EXT(acpi_wake_start)	;\
 	.word	segment
 
-#define	PA(addr)	((addr)-KERNELBASE)
+#define	PA(addr)	(addr)
 
 /*
  * acpi_wake_start
@@ -145,6 +145,10 @@ ENTRY(acpi_sleep_cpu)
 	pushal
 	movl	%esp, saved_esp
 
+	/* make sure tlb is flushed */
+	movl	%cr3,%eax
+	movl	%eax,%cr3
+	
 	/* save control registers */
 	movl	%cr0, %eax
 	movl	%eax, saved_cr0
@@ -186,43 +190,27 @@ ENTRY(acpi_sleep_cpu)
 	jmp	wake_restore
 
 wake_prot:
-
 	/* protected mode, paging disabled */
 	POSTCODE(ACPI_WAKE_PROT_ENTRY)
+
+	movl	PA(saved_cr3), %ebx
+	movl	PA(saved_cr4), %ecx
+	/*
+	 * restore cr3, PAE and NXE states in an orderly fashion
+	 */
+	movl	%ebx, %cr3
+	movl	%ecx, %cr4
+
+	movl	$(MSR_IA32_EFER), %ecx			/* MSR number in ecx */
+	rdmsr						/* MSR value return in edx: eax */
+	orl	$(MSR_IA32_EFER_NXE), %eax		/* Set NXE bit in low 32-bits */
+	wrmsr						/* Update Extended Feature Enable reg */
 
 	/* restore kernel GDT */
 	lgdt	PA(saved_gdt)
 
-	/* restore control registers */
 	movl	PA(saved_cr2), %eax
 	movl	%eax, %cr2
-	
-#ifdef PAE
-	movl	PA(EXT(IdlePDPT)), %eax
-	movl	(%eax), %esi		/* save orig */
-	movl	24(%eax), %ebx
-	movl	%ebx, (%eax)	/* identity map low mem */
-	movl	%eax, %cr3
-
-	movl	PA(saved_cr4), %eax
-	movl	%eax, %cr4
-#else
-	movl	PA(saved_cr4), %eax
-	movl	%eax, %cr4
-
-	/*
-	 * Temporarily use the page tables at IdlePTD
-	 * to enable paging.  Copy the KPTDI entry to
-	 * entry 0 in the PTD to identity map the kernel.
-	 */
-	movl	PA(EXT(IdlePTD)), %eax
-	movl	%eax, %ebx
-	addl	$(KPTDI << PTEINDX), %ebx  /* bytes per PDE */
-	movl	(%ebx), %ebx		/* IdlePTD[KPTDI]  */
-	movl	(%eax), %esi		/* save original IdlePTD[0] */
-	movl	%ebx, (%eax)		/* update IdlePTD[0] */   
-	movl	%eax, %cr3		/* CR3 = IdlePTD */
-#endif
 
 	/* restore CR0, paging enabled */
 	movl	PA(saved_cr0), %eax
@@ -239,20 +227,6 @@ wake_paged:
 	/* switch to kernel data segment */
 	movw	$(KERNEL_DS), %ax
 	movw	%ax, %ds
-
-	/* undo changes to IdlePTD */
-#ifdef PAE
-	movl	EXT(IdlePDPT), %eax
-#else	
-	movl	EXT(IdlePTD), %eax
-#endif
-	addl	$(KERNELBASE), %eax	/* make virtual */
-	movl	%esi, (%eax)
-
-	/* restore real PDE base */
-	movl	saved_cr3, %eax
-	movl	%eax, %cr3
-
 
 	/* restore local and interrupt descriptor tables */
 	lldt	saved_ldt
@@ -293,29 +267,36 @@ wake_restore:
         .globl EXT(acpi_wake_prot_entry)
 ENTRY(acpi_wake_prot_entry)
 	/* protected mode, paging enabled */
+
 	POSTCODE(ACPI_WAKE_PAGED_ENTRY)
 
 	/* restore kernel GDT */
-	lgdt	PA(saved_gdt)
-	
+	lgdt	saved_gdt
+
 	POSTCODE(0x40)
+
 	/* restore control registers */
+
+	movl	saved_cr0, %eax
+	movl	%eax, %cr0
+
 	movl	saved_cr2, %eax
 	movl	%eax, %cr2
 
         POSTCODE(0x3E)
-	/* switch to kernel data segment */
-	movw	$(KERNEL_DS), %ax
-	movw	%ax, %ds
 
-        POSTCODE(0x3D)
 	/* restore real PDE base */
 	movl	saved_cr3, %eax
 	movl	saved_cr4, %edx
 	movl	%eax, %cr3
 	movl	%edx, %cr4
+	movl	%eax, %cr3
 
-        POSTCODE(0x3C)
+	/* switch to kernel data segment */
+	movw	$(KERNEL_DS), %ax
+	movw	%ax, %ds
+
+	POSTCODE(0x3C)
 	/* restore local and interrupt descriptor tables */
 	lldt	saved_ldt
 	lidt	saved_idt
@@ -362,6 +343,7 @@ ENTRY(acpi_wake_prot_entry)
 /*
  * CPU registers saved across sleep/wake.
  */
+
 saved_esp:	.long 0
 saved_es:	.word 0
 saved_fs:	.word 0

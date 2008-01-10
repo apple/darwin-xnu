@@ -340,9 +340,10 @@ proc_exit(struct proc *p)
 				 * if we blocked.
 				 */
 				context.vc_proc = p;
-				context.vc_ucred = p->p_ucred;
+				context.vc_ucred = kauth_cred_proc_ref(p);
 				if (sp->s_ttyvp)
 					VNOP_REVOKE(sp->s_ttyvp, REVOKEALL, &context);
+				kauth_cred_unref(&context.vc_ucred);
 			}
 			ttyvp = sp->s_ttyvp;
 			sp->s_ttyvp = NULL;
@@ -573,11 +574,9 @@ reap_child_process(struct proc *parent, struct proc *child)
 	/*
 	 * Free up credentials.
 	 */
-	if (child->p_ucred != NOCRED) {
-		kauth_cred_t ucr = child->p_ucred;
-			child->p_ucred = NOCRED;
-			kauth_cred_rele(ucr);
-		}
+	if (IS_VALID_CRED(child->p_ucred)) {
+		kauth_cred_unref(&child->p_ucred);
+	}
 
 	/*
 	 * Release reference to text vnode
@@ -1157,9 +1156,10 @@ vproc_exit(struct proc *p)
 				 * if we blocked.
 				 */
 				context.vc_proc = p;
-				context.vc_ucred = p->p_ucred;
+				context.vc_ucred = kauth_cred_proc_ref(p);
 				if (sp->s_ttyvp)
 					VNOP_REVOKE(sp->s_ttyvp, REVOKEALL, &context);
+				kauth_cred_unref(&context.vc_ucred);
 			}
 			ttyvp = sp->s_ttyvp;
 			sp->s_ttyvp = NULL;

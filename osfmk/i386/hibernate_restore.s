@@ -42,34 +42,12 @@ needs to be careful to only touch memory also in the "__HIB" section.
 	.long	address		;\
 	.word	segment
 	
-#define KVTOPHYS	(-KERNELBASE)
-#define	KVTOLINEAR	LINEAR_KERNELBASE
-
-#define	PA(addr)	((addr)+KVTOPHYS)
-#define	VA(addr)	((addr)-KVTOPHYS)
-
 /* Location of temporary page tables */
-#define HPTD        0x80000
-	
-#define KERNEL_MAP_SIZE (  4 * 1024 * 1024)
+#define HPTD        (0x13000)
+#define HPDPT       (0x17000)
 
-/*
- * fillkpt
- *	eax = page frame address
- *	ebx = index into page table
- *	ecx = how many pages to map
- * 	base = base address of page dir/table
- *	prot = protection bits
- */
-#define	fillkpt(base, prot)		  \
-	shll	$2,%ebx			; \
-	addl	base,%ebx		; \
-	orl	$(PTE_V), %eax          ; \
-	orl	prot,%eax		; \
-1:	movl	%eax,(%ebx)		; \
-	addl	$(PAGE_SIZE),%eax	; /* increment physical address */ \
-	addl	$4,%ebx			; /* next pte */ \
-	loop	1b
+#define LAST_PAGE	(0xFFE00000)
+#define LAST_PAGE_PDE   (0x7ff)
 
 /*
  * fillpse
@@ -80,26 +58,48 @@ needs to be careful to only touch memory also in the "__HIB" section.
  *	prot = protection bits
  */
 #define	fillpse(base, prot)		  \
-	shll	$2,%ebx			; \
+	shll	$3,%ebx			; \
 	addl	base,%ebx		; \
-	orl	$(PTE_V|PTE_PS), %eax   ; \
+	orl	$(PTE_V|PTE_PS|0x60), %eax   ; \
 	orl	prot,%eax		; \
-1:	movl	%eax,(%ebx)		; \
-	addl	$(1 << PDESHIFT),%eax	; /* increment physical address 4Mb */ \
+        xorl    %edx, %edx		; \
+1:	movl	%eax,(%ebx)		; /* low 32b */ \
+	addl	$4,%ebx			; \
+	movl	%edx,(%ebx)		; /* high 32b */ \
+	addl	$(1 << PDESHIFT),%eax	; /* increment physical address 2Mb */ \
 	addl	$4,%ebx			; /* next entry */ \
 	loop	1b
 	
-/*
- * fillkptphys(base, prot)
- *	eax = physical address
- *	ecx = how many pages to map
- *      base = base of page table
- *	prot = protection bits
+
+
+/*  Segment Descriptor
+ *
+ * 31          24         19   16                 7           0
+ * ------------------------------------------------------------
+ * |             | |B| |A|       | |   |1|0|E|W|A|            |
+ * | BASE 31..24 |G|/|0|V| LIMIT |P|DPL|  TYPE   | BASE 23:16 |
+ * |             | |D| |L| 19..16| |   |1|1|C|R|A|            |
+ * ------------------------------------------------------------
+ * |                             |                            |
+ * |        BASE 15..0           |       LIMIT 15..0          |
+ * |                             |                            |
+ * ------------------------------------------------------------
  */
-#define	fillkptphys(base, prot)		  \
-	movl	%eax, %ebx		; \
-	shrl	$(PAGE_SHIFT), %ebx	; \
-	fillkpt(base, prot)
+
+	.align	ALIGN
+ENTRY(hib_gdt)
+	.word	0, 0		/* 0x0  : null */
+	.byte	0, 0, 0, 0
+
+	.word	0xffff, 0x0000	/* 0x8  : code */
+	.byte	0, 0x9e, 0xcf, 0
+
+	.word	0xffff, 0x0000	/* 0x10 : data */
+	.byte	0, 0x92, 0xcf, 0
+
+ENTRY(hib_gdtr)
+	.word	24		/* limit (8*3 segs) */
+	.long	EXT(hib_gdt) 
 
 /*
  * Hibernation code restarts here.  Steal some pages from 0x10000
@@ -120,38 +120,69 @@ LEXT(hibernate_machine_entrypoint)
 	cli
 
         mov     %eax, %edi
-        
+
 	POSTCODE(0x1)
 
-	/* Map physical memory from zero to 0xC0000000 */
+	/* Map physical memory from zero to LAST_PAGE */
         xorl    %eax, %eax
         xorl    %ebx, %ebx
-        movl    $(KPTDI), %ecx
+        movl    $(LAST_PAGE_PDE), %ecx
         fillpse( $(HPTD), $(PTE_W) )
 
-        /* Map 0 again at 0xC0000000 */
-        xorl    %eax, %eax
-        movl    $(KPTDI), %ebx
-        movl    $(KERNEL_MAP_SIZE >> PDESHIFT), %ecx
-        fillpse( $(HPTD), $(PTE_W) )
-        	
-	movl	$(HPTD), %eax
+	movl	$(HPDPT), %ebx
+        movl    $(HPTD), %eax
+	orl	$(PTE_V), %eax
+
+        xorl    %edx, %edx		; \
+
+	movl	%eax,(%ebx)		; /* low 32b */ \
+	addl	$4,%ebx			; \
+	movl	%edx,(%ebx)		; /* high 32b */ \
+	addl	$4,%ebx			; \
+	addl	$(1 << 12),%eax		; /* increment physical address 1Gb */ \
+
+	movl	%eax,(%ebx)		; /* low 32b */ \
+	addl	$4,%ebx			; \
+	movl	%edx,(%ebx)		; /* high 32b */ \
+	addl	$4,%ebx			; \
+	addl	$(1 << 12),%eax		; /* increment physical address 1Gb */ \
+
+	movl	%eax,(%ebx)		; /* low 32b */ \
+	addl	$4,%ebx			; \
+	movl	%edx,(%ebx)		; /* high 32b */ \
+	addl	$4,%ebx			; \
+	addl	$(1 << 12),%eax		; /* increment physical address 1Gb */ \
+
+	movl	%eax,(%ebx)		; /* low 32b */
+	addl	$4,%ebx			; 
+	movl	%edx,(%ebx)		; /* high 32b */ \
+	addl	$4,%ebx			; \
+	addl	$(1 << 12),%eax		; /* increment physical address 1Gb */ \
+
+	/* set page dir ptr table addr */
+	movl	$(HPDPT), %eax
 	movl	%eax, %cr3
 
         POSTCODE(0x3)
         
 	movl    %cr4,%eax
-        orl     $(CR4_PSE),%eax
+        orl     $(CR4_PAE|CR4_PGE),%eax
         movl    %eax,%cr4               /* enable page size extensions */
+
+	movl	$(MSR_IA32_EFER), %ecx			/* MSR number in ecx */
+	rdmsr						/* MSR value return in edx: eax */
+	orl	$(MSR_IA32_EFER_NXE), %eax		/* Set NXE bit in low 32-bits */
+	wrmsr						/* Update Extended Feature Enable reg */
+
 	movl	%cr0, %eax
 	orl	$(CR0_PG|CR0_WP|CR0_PE), %eax
 	movl	%eax, %cr0	/* ready paging */
 	
         POSTCODE(0x4)
 
-	lgdt	PA(EXT(gdtptr))		/* load GDT */
-	lidt	PA(EXT(idtptr))		/* load IDT */
-	
+	lgdt	EXT(gdtptr)		/* load GDT */
+	lidt	EXT(idtptr)		/* load IDT */
+
         POSTCODE(0x5)
 
         LJMP	(KERNEL_CS,EXT(hstart))  /* paging on and go to correct vaddr */
@@ -175,23 +206,22 @@ LEXT(hstart)
 	
         xorl    %eax, %eax              /* Video memory - N/A */
         pushl   %eax
+        pushl   %eax
+        pushl   %eax
         mov     %edi, %eax              /* Pointer to hibernate header */
         pushl   %eax
         call    EXT(hibernate_kernel_entrypoint)
         /* NOTREACHED */
         hlt
-
-
         
 /*
 void 
 hibernate_restore_phys_page(uint64_t src, uint64_t dst, uint32_t len, uint32_t procFlags);
 */
 
-			.align	5
-			.globl	EXT(hibernate_restore_phys_page)
+	.align	5
+	.globl	EXT(hibernate_restore_phys_page)
 
-        /* XXX doesn't handle 64-bit addresses yet */
 	/* XXX can only deal with exactly one page */
 LEXT(hibernate_restore_phys_page)
 	pushl	%edi
@@ -199,35 +229,39 @@ LEXT(hibernate_restore_phys_page)
 
 	movl	8+ 4(%esp),%esi		/* source virtual address */
         addl    $0, %esi
-        jz      2f                      /* If source == 0, nothing to do */
+        jz      3f                      /* If source == 0, nothing to do */
         
+	movl    8+ 16(%esp),%eax        /* destination physical address, high 32 bits  */
+	movl    8+ 12(%esp),%edi        /* destination physical address, low 32 bits */
+        addl    $0, %eax
+        jne     1f                      /* need to map, above LAST_PAGE */
 
-	movl    8+ 12(%esp),%edi        /* destination physical address */
-        cmpl    $(LINEAR_KERNELBASE), %edi
-        jl      1f                      /* no need to map, below 0xC0000000 */
-
+        cmpl    $(LAST_PAGE), %edi
+        jb      2f                      /* no need to map, below LAST_PAGE */
+1:
+        /* Map physical address %eax:%edi to virt. address LAST_PAGE (4GB - 2MB) */
+        movl    %eax, (HPTD + (LAST_PAGE_PDE * 8) + 4)
         movl    %edi, %eax              /* destination physical address */
-        /* Map physical address to virt. address 0xffc00000 (4GB - 4MB) */
-        andl    $0xFFC00000, %eax
+        andl    $(LAST_PAGE), %eax
         orl     $(PTE_V | PTE_PS | PTE_W), %eax
-        movl    %eax, (HPTD + (0x3FF * 4))
-        orl     $0xFFC00000, %edi
+        movl    %eax, (HPTD + (LAST_PAGE_PDE * 8))
+        orl     $(LAST_PAGE), %edi
         invlpg  (%edi)
 
-1:      
+2:      
 	movl	8+ 20(%esp),%edx	/* number of bytes */
 	cld
-/* move longs*/
+	/* move longs*/
 	movl	%edx,%ecx
 	sarl	$2,%ecx
 	rep
 	movsl
-/* move bytes*/
+	/* move bytes*/
 	movl	%edx,%ecx
 	andl	$3,%ecx
 	rep
 	movsb
-2:
+3:
 	popl	%esi
 	popl	%edi
 	ret

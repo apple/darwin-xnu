@@ -134,11 +134,7 @@ const char *syscallnames[] = {
 	"getpriority",        /* 100 = getpriority */
 	"#101",               /* 101 = old send */
 	"#102",               /* 102 = old recv */
-#ifdef __ppc__
 	"#103",               /* 103 = old sigreturn */
-#else
-	"sigreturn",          /* 103 = sigreturn */
-#endif
 	"bind",               /* 104 = bind */
 	"setsockopt",         /* 105 = setsockopt */
 	"listen",             /* 106 = listen */
@@ -151,11 +147,7 @@ const char *syscallnames[] = {
 	"#113",               /* 113 = old recvmsg */
 	"#114",               /* 114 = old sendmsg */
 	"#115",               /* 115 = old vtrace */
-#ifdef __ppc__
-	"ppc_gettimeofday",   /* 116 = ppc_gettimeofday */
-#else
 	"gettimeofday",       /* 116 = gettimeofday */
-#endif
 	"getrusage",          /* 117 = getrusage */
 	"getsockopt",         /* 118 = getsockopt */
 	"#119",               /* 119 = old resuba */
@@ -231,12 +223,8 @@ const char *syscallnames[] = {
 	"setgid",             /* 181 = setgid */
 	"setegid",            /* 182 = setegid */
 	"seteuid",            /* 183 = seteuid */
-#ifdef __ppc__
 	"sigreturn",          /* 184 = sigreturn */
-#else
-	"#184",               /* 184 = */
-#endif
-	"#185",               /* 185 = */
+	"chud",               /* 185 = chud */
 	"#186",               /* 186 = */
 	"#187",               /* 187 = */
 	"stat",               /* 188 = stat */
@@ -261,7 +249,6 @@ const char *syscallnames[] = {
 	"mlock",              /* 203 = mlock */
 	"munlock",            /* 204 = munlock */
 	"undelete",           /* 205 = undelete */
-#ifdef __ppc__
 	"ATsocket",           /* 206 = ATsocket */
 	"ATgetmsg",           /* 207 = ATgetmsg */
 	"ATputmsg",           /* 208 = ATputmsg */
@@ -270,16 +257,6 @@ const char *syscallnames[] = {
 	"ATPgetreq",          /* 211 = ATPgetreq */
 	"ATPgetrsp",          /* 212 = ATPgetrsp */
 	"#213",               /* 213 = Reserved for AppleTalk */
-#else
-	"ATsocket",           /* 206 = ATsocket */
-	"ATgetmsg",           /* 207 = ATgetmsg */
-	"ATputmsg",           /* 208 = ATputmsg */
-	"ATPsndreq",          /* 209 = ATPsndreq */
-	"ATPsndrsp",          /* 210 = ATPsndrsp */
-	"ATPgetreq",          /* 211 = ATPgetreq */
-	"ATPgetrsp",          /* 212 = ATPgetrsp */
-	"#213",               /* 213 = Reserved for AppleTalk */
-#endif /* __ppc__ */
 	"kqueue_from_portset_np",  /* 214 = kqueue_from_portset_np */
 	"kqueue_portset_np",  /* 215 = kqueue_portset_np */
 	"mkcomplex",          /* 216 = mkcomplex soon to be obsolete */
@@ -411,7 +388,7 @@ const char *syscallnames[] = {
 	"__pthread_canceled",  /* 333 = __pthread_canceled */
 	"__semwait_signal",   /* 334 = __semwait_signal */
 	"utrace",             /* 335 = utrace */
-	"#336",               /* 336 = */
+	"proc_info",          /* 336 = proc_info */
 	"#337",               /* 337 = */
 	"#338",               /* 338 = */
 	"#339",               /* 339 = */
@@ -440,7 +417,7 @@ const char *syscallnames[] = {
 	"kqueue",             /* 362 = kqueue */
 	"kevent",             /* 363 = kevent */
 	"lchown",             /* 364 = lchown */
-	"#365",               /* 365 = */
+	"stack_snapshot",     /* 365 = stack_snapshot */
 	"#366",               /* 366 = */
 	"#367",               /* 367 = */
 	"#368",               /* 368 = */

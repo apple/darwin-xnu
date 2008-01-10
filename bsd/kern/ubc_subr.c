@@ -70,9 +70,9 @@
 #endif /* DIAGNOSTIC */
 
 int ubc_info_init_internal(struct vnode *vp, int withfsize, off_t filesize);
-int ubc_umcallback(vnode_t, void *);
+static int ubc_umcallback(vnode_t, void *);
 int ubc_isinuse_locked(vnode_t, int, int);
-int ubc_msync_internal(vnode_t, off_t, off_t, off_t *, int, int *);
+static int ubc_msync_internal(vnode_t, off_t, off_t, off_t *, int, int *);
 
 struct zone	*ubc_info_zone;
 
@@ -193,12 +193,8 @@ ubc_info_init_internal(struct vnode *vp, int withfsize, off_t filesize)
 static void
 ubc_info_free(struct ubc_info *uip)
 {
-	kauth_cred_t credp;
-	
-	credp = uip->ui_ucred;
-	if (credp != NOCRED) {
-		uip->ui_ucred = NOCRED;
-		kauth_cred_rele(credp);
+	if (IS_VALID_CRED(uip->ui_ucred)) {
+		kauth_cred_unref(&uip->ui_ucred);
 	}
 
 	if (uip->ui_control != MEMORY_OBJECT_CONTROL_NULL)
@@ -363,7 +359,7 @@ ubc_setthreadcred(struct vnode *vp, struct proc *p, thread_t thread)
 	uip = vp->v_ubcinfo;
 	credp = uip->ui_ucred;
 
-	if (credp == NOCRED) {
+	if (!IS_VALID_CRED(credp)) {
 		/* use per-thread cred, if assumed identity, else proc cred */
 		if (uthread == NULL || (uthread->uu_flag & UT_SETUID) == 0) {
 			uip->ui_ucred = kauth_cred_proc_ref(p);
@@ -396,7 +392,7 @@ ubc_setcred(struct vnode *vp, struct proc *p)
 	uip = vp->v_ubcinfo;
 	credp = uip->ui_ucred;
 
-	if (credp == NOCRED) {
+	if (!IS_VALID_CRED(credp)) {
 		uip->ui_ucred = kauth_cred_proc_ref(p);
 	} 
 	vnode_unlock(vp);

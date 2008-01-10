@@ -88,19 +88,11 @@ struct vn_ioctl {
 
 #ifdef KERNEL_PRIVATE
 
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
-
 struct user_vn_ioctl {
 	u_int64_t	vn_file;	/* pathname of file to mount */
 	int			vn_size;	/* (returned) size of disk */
 	vncontrol_t	vn_control;
 };
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
-#endif
 
 #endif /* KERNEL_PRIVATE */
 

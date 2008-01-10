@@ -152,8 +152,6 @@ extern void		db_low_trace(
 				int		have_addr,
 				db_expr_t	count,
 				char 		*modif);
-extern void		db_to_gdb(
-				void);
 
 
 /* macros for printing OS server dependent task name */

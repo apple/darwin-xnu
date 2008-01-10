@@ -90,18 +90,11 @@ struct union_mount {
  */
 /* LP64todo - should this move? */
 
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
-
 struct user_union_args {
 	user_addr_t	target;		/* Target of loopback  */
 	int			mntflags;	/* Options on the mount */
+	char		_pad[4];
 };
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
-#endif
 
 /*
  * DEFDIRMODE is the mode bits used to create a shadow directory.

@@ -57,7 +57,7 @@ bool OSData::initWithCapacity(unsigned int inCapacity)
 
     if (data && (!inCapacity || capacity < inCapacity) ) {
         // clean out old data's storage if it isn't big enough
-        kfree((vm_address_t) data, capacity);
+        kfree(data, capacity);
         data = 0;
         ACCUMSIZE(-capacity);
     }
@@ -182,7 +182,7 @@ OSData *OSData::withData(const OSData *inData,
 void OSData::free()
 {
     if (capacity != EXTERNAL && data && capacity) {
-        kfree((vm_offset_t)data, capacity);
+        kfree(data, capacity);
         ACCUMSIZE( -capacity );
     }
     super::free();
@@ -217,7 +217,7 @@ unsigned int OSData::ensureCapacity(unsigned int newCapacity)
         bzero(newData + capacity, newCapacity - capacity);
         if (data) {
             bcopy(data, newData, capacity);
-            kfree((vm_offset_t)data, capacity);
+            kfree(data, capacity);
         }
         ACCUMSIZE( newCapacity - capacity );
         data = (void *) newData;

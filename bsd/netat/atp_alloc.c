@@ -51,28 +51,23 @@
 #define TRPS_PER_BLK 16
 
 gbuf_t *atp_resource_m = 0;
-extern atlock_t atpgen_lock;
 extern caddr_t atp_free_cluster_list;
 extern void atp_delete_free_clusters();
 
 struct atp_trans *atp_trans_alloc(atp)
 struct  atp_state *atp;
 {
-	int s;
 	int i;
 	gbuf_t *m;
 	register struct atp_trans *trp, *trp_array;
 
-	ATDISABLE(s, atpgen_lock);
 	if (atp_trans_free_list == 0) {
-		ATENABLE(s, atpgen_lock);
 		if ((m = gbuf_alloc(TRPS_PER_BLK*sizeof(struct atp_trans),PRI_HI)) == 0)
 			return (struct atp_trans *)0;
 		bzero(gbuf_rptr(m), TRPS_PER_BLK*sizeof(struct atp_trans));
 		trp_array = (struct atp_trans *)gbuf_rptr(m);
 		for (i=0; i < TRPS_PER_BLK-1; i++)
 			trp_array[i].tr_list.next = (struct atp_trans *)&trp_array[i+1];
-		ATDISABLE(s, atpgen_lock);
 		gbuf_cont(m) = atp_resource_m;
 		atp_resource_m = m;
 		trp_array[i].tr_list.next = atp_trans_free_list;
@@ -81,11 +76,9 @@ struct  atp_state *atp;
 
 	trp = atp_trans_free_list;
 	atp_trans_free_list = trp->tr_list.next;
-	ATENABLE(s, atpgen_lock);
 	trp->tr_queue = atp;
 	trp->tr_state = TRANS_TIMEOUT;
 	trp->tr_local_node = 0;
-	ATLOCKINIT(trp->tr_lock);
 	ATEVENTINIT(trp->tr_event);
 
 	dPrintf(D_M_ATP_LOW, D_L_TRACE,
@@ -102,13 +95,10 @@ struct  atp_state *atp;
 void atp_trans_free(trp)
 register struct atp_trans *trp;
 {
-	int s;
 
-	ATDISABLE(s, atpgen_lock);
 	trp->tr_queue = 0;
 	trp->tr_list.next = atp_trans_free_list;
 	atp_trans_free_list = trp;
-	ATENABLE(s, atpgen_lock);
 }
 
 /*
@@ -121,16 +111,13 @@ struct atp_rcb *atp_rcb_alloc(atp)
 struct  atp_state *atp;
 {
 	register struct atp_rcb *rcbp;
-	int s;
 
-	ATDISABLE(s, atpgen_lock);
 	if ((rcbp = atp_rcb_free_list) != NULL) {
 		atp_rcb_free_list = rcbp->rc_list.next;
 		rcbp->rc_queue = atp;
 		rcbp->rc_pktcnt = 0;
 		rcbp->rc_local_node = 0;
 	}
-	ATENABLE(s, atpgen_lock);
 	dPrintf(D_M_ATP_LOW, D_L_TRACE,
 		("atp_rcb_alloc: allocated rcbp 0x%x\n", (u_int) rcbp));
 	return(rcbp);
@@ -147,14 +134,11 @@ register struct atp_rcb *rcbp;
 	register struct atp_state *atp;
 	register int i;
 	register int rc_state;
-	int s;
 
 	dPrintf(D_M_ATP_LOW, D_L_TRACE,
 		("atp_rcb_free: freeing rcbp 0x%x\n", (u_int) rcbp));
-	ATDISABLE(s, atpgen_lock);
 	atp = rcbp->rc_queue;
 	if ((rc_state = rcbp->rc_state) == -1) {
-		ATENABLE(s, atpgen_lock);
 		dPrintf(D_M_ATP, D_L_WARNING,
 			("atp_rcb_free(%d): tid=%d,loc=%d,rem=%d\n",
 			0, rcbp->rc_tid,
@@ -195,5 +179,4 @@ register struct atp_rcb *rcbp;
 	}
 	rcbp->rc_list.next = atp_rcb_free_list;
 	atp_rcb_free_list = rcbp;
-	ATENABLE(s, atpgen_lock);
 }

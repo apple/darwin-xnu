@@ -51,17 +51,13 @@ hibernate_page_list_zero(hibernate_page_list_t *list)
     bitmap = &list->bank_bitmap[0];
     for (bank = 0; bank < list->bank_count; bank++)
     {
-        uint32_t bit, last_bit;
-        uint32_t *bitmap_word;
+        uint32_t last_bit;
 
 	bzero((void *) &bitmap->bitmap[0], bitmap->bitmapwords << 2); 
-
-        // Set out-of-bound bits at end of bitmap.
-        bitmap_word = &bitmap->bitmap[bitmap->bitmapwords - 1];
-        last_bit = ((bitmap->last_page - bitmap->first_page) & 31);
-        for (bit = 31; bit > last_bit; bit--) {
-            *bitmap_word |= (0x80000000 >> bit);
-        }
+        // set out-of-bound bits at end of bitmap.
+        last_bit = ((bitmap->last_page - bitmap->first_page + 1) & 31);
+	if (last_bit)
+	    bitmap->bitmap[bitmap->bitmapwords - 1] = (0xFFFFFFFF >> last_bit);
 
 	bitmap = (hibernate_bitmap_t *) &bitmap->bitmap[bitmap->bitmapwords];
     }
@@ -165,6 +161,7 @@ discard_page(vm_page_t m)
  pages known to VM to not need saving are subtracted.
  Wired pages to be saved are present in page_list_wired, pageable in page_list.
 */
+extern vm_page_t vm_lopage_queue_free;
 
 void
 hibernate_page_list_setall(hibernate_page_list_t * page_list,
@@ -197,6 +194,16 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
     }
 
     m = (vm_page_t) vm_page_queue_free;
+    while(m)
+    {
+	pages--;
+	count_wire--;
+	hibernate_page_bitset(page_list,       TRUE, m->phys_page);
+	hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
+	m = (vm_page_t) m->pageq.next;
+    }
+
+    m = (vm_page_t) vm_lopage_queue_free;
     while(m)
     {
 	pages--;

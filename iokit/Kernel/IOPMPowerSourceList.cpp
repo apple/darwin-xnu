@@ -26,54 +26,61 @@
 #define super OSObject
 OSDefineMetaClassAndStructors(IOPMPowerSourceList,OSObject)
 
-//*********************************************************************************
+//******************************************************************************
 // init
 //
-//*********************************************************************************
+//******************************************************************************
 void IOPMPowerSourceList::initialize ( void )
 {
     firstItem = NULL;
     length = 0;
 }
 
-//*********************************************************************************
+//******************************************************************************
 // addToList
 //
-//*********************************************************************************
+//******************************************************************************
 
-IOReturn IOPMPowerSourceList::addToList ( IOPMPowerSource * newPowerSource )
+IOReturn IOPMPowerSourceList::addToList(IOPMPowerSource *newPowerSource)
 {
     IOPMPowerSource * nextPowerSource;
-    nextPowerSource = firstItem;				// Is new object already in the list?
-    while (  nextPowerSource != NULL ) {
-        if ( nextPowerSource == newPowerSource ) {
-            return IOPMNoErr;				// yes, just return
+
+    // Is new object already in the list?
+    nextPowerSource = firstItem;
+    while (  nextPowerSource != NULL ) 
+    {
+        if ( nextPowerSource == newPowerSource ) 
+        {
+            // yes, just return
+            return IOPMNoErr;				
         }
         nextPowerSource = nextInList(nextPowerSource);
     }
-    newPowerSource->nextInList = firstItem;		// add it to list
+
+    // add it to list
+    newPowerSource->nextInList = firstItem;
     firstItem = newPowerSource;
-    length += 1;
+    length++;
     return IOPMNoErr;
 }
 
 
-//*********************************************************************************
+//******************************************************************************
 // firstInList
 //
-//*********************************************************************************
+//******************************************************************************
 
 IOPMPowerSource * IOPMPowerSourceList::firstInList ( void )
 {
     return firstItem;
 }
 
-//*********************************************************************************
+//******************************************************************************
 // nextInList
 //
-//*********************************************************************************
+//******************************************************************************
 
-IOPMPowerSource * IOPMPowerSourceList::nextInList ( IOPMPowerSource * currentItem )
+IOPMPowerSource * IOPMPowerSourceList::nextInList(IOPMPowerSource *currentItem)
 {
     if ( currentItem != NULL ) {
        return (currentItem->nextInList);
@@ -81,54 +88,56 @@ IOPMPowerSource * IOPMPowerSourceList::nextInList ( IOPMPowerSource * currentIte
     return NULL;
 }
 
-//*********************************************************************************
+//******************************************************************************
 // numberOfItems
 //
-//*********************************************************************************
+//******************************************************************************
 
 unsigned long IOPMPowerSourceList::numberOfItems ( void )
 {
     return length;
 }
 
-//*********************************************************************************
+//******************************************************************************
 // removeFromList
 //
 // Find the item in the list, unlink it, and free it.
-//*********************************************************************************
+//******************************************************************************
 
 IOReturn IOPMPowerSourceList::removeFromList ( IOPMPowerSource * theItem )
 {
     IOPMPowerSource * item = firstItem;
     IOPMPowerSource * temp;
 
-    if ( item != NULL ) {
-        if ( item  == theItem ) {
-            firstItem = item->nextInList;
+    if ( NULL == item) goto exit;
+    
+    if ( item  == theItem ) {
+        firstItem = item->nextInList;
+        length--;
+        item->release();
+        return IOPMNoErr;
+    }
+    while ( item->nextInList != NULL ) {
+        if ( item->nextInList == theItem ) {
+            temp = item->nextInList;
+            item->nextInList = temp->nextInList;
             length--;
-            item->release();
+            temp->release();
             return IOPMNoErr;
         }
-        while ( item->nextInList != NULL ) {
-            if ( item->nextInList == theItem ) {
-                temp = item->nextInList;
-                item->nextInList = temp->nextInList;
-                length--;
-                temp->release();
-                return IOPMNoErr;
-            }
-            item = item->nextInList;
-        }
+        item = item->nextInList;
     }
+
+exit:
     return IOPMNoErr;
 }
 
 
-//*********************************************************************************
+//******************************************************************************
 // free
 //
 // Free all items in the list, and then free the list itself
-//*********************************************************************************
+//******************************************************************************
 
 void IOPMPowerSourceList::free (void )
 {
@@ -140,7 +149,7 @@ void IOPMPowerSourceList::free (void )
         next->release();
         next = firstItem;        
     }
-super::free();
+    super::free();
 }
 
 

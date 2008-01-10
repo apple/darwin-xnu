@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -72,9 +72,9 @@ extern	struct clock_ops	sysclk_ops, calend_ops;
 struct	clock	clock_list[] = {
 
 	/* SYSTEM_CLOCK */
-	{ &sysclk_ops, 0, 0, {0} },
+	{ &sysclk_ops, 0, 0 },
 
 	/* CALENDAR_CLOCK */
-	{ &calend_ops, 0, 0, {0} }
+	{ &calend_ops, 0, 0 }
 };
 int	clock_count = sizeof(clock_list) / sizeof(clock_list[0]);

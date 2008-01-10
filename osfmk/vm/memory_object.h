@@ -112,9 +112,9 @@ extern ipc_port_t convert_upl_to_port( upl_t );
 __private_extern__ void upl_no_senders(ipc_port_t, mach_port_mscount_t);
 
 extern kern_return_t	memory_object_free_from_cache(
-				host_t		host,
-				int		*pager_id,
-				int		*count);
+	host_t				host,
+	memory_object_pager_ops_t	pager_ops,
+	int				*count);
 
 extern kern_return_t	memory_object_iopl_request(
 	ipc_port_t		port,

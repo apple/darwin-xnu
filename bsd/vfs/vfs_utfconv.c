@@ -27,7 +27,7 @@
 #include <sys/param.h>
 #include <sys/utfconv.h>
 #include <sys/errno.h>
-#include <architecture/byte_order.h>
+#include <libkern/OSByteOrder.h>
 
 /*
  * UTF-8 (Unicode Transformation Format)
@@ -175,7 +175,7 @@ utf8_encodelen(const u_int16_t * ucsp, size_t ucslen, u_int16_t altslash,
 		ucs_ch = *ucsp++;
 
 		if (swapbytes)
-			ucs_ch = NXSwapShort(ucs_ch);
+			ucs_ch = OSSwapInt16(ucs_ch);
 		if (ucs_ch == '/')
 			ucs_ch = altslash ? altslash : '_';
 		else if (ucs_ch == '\0')
@@ -232,7 +232,7 @@ utf8_encodestr(const u_int16_t * ucsp, size_t ucslen, u_int8_t * utf8p,
 			--extra;
 			ucs_ch = *chp++;
 		} else {
-			ucs_ch = swapbytes ? NXSwapShort(*ucsp++) : *ucsp++;
+			ucs_ch = swapbytes ? OSSwapInt16(*ucsp++) : *ucsp++;
 
 			if (decompose && unicode_decomposeable(ucs_ch)) {
 				extra = unicode_decompose(ucs_ch, sequence) - 1;
@@ -276,7 +276,7 @@ utf8_encodestr(const u_int16_t * ucsp, size_t ucslen, u_int8_t * utf8p,
 				u_int16_t ch2;
 				u_int32_t pair;
 
-				ch2 = swapbytes ? NXSwapShort(*ucsp) : *ucsp;
+				ch2 = swapbytes ? OSSwapInt16(*ucsp) : *ucsp;
 				if (ch2 >= SP_LOW_FIRST && ch2 <= SP_LOW_LAST) {
 					pair = ((ucs_ch - SP_HIGH_FIRST) << SP_HALF_SHIFT)
 						+ (ch2 - SP_LOW_FIRST) + SP_HALF_BASE;
@@ -414,13 +414,13 @@ utf8_decodestr(const u_int8_t* utf8p, size_t utf8len, u_int16_t* ucsp,
 				ucs_ch = (ch >> SP_HALF_SHIFT) + SP_HIGH_FIRST;
 				if (ucs_ch < SP_HIGH_FIRST || ucs_ch > SP_HIGH_LAST)
 					goto invalid;
-				*ucsp++ = swapbytes ? NXSwapShort(ucs_ch) : ucs_ch;
+				*ucsp++ = swapbytes ? OSSwapInt16(ucs_ch) : ucs_ch;
 				if (ucsp >= bufend)
 					goto toolong;
 				ucs_ch = (ch & SP_HALF_MASK) + SP_LOW_FIRST;
 				if (ucs_ch < SP_LOW_FIRST || ucs_ch > SP_LOW_LAST)
 					goto invalid;
-				*ucsp++ = swapbytes ? NXSwapShort(ucs_ch) : ucs_ch;
+				*ucsp++ = swapbytes ? OSSwapInt16(ucs_ch) : ucs_ch;
 			        continue;
 			default:
 				goto invalid;
@@ -429,9 +429,9 @@ utf8_decodestr(const u_int8_t* utf8p, size_t utf8len, u_int16_t* ucsp,
 				if (unicode_decomposeable(ucs_ch)) {
 					u_int16_t sequence[8];
 					int count, i;
-
+					
 					/* Before decomposing a new unicode character, sort
-				 	 * previous combining characters, if any, and reset
+					 * previous combining characters, if any, and reset 
 					 * the counter
 					 */
 					if (combcharcnt > 1){
@@ -442,18 +442,18 @@ utf8_decodestr(const u_int8_t* utf8p, size_t utf8len, u_int16_t* ucsp,
 
 					for (i = 0; i < count; ++i) {
 						ucs_ch = sequence[i];
-						*ucsp++ = swapbytes ? NXSwapShort(ucs_ch) : ucs_ch;
+						*ucsp++ = swapbytes ? OSSwapInt16(ucs_ch) : ucs_ch;
 						if (ucsp >= bufend)
 							goto toolong;
 					}
 					combcharcnt += count - 1;
-                	continue;			
+					continue;			
 				}
 			} else if (precompose && (ucsp != bufstart)) {
 				u_int16_t composite, base;
 
 				if (unicode_combinable(ucs_ch)) {
-					base = swapbytes ? NXSwapShort(*(ucsp - 1)) : *(ucsp - 1);
+					base = swapbytes ? OSSwapInt16(*(ucsp - 1)) : *(ucsp - 1);
 					composite = unicode_combine(base, ucs_ch);
 					if (composite) {
 						--ucsp;
@@ -478,7 +478,7 @@ utf8_decodestr(const u_int8_t* utf8p, size_t utf8len, u_int16_t* ucsp,
 			}
 			combcharcnt = 0;  /* start over */
 		}
-		*ucsp++ = swapbytes ? NXSwapShort(ucs_ch) : ucs_ch;
+		*ucsp++ = swapbytes ? OSSwapInt16(ucs_ch) : ucs_ch;
 	}
 	/*
 	 * Make a previous combining sequence canonical

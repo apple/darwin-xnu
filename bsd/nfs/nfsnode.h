@@ -126,6 +126,8 @@ struct nfsbuf {
 	void *			nb_pagelist;	/* upl */
 };
 
+#define NFS_MAXBSIZE	(32 * PAGE_SIZE)	/* valid/dirty page masks limit buffer size */
+
 /*
  * These flags are kept in b_lflags... 
  * nfs_buf_mutex must be held before examining/updating

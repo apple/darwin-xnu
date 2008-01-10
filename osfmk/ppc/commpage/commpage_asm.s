@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -74,7 +74,7 @@ Ldata:
  *	***********************************************
  *
  *	Update the gettimeofday() shared data on the commpages, as follows:
- *		_COMM_PAGE_TIMESTAMP = a BSD-style pair of uint_32's for secs and usecs
+ *		_COMM_PAGE_TIMESTAMP = the clock offset at timebase (seconds)
  *		_COMM_PAGE_TIMEBASE = the timebase at which the timestamp was valid
  *		_COMM_PAGE_SEC_PER_TICK = multiply timebase ticks by this to get seconds (double)
  *	The convention is that if the timebase is 0, the data is invalid.  Because other
@@ -94,8 +94,8 @@ Ldata:
  *	When called:
  *		r3 = upper half of timebase (timebase is disabled if 0)
  *		r4 = lower half of timebase
- *		r5 = seconds part of timestamp
- *		r6 = useconds part of timestamp
+ *		r5 = upper half of timestamp
+ *		r6 = lower half of timestamp
  *		r7 = divisor (ie, timebase ticks per sec)
  *	We set up:
  *		r8 = ptr to our static data (kkBinary0, kkDouble1, kkTicksPerSec)
@@ -106,7 +106,7 @@ Ldata:
  */
  
         .align	5
-LEXT(commpage_set_timestamp)				// void commpage_set_timestamp(tbr,secs,usecs,divisor)
+LEXT(commpage_set_timestamp)				// void commpage_set_timestamp(tbr,secs,divisor)
         mfmsr	r11							// get MSR
         ori		r2,r11,MASK(MSR_FP)			// turn FP on
         mtmsr	r2
@@ -155,7 +155,7 @@ LEXT(commpage_set_timestamp)				// void commpage_set_timestamp(tbr,secs,usecs,di
         lfd		f3,kkTicksPerSec(r8)		// float new ticks_per_sec + 2**52
         lfd		f4,kkDouble1(r8)			// f4 <- double(1.0)
         mffs	f5							// save caller's FPSCR
-        mtfsfi	7,0							// clear Inexeact Exception bit, set round-to-nearest
+        mtfsfi	7,1							// clear Inexeact Exception bit, set round-to-zero
         fsub	f3,f3,f2					// get ticks_per_sec
         fdiv	f3,f4,f3					// divide 1 by ticks_per_sec to get SEC_PER_TICK
         stfd	f3,_COMM_PAGE_SEC_PER_TICK(r9)

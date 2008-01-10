@@ -83,6 +83,7 @@
 #include <kern/thread.h>
 
 #include <IOKit/IOHibernatePrivate.h>
+#include <IOKit/IOPlatformExpert.h>
 
 /*
  *	Exported variables:
@@ -136,7 +137,12 @@ host_reboot(
 		return (KERN_SUCCESS);
 	}
 
-	halt_all_cpus(!(options & HOST_REBOOT_HALT));
+    if (options & HOST_REBOOT_UPSDELAY) {
+        // UPS power cutoff path
+        PEHaltRestart( kPEUPSDelayHaltCPU );
+    } else {
+       halt_all_cpus(!(options & HOST_REBOOT_HALT));
+    }
 
 	return (KERN_SUCCESS);
 }

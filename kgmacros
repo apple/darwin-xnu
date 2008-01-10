@@ -6,26 +6,8 @@
 #
 #  All the convenience variables used by these macros begin with $kgm_
 
-define showversion
-#Display version string, a pointer to which is pinned at 0x501C in the kernel's
-#low memory globals
-       p (char *) *0x501c
-end
-
-document showversion
-Syntax: showversion
-| Read the kernel version string from a fixed address in low
-| memory. Useful if you don't know which kernel is on the other end,
-| and need to find the appropriate symbols. Beware that if you've
-| loaded a symbol file, but aren't connected to a remote target,
-| the version string from the symbol file will be displayed instead.
-| This macro expects to be connected to the remote kernel to function
-| correctly.
-end
-
-set $kgm_dummy = &proc0
-set $kgm_dummy = &kmod
-set $kgm_mtype = ((struct mach_header)_mh_execute_header).cputype
+set print asm-demangle on
+set cp-abi gnu-v2
 
 echo Loading Kernel GDB Macros package.  Type "help kgm" for more info.\n
 
@@ -54,7 +36,13 @@ document kgm
 |     showallipc     Display a summary listing of all the ipc spaces
 |     showallrights  Display a summary listing of all the ipc rights
 |     showallkmods   Display a summary listing of all the kernel modules
-|     showallclasses Display info about all OSObject subclasses in the system
+|
+|     showallclasses    Display info about all OSObject subclasses in the system
+|     showobject        Show info about an OSObject - its vtable ptr and retain count, & more info for simple container classes.
+|     showregistry      Show info about all registry entries in the current plane
+|     showregistryprops Show info about all registry entries in the current plane, and their properties
+|     showregistryentry Show info about a registry entry; its properties and descendants in the current plane
+|     setregistryplane  Set the plane to be used for the iokit registry macros (pass zero for list)
 |
 |     showtask       Display info about the specified task
 |     showtaskthreads      Display info about the threads in the task
@@ -104,13 +92,45 @@ document kgm
 |     disablecore    Configure the kernel to disable coredump transmission
 |     switchtocorethread Corefile version of "switchtoact"
 |     resetcorectx   Corefile version of "resetctx"
-|     
+|
+|     readphys       Reads the specified untranslated address
+|     readphys64     Reads the specified untranslated 64-bit address
+|
 |     kdp-reboot     Restart remote target
 |	
 | Type "help <macro>" for more specific help on a particular macro.
 | Type "show user <macro>" to see what the macro is really doing.
 end
 
+# This macro should appear before any symbol references, to facilitate
+# a gdb "source" without a loaded symbol file.
+define showversion
+       printf "%s\n", *(char **)0x501C
+end
+
+document showversion
+Syntax: showversion
+| Read the kernel version string from a fixed address in low
+| memory. Useful if you don't know which kernel is on the other end,
+| and need to find the appropriate symbols. Beware that if you've
+| loaded a symbol file, but aren't connected to a remote target,
+| the version string from the symbol file will be displayed instead.
+| This macro expects to be connected to the remote kernel to function
+| correctly.
+end
+
+set $kgm_dummy = &proc0
+set $kgm_dummy = &kmod
+set $kgm_mtype = ((struct mach_header)_mh_execute_header).cputype
+
+set $kgm_reg_depth = 0
+set $kgm_reg_plane = (void **) gIOServicePlane
+set $kgm_namekey = (OSSymbol *) 0
+set $kgm_childkey = (OSSymbol *) 0
+
+set $kgm_show_object_addrs = 0
+set $kgm_show_object_retain = 0
+set $kgm_show_props = 0
 
 define showkmodheader
     printf "kmod        address     size        "
@@ -135,7 +155,7 @@ set $kgm_fkmodmax = 0xffffffff
 set $kgm_pkmod = 0
 set $kgm_pkmodst = 0
 set $kgm_pkmoden = 0
-define showkmodaddr
+define showkmodaddrint
     printf "0x%x" , $arg0
     if ((unsigned int)$arg0 >= (unsigned int)$kgm_pkmodst) && ((unsigned int)$arg0 <= (unsigned int)$kgm_pkmoden)
 	set $kgm_off = ((unsigned int)$arg0 - (unsigned int)$kgm_pkmodst)
@@ -149,7 +169,7 @@ define showkmodaddr
 		    set $kgm_kmodmin = $kgm_kmod.address
 		end
 		if ($kgm_kmod.address + $kgm_kmod.size) > $kgm_kmodmax
-	    	    set $kgm_kmodmax = $kgm_kmod.address
+	    	    set $kgm_kmodmax = $kgm_kmod.address + $kgm_kmod.size
 	    	end
 	        set $kgm_off = ((unsigned int)$arg0 - (unsigned int)$kgm_kmod.address)
 	        if ($kgm_kmod.address <= $arg0) && ($kgm_off <= $kgm_kmod.size)
@@ -169,6 +189,12 @@ define showkmodaddr
 	end
     end
 end
+
+define showkmodaddr
+    showkmodaddrint $arg0
+    printf "\n"
+end
+
 document showkmodaddr
 | Given an address, print the offset and name for the kmod containing it
 | The following is the syntax:
@@ -235,10 +261,10 @@ define showactint
    	if $kgm_state & 0x01
 	    printf "W\t" 
 	    printf "0x%08x  ", $kgm_thread.wait_queue
-		
-		if ((unsigned)$kgm_thread.wait_event > (unsigned)sectPRELINKB)
-		    showkmodaddr $kgm_thread.wait_event
-		else
+	    	if (((unsigned)$kgm_thread.wait_event > (unsigned)sectPRELINKB) \
+		    && ($arg1 != 2))
+			showkmodaddr $kgm_thread.wait_event
+	        else
 			output /a (unsigned) $kgm_thread.wait_event
 		end
 	end
@@ -251,37 +277,45 @@ define showactint
 		if ($kgm_mtype == 18)
 			set $mysp = $kgm_thread.machine.pcb->save_r1
 		else
-			set $kgm_statep = (struct i386_kernel_state *) \
+			set $kgm_statep = (struct x86_kernel_state32 *) \
 				($kgm_thread->kernel_stack + 0x4000 \
-				 - sizeof(struct i386_kernel_state))
+				 - sizeof(struct x86_kernel_state32))
 			set $mysp = $kgm_statep->k_ebp
 		end
-		set $prevsp = 0
+		set $prevsp = $mysp - 16
 		printf "\n\t\tstacktop=0x%08x", $mysp
 		if ($kgm_mtype == 18)
 			set $stkmask = 0xf
-			set $stklimit = 0xb0000000
 		else
 			set $stkmask = 0x3
-			set $stklimit = 0xfc000000
 		end
+		set $kgm_return = 0
 	    	while ($mysp != 0) && (($mysp & $stkmask) == 0) \
-		       && ($mysp < $stklimit) \
-		       && ((unsigned)$mysp > (unsigned)$prevsp)
+		      && ($mysp != $prevsp) \
+		      && ((((unsigned) $mysp ^ (unsigned) $prevsp) < 0x2000) \
+		      || (((unsigned)$mysp < ((unsigned) ($kgm_thread->kernel_stack+0x4000))) \
+		      && ((unsigned)$mysp > (unsigned) ($kgm_thread->kernel_stack))))
+
+			if ((unsigned) $kgm_return > (unsigned) sectPRELINKB)
+			    showkmodaddr $kgm_return
+			else
+				if ((unsigned) $kgm_return > 0)
+				    output /a (unsigned) $kgm_return
+				end
+			end
 			printf "\n\t\t0x%08x  ", $mysp
 			if ($kgm_mtype == 18)
 				set $kgm_return = *($mysp + 8)
 			else
 				set $kgm_return = *($mysp + 4)
 			end
-			if ((unsigned) $kgm_return > (unsigned) sectPRELINKB)
-			    showkmodaddr $kgm_return
-			else
-			    output /a (unsigned) $kgm_return
-			end
 			set $prevsp = $mysp
 			set $mysp = * $mysp
 		end
+		if ((unsigned) $kgm_return > 0)
+		   output/a $kgm_return
+		end
+		set $kgm_return = 0
 		printf "\n\t\tstackbottom=0x%08x", $prevsp
 	    else
 		printf "\n\t\t\tcontinuation="
@@ -358,6 +392,7 @@ document showcurrentthreads
 |     (gdb) showcurrentthreads
 end
 
+set $decode_wait_events = 0
 define showallstacks
     set $kgm_head_taskp = &default_pset.tasks
     set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
@@ -368,17 +403,25 @@ define showallstacks
         set $kgm_actp = (struct thread *)($kgm_taskp->threads.next)
 	while $kgm_actp != $kgm_head_actp
 	    showactheader
-	    showactint $kgm_actp 1
+	    if ($decode_wait_events > 0)
+	       showactint $kgm_actp 1
+	    else
+	       showactint $kgm_actp 2
+	    end
   	    set $kgm_actp = (struct thread *)($kgm_actp->task_threads.next)
         end
 	printf "\n"
     	set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
     end
 end
+
 document showallstacks
 | Routine to print out the stack for each thread in the system.
 | The following is the syntax:
 |     (gdb) showallstacks
+| If the variable $decode_wait_events is non-zero, the routine attempts to
+| interpret thread wait_events as kernel module offsets, which can add to
+| processing time.
 end
 
 define showcurrentstacks
@@ -395,6 +438,7 @@ set $kgm_prp = processor_list
 	set $kgm_prp = ($kgm_prp)->processor_list
     end
 end
+
 document showcurrentstacks
 | Routine to print out the thread running on each cpu (incl. its stack)
 | The following is the syntax:
@@ -1426,25 +1470,44 @@ end
 set $kdp_act_counter = 0
 
 define switchtoact
+	set $newact = (struct thread *) $arg0
+	if ($newact->kernel_stack == 0)
+		echo This activation does not have a stack.\n
+		echo continuation:
+		output/a (unsigned) $newact.continuation
+		echo \n
+	else
 	if ($kgm_mtype == 18)
 		if ($kdp_act_counter == 0)
-		set $kdpstate = (struct savearea *) kdp.saved_state
+			set $kdpstate = (struct savearea *) kdp.saved_state
 		end
 		set $kdp_act_counter = $kdp_act_counter + 1
 		set $newact = (struct thread *) $arg0
-		if ($newact->kernel_stack == 0)
-		   echo This activation does not have a stack.\n
-		   echo continuation:
-		   output/a (unsigned) $newact.continuation
-		   echo \n
-		else
-		   set (struct savearea *) kdp.saved_state=$newact->machine->pcb
-		   flush
-		   set $pc=$newact->machine->pcb.save_srr0
-		   update
-		end
+		set (struct savearea *) kdp.saved_state=$newact->machine->pcb
+		flushregs
+		flushstack
+		set $pc=$newact->machine->pcb.save_srr0
+		update
 	else
-		echo switchtoact not implemented for this architecture.\n
+		set $kdpstatep = (struct x86_saved_state32 *) kdp.saved_state
+		if ($kdp_act_counter == 0)
+			set $kdpstate = *($kdpstatep)
+		end	
+		set $kdp_act_counter = $kdp_act_counter + 1
+
+		set $kgm_statep = (struct x86_kernel_state32 *) \
+					($newact->kernel_stack + 0x4000 \
+					 - sizeof(struct x86_kernel_state32))
+		set $kdpstatep->ebx = $kgm_statep->k_ebx 
+		set $kdpstatep->ebp = $kgm_statep->k_ebp 
+		set $kdpstatep->edi = $kgm_statep->k_edi 
+		set $kdpstatep->esi = $kgm_statep->k_esi 
+		set $kdpstatep->eip = $kgm_statep->k_eip 
+		flushregs
+		flushstack
+		set $pc = $kgm_statep->k_eip
+		update
+	end
 	end
 end
 
@@ -1464,7 +1527,8 @@ define switchtoctx
 		end
 		set $kdp_act_counter = $kdp_act_counter + 1
 		set (struct savearea *) kdp.saved_state=(struct savearea *) $arg0
-		flush
+		flushregs
+		flushstack
 		set $pc=((struct savearea *) $arg0)->save_srr0
 		update
 	else
@@ -1483,12 +1547,19 @@ end
 define resetctx
 	if ($kgm_mtype == 18)
 		set (struct savearea *)kdp.saved_state=$kdpstate
-		flush
+		flushregs
+		flushstack
 		set $pc=((struct savearea *) kdp.saved_state)->save_srr0
 		update
 		set $kdp_act_counter = 0
 	else
-		echo resetctx not implemented for this architecture.\n
+		set $kdpstatep = (struct x86_saved_state32 *) kdp.saved_state
+		set *($kdpstatep)=$kdpstate
+		flushregs
+		flushstack
+		set $pc=$kdpstatep->eip
+		update
+		set $kdp_act_counter = 0
 	end
 end     
         
@@ -1600,7 +1671,8 @@ end
 define _kgm_flush_loop
        set $kgm_flush_loop_ctr = 0
        while ($kgm_flush_loop_ctr < 30)
-       	     flush
+       	     flushregs
+	     flushstack
 	     set $kgm_flush_loop_ctr = $kgm_flush_loop_ctr + 1
        end
 end
@@ -1611,6 +1683,41 @@ define _kgm_update_loop
        	     update
        	     set $kgm_update_loop_ctr = $kgm_update_loop_ctr + 1
        end
+end
+
+#This is necessary since gdb often doesn't do backtraces on x86 correctly
+#in the absence of symbols.The code below in showuserstack and 
+#showx86backtrace also contains several workarouds for the gdb bug where 
+#gdb stops macro evaluation because of spurious "Cannot read memory"
+#errors on x86. These errors appear on ppc as well, but they don't
+#always stop macro evaluation.
+
+set $kgm_cur_ebp = 0
+set $kgm_cur_eip = 0
+
+define showx86backtrace
+	if ($kgm_cur_ebp == 0)
+		set $kgm_cur_ebp = $ebp
+	end
+	if ($kgm_cur_eip == 0)
+		set $kgm_cur_eip = $eip
+	end
+	printf "0: EBP: 0x%08x EIP: 0x%08x\n", $kgm_cur_ebp, $kgm_cur_eip
+	x/i $kgm_cur_eip
+	set $kgm_prev_ebp = *((uint32_t *) $kgm_cur_ebp)
+	set $kgm_prev_eip = *((uint32_t *) ($kgm_cur_ebp + 4))
+	set $kgm_frameno = 1
+	while $kgm_prev_ebp != 0
+		printf "%d: saved EBP: 0x%08x saved EIP: 0x%08x\n", $kgm_frameno, $kgm_prev_ebp, $kgm_prev_eip
+		x/i $kgm_prev_eip
+		set $kgm_cur_ebp = $kgm_prev_ebp
+		set $kgm_prev_ebp = *((uint32_t *) $kgm_cur_ebp)
+		set $kgm_prev_eip = *((uint32_t *) ($kgm_cur_ebp + 4))
+		set $kgm_frameno = $kgm_frameno + 1
+	end
+	set $kgm_cur_ebp = 0
+	set $kgm_cur_eip = 0
+	set kdp_pmap = 0
 end
 
 define showuserstack
@@ -1644,10 +1751,22 @@ define showuserstack
 		     _kgm_update_loop
 		   end
 		else
-		echo showuserstack not implemented for this architecture.\n
-	end		
+			set $newact = (struct thread *) $arg0
+			set $newiss = (x86_saved_state32_t *) ($newact->machine.pcb->iss)
+			set $checkpc = $newiss.eip
+			if ($checkpc == 0)
+			    echo This activation does not appear to have
+			    echo \20 a valid user context.\n
+			else
+			set $kgm_cur_ebp = $newiss.ebp
+			set $kgm_cur_eip = $checkpc
+			printf "You may now issue the showx86backtrace command to see the user space backtrace for this thread (0x%08x); you can also examine memory locations in this address space (pmap 0x%08x) before issuing the backtrace. This two-step process is necessary to work around various bugs in x86 gdb, which cause it to stop memory evaluation on spurious memory read errors. Additionally, you may need to issue a set kdp_pmap = 0 command after the showx86backtrace completes, to resume reading from the kernel address space.\n", $arg0, $newact->task->map->pmap
+			set kdp_pmap = $newact->task->map->pmap
+			_kgm_flush_loop
+			_kgm_update_loop
+			end			
+		end
 end
-
 document showuserstack
 Syntax: showuserstack <address of thread activation>
 |This command displays a numeric backtrace for the user space stack of
@@ -1843,9 +1962,9 @@ define showgdbthread
 		if ($kgm_mtype == 18)
 			set $mysp = $kgm_thread.machine.pcb->save_r1
 		else
-			set $kgm_statep = (struct i386_kernel_state *) \
+			set $kgm_statep = (struct x86_kernel_state32 *) \
 				($kgm_thread->kernel_stack + 0x4000 \
-				 - sizeof(struct i386_kernel_state))
+				 - sizeof(struct x86_kernel_state32))
 			set $mysp = $kgm_statep->k_ebp
 		end
 		set $prevsp = 0
@@ -1955,22 +2074,429 @@ Syntax: switchtouserthread <address of thread>
 end
 
 define showmetaclass
-    set cp-abi gnu-v2
     set $kgm_metaclassp = (OSMetaClass *)$arg0
     printf "%-5d", $kgm_metaclassp->instanceCount
     printf "x %5d bytes", $kgm_metaclassp->classSize
     printf " %s\n", $kgm_metaclassp->className->string
 end
 
-define showallclasses
-    set cp-abi gnu-v2
-    set $kgm_classidx = 0
-    while $kgm_classidx < sAllClassesDict->count
-	set $kgm_meta = (OSMetaClass *) sAllClassesDict->dictionary[$kgm_classidx].value
-	showmetaclass $kgm_meta
-	set $kgm_classidx = $kgm_classidx + 1
+define showstring
+    printf "\"%s\"", ((OSString *)$arg0)->string
+end
+
+define shownumber
+    printf "%lld", ((OSNumber *)$arg0)->value
+end
+
+define showboolean
+    if ($arg0 == gOSBooleanFalse)
+	printf "No"
+    else
+	printf "Yes"
     end
 end
+
+define showdata
+    set $kgm_data = (OSData *)$arg0
+
+    printf "<"
+    set $kgm_datap = (const unsigned char *) $kgm_data->data
+
+    set $kgm_printstr = 0
+    if (0 == (3 & (unsigned int)$kgm_datap) && ($kgm_data->length >= 3))
+	set $kgm_bytes = *(unsigned int *) $kgm_datap
+	if (0xffff0000 & $kgm_bytes)
+	    set $kgm_idx = 0
+	    set $kgm_printstr = 1
+	    while ($kgm_idx++ < 4)
+		set $kgm_bytes = $kgm_bytes >> 8
+		set $kgm_char = 0xff & $kgm_bytes
+		if ($kgm_char && (($kgm_char < 0x20) || ($kgm_char > 0x7e)))
+		    set $kgm_printstr = 0
+		end
+	    end
+	end
+    end
+    
+    set $kgm_idx = 0
+    if ($kgm_printstr)
+	set $kgm_quoted = 0
+	while ($kgm_idx < $kgm_data->length)
+	    set $kgm_char = $kgm_datap[$kgm_idx++]
+	    if ($kgm_char)
+		if (0 == $kgm_quoted)
+		    set $kgm_quoted = 1
+		    if ($kgm_idx > 1)
+			printf ",\""
+		    else
+			printf "\""
+		    end
+		end
+		printf "%c", $kgm_char
+	    else
+		if ($kgm_quoted)
+		    set $kgm_quoted = 0
+		    printf "\""
+		end
+	    end
+	end
+	if ($kgm_quoted)
+	    printf "\""
+	end
+    else
+	if (0 == (3 & (unsigned int)$kgm_datap))
+	    while (($kgm_idx + 3) <= $kgm_data->length)
+		printf "%08x", *(unsigned int *) &$kgm_datap[$kgm_idx]
+		set $kgm_idx = $kgm_idx + 4
+	    end
+	end
+	while ($kgm_idx < $kgm_data->length)
+	    printf "%02x", $kgm_datap[$kgm_idx++]
+	end
+    end
+    printf ">"
+end
+
+define showdictionaryint
+    set $kgm$arg0_dict = (OSDictionary *)$arg1
+
+    printf "{"
+    set $kgm$arg0_idx = 0
+    while ($kgm$arg0_idx < $kgm$arg0_dict->count)
+	set $kgm_obj = $kgm$arg0_dict->dictionary[$kgm$arg0_idx].key
+	showobjectint _$arg0 $kgm_obj
+	printf "="
+	set $kgm_obj = $kgm$arg0_dict->dictionary[$kgm$arg0_idx++].value
+	showobjectint _$arg0 $kgm_obj
+	if ($kgm$arg0_idx < $kgm$arg0_dict->count)
+	    printf ","
+	end
+    end
+    printf "}"
+end
+
+define indent
+    set $kgm_idx = 0
+    while ($kgm_idx < $arg0)
+	if ($arg1 & (1 << $kgm_idx++))
+	    printf "| "
+	else
+	    printf "  "
+	end
+    end
+end
+
+define showregdictionary
+    indent $kgm_reg_depth+2 $arg1
+    printf "{\n"
+
+    set $kgm_reg_idx = 0
+    while ($kgm_reg_idx < $arg0->count)
+	indent $kgm_reg_depth+2 $arg1
+	printf "  "
+	set $kgm_obj = $arg0->dictionary[$kgm_reg_idx].key
+	showobjectint _ $kgm_obj
+	printf " = "
+
+	set $kgm_obj = $arg0->dictionary[$kgm_reg_idx++].value
+	showobjectint _ $kgm_obj
+	printf "\n"
+    end
+    indent $kgm_reg_depth+2 $arg1
+    printf "}\n"
+end
+
+
+define showarraysetint
+    set $kgm$arg0_array = (OSArray *)$arg1
+
+    set $kgm$arg0_idx = 0
+    while ($kgm$arg0_idx < $kgm$arg0_array->count)
+	set $kgm_obj = $kgm$arg0_array->array[$kgm$arg0_idx++]
+	showobjectint _$arg0 $kgm_obj
+	if ($kgm$arg0_idx < $kgm$arg0_array->count)
+	    printf ","
+	end
+    end
+end
+
+define showarrayint
+    printf "("
+    showarraysetint $arg0 $arg1
+    printf ")"
+end
+
+define showsetint
+    set $kgm_array = ((OSSet *)$arg1)->members
+    printf "["
+    showarraysetint $arg0 $kgm_array
+    printf "]"
+end
+
+
+define showobjectint
+    set $kgm_obj = (OSObject *) $arg1
+    set $kgm_vt = *((void **) $arg1)
+
+    if ($kgm_show_object_addrs)
+	printf "`object %p, vt ", $arg1
+	output /a (unsigned) $kgm_vt
+	if ($kgm_show_object_retain)
+	    printf ", retain count %d, container retain %d", (0xffff & $kgm_obj->retainCount), $kgm_obj->retainCount >> 16
+	end
+	printf "` "
+    end
+
+    if ($kgm_vt == _ZTV8OSString)
+	showstring $arg1
+    else
+	if ($kgm_vt == _ZTV8OSSymbol)
+	    showstring $arg1
+	else
+	    if ($kgm_vt == _ZTV8OSNumber)
+		shownumber $arg1
+	    else
+		if ($kgm_vt == _ZTV6OSData)
+		    showdata $arg1
+		else
+		    if ($kgm_vt == _ZTV9OSBoolean)
+			showboolean $arg1
+		    else
+			if ($kgm_vt == _ZTV12OSDictionary)
+			    showdictionaryint _$arg0 $arg1
+			else
+			    if ($kgm_vt == _ZTV7OSArray)
+				showarrayint _$arg0 $arg1
+			    else
+				if ($kgm_vt == _ZTV5OSSet)
+				    showsetint _$arg0 $arg1
+				else
+				    if ($kgm_show_object_addrs == 0)
+					printf "`object %p, vt ", $arg1
+					output /a (unsigned) $kgm_vt
+					printf "`"
+				    end
+				end
+			    end
+			end
+		    end
+		end
+	    end
+	end
+    end
+end
+
+define showobject
+    set $kgm_save = $kgm_show_object_addrs
+    set $kgm_show_object_addrs = 1
+    set $kgm_show_object_retain = 1
+    showobjectint _ $arg0
+    set $kgm_show_object_addrs = $kgm_save
+    set $kgm_show_object_retain = 0
+    printf "\n"
+end
+document showobject
+| Show info about an OSObject - its vtable ptr and retain count.
+| If the object is a simple container class, more info will be shown.
+| The following is the syntax:
+|     (gdb) showobject <object address>
+end
+
+define dictget 
+    set $kgm_dictp = (OSDictionary *)$arg0
+    set $kgm_keyp = (const OSSymbol *)$arg1
+    set $kgm_idx = 0
+    set $kgm_result = 0
+    while (($kgm_idx < $kgm_dictp->count) && ($kgm_result == 0))
+	if ($kgm_keyp == $kgm_dictp->dictionary[$kgm_idx].key)
+	    set $kgm_result = $kgm_dictp->dictionary[$kgm_idx].value
+	end
+	set $kgm_idx = $kgm_idx + 1
+    end
+end
+
+
+define showregistryentryrecurse
+    set $kgm_re         = (IOService *)$arg1
+    set $kgm$arg0_stack = (unsigned long long) $arg2
+
+    if ($arg3)
+	set $kgm$arg0_stack = $kgm$arg0_stack | (1ULL << $kgm_reg_depth)
+    else
+	set $kgm$arg0_stack = $kgm$arg0_stack & ~(1ULL << $kgm_reg_depth)
+    end
+
+    dictget $kgm_re->fRegistryTable $kgm_childkey
+    set $kgm$arg0_child_array = (OSArray *) $kgm_result
+
+    if ($kgm$arg0_child_array)
+	set $kgm$arg0_child_count = $kgm$arg0_child_array->count
+    else
+	set $kgm$arg0_child_count = 0
+    end
+
+    if ($kgm$arg0_child_count)
+	set $kgm$arg0_stack = $kgm$arg0_stack | (2ULL << $kgm_reg_depth)
+    else
+	set $kgm$arg0_stack = $kgm$arg0_stack & ~(2ULL << $kgm_reg_depth)
+    end
+
+    indent $kgm_reg_depth $kgm$arg0_stack
+    printf "+-o "
+
+    dictget $kgm_re->fRegistryTable $kgm_namekey
+    if ($kgm_result == 0)
+	dictget $kgm_re->fRegistryTable gIONameKey
+    end
+    if ($kgm_result == 0)
+	dictget $kgm_re->fPropertyTable gIOClassKey
+    end
+
+    if ($kgm_result != 0)
+	printf "%s", ((OSString *)$kgm_result)->string
+    else
+ 	if (((IOService*)$kgm_re)->pm_vars &&  ((IOService*)$kgm_re)->pm_vars->ourName)
+ 	    printf "%s", ((IOService*)$kgm_re)->pm_vars->ourName
+	else
+#	    printf ", guessclass "
+#	    guessclass $kgm_re
+	    printf "??"
+	end
+    end
+
+
+    printf "  <object %p, ", $kgm_re
+    printf "vtable "
+    set $kgm_vt = (unsigned) *(void**) $kgm_re
+    output /a $kgm_vt
+
+    if ($kgm_vt != _ZTV15IORegistryEntry)
+	printf ", "
+	set $kgm_state =  $kgm_re->__state[0]
+	# kIOServiceRegisteredState
+	if (0 == ($kgm_state & 2))
+	    printf "!"
+	end
+	printf "registered, "
+	# kIOServiceMatchedState
+	if (0 == ($kgm_state & 4))
+	    printf "!"
+	end
+	printf "matched, "
+	# kIOServiceInactiveState
+	if ($kgm_state & 1)
+	    printf "in"
+	end
+	printf "active, busy %d, retain count %d", (0xff & $kgm_re->__state[1]), (0xffff & $kgm_re->retainCount)
+    end
+    printf ">\n"
+
+    if ($kgm_show_props)
+	set $kgm_props = $kgm_re->fPropertyTable
+	showregdictionary $kgm_props $kgm$arg0_stack
+    end
+
+    # recurse
+    if ($kgm$arg0_child_count != 0)
+
+	set $kgm_reg_depth = $kgm_reg_depth + 1
+	set $kgm$arg0_child_idx = 0
+
+	while ($kgm$arg0_child_idx < $kgm$arg0_child_count)
+	    set $kgm_re = $kgm$arg0_child_array->array[$kgm$arg0_child_idx++]
+	    set $kgm_more_sib = ($kgm$arg0_child_idx < $kgm$arg0_child_count)
+	    showregistryentryrecurse _$arg0 $kgm_re $kgm$arg0_stack $kgm_more_sib
+	end
+
+	set $kgm_reg_depth = $kgm_reg_depth - 1
+    end
+end
+
+define showregistryentryint
+    set $kgm_namekey   = (OSSymbol *) $kgm_reg_plane[2]
+    set $kgm_childkey  = (OSSymbol *) $kgm_reg_plane[4]
+
+    showregistryentryrecurse _ $arg0 0 0
+end
+
+define showregistry
+    set $kgm_reg_depth  = 0
+    set $kgm_show_props = 0
+    showregistryentryint gRegistryRoot
+end
+document showregistry
+| Show info about all registry entries in the current plane.
+| The following is the syntax:
+|     (gdb) showregistry 
+end
+
+define showregistryprops
+    set $kgm_reg_depth  = 0
+    set $kgm_show_props = 1
+    showregistryentryint gRegistryRoot
+end
+document showregistryprops
+| Show info about all registry entries in the current plane, and their properties.
+| set $kgm_show_object_addrs = 1 and/or set $kgm_show_object_retain = 1 will display
+| more verbose information
+| The following is the syntax:
+|     (gdb) showregistryprops 
+end
+
+define showregistryentry
+    set $kgm_reg_depth  = 0
+    set $kgm_show_props = 1
+    showregistryentryint $arg0
+end
+document showregistryentry
+| Show info about a registry entry; its properties and descendants in the current plane.
+| The following is the syntax:
+|     (gdb) showregistryentry <object address>
+end
+
+define setregistryplane
+    if ($arg0)
+	set $kgm_reg_plane = (void **) $arg0
+    else
+	showobjectint _ gIORegistryPlanes
+	printf "\n"
+    end
+end
+document setregistryplane
+| Set the plane to be used for the iokit registry macros. An argument of zero will 
+| display known planes.
+| The following is the syntax:
+|     (gdb) setregistryplane <plane object address>
+end
+
+define guessclass
+    set $kgm_classidx = 0
+    set $kgm_lookvt = *((void **) $arg0)
+    set $kgm_bestvt = (void *) 0
+    set $kgm_bestidx = 0
+    
+    while $kgm_classidx < sAllClassesDict->count
+	set $kgm_meta = (OSMetaClass *) sAllClassesDict->dictionary[$kgm_classidx].value
+
+	set $kgm_vt = *((void **) $kgm_meta)
+
+	if (($kgm_vt > $kgm_bestvt) && ($kgm_vt < $kgm_lookvt))
+	    set $kgm_bestvt  = $kgm_vt
+	    set $kgm_bestidx = $kgm_classidx
+	end
+	set $kgm_classidx = $kgm_classidx + 1
+    end
+    printf "%s", sAllClassesDict->dictionary[$kgm_bestidx].key->string
+end
+
+define showallclasses
+    set $kgm_classidx = 0
+    while $kgm_classidx < sAllClassesDict->count
+	set $kgm_meta = (OSMetaClass *) sAllClassesDict->dictionary[$kgm_classidx++].value
+	showmetaclass $kgm_meta
+    end
+end
+
 document showallclasses
 | Show the instance counts and ivar size of all OSObject subclasses. See ioclasscount man page for details.
 | The following is the syntax:
@@ -1988,4 +2514,32 @@ document showioalloc
 | Show some accounting of memory allocated by IOKit allocators. See ioalloccount man page for details.
 | The following is the syntax:
 |     (gdb) showioalloc
+end
+
+define readphys
+       set kdp_trans_off = 1
+       x/x $arg0
+       set kdp_trans_off = 0
+end
+
+define readphys64
+	if ($kgm_mtype == 18)
+	   set kdp_src_high32 = ((uint32_t) ($arg0)) >> 32
+	   x/x (uint32_t) (($arg0) & 0x00000000ffffffffUL)
+	   set kdp_src_high32 = 0
+	else
+		echo readphys64 not available on this architecture.\n
+	end
+end
+
+document readphys
+| The argument is interpreted as a physical address, and the word addressed is
+| displayed. While this fails if no physical page exists at the given address,
+| it must be used with caution.
+end
+
+document readphys64
+| The argument is interpreted as a 64-bit physical address, and the word
+| addressed is displayed. While this fails if no physical page exists at the
+| given address, it must be used with caution.
 end

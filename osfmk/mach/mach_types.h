@@ -103,7 +103,7 @@
  * If we are in the kernel, then pick up the kernel definitions for
  * the basic mach types.
  */
-typedef struct task			*task_t;
+typedef struct task			*task_t, *task_name_t;
 typedef struct thread		*thread_t, *thread_act_t;
 typedef struct ipc_space		*ipc_space_t;
 typedef struct host			*host_t;
@@ -145,6 +145,7 @@ __END_DECLS
  * ports at user-space.
  */
 typedef mach_port_t		task_t;
+typedef mach_port_t		task_name_t;
 typedef mach_port_t		thread_t;
 typedef	mach_port_t		thread_act_t;
 typedef mach_port_t		ipc_space_t;
@@ -230,6 +231,7 @@ typedef exception_handler_array_t exception_port_arrary_t;
 
 
 #define TASK_NULL		((task_t) 0)
+#define TASK_NAME_NULL		((task_name_t) 0)
 #define THREAD_NULL		((thread_t) 0)
 #define THR_ACT_NULL 		((thread_act_t) 0)
 #define IPC_SPACE_NULL		((ipc_space_t) 0)

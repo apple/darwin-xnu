@@ -236,5 +236,5 @@ void	ip_rsvp_force_done(struct socket *);
 
 void	in_delayed_cksum(struct mbuf *m);
 
-#endif KERNEL_PRIVATE
-#endif !_NETINET_IP_VAR_H_
+#endif /* KERNEL_PRIVATE */
+#endif /* !_NETINET_IP_VAR_H_ */

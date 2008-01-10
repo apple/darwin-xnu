@@ -947,20 +947,21 @@ static OSErr BlockAllocateKnown(
 	
 	// sanity check
 	if ((*actualStartBlock + *actualNumBlocks) > vcb->totalBlocks)
-	{	
+	{
 		printf("BlockAllocateKnown: allocation overflow on \"%s\"", vcb->vcbVN);
 		*actualStartBlock = 0;
 		*actualNumBlocks = 0;
 		err = EIO;
 	}
+
 	else
 	{
 		//
 		//	Now mark the found extent in the bitmap
 		//
-		err = BlockMarkAllocated(vcb, *actualStartBlock, *actualNumBlocks);
+	err = BlockMarkAllocated(vcb, *actualStartBlock, *actualNumBlocks);
 	}
-	return err;
+	return err;	
 }
 
 
@@ -1172,7 +1173,7 @@ OSErr BlockMarkFree(
 	    printf("hfs: block mark free: trying to free non-existent blocks (%d %d %d)\n",
 		  startingBlock, numBlocks, vcb->totalBlocks);
 	    err = EIO;
-	    goto Exit;	
+	    goto Exit;
 	}
 
 

@@ -541,7 +541,6 @@ static int RXConnection(gref, spPtr, f, len, addr, dsoc)
     gbuf_t *mp;
     ADSP_FRAMEPtr adspp;
     ADSP_OPEN_DATAPtr adspop;
-    int s;
 
     op = (ADSP_OPEN_DATAPtr)&f->data[0]; /* Point to Open-Connection parms */
     len -= ADSP_FRAME_LEN;
@@ -567,7 +566,7 @@ static int RXConnection(gref, spPtr, f, len, addr, dsoc)
 	adspop = (ADSP_OPEN_DATAPtr)gbuf_wptr(mp);
 	gbuf_winc(mp,ADSP_OPEN_FRAME_LEN);
 	UAS_UAS(adspop->dstCID, f->CID);
-	UAS_ASSIGN(adspop->version, 0x100);
+	UAS_ASSIGN_HTON(adspop->version, 0x100);
 	adsp_sendddp(0, mp, DDPL_FRAME_LEN + ADSP_FRAME_LEN + 
 		   ADSP_OPEN_FRAME_LEN, &addr, DDP_ADSP);
 
@@ -576,8 +575,8 @@ static int RXConnection(gref, spPtr, f, len, addr, dsoc)
     m.addr = addr;
     m.socket = dsoc;
     m.descriptor = f->descriptor;
-    m.srcCID = UAS_VALUE(f->CID);
-    m.dstCID = UAS_VALUE(op->dstCID);	/* On even-byte boundry */
+    m.srcCID = UAS_VALUE_NTOH(f->CID);
+    m.dstCID = UAS_VALUE_NTOH(op->dstCID);	/* On even-byte boundry */
     m.idx = ((f->descriptor & ADSP_CONTROL_MASK) - 1) * 4;
                                           
     /*
@@ -598,7 +597,6 @@ static int RXConnection(gref, spPtr, f, len, addr, dsoc)
 				  (ProcPtr)MatchListener)) == 0)
 	    return 1;
 
-	ATDISABLE(s, sp->lock);
 	p = (struct adspcmd *)&sp->opb;
 	while (n = (struct adspcmd *)p->qLink) /* Hunt down list of listens */
 	{
@@ -615,11 +613,10 @@ static int RXConnection(gref, spPtr, f, len, addr, dsoc)
 		p->qLink = n->qLink; /* Unlink this param block */
 		n->u.openParams.remoteCID = m.srcCID;
 		*((AddrUnionPtr)&n->u.openParams.remoteAddress)	= addr;
-		n->u.openParams.sendSeq	= netdw(UAL_VALUE(f->pktNextRecvSeq));
-		n->u.openParams.sendWindow = netw(UAS_VALUE(f->pktRecvWdw));
-		n->u.openParams.attnSendSeq = netdw(UAL_VALUE(op->pktAttnRecvSeq));
+		n->u.openParams.sendSeq	= UAL_VALUE_NTOH(f->pktNextRecvSeq);
+		n->u.openParams.sendWindow = UAS_VALUE_NTOH(f->pktRecvWdw);
+		n->u.openParams.attnSendSeq = UAL_VALUE_NTOH(op->pktAttnRecvSeq);
 		n->ioResult = 0;
-		ATENABLE(s, sp->lock);
 		completepb(sp, n); /* complete copy of request */
 				/* complete(n, 0); */
 		return 0;
@@ -629,29 +626,26 @@ static int RXConnection(gref, spPtr, f, len, addr, dsoc)
 			
 	}			/* while */
 		
-	ATENABLE(s, sp->lock);
 	return 1;
     }
 	
     *spPtr = sp;		/* Save ptr to stream we just found */
 	
-	ATDISABLE(s, sp->lock);
     sp->openState = m.t->openState; /* Move to next state (may be same) */
     sp->state = m.t->state;	/* Move to next state (may be same) */
 
     if (m.t->action & A_SAVEPARMS) { /* Need to Save open-conn parms */
-	sp->firstRtmtSeq = sp->sendSeq = netdw(UAL_VALUE(f->pktNextRecvSeq));
-	sp->sendWdwSeq = netdw(UAL_VALUE(f->pktNextRecvSeq)) + netw(UAS_VALUE(f->pktRecvWdw)) - 1;
-	sp->attnSendSeq = netdw(UAL_VALUE(op->pktAttnRecvSeq)); /* on even boundry */
+	sp->firstRtmtSeq = sp->sendSeq = UAL_VALUE_NTOH(f->pktNextRecvSeq);
+	sp->sendWdwSeq = UAL_VALUE_NTOH(f->pktNextRecvSeq) + UAS_VALUE_NTOH(f->pktRecvWdw) - 1;
+	sp->attnSendSeq = UAL_VALUE_NTOH(op->pktAttnRecvSeq); /* on even boundry */
 
 		
-	sp->remCID = UAS_VALUE(f->CID);	/* Save Source CID as RemCID */
+	sp->remCID = UAS_VALUE_NTOH(f->CID);	/* Save Source CID as RemCID */
 	UAS_UAS(sp->of.dstCID, f->CID);	/* Save CID in open ctl packet */
 		
 	sp->remoteAddress = addr; /* Save his address */
 
     }
-	ATENABLE(s, sp->lock);
 
     if (m.t->action & A_DENY) {	/* We've been denied ! */
 	DoClose(sp, errOpenDenied, -1);
@@ -725,7 +719,6 @@ int adspPacket(gref, mp)
     int len;
     AddrUnion a;
     int dsoc;
-    int s;
     register DDPX_FRAME *ddp;	/* DDP frame pointer */
     register ADSP_FRAMEPtr f;	/* Frame */
     CCBPtr sp;
@@ -737,7 +730,7 @@ int adspPacket(gref, mp)
 	return -1;
     f = (ADSP_FRAMEPtr)(bp + DDPL_FRAME_LEN);
 
-    len = UAS_VALUE(ddp->ddpx_length) & 0x3ff; /* (ten bits of length) */
+    len = UAS_VALUE_NTOH(ddp->ddpx_length) & 0x3ff; /* (ten bits of length) */
     len -= DDPL_FRAME_LEN;
     if (len < (sizeof(ADSP_FRAME) - 1))	/* Packet too small */
 	return -1;		/* mark the failure */
@@ -799,12 +792,10 @@ int adspPacket(gref, mp)
 		/* This pkt may also ack some data we sent */
 		CheckRecvSeq(sp, f); 
 		RemoveTimerElem(&adspGlobal.fastTimers, &sp->RetryTimer);
-		ATDISABLE(s, sp->lock);
 		sp->sendSeq = sp->firstRtmtSeq;
 		sp->pktSendCnt = 0;
 		sp->waitingAck = 0;
 		sp->callSend = 1;
-		ATENABLE(s, sp->lock);
 	    } else
 		goto ignore;
 	    break;

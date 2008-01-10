@@ -234,7 +234,7 @@ void OSDictionary::free()
     (void) super::setOptions(0, kImmutable);
     flushCollection();
     if (dictionary) {
-        kfree((vm_offset_t)dictionary, capacity * sizeof(dictEntry));
+        kfree(dictionary, capacity * sizeof(dictEntry));
         ACCUMSIZE( -(capacity * sizeof(dictEntry)) );
     }
 
@@ -277,7 +277,7 @@ unsigned int OSDictionary::ensureCapacity(unsigned int newCapacity)
         bzero(&newDict[capacity], newSize - oldSize);
 
         ACCUMSIZE(newSize - oldSize);
-        kfree((vm_offset_t)dictionary, oldSize);
+        kfree(dictionary, oldSize);
 
         dictionary = newDict;
         capacity = newCapacity;

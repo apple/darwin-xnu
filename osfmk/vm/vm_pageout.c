@@ -97,9 +97,6 @@
 /*
  * ENCRYPTED SWAP:
  */
-#ifdef __ppc__
-#include <ppc/mappings.h>
-#endif /* __ppc__ */
 #include <../bsd/crypto/aes/aes.h>
 
 extern ipc_port_t	memory_manager_default;
@@ -1063,9 +1060,6 @@ struct flow_control {
         mach_timespec_t	ts;
 };
 
-extern kern_return_t	sysclk_gettime(mach_timespec_t *);
-
-
 void
 vm_pageout_scan(void)
 {
@@ -1351,7 +1345,9 @@ done_with_activepage:
 reset_deadlock_timer:
 			        ts.tv_sec = vm_pageout_deadlock_wait / 1000;
 				ts.tv_nsec = (vm_pageout_deadlock_wait % 1000) * 1000 * NSEC_PER_USEC;
-				sysclk_gettime(&flow_control.ts);
+				clock_get_system_nanotime(
+					&flow_control.ts.tv_sec,
+					(uint32_t *) &flow_control.ts.tv_nsec);
 				ADD_MACH_TIMESPEC(&flow_control.ts, &ts);
 				
 				flow_control.state = FCS_DELAYED;
@@ -1360,7 +1356,9 @@ reset_deadlock_timer:
 				break;
 					
 			case FCS_DELAYED:
-			        sysclk_gettime(&ts);
+			        clock_get_system_nanotime(
+					&ts.tv_sec,
+					(uint32_t *) &ts.tv_nsec);
 
 				if (CMP_MACH_TIMESPEC(&ts, &flow_control.ts) >= 0) {
 				        /*
@@ -1933,7 +1931,9 @@ vm_pageout_iothread_continue(struct vm_pageout_queue *q)
 			    */
 
 			   if (!object->pager_initialized)
-			           vm_object_collapse(object, (vm_object_offset_t)0);
+			           vm_object_collapse(object,
+						      (vm_object_offset_t) 0,
+						      TRUE);
 			   if (!object->pager_initialized)
 			           vm_object_pager_create(object);
 			   if (!object->pager_initialized) {
@@ -2183,7 +2183,6 @@ vm_pageout(void)
 
 	vm_object_reaper_init();
 
-
 	vm_pageout_continue();
 	/*NOTREACHED*/
 }
@@ -2215,6 +2214,7 @@ upl_create(
 	upl->size = 0;
 	upl->map_object = NULL;
 	upl->ref_count = 1;
+	upl->highest_page = 0;
 	upl_lock_init(upl);
 #ifdef UPL_DEBUG
 	upl->ubc_alias1 = 0;
@@ -2393,7 +2393,7 @@ vm_object_upl_request(
 			*page_list_count = MAX_UPL_TRANSFER;
 
 	if((!object->internal) && (object->paging_offset != 0))
-		panic("vm_object_upl_request: vnode object with non-zero paging offset\n");
+		panic("vm_object_upl_request: external object with non-zero paging offset\n");
 
 	if((cntrl_flags & UPL_COPYOUT_FROM) && (upl_ptr == NULL)) {
 		return KERN_SUCCESS;
@@ -2501,6 +2501,7 @@ vm_object_upl_request(
 				   (offset + object->shadow_offset)>>PAGE_SHIFT;
 				user_page_list[0].device = TRUE;
 			}
+			upl->highest_page = (offset + object->shadow_offset + size - 1)>>PAGE_SHIFT;
 
 			if(page_list_count != NULL) {
 				if (upl->flags & UPL_INTERNAL) {
@@ -2812,6 +2813,9 @@ check_busy:
 						vm_page_wire(dst_page);
 					}
 				}
+
+				if (dst_page->phys_page > upl->highest_page)
+					upl->highest_page = dst_page->phys_page;
 
 				if(user_page_list) {
 					user_page_list[entry].phys_addr
@@ -3125,6 +3129,10 @@ check_busy:
 				dst_page->precious = 
 					(cntrl_flags & UPL_PRECIOUS) 
 							? TRUE : FALSE;
+
+				if (dst_page->phys_page > upl->highest_page)
+					upl->highest_page = dst_page->phys_page;
+
 				if(user_page_list) {
 					user_page_list[entry].phys_addr
 						= dst_page->phys_page;
@@ -3233,7 +3241,7 @@ vm_fault_list_request(
 	int			page_list_count,
 	int			cntrl_flags)
 {
-	int			local_list_count;
+	unsigned int		local_list_count;
 	upl_page_info_t		*user_page_list;
 	kern_return_t		kr;
 
@@ -4692,6 +4700,21 @@ vm_object_iopl_request(
 		 */
 		return KERN_INVALID_VALUE;
 	}
+	if (vm_lopage_poolsize == 0)
+	        cntrl_flags &= ~UPL_NEED_32BIT_ADDR;
+
+	if (cntrl_flags & UPL_NEED_32BIT_ADDR) {
+	        if ( (cntrl_flags & (UPL_SET_IO_WIRE | UPL_SET_LITE)) != (UPL_SET_IO_WIRE | UPL_SET_LITE))
+		        return KERN_INVALID_VALUE;
+
+		if (object->phys_contiguous) {
+		        if ((offset + object->shadow_offset) >= (vm_object_offset_t)max_valid_dma_address)
+			        return KERN_INVALID_ADDRESS;
+			  
+		        if (((offset + object->shadow_offset) + size) >= (vm_object_offset_t)max_valid_dma_address)
+			        return KERN_INVALID_ADDRESS;
+		}
+	}
 
 	if (cntrl_flags & UPL_ENCRYPT) {
 		/*
@@ -4724,7 +4747,7 @@ vm_object_iopl_request(
 		return KERN_INVALID_ARGUMENT;
 
 	if((!object->internal) && (object->paging_offset != 0))
-		panic("vm_object_upl_request: vnode object with non-zero paging offset\n");
+		panic("vm_object_upl_request: external object with non-zero paging offset\n");
 
 	if(object->phys_contiguous) {
 		/* No paging operations are possible against this memory */
@@ -4792,6 +4815,7 @@ vm_object_iopl_request(
 				  (offset + object->shadow_offset)>>PAGE_SHIFT;
 				user_page_list[0].device = TRUE;
 			}
+			upl->highest_page = (offset + object->shadow_offset + size - 1)>>PAGE_SHIFT;
 
 			if(page_list_count != NULL) {
 				if (upl->flags & UPL_INTERNAL) {
@@ -4961,23 +4985,74 @@ vm_object_iopl_request(
 				ret = (error_code ? error_code:
 					KERN_MEMORY_ERROR);
 				vm_object_lock(object);
-				for(; offset < dst_offset;
-						offset += PAGE_SIZE) {
-				   dst_page = vm_page_lookup(
-						object, offset);
-				   if(dst_page == VM_PAGE_NULL)
-					panic("vm_object_iopl_request: Wired pages missing. \n");
-				   vm_page_lock_queues();
-				   vm_page_unwire(dst_page);
-				   vm_page_unlock_queues();
-				   VM_STAT(reactivations++);
-				}
-				vm_object_unlock(object);
-				upl_destroy(upl);
-			   	return ret;
+
+				goto return_err;
 			}
 		   } while ((result != VM_FAULT_SUCCESS) 
 				|| (result == VM_FAULT_INTERRUPTED));
+		}
+
+		if ( (cntrl_flags & UPL_NEED_32BIT_ADDR) &&
+		     dst_page->phys_page >= (max_valid_dma_address >> PAGE_SHIFT) ) {
+		        vm_page_t	low_page;
+			int 		refmod;
+
+			/*
+			 * support devices that can't DMA above 32 bits
+			 * by substituting pages from a pool of low address
+			 * memory for any pages we find above the 4G mark
+			 * can't substitute if the page is already wired because
+			 * we don't know whether that physical address has been
+			 * handed out to some other 64 bit capable DMA device to use
+			 */
+		        if (dst_page->wire_count) {
+			        ret = KERN_PROTECTION_FAILURE;
+				goto return_err;
+			}
+		        if (delayed_unlock) {
+			        delayed_unlock = 0;
+			        vm_page_unlock_queues();
+			}
+			low_page = vm_page_grablo();
+
+			if (low_page == VM_PAGE_NULL) {
+			        ret = KERN_RESOURCE_SHORTAGE;
+				goto return_err;
+			}
+			/*
+			 * from here until the vm_page_replace completes
+			 * we musn't drop the object lock... we don't
+			 * want anyone refaulting this page in and using
+			 * it after we disconnect it... we want the fault
+			 * to find the new page being substituted.
+			 */
+			refmod = pmap_disconnect(dst_page->phys_page);
+
+			vm_page_copy(dst_page, low_page);
+			
+			low_page->reference = dst_page->reference;
+			low_page->dirty     = dst_page->dirty;
+
+			if (refmod & VM_MEM_REFERENCED)
+			        low_page->reference = TRUE;
+			if (refmod & VM_MEM_MODIFIED)
+			        low_page->dirty = TRUE;
+
+		        vm_page_lock_queues();
+			vm_page_replace(low_page, object, dst_offset);
+			/*
+			 * keep the queue lock since we're going to 
+			 * need it immediately
+			 */
+			delayed_unlock = 1;
+
+			dst_page = low_page;
+			/*
+			 * vm_page_grablo returned the page marked
+			 * BUSY... we don't need a PAGE_WAKEUP_DONE
+			 * here, because we've never dropped the object lock
+			 */
+			dst_page->busy = FALSE;
 		}
 		if (delayed_unlock == 0)
 		        vm_page_lock_queues();
@@ -5023,6 +5098,9 @@ vm_object_iopl_request(
 	   		if (!(cntrl_flags & UPL_COPYOUT_FROM))
 				dst_page->dirty = TRUE;
 			alias_page = NULL;
+
+			if (dst_page->phys_page > upl->highest_page)
+				upl->highest_page = dst_page->phys_page;
 
 			if (user_page_list) {
 				user_page_list[entry].phys_addr
@@ -5076,7 +5154,29 @@ vm_object_iopl_request(
 	}
 
 	return KERN_SUCCESS;
+
+
+return_err:
+	if (delayed_unlock)
+	        vm_page_unlock_queues();
+
+	for (; offset < dst_offset; offset += PAGE_SIZE) {
+	        dst_page = vm_page_lookup(object, offset);
+
+		if (dst_page == VM_PAGE_NULL)
+		        panic("vm_object_iopl_request: Wired pages missing. \n");
+		vm_page_lock_queues();
+		vm_page_unwire(dst_page);
+		vm_page_unlock_queues();
+		VM_STAT(reactivations++);
+	}
+	vm_object_paging_end(object);
+	vm_object_unlock(object);
+	upl_destroy(upl);
+
+	return ret;
 }
+
 
 kern_return_t
 upl_transpose(
@@ -5225,16 +5325,12 @@ vm_paging_map_object(
 	vm_map_offset_t		page_map_offset;
 	vm_map_size_t		map_size;
 	vm_object_offset_t	object_offset;
-#ifdef __ppc__
 	int			i;
 	vm_map_entry_t		map_entry;
-#endif /* __ppc__ */
 
 
-#ifdef __ppc__
 	if (page != VM_PAGE_NULL && *size == PAGE_SIZE) {
 		/*
-		 * Optimization for the PowerPC.
 		 * Use one of the pre-allocated kernel virtual addresses
 		 * and just enter the VM page in the kernel address space
 		 * at that virtual address.
@@ -5252,6 +5348,7 @@ vm_paging_map_object(
 			kr = vm_map_find_space(kernel_map,
 					       &page_map_offset,
 					       VM_PAGING_NUM_PAGES * PAGE_SIZE,
+					       0,
 					       0,
 					       &map_entry);
 			if (kr != KERN_SUCCESS) {
@@ -5304,14 +5401,17 @@ vm_paging_map_object(
 			}
 			vm_paging_page_inuse[i] = TRUE;
 			simple_unlock(&vm_paging_lock);
-			pmap_map_block(kernel_pmap,
-				       page_map_offset,
-				       page->phys_page,
-				       1,						/* Size is number of 4k pages */
-				       VM_PROT_DEFAULT,
-				       ((int) page->object->wimg_bits &
-					VM_WIMG_MASK),
-				       0);
+			if (page->no_isync == TRUE) {
+				pmap_sync_page_data_phys(page->phys_page);
+			}
+			assert(pmap_verify_free(page->phys_page));
+			PMAP_ENTER(kernel_pmap,
+				   page_map_offset,
+				   page,
+				   VM_PROT_DEFAULT,
+				   ((int) page->object->wimg_bits &
+				    VM_WIMG_MASK),
+				   TRUE);
 			vm_paging_objects_mapped++;
 			vm_paging_pages_mapped++; 
 			*address = page_map_offset;
@@ -5330,7 +5430,6 @@ vm_paging_map_object(
 		simple_unlock(&vm_paging_lock);
 		vm_object_lock(object);
 	}
-#endif /* __ppc__ */
 
 	object_offset = vm_object_trunc_page(offset);
 	map_size = vm_map_round_page(*size);
@@ -5388,12 +5487,13 @@ vm_paging_map_object(
 		}
 		cache_attr = ((unsigned int) object->wimg_bits) & VM_WIMG_MASK;
 
+		assert(pmap_verify_free(page->phys_page));
 		PMAP_ENTER(kernel_pmap,
 			   *address + page_map_offset,
 			   page,
 			   VM_PROT_DEFAULT,
 			   cache_attr,
-			   FALSE);
+			   TRUE);
 	}
 			   
 	vm_paging_objects_mapped_slow++;
@@ -5418,11 +5518,9 @@ vm_paging_unmap_object(
 	vm_map_offset_t	end)
 {
 	kern_return_t	kr;
-#ifdef __ppc__
 	int		i;
-#endif /* __ppc__ */
 
-	if ((vm_paging_base_address != 0) ||
+	if ((vm_paging_base_address == 0) ||
 	    (start < vm_paging_base_address) ||
 	    (end > (vm_paging_base_address
 		    + (VM_PAGING_NUM_PAGES * PAGE_SIZE)))) {
@@ -5445,17 +5543,15 @@ vm_paging_unmap_object(
 		 * pre-allocated pool.  Put it back in the pool
 		 * for next time.
 		 */
-#ifdef __ppc__
 		assert(end - start == PAGE_SIZE);
 		i = (start - vm_paging_base_address) >> PAGE_SHIFT;
 
 		/* undo the pmap mapping */
-		mapping_remove(kernel_pmap, start);
+		pmap_remove(kernel_pmap, start, end);
 
 		simple_lock(&vm_paging_lock);
 		vm_paging_page_inuse[i] = FALSE;
 		simple_unlock(&vm_paging_lock);
-#endif /* __ppc__ */
 	}
 }
 
@@ -5847,7 +5943,7 @@ vm_page_decrypt(
 	 * be part of a DMA transfer from a driver that expects the memory to
 	 * be coherent at this point, we have to flush the data cache.
 	 */
-	pmap_sync_page_data_phys(page->phys_page);
+	pmap_sync_page_attributes_phys(page->phys_page);
 	/*
 	 * Since the page is not mapped yet, some code might assume that it
 	 * doesn't need to invalidate the instruction cache when writing to
@@ -5971,17 +6067,15 @@ upl_get_internal_pagelist_offset(void)
 }
 
 void
-upl_set_dirty(
-	upl_t	upl)
-{
-	upl->flags |= UPL_CLEAR_DIRTY;
-}
-
-void
 upl_clear_dirty(
-	upl_t	upl)
+	upl_t		upl,
+	boolean_t 	value)
 {
-	upl->flags &= ~UPL_CLEAR_DIRTY;
+	if (value) {
+		upl->flags |= UPL_CLEAR_DIRTY;
+	} else {
+		upl->flags &= ~UPL_CLEAR_DIRTY;
+	}
 }
 
 
@@ -6075,6 +6169,12 @@ vm_countdirtypages(void)
 
 }
 #endif /* MACH_BSD */
+
+ppnum_t upl_get_highest_page(
+	upl_t			upl)
+{
+	return upl->highest_page;
+}
 
 #ifdef UPL_DEBUG
 kern_return_t  upl_ubc_alias_set(upl_t upl, unsigned int alias1, unsigned int alias2)

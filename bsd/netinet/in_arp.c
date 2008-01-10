@@ -162,11 +162,11 @@ static void
 arptimer(
 	__unused void *ignored_arg)
 {
-	struct llinfo_arp *la = llinfo_arp.lh_first;
-	struct llinfo_arp *ola;
+	struct llinfo_arp *la, *ola;
 	struct timeval timenow;
 
 	lck_mtx_lock(rt_mtx);
+	la = llinfo_arp.lh_first;
 	getmicrotime(&timenow);
 	while ((ola = la) != 0) {
 		struct rtentry *rt = la->la_rt;

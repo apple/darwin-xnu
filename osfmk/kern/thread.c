@@ -774,11 +774,9 @@ kernel_thread_create(
 	pset_unlock(task->processor_set);
 	task_unlock(task);
 
-#if !defined(i386)
 	stack_alloc(thread);
 	assert(thread->kernel_stack != 0);
 	thread->reserved_stack = thread->kernel_stack;
-#endif /* !defined(i386) */
 
 	thread->parameter = parameter;
 
@@ -1134,12 +1132,10 @@ funnel_alloc(
 
 	if (funnel_lck_grp == LCK_GRP_NULL) {
 		funnel_lck_grp_attr = lck_grp_attr_alloc_init();
-		//lck_grp_attr_setstat(funnel_lck_grp_attr);
 
 		funnel_lck_grp = lck_grp_alloc_init("Funnel",  funnel_lck_grp_attr);
 
 		funnel_lck_attr = lck_attr_alloc_init();
-		//lck_attr_setdebug(funnel_lck_attr);
 	}
 	if ((fnl = (funnel_t *)kalloc(sizeof(funnel_t))) != 0){
 		bzero((void *)fnl, sizeof(funnel_t));

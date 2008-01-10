@@ -371,5 +371,4 @@ struct ip_old_fw {
  */
 #define IP_OLD_FW_TCPF_ESTAB	0x40
 
-#endif
 

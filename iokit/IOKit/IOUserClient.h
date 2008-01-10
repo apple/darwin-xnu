@@ -102,7 +102,10 @@ protected:
 
 public:
     OSSet * mappings;
-    void  * __reserved[8];
+    UInt8   sharedInstance;
+
+    UInt8   __reservedA[3];
+    void  * __reserved[7];
 
 private:
     OSMetaClassDeclareReservedUnused(IOUserClient, 0);
@@ -137,6 +140,10 @@ public:
     static IOReturn clientHasPrivilege( void * securityToken,
                                         const char * privilegeName );
 
+#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
+    virtual bool init();
+    virtual bool init( OSDictionary * dictionary );
+#endif
     // Currently ignores the all args, just passes up to IOService::init()
     virtual bool initWithTask(
                     task_t owningTask, void * securityToken, UInt32 type,

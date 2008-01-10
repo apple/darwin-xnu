@@ -34,7 +34,6 @@
 #include <sys/kernel.h>
 #include <sys/kauth.h>
 
-#include <architecture/byte_order.h>
 #include <ufs/ufs/dinode.h>
 #include <ufs/ffs/fs.h>
 #include <sys/mount_internal.h>

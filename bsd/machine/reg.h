@@ -25,7 +25,7 @@
 
 #if defined (__ppc__) || defined (__ppc64__)
 #include "ppc/reg.h"
-#elif defined (__i386__)
+#elif defined (__i386__) || defined(__x86_64__)
 #include "i386/reg.h"
 #else
 #error architecture not supported

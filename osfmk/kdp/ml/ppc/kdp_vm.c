@@ -51,6 +51,7 @@
 pmap_t kdp_pmap=0;
 boolean_t kdp_trans_off=0;
 boolean_t kdp_read_io  =0;
+uint32_t kdp_src_high32 = 0;
 
 unsigned kdp_vm_read( caddr_t, caddr_t, unsigned);
 unsigned kdp_vm_write( caddr_t, caddr_t, unsigned);
@@ -60,42 +61,18 @@ extern int sectSizeTEXT, sectSizeDATA, sectSizeLINK, sectSizePRELINK;
 
 /* XXX prototypes which should be in a commmon header file */
 addr64_t	kdp_vtophys(pmap_t pmap, addr64_t va);
-int	kern_dump(void);
-int	kdp_dump_trap(int type, struct savearea *regs);
-/*
- * XXX the following prototype doesn't match the declaration because the
- * XXX actual declaration is wrong.
- */
-extern int	kdp_send_panic_packets(unsigned int request, char *corename,
-				unsigned int length, caddr_t txstart);
-
-
-
+int		kern_dump(void);
+int		kdp_dump_trap(int type, struct savearea *regs);
 
 typedef struct {
   int	flavor;			/* the number for this flavor */
   int	count;			/* count of ints in this flavor */
 } mythread_state_flavor_t;
 
-/* These will need to be uncommented and completed
- *if we support other architectures 
- */
-
-/*
-#if defined (__ppc__)
-*/
 static mythread_state_flavor_t thread_flavor_array[] = {
   {PPC_THREAD_STATE , PPC_THREAD_STATE_COUNT},
 };
-/*
-#elif defined (__i386__)
-mythread_state_flavor_t thread_flavor_array [] = { 
-  {i386_THREAD_STATE, i386_THREAD_STATE_COUNT},
-};
-#else
-#error architecture not supported
-#endif
-*/
+
 static int kdp_mynum_flavors = 1;
 static int MAX_TSTATE_FLAVORS = 1;
 
@@ -109,8 +86,6 @@ typedef struct {
 unsigned int not_in_kdp = 1; /* Cleared when we begin to access vm functions in kdp */
 
 char command_buffer[512];
-
-// XXX static struct vm_object test_object;
 
 /*
  *
@@ -150,13 +125,11 @@ unsigned kdp_vm_read(
     kprintf("kdp_vm_read1: src %x dst %x len %x - %08X %08X\n", src, dst, len, ((unsigned long *)src)[0], ((unsigned long *)src)[1]);
 #endif
 
-	cur_virt_src = (addr64_t)((unsigned int)src);
+	cur_virt_src = (addr64_t)((unsigned int)src | (((uint64_t)kdp_src_high32) << 32));
 	cur_virt_dst = (addr64_t)((unsigned int)dst);
 	
 	if (kdp_trans_off) {
-		
-		
-		resid = len;								/* Get the length to copy */
+		resid = len;	/* Get the length to copy */
 
 		while (resid != 0) {
 
@@ -317,7 +290,7 @@ kdp_dump_trap(
 	      __unused struct savearea *regs)
 {
   printf ("An unexpected trap (type %d) occurred during the kernel dump, terminating.\n", type);
-  kdp_send_panic_pkt (KDP_EOF, NULL, 0, ((void *) 0));
+  kdp_send_crashdump_pkt (KDP_EOF, NULL, 0, ((void *) 0));
   abort_panic_transfer();
   kdp_flag &= ~KDP_PANIC_DUMP_ENABLED;
   kdp_flag &= ~PANIC_CORE_ON_NMI;
@@ -417,25 +390,25 @@ kern_dump(void)
    * to begin data transmission 
    */
 
-   if ((panic_error = kdp_send_panic_pkt (KDP_SEEK, NULL, sizeof(nfoffset) , &nfoffset)) < 0) { 
-     printf ("kdp_send_panic_pkt failed with error %d\n", panic_error); 
+   if ((panic_error = kdp_send_crashdump_pkt (KDP_SEEK, NULL, sizeof(nfoffset) , &nfoffset)) < 0) { 
+     printf ("kdp_send_crashdump_pkt failed with error %d\n", panic_error); 
      return -1; 
    } 
 
-   if ((panic_error = kdp_send_panic_packets (KDP_DATA, NULL, sizeof(struct mach_header), (caddr_t) mh) < 0)) {
-     printf ("kdp_send_panic_packets failed with error %d\n", panic_error);
+   if ((panic_error = kdp_send_crashdump_data (KDP_DATA, NULL, sizeof(struct mach_header), (caddr_t) mh) < 0)) {
+     printf ("kdp_send_crashdump_data failed with error %d\n", panic_error);
      return -1 ;
    }
 
-   if ((panic_error = kdp_send_panic_pkt (KDP_SEEK, NULL, sizeof(foffset) , &foffset) < 0)) {
-     printf ("kdp_send_panic_pkt failed with error %d\n", panic_error);
+   if ((panic_error = kdp_send_crashdump_pkt (KDP_SEEK, NULL, sizeof(foffset) , &foffset) < 0)) {
+     printf ("kdp_send_crashdump_pkt failed with error %d\n", panic_error);
      return (-1);
    }
   printf ("Transmitting kernel state, please wait: ");
 
   while ((segment_count > 0) || (kret == KERN_SUCCESS)){
     /* Check if we've transmitted all the kernel sections */
-    if (num_sects_txed == mach_section_count-1) {
+    if (num_sects_txed == mach_section_count) {
       
     while (1) {
 
@@ -519,13 +492,13 @@ kern_dump(void)
     sc->initprot = prot;
     sc->nsects = 0;
 
-    if ((panic_error = kdp_send_panic_pkt (KDP_SEEK, NULL, sizeof(hoffset) , &hoffset)) < 0) { 
-	printf ("kdp_send_panic_pkt failed with error %d\n", panic_error); 
+    if ((panic_error = kdp_send_crashdump_pkt (KDP_SEEK, NULL, sizeof(hoffset) , &hoffset)) < 0) { 
+	printf ("kdp_send_crashdump_pkt failed with error %d\n", panic_error); 
 	return -1; 
       } 
     
-    if ((panic_error = kdp_send_panic_packets (KDP_DATA, NULL, sizeof(struct segment_command) , (caddr_t) sc)) < 0) {
-	printf ("kdp_send_panic_packets failed with error %d\n", panic_error);
+    if ((panic_error = kdp_send_crashdump_data (KDP_DATA, NULL, sizeof(struct segment_command) , (caddr_t) sc)) < 0) {
+	printf ("kdp_send_crashdump_data failed with error %d\n", panic_error);
 	return -1 ;
       }
 
@@ -535,15 +508,15 @@ kern_dump(void)
 
     if ((vbr.user_tag != VM_MEMORY_IOKIT)) {
       
-      if ((panic_error = kdp_send_panic_pkt (KDP_SEEK, NULL, sizeof(foffset) , &foffset)) < 0) {
-	  printf ("kdp_send_panic_pkt failed with error %d\n", panic_error);
+      if ((panic_error = kdp_send_crashdump_pkt (KDP_SEEK, NULL, sizeof(foffset) , &foffset)) < 0) {
+	  printf ("kdp_send_crashdump_pkt failed with error %d\n", panic_error);
 	  return (-1);
 	}
 
       txstart = vmoffset;
 
-      if ((panic_error = kdp_send_panic_packets (KDP_DATA, NULL, size, (caddr_t) txstart)) < 0)	{
-	  printf ("kdp_send_panic_packets failed with error %d\n", panic_error);
+      if ((panic_error = kdp_send_crashdump_data (KDP_DATA, NULL, size, (caddr_t) txstart)) < 0)	{
+	  printf ("kdp_send_crashdump_data failed with error %d\n", panic_error);
 	  return -1 ;
 	}
     }
@@ -568,20 +541,20 @@ kern_dump(void)
    */
   kern_collectth_state (current_thread(), &tir1);
 
-  if ((panic_error = kdp_send_panic_pkt (KDP_SEEK, NULL, sizeof(hoffset) , &hoffset)) < 0) { 
-      printf ("kdp_send_panic_pkt failed with error %d\n", panic_error); 
+  if ((panic_error = kdp_send_crashdump_pkt(KDP_SEEK, NULL, sizeof(hoffset) , &hoffset)) < 0) { 
+      printf ("kdp_send_crashdump_pkt failed with error %d\n", panic_error); 
       return -1; 
     } 
   
-    if ((panic_error = kdp_send_panic_packets (KDP_DATA, NULL, tir1.hoffset , (caddr_t) header)) < 0) {
-	printf ("kdp_send_panic_packets failed with error %d\n", panic_error);
+    if ((panic_error = kdp_send_crashdump_data(KDP_DATA, NULL, tir1.hoffset , (caddr_t) header)) < 0) {
+	printf ("kdp_send_crashdump_data failed with error %d\n", panic_error);
 	return -1 ;
       }
     
     /* last packet */
-    if ((panic_error = kdp_send_panic_pkt (KDP_EOF, NULL, 0, ((void *) 0))) < 0)
+    if ((panic_error = kdp_send_crashdump_pkt(KDP_EOF, NULL, 0, ((void *) 0))) < 0)
       {
-	printf ("kdp_send_panic_pkt failed with error %d\n", panic_error);
+	printf ("kdp_send_crashdump_pkt failed with error %d\n", panic_error);
 	return (-1) ;
       }
     

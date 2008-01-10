@@ -154,7 +154,6 @@ void
 nfs_nbinit(void)
 {
 	nfs_buf_lck_grp_attr = lck_grp_attr_alloc_init();
-	lck_grp_attr_setstat(nfs_buf_lck_grp_attr);
 	nfs_buf_lck_grp = lck_grp_alloc_init("nfs_buf", nfs_buf_lck_grp_attr);
 
 	nfs_buf_lck_attr = lck_attr_alloc_init();
@@ -254,13 +253,11 @@ nfs_buf_freeup(int timer)
 	while ((fbp = TAILQ_FIRST(&nfsbuffreeup))) {
 		TAILQ_REMOVE(&nfsbuffreeup, fbp, nb_free);
 		/* nuke any creds */
-		if (fbp->nb_rcred != NOCRED) {
-			kauth_cred_rele(fbp->nb_rcred);
-			fbp->nb_rcred = NOCRED;
+		if (IS_VALID_CRED(fbp->nb_rcred)) {
+			kauth_cred_unref(&fbp->nb_rcred);
 		}
-		if (fbp->nb_wcred != NOCRED) {
-			kauth_cred_rele(fbp->nb_wcred);
-			fbp->nb_wcred = NOCRED;
+		if (IS_VALID_CRED(fbp->nb_wcred)) {
+			kauth_cred_unref(&fbp->nb_wcred);
 		}
 		/* if buf was NB_META, dump buffer */
 		if (ISSET(fbp->nb_flags, NB_META) && fbp->nb_data)
@@ -630,9 +627,9 @@ nfs_buf_get(
 	struct nfsbuf **bpp)
 {
 	struct nfsnode *np = VTONFS(vp);
+	struct nfsmount *nmp = VFSTONFS(vnode_mount(vp));
 	struct nfsbuf *bp;
 	int biosize, bufsize;
-	kauth_cred_t cred;
 	int slpflag = PCATCH;
 	int operation = (flags & NBLK_OPMASK);
 	int error = 0;
@@ -642,10 +639,14 @@ nfs_buf_get(
 	*bpp = NULL;
 
 	bufsize = size;
-	if (bufsize > MAXBSIZE)
-		panic("nfs_buf_get: buffer larger than MAXBSIZE requested");
+	if (bufsize > NFS_MAXBSIZE)
+		panic("nfs_buf_get: buffer larger than NFS_MAXBSIZE requested");
 
-	biosize = vfs_statfs(vnode_mount(vp))->f_iosize;
+	if (!nmp) {
+		FSDBG_BOT(541, vp, blkno, 0, ENXIO);
+		return (ENXIO);
+	}
+	biosize = nmp->nm_biosize;
 
 	if (UBCINVALID(vp) || !UBCINFOEXISTS(vp)) {
 		operation = NBLK_META;
@@ -778,15 +779,11 @@ loop:
 		}
 		LIST_REMOVE(bp, nb_hash);
 		/* nuke any creds we're holding */
-		cred = bp->nb_rcred;
-		if (cred != NOCRED) {
-			bp->nb_rcred = NOCRED; 
-			kauth_cred_rele(cred);
+		if (IS_VALID_CRED(bp->nb_rcred)) {
+			kauth_cred_unref(&bp->nb_rcred);
 		}
-		cred = bp->nb_wcred;
-		if (cred != NOCRED) {
-			bp->nb_wcred = NOCRED; 
-			kauth_cred_rele(cred);
+		if (IS_VALID_CRED(bp->nb_wcred)) {
+			kauth_cred_unref(&bp->nb_wcred);
 		}
 		/* if buf will no longer be NB_META, dump old buffer */
 		if (operation == NBLK_META) {
@@ -976,7 +973,9 @@ nfs_buf_release(struct nfsbuf *bp, int freeup)
 				panic("ubc_upl_unmap failed");
 			bp->nb_data = NULL;
 		}
-		if (bp->nb_flags & (NB_ERROR | NB_INVAL | NB_NOCACHE)) {
+		/* abort pages if error, invalid, or non-needcommit nocache */
+		if ((bp->nb_flags & (NB_ERROR | NB_INVAL)) ||
+		    ((bp->nb_flags & NB_NOCACHE) && !(bp->nb_flags & (NB_NEEDCOMMIT | NB_DELWRI)))) {
 			if (bp->nb_flags & (NB_READ | NB_INVAL | NB_NOCACHE))
 				upl_flags = UPL_ABORT_DUMP_PAGES;
 			else
@@ -1006,10 +1005,9 @@ pagelist_cleanup_done:
 		/* was this the last buffer in the file? */
 		if (NBOFF(bp) + bp->nb_bufsize > (off_t)(VTONFS(vp)->n_size)) {
 			/* if so, invalidate all pages of last buffer past EOF */
-			int biosize = vfs_statfs(vnode_mount(vp))->f_iosize;
 			off_t start, end;
 			start = trunc_page_64(VTONFS(vp)->n_size) + PAGE_SIZE_64;
-			end = trunc_page_64(NBOFF(bp) + biosize);
+			end = trunc_page_64(NBOFF(bp) + bp->nb_bufsize);
 			if (end > start) {
 				if (!(rv = ubc_sync_range(vp, start, end, UBC_INVALIDATE)))
 					printf("nfs_buf_release(): ubc_sync_range failed!\n");
@@ -1034,8 +1032,9 @@ pagelist_cleanup_done:
 		wakeup_buffer = 1;
 	}
 
-	/* If it's not cacheable, or an error, mark it invalid. */
-	if (ISSET(bp->nb_flags, (NB_NOCACHE|NB_ERROR)))
+	/* If it's non-needcommit nocache, or an error, mark it invalid. */
+	if (ISSET(bp->nb_flags, NB_ERROR) ||
+	    (ISSET(bp->nb_flags, NB_NOCACHE) && !ISSET(bp->nb_flags, (NB_NEEDCOMMIT | NB_DELWRI))))
 		SET(bp->nb_flags, NB_INVAL);
 
 	if ((bp->nb_bufsize <= 0) || ISSET(bp->nb_flags, NB_INVAL)) {
@@ -1092,7 +1091,7 @@ pagelist_cleanup_done:
 	NFSBUFCNTCHK(1);
 
 	/* Unlock the buffer. */
-	CLR(bp->nb_flags, (NB_ASYNC | NB_NOCACHE | NB_STABLE | NB_IOD));
+	CLR(bp->nb_flags, (NB_ASYNC | NB_STABLE | NB_IOD));
 	CLR(bp->nb_lflags, NBL_BUSY);
 
 	FSDBG_BOT(548, bp, NBOFF(bp), bp->nb_flags, bp->nb_data);
@@ -1444,9 +1443,10 @@ nfs_bioread(
 		return (EINVAL);
 	}
 
+	biosize = nmp->nm_biosize;
 	if ((nmp->nm_flag & NFSMNT_NFSV3) && !(nmp->nm_state & NFSSTA_GOTFSINFO))
 		nfs_fsinfo(nmp, vp, cred, p);
-	biosize = vfs_statfs(vnode_mount(vp))->f_iosize;
+
 	vtype = vnode_vtype(vp);
 	/*
 	 * For nfs, cache consistency can only be maintained approximately.
@@ -1699,7 +1699,7 @@ again:
 				/* so write the buffer out and try again */
 				CLR(bp->nb_flags, (NB_DONE | NB_ERROR | NB_INVAL));
 				SET(bp->nb_flags, NB_ASYNC);
-				if (bp->nb_wcred == NOCRED)  {
+				if (!IS_VALID_CRED(bp->nb_wcred))  {
 					kauth_cred_ref(cred);
 					bp->nb_wcred = cred;
 				}
@@ -2008,9 +2008,11 @@ nfs_write(ap)
 		FSDBG_BOT(515, vp, uio->uio_offset, uio_uio_resid(uio), np->n_error);
 		return (np->n_error);
 	}
-	if ((nmp->nm_flag & NFSMNT_NFSV3) &&
-	    !(nmp->nm_state & NFSSTA_GOTFSINFO))
-		(void)nfs_fsinfo(nmp, vp, cred, p);
+
+	biosize = nmp->nm_biosize;
+	if ((nmp->nm_flag & NFSMNT_NFSV3) && !(nmp->nm_state & NFSSTA_GOTFSINFO))
+		nfs_fsinfo(nmp, vp, cred, p);
+
 	if (ioflag & (IO_APPEND | IO_SYNC)) {
 		if (np->n_flag & NMODIFIED) {
 			NATTRINVALIDATE(np);
@@ -2042,8 +2044,6 @@ nfs_write(ap)
 		FSDBG_BOT(515, vp, uio->uio_offset, uio_uio_resid(uio), 0);
 		return (0);
 	}
-
-	biosize = vfs_statfs(vnode_mount(vp))->f_iosize;
 
 	if (vnode_isnocache(vp)) {
 		if (!(np->n_flag & NNOCACHE)) {
@@ -2085,9 +2085,9 @@ again:
 		NFS_BUF_MAP(bp);
 
 		if (np->n_flag & NNOCACHE)
-			SET(bp->nb_flags, (NB_NOCACHE|NB_STABLE));
+			SET(bp->nb_flags, NB_NOCACHE);
 
-		if (bp->nb_wcred == NOCRED) {
+		if (!IS_VALID_CRED(bp->nb_wcred)) {
 			kauth_cred_ref(cred);
 			bp->nb_wcred = cred;
 		}
@@ -2227,7 +2227,7 @@ again:
 				char *d;
 				int i;
 				if (np->n_flag & NNOCACHE)
-					SET(eofbp->nb_flags, (NB_NOCACHE|NB_STABLE));
+					SET(eofbp->nb_flags, NB_NOCACHE);
 				NFS_BUF_MAP(eofbp);
 				FSDBG(516, eofbp, eofoff, biosize - eofoff, 0xe0fff01e);
 				d = eofbp->nb_data;
@@ -2492,9 +2492,14 @@ again:
 
 	} while (uio_uio_resid(uio) > 0 && n > 0);
 
+	if (np->n_flag & NNOCACHE) {
+		/* make sure all the buffers are flushed out */
+		error = nfs_flush(vp, MNT_WAIT, cred, p, 0);
+	}
+
 	np->n_flag &= ~NWRBUSY;
-	FSDBG_BOT(515, vp, uio->uio_offset, uio_uio_resid(uio), 0);
-	return (0);
+	FSDBG_BOT(515, vp, uio->uio_offset, uio_uio_resid(uio), error);
+	return (error);
 }
 
 /*
@@ -2579,7 +2584,7 @@ nfs_vinvalbuf_internal(
 				}
 				bp->nb_dirty &= (1 << (round_page_32(end)/PAGE_SIZE)) - 1;
 				/* also make sure we'll have a credential to do the write */
-				if (mustwrite && (bp->nb_wcred == NOCRED) && (cred == NOCRED)) {
+				if (mustwrite && !IS_VALID_CRED(bp->nb_wcred) && !IS_VALID_CRED(cred)) {
 					printf("nfs_vinvalbuf: found dirty buffer with no write creds\n");
 					mustwrite = 0;
 				}
@@ -2592,7 +2597,7 @@ nfs_vinvalbuf_internal(
 					/* (NB_NOCACHE indicates buffer should be discarded) */
 					CLR(bp->nb_flags, (NB_DONE | NB_ERROR | NB_INVAL | NB_ASYNC));
 					SET(bp->nb_flags, NB_STABLE | NB_NOCACHE);
-					if (bp->nb_wcred == NOCRED) {
+					if (!IS_VALID_CRED(bp->nb_wcred)) {
 						kauth_cred_ref(cred);
 						bp->nb_wcred = cred;
 					}
@@ -2831,13 +2836,13 @@ again:
 		}
 
 		if (ISSET(bp->nb_flags, NB_READ)) {
-			if (bp->nb_rcred == NOCRED && cred != NOCRED) {
+			if (!IS_VALID_CRED(bp->nb_rcred) && IS_VALID_CRED(cred)) {
 				kauth_cred_ref(cred);
 				bp->nb_rcred = cred;
 			}
 		} else {
 			SET(bp->nb_flags, NB_WRITEINPROG);
-			if (bp->nb_wcred == NOCRED && cred != NOCRED) {
+			if (!IS_VALID_CRED(bp->nb_wcred) && IS_VALID_CRED(cred)) {
 				kauth_cred_ref(cred);
 				bp->nb_wcred = cred;
 			}
@@ -3083,10 +3088,10 @@ nfs_doio(struct nfsbuf *bp, kauth_cred_t cr, proc_t p)
 
 		/* compare page mask to nb_dirty; if there are other dirty pages */
 		/* then write FILESYNC; otherwise, write UNSTABLE if async and */
-		/* not needcommit/nocache/call; otherwise write FILESYNC */
+		/* not needcommit/stable; otherwise write FILESYNC */
 		if (bp->nb_dirty & ~pagemask)
 		    iomode = NFSV3WRITE_FILESYNC;
-		else if ((bp->nb_flags & (NB_ASYNC | NB_NEEDCOMMIT | NB_NOCACHE | NB_STABLE)) == NB_ASYNC)
+		else if ((bp->nb_flags & (NB_ASYNC | NB_NEEDCOMMIT | NB_STABLE)) == NB_ASYNC)
 		    iomode = NFSV3WRITE_UNSTABLE;
 		else
 		    iomode = NFSV3WRITE_FILESYNC;
@@ -3134,7 +3139,7 @@ nfs_doio(struct nfsbuf *bp, kauth_cred_t cr, proc_t p)
 		 * NB_NEEDCOMMIT flags.
 		 */
 		if (error == EINTR || (!error && bp->nb_flags & NB_NEEDCOMMIT)) {
-		    CLR(bp->nb_flags, NB_INVAL | NB_NOCACHE);
+		    CLR(bp->nb_flags, NB_INVAL);
 		    if (!ISSET(bp->nb_flags, NB_DELWRI)) {
 			SET(bp->nb_flags, NB_DELWRI);
 			OSAddAtomic(1, (SInt32*)&nfs_nbdwrite);

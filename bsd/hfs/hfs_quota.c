@@ -163,7 +163,11 @@ hfs_chkdq(cp, change, cred, flags)
 		return (0);
 	}
 	p = current_proc();
-	if (cred == NOCRED)
+	/*
+	 * This use of proc_ucred() is safe because kernproc credential never
+	 * changes.
+	 */
+	if (!IS_VALID_CRED(cred))
 		cred = proc_ucred(kernproc);
 	if (suser(cred, NULL) || proc_forcequota(p)) {
 		for (i = 0; i < MAXQUOTAS; i++) {
@@ -304,7 +308,11 @@ hfs_chkiq(cp, change, cred, flags)
 		return (0);
 	}
 	p = current_proc();
-	if (cred == NOCRED)
+	/*
+	 * This use of proc_ucred() is safe because kernproc credential never
+	 * changes.
+	 */
+	if (!IS_VALID_CRED(cred))
 		cred = proc_ucred(kernproc);
 	if (suser(cred, NULL) || proc_forcequota(p)) {
 		for (i = 0; i < MAXQUOTAS; i++) {
@@ -495,8 +503,8 @@ hfs_quotaon(p, mp, type, fnamep)
 	if (error) {
 		(void) vnode_close(vp, FREAD|FWRITE, NULL);
 
-	        kauth_cred_rele(qfp->qf_cred);
-		qfp->qf_cred = NOCRED;
+		if (IS_VALID_CRED(qfp->qf_cred))
+		        kauth_cred_unref(&qfp->qf_cred);
 	        qfp->qf_vp = NULLVP;
 		goto out;
 	}
@@ -563,7 +571,6 @@ hfs_quotaoff(__unused struct proc *p, struct mount *mp, register int type)
 	struct hfsmount *hfsmp = VFSTOHFS(mp);
 	struct quotafile *qfp;
 	int error;
-	kauth_cred_t cred;
 	struct hfs_quotaoff_cargs args;
 
 	qfp = &hfsmp->hfs_qfiles[type];
@@ -598,11 +605,9 @@ hfs_quotaoff(__unused struct proc *p, struct mount *mp, register int type)
 	error = vnode_close(qvp, FREAD|FWRITE, NULL);
 
 	qfp->qf_vp = NULLVP;
-	cred = qfp->qf_cred;
-	if (cred != NOCRED) {
-		qfp->qf_cred = NOCRED;
-		kauth_cred_rele(cred);
-	}
+
+	if (IS_VALID_CRED(qfp->qf_cred))
+		kauth_cred_unref(&qfp->qf_cred);
 	for (type = 0; type < MAXQUOTAS; type++)
 		if (hfsmp->hfs_qfiles[type].qf_vp != NULLVP)
 			break;

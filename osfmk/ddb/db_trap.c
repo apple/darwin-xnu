@@ -64,7 +64,7 @@
 #include <ddb/db_break.h>
 #include <ddb/db_command.h>
 #include <ddb/db_examine.h>
-#include <ddb/db_output.h>		/* For db_printf() */
+#include <ddb/db_output.h>             /* For db_printf() */
 #include <ddb/db_run.h>
 #include <ddb/db_task_thread.h>
 #include <ddb/db_trap.h>
@@ -99,8 +99,16 @@ db_task_trap(
 	 * but print symbols using a (task-specific) symbol table, found
 	 * using task.
 	 */
+
+	/* Elided since walking the thread/task lists before setting up
+	 * safe recovery points is incorrect, and could
+	 * potentially cause us to loop and fault indefinitely.
+	 */
+#if 0	
 	db_init_default_act();
+#endif       
 	db_check_breakpoint_valid();
+
 	if (db_stop_at_pc(&bkpt, task, task_space)) {
 	    if (db_inst_count) {
 		db_printf("After %d instructions (%d loads, %d stores),\n",

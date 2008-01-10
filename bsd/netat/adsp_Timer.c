@@ -70,13 +70,10 @@ void TimerTick();
 void TrashSession(sp)		/* (CCBPtr sp) */
     CCBPtr sp;
 {
-    int s;
 
-    ATDISABLE(s, sp->lock);
     sp->userFlags |= eTearDown;
     sp->removing = 1;
     sp->state = sClosed;
-    ATENABLE(s, sp->lock);
 
     DoClose(sp, errAborted, 1);
 }
@@ -94,10 +91,8 @@ void DoTimerElem(t) /* (TimerElemPtr t) */
     TimerElemPtr t;
 {
     CCBPtr sp;
-    int	s;
 
     sp = (CCBPtr)((Ptr)t - t->type); /* Recover stream pointer for this guy */
-    ATDISABLE(s, sp->lock);
 	
     if (t->type == kFlushTimerType) { /* flush write data time just fired */
 	if (sp->sData) {	/* If there's any data, flush it. */
@@ -136,7 +131,6 @@ void DoTimerElem(t) /* (TimerElemPtr t) */
     } else if (t->type == kProbeTimerType) {
 	if (sp->state == sOpen || sp->state == sClosing) {
 	    if (--sp->probeCntr == 0) { /* Connection died */
-		ATENABLE(s, sp->lock);
 		TrashSession(sp);
 		return;
 	    } else {
@@ -151,7 +145,6 @@ void DoTimerElem(t) /* (TimerElemPtr t) */
 	    {
 		if (--sp->openRetrys == 0) { /* Oops, didn't open */
 		    sp->state = sClosed;
-		    ATENABLE(s, sp->lock);
 		    DoClose(sp, errOpening, 1);
 		    return;
 		}		/* open failed */
@@ -169,11 +162,9 @@ void DoTimerElem(t) /* (TimerElemPtr t) */
 	dPrintf(D_M_ADSP, D_L_ERROR, ("DoTimerElem:Unknown timer type!\n"));
     }
 
-    ATENABLE(s, sp->lock);
 	return;
 	
 send:
-    ATENABLE(s, sp->lock);
     CheckSend(sp);
 }
 

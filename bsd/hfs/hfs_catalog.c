@@ -520,7 +520,7 @@ cat_idlookup(struct hfsmount *hfsmp, cnid_t cnid, struct cat_desc *outdescp,
 		 * the key in the thread matches the key in the record.
 		 */
 		if (cnid != dcnid) {
-			printf("Requested cnid (%d / 0x%08lx) != dcnid (%d / 0x%08lx)\n", cnid, cnid, dcnid, dcnid);
+			printf("Requested cnid (%d / 0x%08lx) != dcnid (%d / 0x%08lx)\n", cnid, cnid, dcnid, dcnid);			
 			result = ENOENT;
 		}
 	}
@@ -548,8 +548,9 @@ cat_lookupmangled(struct hfsmount *hfsmp, struct cat_desc *descp, int wantrsrc,
 		return (ENOENT);
 
 	fileID = GetEmbeddedFileID(descp->cd_nameptr, descp->cd_namelen, &prefixlen);
- 	if (fileID < (cnid_t)kHFSFirstUserCatalogNodeID)
- 		return (ENOENT);
+
+	if (fileID < (cnid_t)kHFSFirstUserCatalogNodeID)
+		return (ENOENT);
 
 	if(fileID == hfsmp->hfs_privdir_desc.cd_cnid ||
 		fileID == hfsmp->hfs_jnlfileid ||

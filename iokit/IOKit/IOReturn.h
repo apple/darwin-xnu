@@ -46,8 +46,16 @@ typedef	kern_return_t		IOReturn;
 #define sub_iokit_firewire                err_sub(2)
 #define sub_iokit_block_storage           err_sub(4)
 #define sub_iokit_graphics                err_sub(5)
+#define sub_iokit_networking		  err_sub(6)
 #define sub_iokit_bluetooth               err_sub(8)
 #define sub_iokit_pmu                     err_sub(9)
+#define sub_iokit_acpi                    err_sub(10)
+#define sub_iokit_smbus                   err_sub(11)
+#define sub_iokit_ahci                    err_sub(12)
+#define sub_iokit_powermanagement         err_sub(13)
+//#define sub_iokit_hidsystem             err_sub(14)
+//#define sub_iokit_pccard                err_sub(21)
+
 #define sub_iokit_vendor_specific         err_sub(-2)
 #define sub_iokit_reserved                err_sub(-1)
 

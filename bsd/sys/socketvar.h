@@ -204,6 +204,14 @@ struct socket {
 	int	so_usecount;		/* refcounting of socket use */;
 	int	so_retaincnt;
 	u_int32_t	so_filteruse; /* usecount for the socket filters */
+/* for debug pruposes */
+#define SO_LCKDBG_MAX		4	/* number of debug locking Link Registers recorded */
+	u_int32_t lock_lr[SO_LCKDBG_MAX];	/* socket locking calling history */ 
+	int	next_lock_lr;
+	u_int32_t unlock_lr[SO_LCKDBG_MAX];	/* socket unlocking caller history */
+	int	next_unlock_lr;
+	
+
 	void	*reserved3;		/* Temporarily in use/debug: last socket lock LR */
 	void	*reserved4;		/* Temporarily in use/debug: last socket unlock LR */
 	thread_t	so_send_filt_thread;
@@ -369,7 +377,6 @@ int	sbappendcontrol(struct sockbuf *sb, struct mbuf *m0,
 	    struct mbuf *control, int *error_out);
 int	sbappendrecord(struct sockbuf *sb, struct mbuf *m0);
 void	sbcheck(struct sockbuf *sb);
-int	sbcompress(struct sockbuf *sb, struct mbuf *m, struct mbuf *n);
 struct mbuf *
 	sbcreatecontrol(caddr_t p, int size, int type, int level);
 void	sbdrop(struct sockbuf *sb, int len);

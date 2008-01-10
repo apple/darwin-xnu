@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -27,8 +27,15 @@
 #include <stdint.h>
 #endif /* __ASSEMBLER__ */
 
+/* The following macro is used to generate the 64-bit commpage address for a given
+ * routine, based on its 32-bit address.  This is used in the kernel to compile
+ * the 64-bit commpage.  Since the kernel is a 32-bit object, cpu_capabilities.h
+ * only defines the 32-bit address.
+ */
+#define	_COMM_PAGE_32_TO_64( ADDRESS )	( ADDRESS + _COMM_PAGE64_START_ADDRESS - _COMM_PAGE32_START_ADDRESS )
+
+
 #ifdef	__ASSEMBLER__
-#include <machine/asm.h>
 
 #define	COMMPAGE_DESCRIPTOR(label,address,must,cant)	\
 L ## label ## _end:					;\
@@ -59,18 +66,15 @@ typedef	struct	commpage_descriptor	{
 } commpage_descriptor;
 
 
-extern	char	*commPagePtr;				// virt address of commpage in kernel map
+extern	char	*commPagePtr32;				// virt address of 32-bit commpage in kernel map
+extern	char	*commPagePtr64;				// ...and of 64-bit commpage
 
-extern	void	commpage_set_timestamp(uint64_t tbr,uint32_t secs,uint32_t usecs,uint32_t ticks_per_sec);
+extern	void	_commpage_set_timestamp(uint64_t abstime, uint64_t secs);
+#define commpage_set_timestamp(x, y, z)		_commpage_set_timestamp((x), (y))
 
-typedef struct {
-	uint64_t	nt_base_tsc;
-	uint64_t	nt_base_ns; 
-	uint32_t	nt_scale;
-	uint32_t	nt_shift;
-	uint64_t	nt_check_tsc;
-} commpage_nanotime_t;
-extern  void	commpage_set_nanotime(commpage_nanotime_t *new_nanotime);
+extern  void	commpage_set_nanotime(uint64_t tsc_base, uint64_t ns_base, uint32_t scale, uint32_t shift);
+
+#include <kern/page_decrypt.h>
 
 #endif	/* __ASSEMBLER__ */
 

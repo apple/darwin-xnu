@@ -220,9 +220,9 @@ getfh(proc_t p, struct getfh_args *uap, __unused int *retval)
 	}
 
 	bzero(&nfh, sizeof(nfh));
-	nfh.nfh_xh.nxh_version = NFS_FH_VERSION;
-	nfh.nfh_xh.nxh_fsid = nxfs->nxfs_id;
-	nfh.nfh_xh.nxh_expid = nx->nx_id;
+	nfh.nfh_xh.nxh_version = htonl(NFS_FH_VERSION);
+	nfh.nfh_xh.nxh_fsid = htonl(nxfs->nxfs_id);
+	nfh.nfh_xh.nxh_expid = htonl(nx->nx_id);
 	nfh.nfh_xh.nxh_flags = 0;
 	nfh.nfh_xh.nxh_reserved = 0;
 	nfh.nfh_len = NFS_MAX_FID_SIZE;
@@ -265,41 +265,52 @@ fhopen( proc_t p,
 	struct fileproc *fp, *nfp;
 	int fmode, error, type;
 	int indx;
-	kauth_cred_t cred = proc_ucred(p);
 	struct vfs_context context;
 	kauth_action_t action;
 
 	context.vc_proc = p;
-	context.vc_ucred = cred;
+	context.vc_ucred = kauth_cred_proc_ref(p);
 
 	/*
 	 * Must be super user
 	 */
-	error = suser(cred, 0);
-	if (error)
+	error = suser(context.vc_ucred, 0);
+	if (error) {
+		kauth_cred_unref(&context.vc_ucred);
 		return (error);
+	}
 
 	fmode = FFLAGS(uap->flags);
 	/* why not allow a non-read/write open for our lockd? */
-	if (((fmode & (FREAD | FWRITE)) == 0) || (fmode & O_CREAT))
+	if (((fmode & (FREAD | FWRITE)) == 0) || (fmode & O_CREAT)) {
+		kauth_cred_unref(&context.vc_ucred);
 		return (EINVAL);
+	}
 
 	error = copyin(uap->u_fhp, &nfh.nfh_len, sizeof(nfh.nfh_len));
-	if (error)
+	if (error) {
+		kauth_cred_unref(&context.vc_ucred);
 		return (error);
+	}
 	if ((nfh.nfh_len < (int)sizeof(struct nfs_exphandle)) ||
-	    (nfh.nfh_len > (int)NFS_MAX_FH_SIZE))
+	    (nfh.nfh_len > (int)NFS_MAX_FH_SIZE)) {
+		kauth_cred_unref(&context.vc_ucred);
 		return (EINVAL);
+	}
 	error = copyin(uap->u_fhp, &nfh, sizeof(nfh.nfh_len) + nfh.nfh_len);
-	if (error)
+	if (error) {
+		kauth_cred_unref(&context.vc_ucred);
 		return (error);
+	}
 
 	lck_rw_lock_shared(&nfs_export_rwlock);
 	/* now give me my vnode, it gets returned to me with a reference */
 	error = nfsrv_fhtovp(&nfh, NULL, TRUE, &vp, &nx, &nxo);
 	lck_rw_done(&nfs_export_rwlock);
-	if (error)
+	if (error) {
+		kauth_cred_unref(&context.vc_ucred);
 		return (error);
+	}
 
 	/*
 	 * From now on we have to make sure not
@@ -342,7 +353,7 @@ fhopen( proc_t p,
 
 	// starting here... error paths should call vn_close/vnode_put
 	if ((error = falloc(p, &nfp, &indx)) != 0) {
-		vn_close(vp, fmode & FMASK, cred, p);
+		vn_close(vp, fmode & FMASK, context.vc_ucred, p);
 		goto bad;
 	}
 	fp = nfp;
@@ -367,6 +378,7 @@ fhopen( proc_t p,
 		if ((error = VNOP_ADVLOCK(vp, (caddr_t)fp->f_fglob, F_SETLK, &lf, type, &context))) {
 			vn_close(vp, fp->f_fglob->fg_flag, fp->f_fglob->fg_cred, p);
 			fp_free(p, indx, fp);
+			kauth_cred_unref(&context.vc_ucred);
 			return (error);
 		}
 		fp->f_fglob->fg_flag |= FHASLOCK;
@@ -380,10 +392,12 @@ fhopen( proc_t p,
 	proc_fdunlock(p);
 
 	*retval = indx;
+	kauth_cred_unref(&context.vc_ucred);
 	return (0);
 
 bad:
 	vnode_put(vp);
+	kauth_cred_unref(&context.vc_ucred);
 	return (error);
 }
 
@@ -516,7 +530,9 @@ nfssvc(proc_t p, struct nfssvc_args *uap, __unused int *retval)
 					break;
 			}
 			if (nuidp) {
-			    nfsrv_setcred(nuidp->nu_cr,nfsd->nfsd_nd->nd_cr);
+			    nfsrv_setcred(nuidp->nu_cr,&temp_cred);
+			    kauth_cred_unref(&nfsd->nfsd_nd->nd_cr);
+			    nfsd->nfsd_nd->nd_cr = kauth_cred_create(&temp_cred);
 			    nfsd->nfsd_nd->nd_flag |= ND_KERBFULL;
 			} else {
 			    /*
@@ -545,7 +561,7 @@ nfssvc(proc_t p, struct nfssvc_args *uap, __unused int *retval)
 					nu_lru);
 				    if (nuidp->nu_flag & NU_NAM)
 					mbuf_freem(nuidp->nu_nam);
-				    kauth_cred_rele(nuidp->nu_cr);
+				    kauth_cred_unref(&nuidp->nu_cr);
 				}
 				nuidp->nu_flag = 0;
 
@@ -585,7 +601,7 @@ nfssvc(proc_t p, struct nfssvc_args *uap, __unused int *retval)
 							MBUF_COPYALL, MBUF_WAITOK,
 							&nuidp->nu_nam);
 					if (error) {
-						kauth_cred_rele(nuidp->nu_cr);
+						kauth_cred_unref(&nuidp->nu_cr);
 						FREE_ZONE(nuidp, sizeof(struct nfsuid), M_NFSUID);
 						slp->ns_numuids--;
 						return (error);
@@ -597,8 +613,9 @@ nfssvc(proc_t p, struct nfssvc_args *uap, __unused int *retval)
 					nu_lru);
 				LIST_INSERT_HEAD(NUIDHASH(slp, nsd->nsd_uid),
 					nuidp, nu_hash);
-				nfsrv_setcred(nuidp->nu_cr,
-				    nfsd->nfsd_nd->nd_cr);
+				nfsrv_setcred(nuidp->nu_cr,&temp_cred);
+				kauth_cred_unref(&nfsd->nfsd_nd->nd_cr);
+				nfsd->nfsd_nd->nd_cr = kauth_cred_create(&temp_cred);
 				nfsd->nfsd_nd->nd_flag |= ND_KERBFULL;
 			    }
 			}
@@ -685,7 +702,7 @@ nfskerb_clientd(
 		    error = tsleep((caddr_t)&nmp->nm_authstr, PSOCK | PCATCH,
 			"nfskrbtimr", hz / 3);
 		    if (error == EINTR || error == ERESTART)
-				dounmount(nmp->nm_mountp, 0, 0, p);
+			    dounmount(nmp->nm_mountp, 0, NULL, 0, p);
 	    }
 	}
 
@@ -696,7 +713,7 @@ nfskerb_clientd(
 		nnuidp = nuidp->nu_lru.tqe_next;
 		LIST_REMOVE(nuidp, nu_hash);
 		TAILQ_REMOVE(&nmp->nm_uidlruhead, nuidp, nu_lru);
-		kauth_cred_rele(nuidp->nu_cr);
+		kauth_cred_unref(&nuidp->nu_cr);
 		FREE_ZONE((caddr_t)nuidp, sizeof (struct nfsuid), M_NFSUID);
 	}
 	/*
@@ -941,8 +958,8 @@ nfssvc_nfsd(nsd, argp, p)
 					mbuf_freem(nd->nd_mrep);
 				if (nd->nd_nam2)
 					mbuf_freem(nd->nd_nam2);
-				if (nd->nd_cr)
-					kauth_cred_rele(nd->nd_cr);
+				if (IS_VALID_CRED(nd->nd_cr))
+					kauth_cred_unref(&nd->nd_cr);
 				FREE_ZONE((caddr_t)nd,
 						sizeof *nd, M_NFSRVDESC);
 				nd = NULL;
@@ -1093,8 +1110,8 @@ nfssvc_nfsd(nsd, argp, p)
 				lck_rw_done(&slp->ns_rwlock);
 			}
 			if (error == EINTR || error == ERESTART) {
-				if (nd->nd_cr)
-					kauth_cred_rele(nd->nd_cr);
+				if (IS_VALID_CRED(nd->nd_cr))
+					kauth_cred_unref(&nd->nd_cr);
 				FREE_ZONE((caddr_t)nd, sizeof *nd, M_NFSRVDESC);
 				nfsrv_slpderef(slp);
 				goto done;
@@ -1113,8 +1130,8 @@ nfssvc_nfsd(nsd, argp, p)
 				mbuf_freem(nd->nd_mrep);
 			if (nd->nd_nam2)
 				mbuf_freem(nd->nd_nam2);
-			if (nd->nd_cr)
-				kauth_cred_rele(nd->nd_cr);
+			if (IS_VALID_CRED(nd->nd_cr))
+				kauth_cred_unref(&nd->nd_cr);
 			FREE_ZONE((caddr_t)nd, sizeof *nd, M_NFSRVDESC);
 			nd = NULL;
 		    }
@@ -1624,7 +1641,7 @@ nfs_savenickauth(nmp, cred, len, key, mdp, dposp, mrep)
 				}
 				LIST_REMOVE(nuidp, nu_hash);
 				TAILQ_REMOVE(&nmp->nm_uidlruhead, nuidp, nu_lru);
-				kauth_cred_rele(nuidp->nu_cr);
+				kauth_cred_unref(&nuidp->nu_cr);
 			}
 			nuidp->nu_flag = 0;
 			kauth_cred_ref(cred);
@@ -1675,7 +1692,7 @@ nfsrv_slpfree(struct nfssvc_sock *slp)
 		TAILQ_REMOVE(&slp->ns_uidlruhead, nuidp, nu_lru);
 		if (nuidp->nu_flag & NU_NAM)
 			mbuf_freem(nuidp->nu_nam);
-		kauth_cred_rele(nuidp->nu_cr);
+		kauth_cred_unref(&nuidp->nu_cr);
 		FREE_ZONE((caddr_t)nuidp,
 				sizeof (struct nfsuid), M_NFSUID);
 	}
@@ -1683,8 +1700,8 @@ nfsrv_slpfree(struct nfssvc_sock *slp)
 	for (nwp = slp->ns_tq.lh_first; nwp; nwp = nnwp) {
 		nnwp = nwp->nd_tq.le_next;
 		LIST_REMOVE(nwp, nd_tq);
-		if (nwp->nd_cr)
-			kauth_cred_rele(nwp->nd_cr);
+		if (IS_VALID_CRED(nwp->nd_cr))
+			kauth_cred_unref(&nwp->nd_cr);
 		FREE_ZONE((caddr_t)nwp, sizeof *nwp, M_NFSRVDESC);
 	}
 	LIST_INIT(&slp->ns_tq);

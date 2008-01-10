@@ -736,22 +736,6 @@ struct vnodeop_desc vnop_pageout_desc = {
 	NULL,
 };
 
-int vnop_devblocksize_vp_offsets[] = {
-	VOPARG_OFFSETOF(struct vnop_devblocksize_args,a_vp),
-	VDESC_NO_OFFSET
-};
-struct vnodeop_desc vnop_devblocksize_desc = {
-	0,
-	"vnop_devblocksize",
-	0,
-	vnop_devblocksize_vp_offsets,
-	VDESC_NO_OFFSET,
-	VDESC_NO_OFFSET,
-	VDESC_NO_OFFSET,
-	VDESC_NO_OFFSET,
-	NULL,
-};
-
 int vnop_searchfs_vp_offsets[] = {
 	VOPARG_OFFSETOF(struct vnop_searchfs_args,a_vp),
 	VDESC_NO_OFFSET
@@ -979,7 +963,6 @@ struct vnodeop_desc *vfs_op_descs[] = {
 	&vnop_allocate_desc,
 	&vnop_pagein_desc,
 	&vnop_pageout_desc,
-	&vnop_devblocksize_desc,
 	&vnop_searchfs_desc,
 	&vnop_copyfile_desc,
 	&vnop_getxattr_desc,
