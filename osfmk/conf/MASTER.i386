@@ -58,5 +58,9 @@ options		PAE
 options		X86_64
 options		DISPATCH_COUNTS
 
+#
+# Note: MAC options must be set in all the bsd/conf, osfmk/conf, and 
+# security/conf MASTER files.
+#
 options		CONFIG_MACF		# Mandatory Access Control Framework
 #options	CONFIG_MACF_MACH	# MACF applied to Mach services

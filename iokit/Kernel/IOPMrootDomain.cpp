@@ -1076,6 +1076,9 @@ void IOPMrootDomain::powerChangeDone ( unsigned long previousState )
             // re-enable this timer for next sleep
             idleSleepPending = false;
             gSleepOrShutdownPending = 0;
+
+            // Invalidate prior activity tickles to allow wake from doze.
+            if (wrangler) wrangler->changePowerStateTo(0);
             break;
             
     	case RESTART_STATE:
@@ -1653,12 +1656,87 @@ void IOPMrootDomain::informCPUStateChange(
 #endif __i386__
 }
 
+//******************************************************************************
+// systemPowerEventOccurred
+//
+// The power controller is notifying us of a hardware-related power management
+// event that we must handle. 
+//
+// systemPowerEventOccurred covers the same functionality that receivePowerNotification
+// does; it simply provides a richer API for conveying more information.
+//******************************************************************************
+IOReturn IOPMrootDomain::systemPowerEventOccurred(
+    const OSSymbol *event,
+    uint32_t intValue)
+{
+    IOReturn        attempt = kIOReturnSuccess;
+    OSNumber        *newNumber = NULL;
+
+    if (!event) 
+        return kIOReturnBadArgument;
+        
+    newNumber = OSNumber::withNumber(intValue, 8*sizeof(intValue));
+    if (!newNumber)
+        return kIOReturnInternalError;
+
+    attempt = systemPowerEventOccurred(event, (OSObject *)newNumber);
+
+    newNumber->release();
+
+    return attempt;
+}
+
+IOReturn IOPMrootDomain::systemPowerEventOccurred(
+    const OSSymbol *event,
+    OSObject *value)
+{
+    OSDictionary *thermalsDict = NULL;
+    bool shouldUpdate = true;
+    
+    if (!event || !value) 
+        return kIOReturnBadArgument;
+
+    // LOCK
+    // We reuse featuresDict Lock because it already exists and guards
+    // the very infrequently used publish/remove feature mechanism; so there's zero rsk
+    // of stepping on that lock.
+    if (featuresDictLock) IOLockLock(featuresDictLock);
+
+    thermalsDict = (OSDictionary *)getProperty(kIOPMRootDomainPowerStatusKey);
+                   
+    if (thermalsDict && OSDynamicCast(OSDictionary, thermalsDict)) {
+        thermalsDict = OSDictionary::withDictionary(thermalsDict);                        
+    } else {
+        thermalsDict = OSDictionary::withCapacity(1);
+    }
+
+    if (!thermalsDict) {
+        shouldUpdate = false;
+        goto exit;
+    }
+
+    thermalsDict->setObject (event, value);
+
+    setProperty (kIOPMRootDomainPowerStatusKey, thermalsDict);
+
+    thermalsDict->release();
+
+exit:
+    // UNLOCK
+    if (featuresDictLock) IOLockUnlock(featuresDictLock);
+
+    if (shouldUpdate)
+        messageClients (kIOPMMessageSystemPowerEventOccurred, (void *)NULL);
+
+    return kIOReturnSuccess;
+}
+
 
 //******************************************************************************
 // receivePowerNotification
 //
 // The power controller is notifying us of a hardware-related power management
-// event that we must handle. This is a result of an 'environment' interrupt from
+// event that we must handle. This may be a result of an 'environment' interrupt from
 // the power mgt micro.
 //******************************************************************************
 

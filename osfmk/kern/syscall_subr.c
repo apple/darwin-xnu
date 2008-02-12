@@ -331,7 +331,6 @@ thread_depress_abstime(
 
 		self->sched_pri = DEPRESSPRI;
 		myprocessor->current_pri = self->sched_pri;
-		self->sched_mode &= ~TH_MODE_PREEMPT;
 		self->sched_mode |= TH_MODE_DEPRESS;
 
 		if (interval != 0) {
@@ -427,7 +426,6 @@ thread_poll_yield(
 			if (!(self->sched_mode & TH_MODE_ISDEPRESSED)) {
 				self->sched_pri = DEPRESSPRI;
 				myprocessor->current_pri = self->sched_pri;
-				self->sched_mode &= ~TH_MODE_PREEMPT;
 			}
 			self->computation_epoch = abstime;
 			self->computation_metered = 0;

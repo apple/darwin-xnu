@@ -345,6 +345,8 @@ __END_DECLS
 #define CPU_SUBTYPE_ARM_ALL             ((cpu_subtype_t) 0)
 #define CPU_SUBTYPE_ARM_V4T             ((cpu_subtype_t) 5)
 #define CPU_SUBTYPE_ARM_V6              ((cpu_subtype_t) 6)
+#define CPU_SUBTYPE_ARM_V5TEJ           ((cpu_subtype_t) 7)
+#define CPU_SUBTYPE_ARM_XSCALE		((cpu_subtype_t) 8)
 
 /*
  *	CPU families (sysctl hw.cpufamily)
@@ -368,6 +370,7 @@ __END_DECLS
 #define CPUFAMILY_INTEL_6_26 0x6b5a4cd2  /* Nehalem */
 #define CPUFAMILY_ARM_9      0xe73283ae
 #define CPUFAMILY_ARM_11     0x8ff620d8
+#define CPUFAMILY_ARM_XSCALE 0x53b005f5
 
 #define CPUFAMILY_INTEL_YONAH	CPUFAMILY_INTEL_6_14
 #define CPUFAMILY_INTEL_MEROM	CPUFAMILY_INTEL_6_15

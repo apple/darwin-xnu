@@ -280,24 +280,6 @@ hpet_init(void)
 	DBG(" CVT: HPET to BUS = %08X.%08X\n",
 	    (uint32_t)(hpet2bus >> 32), (uint32_t)hpet2bus);
 
-	/* Make sure the counter is off in the HPET configuration flags */
-	uint64_t hpetcon = ((hpetReg_t *)hpetArea)->GEN_CONF;
-	hpetcon = hpetcon & ~1;
-	((hpetReg_t *)hpetArea)->GEN_CONF = hpetcon;
-
-	/*
-	 * Convert current TSC to HPET value,
-	 * set it, and start it ticking.
-	 */
-	uint64_t currtsc = rdtsc64();
-	uint64_t tscInHPET = tmrCvt(currtsc, tsc2hpet);
-	((hpetReg_t *)hpetArea)->MAIN_CNT = tscInHPET;
-	hpetcon = hpetcon | 1;
-	((hpetReg_t *)hpetArea)->GEN_CONF = hpetcon;
-	kprintf("HPET started: TSC = %08X.%08X, HPET = %08X.%08X\n", 
-		(uint32_t)(currtsc >> 32), (uint32_t)currtsc,
-		(uint32_t)(tscInHPET >> 32), (uint32_t)tscInHPET);
-
 #if MACH_KDB
 	db_display_hpet((hpetReg_t *)hpetArea);	/* (BRINGUP) */
 #endif
@@ -317,8 +299,13 @@ hpet_get_info(hpetInfo_t *info)
     info->hpet2tsc   = hpet2tsc;
     info->bus2hpet   = bus2hpet;
     info->hpet2bus   = hpet2bus;
-    info->rcbaArea   = rcbaArea;
-    info->rcbaAreap  = rcbaAreap;
+    /*
+     * XXX
+     * We're repurposing the rcbaArea so we can use the HPET.
+     * Eventually we'll rename this correctly.
+     */
+    info->rcbaArea   = hpetArea;
+    info->rcbaAreap  = hpetAreap;
 }
 
 

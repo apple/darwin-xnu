@@ -1205,7 +1205,7 @@ vm_object_terminate(
 			panic("vm_object_terminate.4 %p %p", object, p);
 		}
 
-		if (!p->dirty && p->pmapped)
+		if (!p->dirty && p->wpmapped)
 			p->dirty = pmap_is_modified(p->phys_page);
 
 		if ((p->dirty || p->precious) && !p->error && object->alive) {

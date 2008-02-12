@@ -53,8 +53,6 @@ extern int setPop(uint64_t time);
 
 extern void etimer_resync_deadlines(void);
 
-extern uint32_t rtclock_tick_interval;
-
 #if 0 /* this is currently still MD */
 #pragma pack(push,4)
 struct rtclock_timer_t  {

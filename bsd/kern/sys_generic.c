@@ -224,7 +224,7 @@ pread_nocancel(struct proc *p, struct pread_nocancel_args *uap, user_ssize_t *re
 	int error;
 
 	if ( (error = preparefileread(p, &fp, fd, 1)) )
-	        return (error);
+		goto out;
 
 	error = dofileread(vfs_context_current(), fp, uap->buf, uap->nbyte,
 			uap->offset, FOF_OFFSET, retval);
@@ -234,7 +234,8 @@ pread_nocancel(struct proc *p, struct pread_nocancel_args *uap, user_ssize_t *re
 	if (!error)
 	    KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_SC_EXTENDED_INFO, SYS_pread) | DBG_FUNC_NONE),
 	      uap->fd, uap->nbyte, (unsigned int)((uap->offset >> 32)), (unsigned int)(uap->offset), 0);
-	
+
+out:
 	return (error);
 }
 

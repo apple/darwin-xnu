@@ -56,6 +56,9 @@
 extern struct dlil_threading_info *dlil_lo_thread_ptr;
 extern int dlil_multithreaded_input;
 
+static errno_t
+ifnet_list_get_common(ifnet_family_t, boolean_t, ifnet_t **, u_int32_t *);
+
 /*
 	Temporary work around until we have real reference counting
 	
@@ -1084,42 +1087,55 @@ ifnet_find_by_name(
 }
 
 errno_t
-ifnet_list_get(
-	ifnet_family_t family,
-	ifnet_t **list,
-	u_int32_t *count)
+ifnet_list_get(ifnet_family_t family, ifnet_t **list, u_int32_t *count)
+{
+	return (ifnet_list_get_common(family, FALSE, list, count));
+}
+
+__private_extern__ errno_t
+ifnet_list_get_all(ifnet_family_t family, ifnet_t **list, u_int32_t *count)
+{
+	return (ifnet_list_get_common(family, TRUE, list, count));
+}
+
+static errno_t
+ifnet_list_get_common(ifnet_family_t family, boolean_t get_all, ifnet_t **list,
+    u_int32_t *count)
 {
 	struct ifnet *ifp;
 	u_int32_t cmax = 0;
 	*count = 0;
 	errno_t	result = 0;
-	
-	if (list == NULL || count == NULL) return EINVAL;
-	
+
+	if (list == NULL || count == NULL)
+		return (EINVAL);
+
 	ifnet_head_lock_shared();
-	TAILQ_FOREACH(ifp, &ifnet, if_link)
-	{
-		if (ifp->if_eflags & IFEF_DETACHING) continue;
-		if (family == 0 || ifp->if_family == family)
+	TAILQ_FOREACH(ifp, &ifnet, if_link) {
+		if ((ifp->if_eflags & IFEF_DETACHING) && !get_all)
+			continue;
+		if (family == IFNET_FAMILY_ANY || ifp->if_family == family)
 			cmax++;
 	}
-	
+
 	if (cmax == 0)
 		result = ENXIO;
-	
+
 	if (result == 0) {
-		MALLOC(*list, ifnet_t*, sizeof(ifnet_t) * (cmax + 1), M_TEMP, M_NOWAIT);
+		MALLOC(*list, ifnet_t*, sizeof(ifnet_t) * (cmax + 1),
+		    M_TEMP, M_NOWAIT);
 		if (*list == NULL)
 			result = ENOMEM;
 	}
 
 	if (result == 0) {
-		TAILQ_FOREACH(ifp, &ifnet, if_link)
-		{
-			if (ifp->if_eflags & IFEF_DETACHING) continue;
-			if (*count + 1 > cmax) break;
-			if (family == 0 || ((ifnet_family_t)ifp->if_family) == family)
-			{
+		TAILQ_FOREACH(ifp, &ifnet, if_link) {
+			if ((ifp->if_eflags & IFEF_DETACHING) && !get_all)
+				continue;
+			if (*count + 1 > cmax)
+				break;
+			if (family == IFNET_FAMILY_ANY ||
+			    ((ifnet_family_t)ifp->if_family) == family) {
 				(*list)[*count] = (ifnet_t)ifp;
 				ifnet_reference((*list)[*count]);
 				(*count)++;
@@ -1128,23 +1144,22 @@ ifnet_list_get(
 		(*list)[*count] = NULL;
 	}
 	ifnet_head_done();
-	
-	return 0;
+
+	return (result);
 }
 
 void
-ifnet_list_free(
-	ifnet_t *interfaces)
+ifnet_list_free(ifnet_t *interfaces)
 {
 	int i;
-	
-	if (interfaces == NULL) return;
-	
-	for (i = 0; interfaces[i]; i++)
-	{
+
+	if (interfaces == NULL)
+		return;
+
+	for (i = 0; interfaces[i]; i++) {
 		ifnet_release(interfaces[i]);
 	}
-	
+
 	FREE(interfaces, M_TEMP);
 }
 

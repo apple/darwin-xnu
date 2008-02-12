@@ -597,6 +597,7 @@ _ubc_isinuse
 _ubc_msync
 _ubc_offtoblk
 _ubc_page_op
+_ubc_pages_resident
 _ubc_range_op
 _ubc_setcred
 _ubc_setsize

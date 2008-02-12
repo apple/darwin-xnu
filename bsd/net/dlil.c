@@ -310,6 +310,11 @@ dlil_write_end(void)
 static int
 proto_hash_value(u_long protocol_family)
 {
+	/*
+	 * dlil_proto_unplumb_all() depends on the mapping between
+	 * the hash bucket index and the protocol family defined
+	 * here; future changes must be applied there as well.
+	 */
 	switch(protocol_family) {
 		case PF_INET:
 			return 0;
@@ -2851,4 +2856,25 @@ dlil_if_release(
     if (ifp->if_lock)
 		ifnet_lock_done(ifp);
     
+}
+
+__private_extern__ void
+dlil_proto_unplumb_all(struct ifnet *ifp)
+{
+	/*
+	 * if_proto_hash[0-3] are for PF_INET, PF_INET6, PF_APPLETALK
+	 * and PF_VLAN, where each bucket contains exactly one entry;
+	 * PF_VLAN does not need an explicit unplumb.
+	 *
+	 * if_proto_hash[4] is for other protocols; we expect anything
+	 * in this bucket to respond to the DETACHING event (which would
+	 * have happened by now) and do the unplumb then.
+	 */
+	(void) proto_unplumb(PF_INET, ifp);
+#if INET6
+	(void) proto_unplumb(PF_INET6, ifp);
+#endif /* INET6 */
+#if NETAT
+	(void) proto_unplumb(PF_APPLETALK, ifp);
+#endif /* NETAT */
 }

@@ -79,7 +79,7 @@
 #include <i386/eflags.h>
 
 /*
- *	i386_saved_state:
+ *	x86_saved_state32/64:
  *
  *	Has been exported to servers.  See: mach/i386/thread_status.h
  *

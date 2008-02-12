@@ -298,10 +298,19 @@ sflt_detach_private(
 	if (!unregistering) {
 		if ((entry->sfe_flags & SFEF_UNREGISTERING) != 0) {
 			/*
-			 * Another thread is unregistering the filter, we need to
-			 * avoid detaching the filter here so the socket won't go
-			 * away.
+			 * Another thread is unregistering the filter, we
+			 * need to avoid detaching the filter here so the
+			 * socket won't go away.  Bump up the socket's
+			 * usecount so that it won't be freed until after
+			 * the filter unregistration has been completed;
+			 * at this point the caller has already held the
+			 * socket's lock, so we can directly modify the
+			 * usecount.
 			 */
+			if (!(entry->sfe_flags & SFEF_DETACHXREF)) {
+				entry->sfe_socket->so_usecount++;
+				entry->sfe_flags |= SFEF_DETACHXREF;
+			}
 			lck_mtx_unlock(sock_filter_lock);
 			return;
 		}
@@ -322,9 +331,14 @@ sflt_detach_private(
 	else {
 		/*
 		 * Clear the removing flag. We will perform the detach here or
-		 * request a delayed deatch.
+		 * request a delayed detach.  Since we do an extra ref release
+		 * below, bump up the usecount if we haven't done so.
 		 */
 		entry->sfe_flags &= ~SFEF_UNREGISTERING;
+		if (!(entry->sfe_flags & SFEF_DETACHXREF)) {
+			entry->sfe_socket->so_usecount++;
+			entry->sfe_flags |= SFEF_DETACHXREF;
+		}
 	}
 
 	if (entry->sfe_socket->so_filteruse != 0) {
@@ -510,10 +524,22 @@ sflt_unregister(
 		filter->sf_flags |= SFF_DETACHING;
 	
 		for (next_entry = entry_head; next_entry;
-			 next_entry = next_entry->sfe_next_onfilter) {
-			socket_lock(next_entry->sfe_socket, 1);
+		    next_entry = next_entry->sfe_next_onfilter) {
+			/*
+			 * Mark this as "unregistering"; upon dropping the
+			 * lock, another thread may win the race and attempt
+			 * to detach a socket from it (e.g. as part of close)
+			 * before we get a chance to detach.  Setting this
+			 * flag practically tells the other thread to go away.
+			 * If the other thread wins, this causes an extra
+			 * reference hold on the socket so that it won't be
+			 * deallocated until after we finish with the detach
+			 * for it below.  If we win the race, the extra
+			 * reference hold is also taken to compensate for the
+			 * extra reference release when detach is called
+			 * with a "1" for its second parameter.
+			 */
 			next_entry->sfe_flags |= SFEF_UNREGISTERING;
-			socket_unlock(next_entry->sfe_socket, 0);	/* Radar 4201550: prevents the socket from being deleted while being unregistered */
 		}
 	}
 	

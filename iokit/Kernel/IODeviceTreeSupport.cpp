@@ -435,15 +435,21 @@ static bool GetUInt32( IORegistryEntry * regEntry, const OSSymbol * name,
         return( false );
 }
 
-IORegistryEntry * IODTFindInterruptParent( IORegistryEntry * regEntry )
+static IORegistryEntry * IODTFindInterruptParent( IORegistryEntry * regEntry, IOItemCount index )
 {
     IORegistryEntry *	parent;
     UInt32		phandle;
+    OSData	    *	data;
+    unsigned int	len;
 
-    if( GetUInt32( regEntry, gIODTInterruptParentKey, &phandle))
-        parent = FindPHandle( phandle );
+    if( (data = OSDynamicCast( OSData, regEntry->getProperty( gIODTInterruptParentKey )))
+      && (sizeof(UInt32) <= (len = data->getLength()))) {
+	if (((index + 1) * sizeof(UInt32)) > len)
+	    index = 0;
+	phandle = ((UInt32 *) data->getBytesNoCopy())[index];
+	parent = FindPHandle( phandle );
 
-    else if( 0 == regEntry->getProperty( "interrupt-controller"))
+    } else if( 0 == regEntry->getProperty( "interrupt-controller"))
         parent = regEntry->getParentEntry( gIODTPlane);
     else
         parent = 0;
@@ -481,8 +487,8 @@ static void IODTGetICellCounts( IORegistryEntry * regEntry,
         *aCellCount = 0;
 }
 
-UInt32 IODTMapOneInterrupt( IORegistryEntry * regEntry, UInt32 * intSpec,
-				OSData ** spec, const OSSymbol ** controller )
+static UInt32 IODTMapOneInterrupt( IORegistryEntry * regEntry, UInt32 * intSpec, UInt32 index,
+				    OSData ** spec, const OSSymbol ** controller )
 {
     IORegistryEntry *parent = 0;
     OSData			*data;
@@ -494,7 +500,7 @@ UInt32 IODTMapOneInterrupt( IORegistryEntry * regEntry, UInt32 * intSpec,
     UInt32			i, original_icells;
     bool			cmp, ok = false;
 
-    parent = IODTFindInterruptParent( regEntry );    
+    parent = IODTFindInterruptParent( regEntry, index );    
     IODTGetICellCounts( parent, &icells, &acells );
     addrCmp = 0;
     if( acells) {
@@ -640,11 +646,12 @@ static bool IODTMapInterruptsSharing( IORegistryEntry * regEntry, OSDictionary *
     OSData *		local2;
     UInt32 *		localBits;
     UInt32 *		localEnd;
+    IOItemCount		index;
     OSData * 		map;
     OSObject *		oneMap;
     OSArray *		mapped;
     OSArray *		controllerInts;
-    const OSSymbol *	controller;
+    const OSSymbol *	controller = 0;
     OSArray *		controllers;
     UInt32		skip = 1;
     bool		ok, nw;
@@ -666,6 +673,7 @@ static bool IODTMapInterruptsSharing( IORegistryEntry * regEntry, OSDictionary *
 
     localBits = (UInt32 *) local->getBytesNoCopy();
     localEnd = localBits + (local->getLength() / sizeof(UInt32));
+    index = 0;
     mapped = OSArray::withCapacity( 1 );
     controllers = OSArray::withCapacity( 1 );
 
@@ -673,7 +681,7 @@ static bool IODTMapInterruptsSharing( IORegistryEntry * regEntry, OSDictionary *
 
     if( ok) do {
         if( nw) {
-            skip = IODTMapOneInterrupt( regEntry, localBits, &map, &controller );
+            skip = IODTMapOneInterrupt( regEntry, localBits, index, &map, &controller );
             if( 0 == skip) {
                 IOLog("%s: error mapping interrupt[%d]\n",
                         regEntry->getName(), mapped->getCount());
@@ -686,6 +694,7 @@ static bool IODTMapInterruptsSharing( IORegistryEntry * regEntry, OSDictionary *
             controller->retain();
         }
 
+	index++;
         localBits += skip;
         mapped->setObject( map );
         controllers->setObject( controller );

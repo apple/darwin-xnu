@@ -361,7 +361,7 @@ struct x86_saved_state32_tagged {
 typedef struct x86_saved_state32_tagged x86_saved_state32_tagged_t;
 
 struct x86_sframe32 {
-/*
+	/*
 	 * in case we throw a fault reloading
 	 * segment registers on a return out of
 	 * the kernel... the 'slf' state is only kept

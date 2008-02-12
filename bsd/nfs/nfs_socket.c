@@ -318,6 +318,8 @@ nfs_connect(struct nfsmount *nmp)
 		lck_mtx_unlock(&nmp->nm_lock);
 		goto bad;
 	}
+	/* just playin' it safe */
+	sock_setsockopt(so, SOL_SOCKET, SO_UPCALLCLOSEWAIT, &on, sizeof(on));
 
 	if (!(nmp->nm_flag & NFSMNT_INT))
 		sock_nointerrupt(so, 1);

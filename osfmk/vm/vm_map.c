@@ -1749,10 +1749,13 @@ StartAgain: ;
 			}
 			for (; entry->vme_start < end;
 			     entry = entry->vme_next) {
+				/*
+				 * Check if the mapping's attributes
+				 * match the existing map entry.
+				 */
 				if (entry == vm_map_to_entry(map) ||
 				    entry->vme_start != tmp_start ||
 				    entry->is_sub_map != is_submap ||
-				    entry->object.vm_object != object ||
 				    entry->offset != tmp_offset ||
 				    entry->needs_copy != needs_copy ||
 				    entry->protection != cur_protection ||
@@ -1762,6 +1765,36 @@ StartAgain: ;
 					/* not the same mapping ! */
 					RETURN(KERN_NO_SPACE);
 				}
+				/*
+				 * Check if the same object is being mapped.
+				 */
+				if (is_submap) {
+					if (entry->object.sub_map !=
+					    (vm_map_t) object) {
+						/* not the same submap */
+						RETURN(KERN_NO_SPACE);
+					}
+				} else {
+					if (entry->object.vm_object != object) {
+						/* not the same VM object... */
+						vm_object_t obj2;
+
+						obj2 = entry->object.vm_object;
+						if ((obj2 == VM_OBJECT_NULL ||
+						     obj2->internal) &&
+						    (object == VM_OBJECT_NULL ||
+						     object->internal)) {
+							/*
+							 * ... but both are
+							 * anonymous memory,
+							 * so equivalent.
+							 */
+						} else {
+							RETURN(KERN_NO_SPACE);
+						}
+					}
+				}
+
 				tmp_offset += entry->vme_end - entry->vme_start;
 				tmp_start += entry->vme_end - entry->vme_start;
 				if (entry->vme_end >= end) {
@@ -7978,8 +8011,8 @@ submap_recurse:
 
 
 			if(submap_entry->wired_count != 0 ||
-			   (sub_object->copy_strategy !=
-			    MEMORY_OBJECT_COPY_SYMMETRIC)) {
+			   (sub_object->copy_strategy ==
+			    MEMORY_OBJECT_COPY_NONE)) {
 				vm_object_lock(sub_object);
 				vm_object_copy_slowly(sub_object,
 						      submap_entry->offset,
@@ -8086,7 +8119,7 @@ submap_recurse:
 			entry->max_protection |= submap_entry->max_protection;
 
 			if(copied_slowly) {
-				entry->offset = 0;
+				entry->offset = local_start - old_start;
 				entry->needs_copy = FALSE;
 				entry->is_shared = FALSE;
 			} else {

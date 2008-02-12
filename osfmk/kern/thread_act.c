@@ -759,7 +759,6 @@ special_handler_continue(void)
 
 			thread->sched_pri = DEPRESSPRI;
 			myprocessor->current_pri = thread->sched_pri;
-			thread->sched_mode &= ~TH_MODE_PREEMPT;
 		}
 		thread_unlock(thread);
 		splx(s);

@@ -69,7 +69,8 @@ options		UXPR		# user-level XPR package	# <uxpr>
 config		mach_kernel	swap generic			# <mach>
 
 #
-# Note: MAC options must be set in both bsd/conf and security/conf MASTER files
+# Note: MAC options must be set in all the bsd/conf, osfmk/conf, and 
+# security/conf MASTER files.
 #
 options		CONFIG_MACF			# Mandatory Access Control Framework
 options		CONFIG_MACF_SOCKET_SUBSET	# MAC socket subest (no labels)

@@ -96,7 +96,7 @@ thread_quantum_expire(
 	/*
 	 *	Check for fail-safe trip.
 	 */
-	if (!(thread->sched_mode & TH_MODE_TIMESHARE)) {
+	if (!(thread->sched_mode & (TH_MODE_TIMESHARE|TH_MODE_PROMOTED))) {
 		uint64_t			new_computation;
 
 		new_computation = processor->quantum_end;
@@ -115,7 +115,6 @@ thread_quantum_expire(
 
 			thread->safe_release = sched_tick + sched_safe_duration;
 			thread->sched_mode |= (TH_MODE_FAILSAFE|TH_MODE_TIMESHARE);
-			thread->sched_mode &= ~TH_MODE_PREEMPT;
 		}
 	}
 		

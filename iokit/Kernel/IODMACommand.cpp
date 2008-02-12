@@ -263,6 +263,7 @@ IODMACommand::setMemoryDescriptor(const IOMemoryDescriptor *mem, bool autoPrepar
 	else
 	    fInternalState->fCheckAddressing = (fNumAddressBits && (highPage >= (1UL << (fNumAddressBits - PAGE_SHIFT))));
 
+	fInternalState->fNewMD = true;
 	mem->retain();
 	fMemory = mem;
 
@@ -857,10 +858,11 @@ IODMACommand::genIOVMSegments(InternalSegmentFunction outSegFunc,
     if (offset >= memLength)
 	return kIOReturnOverrun;
 
-    if ((offset == internalState->fPreparedOffset) || (offset != state->fOffset)) {
+    if ((offset == internalState->fPreparedOffset) || (offset != state->fOffset) || internalState->fNewMD) {
 	state->fOffset                 = 0;
 	state->fIOVMAddr               = 0;
 	internalState->fNextRemapIndex = 0;
+	internalState->fNewMD	       = false;
 	state->fMapped                 = (IS_MAPPED(fMappingOptions) && fMapper);
 	mdOp                           = kIOMDFirstSegment;
     };

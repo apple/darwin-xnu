@@ -77,7 +77,7 @@ typedef struct lockstat_probe {
 
 lockstat_probe_t lockstat_probes[] =
 {
-#ifndef	__PPC__
+#ifdef __i386__
 	/* Not implemented yet on PPC... */
 	{ LS_LCK_MTX_LOCK,	LSA_ACQUIRE,	LS_LCK_MTX_LOCK_ACQUIRE, DTRACE_IDNONE },
 	{ LS_LCK_MTX_LOCK,	LSA_SPIN,	LS_LCK_MTX_LOCK_SPIN, DTRACE_IDNONE },

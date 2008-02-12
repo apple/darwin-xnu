@@ -440,7 +440,7 @@ struct ip_opts {
 
 #define	IP_TRAFFIC_MGT_BACKGROUND	65   /* int*; get background IO flags; set background IO */
 
-#if CONFIG_FORCE_OUT_IFP
+#ifdef PRIVATE
 /* This is a hack, this is only a hack. */
 #define	IP_FORCE_OUT_IFP	69	/* char ifname[] - send traffic on this interface */
 #endif

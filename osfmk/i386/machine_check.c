@@ -308,11 +308,18 @@ mca_dump(void)
 {
 	ia32_mcg_status_t	status;
 
-	mca_exception_taken = TRUE;
 	mca_save_state();
 
-	/* Serialize in case of multiple simultaneous machine-checks */
+	/*
+	 * Serialize in case of multiple simultaneous machine-checks.
+	 * Only the first caller is allowed to print MCA registers.
+	 */
 	simple_lock(&mca_lock);
+	if (mca_exception_taken) {
+		simple_unlock(&mca_lock);
+		return;
+	}
+	mca_exception_taken = TRUE;
 
 	/*
 	 * Report machine-check capabilities:

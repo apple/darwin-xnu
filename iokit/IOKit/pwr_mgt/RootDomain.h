@@ -41,12 +41,15 @@ enum {
     kPCICantSleep			= 0x00000004
 };
 
+
+
 /* 
  *IOPMrootDomain registry property keys
  */
 #define kRootDomainSupportedFeatures        "Supported Features"
 #define kRootDomainSleepReasonKey           "Last Sleep Reason"
 #define kRootDomainSleepOptionsKey          "Last Sleep Options"
+#define kIOPMRootDomainPowerStatusKey       "Power Status"
 
 /*
  * Possible sleep reasons found under kRootDomainSleepReasonsKey
@@ -115,6 +118,22 @@ public:
     virtual IOReturn setProperties ( OSObject * );
     IOReturn shutdownSystem ( void );
     IOReturn restartSystem ( void );
+
+/*! @function systemPowerEventOccurred
+    @abstract Other drivers may inform IOPMrootDomain of system PM events
+    @discussion systemPowerEventOccurred is a richer alternative to receivePowerNotification()
+        Only Apple-owned kexts should have reason to call systemPowerEventOccurred.
+    @param event An OSSymbol describing the type of power event.
+    @param value A 32-bit integer value associated with the event.
+    @param shouldUpdate indicates whether the root domain should send a notification
+        to interested parties. Pass false if you're calling systemPowerEventOccurred
+        several times in succession; and pass true only on the last invocatino.
+    @result kIOReturnSuccess on success */
+    IOReturn systemPowerEventOccurred(const OSSymbol *event, 
+                                    uint32_t intValue);
+    IOReturn systemPowerEventOccurred(const OSSymbol *event, 
+                                    OSObject *value);
+    
     virtual IOReturn receivePowerNotification (UInt32 msg);
     virtual void setSleepSupported( IOOptionBits flags );
     virtual IOOptionBits getSleepSupported();

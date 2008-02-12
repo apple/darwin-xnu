@@ -55,7 +55,7 @@
 #
 #  EMBEDDED_BASE =	[ intel mach bsmall vol pst gdb kernobjc fixpri simple_clock mdebug kernserv driverkit uxpr kernstack ipc_compat ipc_debug compat_43_tty sysv_sem sysv_msg sysv_shm audit panic_info config_imageboot ]
 #  EMBEDDED_FILESYS =	[ devfs hfs journaling fdesc fifo ]
-#  EMBEDDED_NET =	[ inet compat_oldsock mrouting tcpdrop_synfin bpfilter ipdivert config_mbuf_noexpand dummynet ipfirewall ipfw2 zlib ifnet_input_chk ]
+#  EMBEDDED_NET =	[ inet compat_oldsock mrouting tcpdrop_synfin bpfilter config_mbuf_noexpand ]
 #  EMBEDDED =		[ EMBEDDED_BASE EMBEDDED_NET VPN EMBEDDED_FILESYS libdriver no_printf_str no_kprintf_str no_kdebug ]
 #  DEVELOPMENT =	[ EMBEDDED_BASE EMBEDDED_NET NFS VPN EMBEDDED_FILESYS libdriver netmibs development mach_assert config_dtrace ]
 #
@@ -79,7 +79,8 @@ config		mach_kernel	swap generic			# <mach>
 options		EVENT						# <event>
 
 #
-# Note: MAC options must be set in both bsd/conf and security/conf MASTER files
+# Note: MAC options must be set in all the bsd/conf, osfmk/conf, and 
+# security/conf MASTER files.
 #
 options		CONFIG_MACF					# Mandatory Access Control Framework
 options		CONFIG_MACF_SOCKET_SUBSET	# MAC socket subest (no labels)

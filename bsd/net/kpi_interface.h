@@ -1505,6 +1505,25 @@ errno_t ifnet_find_by_name(const char *ifname, ifnet_t *interface);
  */
 errno_t ifnet_list_get(ifnet_family_t family, ifnet_t **interfaces, u_int32_t *count);
 
+#ifdef KERNEL_PRIVATE
+/*!
+	@function ifnet_list_get_all
+	@discussion Get a list of attached interfaces. List will be set to
+		point to an array allocated by ifnet_list_get. The interfaces
+		are refcounted and the counts will be incremented before the
+		function returns. The list of interfaces must be freed using
+		ifnet_list_free.  This is similar to ifnet_list_get, except
+		that it includes interfaces that are detaching.
+	@param family The interface family (i.e. IFNET_FAMILY_ETHERNET). To
+		find interfaces of all families, use IFNET_FAMILY_ANY.
+	@param interfaces A pointer to an array of interface references.
+	@param count A pointer that will be filled in with the number of
+		matching interfaces in the array.
+	@result 0 on success otherwise the errno error.
+ */
+errno_t ifnet_list_get_all(ifnet_family_t family, ifnet_t **interfaces, u_int32_t *count);
+#endif /* KERNEL_PRIVATE */
+
 /*!
 	@function ifnet_list_free
 	@discussion Free a list of interfaces returned by ifnet_list_get.

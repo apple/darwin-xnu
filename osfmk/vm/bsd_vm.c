@@ -321,6 +321,8 @@ trigger_name_to_port(
 extern int	uiomove64(addr64_t, int, void *);
 #define	MAX_RUN	32
 
+unsigned long vm_cs_tainted_forces = 0;
+
 int
 memory_object_control_uiomove(
 	memory_object_control_t	control,
@@ -396,8 +398,18 @@ memory_object_control_uiomove(
 			 */
 			assert(!dst_page->encrypted);
 
-		        if (mark_dirty)
+		        if (mark_dirty) {
 			        dst_page->dirty = TRUE;
+				if (dst_page->cs_validated) {
+					/*
+					 * CODE SIGNING:
+					 * We're modifying a code-signed
+					 * page:  assume that it is now tainted.
+					 */
+					dst_page->cs_tainted = TRUE;
+					vm_cs_tainted_forces++;
+				}
+			}
 			dst_page->busy = TRUE;
 
 			page_run[cur_run++] = dst_page;

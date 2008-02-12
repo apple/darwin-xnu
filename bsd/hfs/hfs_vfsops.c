@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -2398,6 +2398,7 @@ hfs_vget(struct hfsmount *hfsmp, cnid_t cnid, struct vnode **vpp, int skiplock)
 		} else if ((pid == hfsmp->hfs_private_desc[FILE_HARDLINKS].cd_cnid) &&
 		           (bcmp(nameptr, HFS_DELETE_PREFIX, HFS_DELETE_PREFIX_LEN) == 0)) {
 			*vpp = NULL;
+			cat_releasedesc(&cndesc);
 			return (ENOENT);  /* open unlinked file */
 		}
 	}
@@ -3313,6 +3314,12 @@ out:
 		VTOC(vp)->c_blocks = fp->ff_blocks;
 
 	}
+	/*
+	   Regardless of whether or not the totalblocks actually increased,
+	   we should reset the allocLimit field. If it changed, it will
+	   get updated; if not, it will remain the same.
+	*/
+	hfsmp->allocLimit = vcb->totalBlocks;
 	hfs_systemfile_unlock(hfsmp, lockflags);
 	hfs_end_transaction(hfsmp);
 
@@ -4026,6 +4033,7 @@ hfs_reclaim_journal_file(struct hfsmount *hfsmp, vfs_context_t context)
 	journal_fork.cf_extents[0].blockCount = newBlockCount;
 	journal_fork.cf_blocks = newBlockCount;
 	error = cat_update(hfsmp, &journal_desc, &journal_attr, &journal_fork, NULL);
+	cat_releasedesc(&journal_desc);  /* all done with cat descriptor */
 	if (error) {
 		printf("hfs_reclaim_journal_file: cat_update returned %d\n", error);
 		goto free_fail;
@@ -4140,6 +4148,7 @@ hfs_reclaim_journal_info_block(struct hfsmount *hfsmp, vfs_context_t context)
 	jib_fork.cf_extents[0].blockCount = 1;
 	jib_fork.cf_blocks = 1;
 	error = cat_update(hfsmp, &jib_desc, &jib_attr, &jib_fork, NULL);
+	cat_releasedesc(&jib_desc);  /* all done with cat descriptor */
 	if (error) {
 		printf("hfs_reclaim_journal_info_block: cat_update returned %d\n", error);
 		goto fail;

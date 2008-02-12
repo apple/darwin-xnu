@@ -115,7 +115,9 @@ cpu_IA32e_enable(cpu_data_t *cdp)
 		: "i" (CR0_PG)
 		: "eax" );
 	
+#if ONLY_SAFE_FOR_LINDA_SERIAL
 	kprintf("cpu_IA32e_enable(%p)\n", cdp);
+#endif
 
 	if ((rdmsr64(MSR_IA32_EFER) & MSR_IA32_EFER_LMA) == 0)
 		panic("cpu_IA32e_enable() MSR_IA32_EFER_LMA not asserted");

@@ -125,10 +125,12 @@ struct	inpcbhead ripcb;
 struct	inpcbinfo ripcbinfo;
 
 /* control hooks for ipfw and dummynet */
+#if IPFIREWALL
 ip_fw_ctl_t *ip_fw_ctl_ptr;
 #if DUMMYNET
 ip_dn_ctl_t *ip_dn_ctl_ptr;
 #endif /* DUMMYNET */
+#endif /* IPFIREWALL */
 
 /*
  * Nominal space allocated to a raw ip socket.

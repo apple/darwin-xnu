@@ -94,9 +94,15 @@ PRIVHDRSPPC = ${PRIVHDRS}/architecture/ppc
 KERNELFRAMEWORK = ${DESTDIR}/System/Library/Frameworks/Kernel.framework
 PRIVKERNELHDRS = ${KERNELFRAMEWORK}/Versions/A/PrivateHeaders
 
+.if ${MACHINE_ARCH} == armv6
+ARCHDIR = arm
+.else
+ARCHDIR = ${MACHINE_ARCH}
+.endif
+
 installhdrs-md: gen_md_mig_defs
-	mkdir -p ${INCDIR}/mach/${MACHINE_ARCH}
-	${INSTALL} -o 0 -c -m 444 ${MD_MIGHDRS} ${INCDIR}/mach/${MACHINE_ARCH}
+	mkdir -p ${INCDIR}/mach/${ARCHDIR}
+	${INSTALL} -o 0 -c -m 444 ${MD_MIGHDRS} ${INCDIR}/mach/${ARCHDIR}
 	mkdir -p ${PRIVHDRSPPC}
 	${INSTALL} -c -m 444 ${PRIVHDRSPPCHDRS} ${PRIVHDRSPPC}
 

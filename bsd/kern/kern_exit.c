@@ -246,8 +246,7 @@ exit1(proc_t p, int rv, int *retval)
 		}
 		sig_lock_to_exit(p);
 	}
-#if !CONFIG_EMBEDDED /* BER_XXX */
-	if (p->p_pid == 1) {
+	if (p == initproc) {
 		proc_unlock(p);
 		printf("pid 1 exited (signal %d, exit %d)",
 		    WTERMSIG(rv), WEXITSTATUS(rv));
@@ -257,7 +256,6 @@ exit1(proc_t p, int rv, int *retval)
 								"launchd"),
 							init_task_failure_data);
 	}
-#endif
 
 	p->p_lflag |= P_LEXIT;
 	p->p_xstat = rv;

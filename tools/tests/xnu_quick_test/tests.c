@@ -4577,7 +4577,7 @@ int aio_tests( void * the_argp )
 	
 	my_aiocbp = &my_aiocbs[ 0 ];
     my_aiocbp->aio_fildes = my_fd_list[ 0 ];
-	my_aiocbp->aio_offset = 0;
+	my_aiocbp->aio_offset = 4096;
 	my_aiocbp->aio_buf = my_buffers[ 0 ];
     my_aiocbp->aio_nbytes = AIO_TESTS_BUFFER_SIZE;
     my_aiocbp->aio_reqprio = 0;

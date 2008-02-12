@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -226,6 +226,11 @@ cat_convertattr(
 	}
 }
 
+/*
+ * Convert a raw catalog key and record into an in-core catalog descriptor.
+ *
+ * Note: The caller is responsible for releasing the catalog descriptor.
+ */
 __private_extern__
 int
 cat_convertkey(
@@ -286,6 +291,9 @@ cat_releasedesc(struct cat_desc *descp)
 
 /*
  * cat_lookup - lookup a catalog node using a cnode decriptor
+ *
+ * Note: The caller is responsible for releasing the output
+ * catalog descriptor (when supplied outdescp is non-null).
  */
 __private_extern__
 int
@@ -394,6 +402,10 @@ exit:
  * cat_findname - obtain a descriptor from cnid
  *
  * Only a thread lookup is performed.
+ *
+ * Note: The caller is responsible for releasing the output
+ * catalog descriptor (when supplied outdescp is non-null).
+
  */
 __private_extern__
 int
@@ -464,6 +476,9 @@ exit:
 
 /*
  * cat_idlookup - lookup a catalog node using a cnode id
+ *
+ * Note: The caller is responsible for releasing the output
+ * catalog descriptor (when supplied outdescp is non-null).
  */
 __private_extern__
 int
@@ -765,6 +780,9 @@ exit:
  *
  * NOTE: both the catalog file and attribute file locks must
  *       be held before calling this function.
+ *
+ * The caller is responsible for releasing the output
+ * catalog descriptor (when supplied outdescp is non-null).
  */
 __private_extern__
 int
@@ -937,6 +955,9 @@ exit:
  *	3. BTDeleteRecord(from_cnode);
  *	4. BTDeleteRecord(from_thread);
  *	5. BTInsertRecord(to_thread);
+ *
+ * Note: The caller is responsible for releasing the output
+ * catalog descriptor (when supplied out_cdp is non-null).
  */
 __private_extern__
 int 
@@ -1690,6 +1711,7 @@ cat_set_childlinkbit(struct hfsmount *hfsmp, cnid_t cnid)
 		if (retval) {
 			hfs_systemfile_unlock(hfsmp, lockflags);
 			hfs_end_transaction(hfsmp);
+			cat_releasedesc(&desc);
 			break;
 		}
 
@@ -1697,6 +1719,7 @@ cat_set_childlinkbit(struct hfsmount *hfsmp, cnid_t cnid)
 		hfs_end_transaction(hfsmp);
 
 		cnid = desc.cd_parentcnid;
+		cat_releasedesc(&desc);
 	}
 
 	return retval;

@@ -5383,3 +5383,169 @@ document showMCAstate
 Syntax: showMCAstate
 | Print machine-check register state after MC exception.
 end
+
+define _pt_step
+    #
+    # Step to lower-level page table and print attributes
+    #   $kgm_pt_paddr: current page table entry physical address
+    #   $kgm_pt_index: current page table entry index (0..511)
+    # returns
+    #   $kgm_pt_paddr: next level page table entry physical address
+    #                  or null if invalid
+    # For $kgm_pt_verbose = 0: print nothing
+    #                       1: print basic information
+    #                       2: print basic information and hex table dump
+    # The trickery with kdp_src_high32 is required for accesses above 4GB.
+    #
+    set $kgm_entryp = $kgm_pt_paddr + 8*$kgm_pt_index
+    set kdp_src_high32 = $kgm_pt_paddr >> 32
+    set kdp_trans_off = 1
+    set $entry =  *(pt_entry_t *)($kgm_entryp & 0x0ffffffffULL)
+    if $kgm_pt_verbose == 2
+        x/512g ($kgm_pt_paddr & 0x0ffffffffULL)
+    end
+    set kdp_trans_off = 0
+    set kdp_src_high32 = 0
+    set $kgm_paddr_mask = ~((0xffffULL<<48) | 0xfffULL)
+    if $kgm_pt_verbose == 0
+        if $entry & (0x1 << 0)
+            set $kgm_pt_paddr = $entry & $kgm_paddr_mask
+        else
+            set $kgm_pt_paddr = 0
+        end
+    else
+        printf "0x%016llx:\n\t0x%016llx\n\t", $kgm_entryp, $entry
+        if $entry & (0x1 << 0)
+            printf "valid"	
+            set $kgm_pt_paddr = $entry & $kgm_paddr_mask
+        else
+            printf "invalid"
+            set $kgm_pt_paddr = 0
+        end
+        if $entry & (0x1 << 1)
+            printf " writeable" 
+        else
+            printf " read-only" 
+        end
+        if $entry & (0x1 << 2)
+            printf " user" 
+        else
+            printf " supervisor" 
+        end
+        if $entry & (0x1 << 3)
+            printf " PWT" 
+        end
+        if $entry & (0x1 << 4)
+            printf " PCD" 
+        end
+        if $entry & (0x1 << 5)
+            printf " accessed" 
+        end
+        if $entry & (0x1 << 6)
+            printf " dirty" 
+        end
+        if $entry & (0x1 << 7)
+            printf " PAT" 
+        end
+        if $entry & (0x1 << 8)
+            printf " global" 
+        end
+        if $entry & (0x3 << 9)
+            printf " avail:0x%x", ($entry >> 9) & 0x3
+        end
+        if $entry & (0x1 << 63)
+            printf " noexec" 
+        end
+        printf "\n"
+    end
+end
+
+define _pmap_walk
+    set $kgm_pmap = (pmap_t) $arg0
+    set $kgm_vaddr = $arg1
+    set $kgm_pt_paddr = $kgm_pmap->pm_cr3
+    if $kgm_pt_paddr && cpu_64bit
+        set $kgm_pt_index = ($kgm_vaddr >> 39) & 0x1ffULL
+        if $kgm_pt_verbose
+            printf "pml4 (index %d):\n", $kgm_pt_index
+        end
+        _pt_step
+    end
+    if $kgm_pt_paddr
+        set $kgm_pt_index = ($kgm_vaddr >> 30) & 0x1ffULL
+        if $kgm_pt_verbose
+            printf "pdpt (index %d):\n", $kgm_pt_index
+        end
+        _pt_step
+    end
+    if $kgm_pt_paddr
+        set $kgm_pt_index = ($kgm_vaddr >> 21) & 0x1ffULL
+        if $kgm_pt_verbose
+            printf "pdt (index %d):\n", $kgm_pt_index
+        end
+        _pt_step
+    end
+    if $kgm_pt_paddr
+        set $kgm_pt_index = ($kgm_vaddr >> 12) & 0x1ffULL
+        if $kgm_pt_verbose
+            printf "pt (index %d):\n", $kgm_pt_index
+        end
+        _pt_step
+    end
+    if $kgm_pt_paddr
+        set $kgm_paddr = $kgm_pt_paddr + ($kgm_vaddr & 0xfffULL)
+        set kdp_trans_off = 1
+        set kdp_src_high32 = $kgm_paddr >> 32
+        set $kgm_value = *($kgm_paddr & 0x0ffffffffULL)
+        set kdp_trans_off = 0
+        set kdp_src_high32 = 0
+        printf "phys 0x%016llx: 0x%08x\n", $kgm_paddr, $kgm_value
+    else
+        set $kgm_paddr = 0
+        printf "(no translation)\n"
+    end
+end
+
+define pmap_walk
+    if $kgm_mtype != 7
+        printf "Not available for current architecture.\n"
+    else
+        if $argc != 2
+            printf "pmap_walk <pmap> <vaddr>\n"
+        else
+            if !$kgm_pt_verbose
+                set $kgm_pt_verbose = 1
+            else
+                if $kgm_pt_verbose != 2
+                    set $kgm_pt_verbose = 1
+                end
+            end
+            _pmap_walk $arg0 $arg1
+        end
+    end
+end
+
+document pmap_walk
+Syntax: (gdb) pmap_walk <pmap> <virtual_address>
+| Perform a page-table walk in <pmap> for <virtual_address>.
+| Set $kgm_pt_verbose=2 for full hex dump of page tables.
+end
+
+define pmap_vtop
+    if $kgm_mtype != 7
+        printf "Not available for current architecture.\n"
+    else
+        if $argc != 2
+            printf "pmap_vtop <pamp> <vaddr>\n"
+        else
+            set $kgm_pt_verbose = 0
+            _pmap_walk $arg0 $arg1
+        end
+    end
+end
+
+document pmap_vtop
+Syntax: (gdb) pmap_vtop <pmap> <virtual_address>
+| For page-tables in <pmap> translate <virtual_address> to physical address.
+end
+

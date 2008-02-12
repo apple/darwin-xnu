@@ -107,6 +107,28 @@ extern uint64_t		_rtc_nanotime_read(
 rtc_nanotime_t	rtc_nanotime_info = {0,0,0,0,1,0};
 
 
+/*
+ * tsc_to_nanoseconds:
+ *
+ * Basic routine to convert a raw 64 bit TSC value to a
+ * 64 bit nanosecond value.  The conversion is implemented
+ * based on the scale factor and an implicit 32 bit shift.
+ */
+static inline uint64_t
+_tsc_to_nanoseconds(uint64_t value)
+{
+    asm volatile("movl	%%edx,%%esi	;"
+		 "mull	%%ecx		;"
+		 "movl	%%edx,%%edi	;"
+		 "movl	%%esi,%%eax	;"
+		 "mull	%%ecx		;"
+		 "addl	%%edi,%%eax	;"	
+		 "adcl	$0,%%edx	 "
+		 : "+A" (value) : "c" (rtc_nanotime_info.scale) : "esi", "edi");
+
+    return (value);
+}
+
 static uint32_t
 deadline_to_decrementer(
 	uint64_t	deadline,
@@ -234,26 +256,31 @@ rtc_nanotime_read(void)
 /*
  * rtc_clock_napped:
  *
- * Invoked from power manangement when we have awoken from a nap (C3/C4)
- * during which the TSC lost counts.  The nanotime data is updated according
- * to the provided value which indicates the number of nanoseconds that the
- * TSC was not counting.
- *
- * The caller must guarantee non-reentrancy.
+ * Invoked from power management when we exit from a low C-State (>= C4)
+ * and the TSC has stopped counting.  The nanotime data is updated according
+ * to the provided value which represents the new value for nanotime.
  */
 void
-rtc_clock_napped(
-	uint64_t		delta)
+rtc_clock_napped(uint64_t base, uint64_t tsc_base)
 {
 	rtc_nanotime_t	*rntp = &rtc_nanotime_info;
-	uint32_t	generation;
+	uint64_t	oldnsecs;
+	uint64_t	newnsecs;
+	uint64_t	tsc;
 
 	assert(!ml_get_interrupts_enabled());
-	generation = rntp->generation;
-	rntp->generation = 0;
-	rntp->ns_base += delta;
-	rntp->generation = ((generation + 1) != 0) ? (generation + 1) : 1;
-	rtc_nanotime_set_commpage(rntp);
+	tsc = rdtsc64();
+	oldnsecs = rntp->ns_base + _tsc_to_nanoseconds(tsc - rntp->tsc_base);
+	newnsecs = base + _tsc_to_nanoseconds(tsc - tsc_base);
+	
+	/*
+	 * Only update the base values if time using the new base values
+	 * is later than the time using the old base values.
+	 */
+	if (oldnsecs < newnsecs) {
+	    _rtc_nanotime_store(tsc_base, base, rntp->scale, rntp->shift, rntp);
+	    rtc_nanotime_set_commpage(rntp);
+	}
 }
 
 void

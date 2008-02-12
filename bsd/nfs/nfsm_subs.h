@@ -513,11 +513,13 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 /* get a pointer to the next consecutive bytes in an mbuf chain */
 #define nfsm_chain_get_opaque_pointer(E, NMC, LEN, PTR) \
 	do { \
+		uint32_t rndlen; \
 		if (E) break; \
-		if ((NMC)->nmc_left >= (uint32_t)(LEN)) { \
+		rndlen = nfsm_rndup(LEN); \
+		if ((NMC)->nmc_left >= rndlen) { \
 			(PTR) = (void*)(NMC)->nmc_ptr; \
-			(NMC)->nmc_left -= nfsm_rndup(LEN); \
-			(NMC)->nmc_ptr += nfsm_rndup(LEN); \
+			(NMC)->nmc_left -= rndlen; \
+			(NMC)->nmc_ptr += rndlen; \
 		} else { \
 			(E) = nfsm_chain_get_opaque_pointer_f((NMC), (LEN), (u_char**)&(PTR)); \
 		} \
@@ -526,11 +528,13 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 /* copy the next consecutive bytes of opaque data from an mbuf chain */
 #define nfsm_chain_get_opaque(E, NMC, LEN, PTR) \
 	do { \
+		uint32_t rndlen; \
 		if (E) break; \
-		if ((NMC)->nmc_left >= (LEN)) { \
+		rndlen = nfsm_rndup(LEN); \
+		if ((NMC)->nmc_left >= rndlen) { \
 			u_char *__tmpptr = (u_char*)(NMC)->nmc_ptr; \
-			(NMC)->nmc_left -= nfsm_rndup(LEN); \
-			(NMC)->nmc_ptr += nfsm_rndup(LEN); \
+			(NMC)->nmc_left -= rndlen; \
+			(NMC)->nmc_ptr += rndlen; \
 			bcopy(__tmpptr, (PTR), (LEN)); \
 		} else { \
 			(E) = nfsm_chain_get_opaque_f((NMC), (LEN), (u_char*)(PTR)); \

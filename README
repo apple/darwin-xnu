@@ -15,31 +15,27 @@ A. How to build XNU:
 
   By default, architecture defaults to the build machine 
   architecture, and the kernel configuration is set to build for DEVELOPMENT.
-  The machine configuration defaults to MX31ADS for arm and nothing for i386 and ppc.
+  The machine configuration defaults to S5L8900XRB for arm and default for i386 and ppc.
   
   This will also create a bootable image, mach_kernel,  and a kernel binary 
   with symbols, mach_kernel.sys.
-
-  Here are the valid arm machine configs:
-	LN2410SBC MX31ADS INTEGRATORCP S5I3000SMDK S5L8900XFPGA S5L8900XRB
-	OLOCREEK
 	
   Examples:
-	/* make a debug kernel for MX31 arm board */
-	make TARGET_CONFIGS="debug arm MX31ADS"
+	/* make a debug kernel for H1 arm board */
+	make TARGET_CONFIGS="debug arm s5l8900xrb"
 	
-    $(OBJROOT)/DEBUG_ARM_MX31ADS/osfmk/DEBUG/osfmk.o: pre-linked object for osfmk component
-    $(OBJROOT)/DEBUG_ARM_MX31ADS/mach_kernel: bootable image
+    $(OBJROOT)/DEBUG_ARM_S5L8900XRB/osfmk/DEBUG/osfmk.o: pre-linked object for osfmk component
+    $(OBJROOT)/DEBUG_ARM_S5L8900XRB/mach_kernel: bootable image
 
-	/* make debug and development kernels for MX31 arm board */
-	make TARGET_CONFIGS="debug arm MX31ADS  development arm MX31ADS"
+	/* make debug and development kernels for H1 arm board */
+	make TARGET_CONFIGS="debug arm s5l8900xrb  development arm s5l8900xrb"
 	
-    $(OBJROOT)/DEBUG_ARM_MX31ADS/osfmk/DEBUG/osfmk.o: pre-linked object for osfmk component
-    $(OBJROOT)/DEBUG_ARM_MX31ADS/mach_kernel: bootable image
+    $(OBJROOT)/DEBUG_ARM_S5L8900XRB/osfmk/DEBUG/osfmk.o: pre-linked object for osfmk component
+    $(OBJROOT)/DEBUG_ARM_S5L8900XRB/mach_kernel: bootable image
     $(OBJROOT)/DEVELOPMENT_ARM/osfmk/DEVELOPMENT/osfmk.o: pre-linked object for osfmk component
     $(OBJROOT)/DEVELOPMENT_ARM/mach_kernel: bootable image
 
-	/* this is all you need to do to build MX31ADS arm with DEVELOPMENT kernel configuration  */
+	/* this is all you need to do to build H1 arm with DEVELOPMENT kernel configuration  */
 	make TARGET_CONFIGS="default arm default"
 	
 	or the following is equivalent

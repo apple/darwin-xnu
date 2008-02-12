@@ -185,14 +185,13 @@ struct thread {
 	integer_t			sched_mode;			/* scheduling mode bits */
 #define TH_MODE_REALTIME		0x0001		/* time constraints supplied */
 #define TH_MODE_TIMESHARE		0x0002		/* use timesharing algorithm */
-#define TH_MODE_PREEMPT			0x0004		/* can preempt kernel contexts */
-#define TH_MODE_FAILSAFE		0x0008		/* fail-safe has tripped */
-#define	TH_MODE_PROMOTED		0x0010		/* sched pri has been promoted */
-#define TH_MODE_ABORT			0x0020		/* abort interruptible waits */
-#define TH_MODE_ABORTSAFELY		0x0040		/* ... but only those at safe point */
+#define TH_MODE_FAILSAFE		0x0004		/* fail-safe has tripped */
+#define	TH_MODE_PROMOTED		0x0008		/* sched pri has been promoted */
+#define TH_MODE_ABORT			0x0010		/* abort interruptible waits */
+#define TH_MODE_ABORTSAFELY		0x0020		/* ... but only those at safe point */
 #define TH_MODE_ISABORTED		(TH_MODE_ABORT | TH_MODE_ABORTSAFELY)
-#define	TH_MODE_DEPRESS			0x0080		/* normal depress yield */
-#define TH_MODE_POLLDEPRESS		0x0100		/* polled depress yield */
+#define	TH_MODE_DEPRESS			0x0040		/* normal depress yield */
+#define TH_MODE_POLLDEPRESS		0x0080		/* polled depress yield */
 #define TH_MODE_ISDEPRESSED		(TH_MODE_DEPRESS | TH_MODE_POLLDEPRESS)
 
 	integer_t			sched_pri;			/* scheduled (current) priority */

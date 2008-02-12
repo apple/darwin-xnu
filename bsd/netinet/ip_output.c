@@ -249,7 +249,9 @@ ip_output_list(
 #if IPFIREWALL_FORWARD
 	int fwd_rewrite_src = 0;
 #endif
+#if IPFIREWALL
 	struct ip_fw_args args;
+#endif
 	int didfilter = 0;
 	ipfilter_t inject_filter_ref = 0;
 	struct m_tag	*tag;
@@ -261,8 +263,8 @@ ip_output_list(
 	KERNEL_DEBUG(DBG_FNC_IP_OUTPUT | DBG_FUNC_START, 0,0,0,0,0);
 
 	packetlist = m0;
-	args.next_hop = NULL;
 #if IPFIREWALL
+	args.next_hop = NULL;
 	args.eh = NULL;
 	args.rule = NULL;
 	args.divert_rule = 0;			/* divert cookie */
@@ -297,7 +299,6 @@ ip_output_list(
 		m_tag_delete(m0, tag);
 	}
 #endif /* IPDIVERT */
-#endif /* IPFIREWALL */
 
 	if ((tag = m_tag_locate(m0, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_IPFORWARD, NULL)) != NULL) {
 		struct ip_fwd_tag	*ipfwd_tag;
@@ -307,6 +308,7 @@ ip_output_list(
 		
 		m_tag_delete(m0, tag);
 	}
+#endif /* IPFIREWALL */
 
 	m = m0;
 	
@@ -356,7 +358,11 @@ loopit:
 		hlen = len;
 	}
 	ip = mtod(m, struct ip *);
+#if IPFIREWALL
 	pkt_dst = args.next_hop ? args.next_hop->sin_addr : ip->ip_dst;
+#else
+	pkt_dst = ip->ip_dst;
+#endif
 
 	/*
 	 * Fill in IP header.

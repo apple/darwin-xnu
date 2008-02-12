@@ -149,6 +149,12 @@ extern void vm_fault_classify(vm_object_t	object,
 extern void vm_fault_classify_init(void);
 #endif
 
+
+unsigned long vm_cs_validates = 0;
+unsigned long vm_cs_revalidates = 0;
+unsigned long vm_cs_query_modified = 0;
+unsigned long vm_cs_validated_dirtied = 0;
+
 /*
  *	Routine:	vm_fault_init
  *	Purpose:
@@ -1988,19 +1994,21 @@ vm_fault_enter(vm_page_t m,
 
         cache_attr = ((unsigned int)m->object->wimg_bits) & VM_WIMG_MASK;
 
-	if (m->object->code_signed && !m->cs_validated &&
-	    pmap != kernel_pmap) {
-		/*
-		 * CODE SIGNING:
-		 * This page comes from a VM object backed by a
-		 * signed memory object and it hasn't been validated yet.
-		 * We're about to enter it into a process address space,
-		 * so we need to validate its signature now.
-		 */
+	if (m->object->code_signed && pmap != kernel_pmap &&
+	    (!m->cs_validated || m->wpmapped)) {
 		vm_object_lock_assert_exclusive(m->object);
 
-		/* VM map still locked, so 1 ref will remain on VM object */
+		if (m->cs_validated && m->wpmapped) {
+			vm_cs_revalidates++;
+		}
 
+		/*
+		 * CODE SIGNING:
+		 * This page comes from a VM object backed by a signed
+		 * memory object.  We are about to enter it into a process
+		 * address space, so we need to validate its signature.
+		 */
+		/* VM map is locked, so 1 ref will remain on VM object */
 		vm_page_validate_cs(m);
 	}
 
@@ -2087,6 +2095,10 @@ vm_fault_enter(vm_page_t m,
 		 * that's needed for an AtomicCompareAndSwap
 		 */
 		m->pmapped = TRUE;
+		if (prot & VM_PROT_WRITE) {
+			vm_object_lock_assert_exclusive(m->object);
+			m->wpmapped = TRUE;
+		}
 
 		PMAP_ENTER(pmap, vaddr, m, prot, cache_attr, wired);
 	}
@@ -2273,7 +2285,6 @@ RetryFault:
 	 */
 	if (wired) {
 		fault_type = prot | VM_PROT_WRITE;
-	
 		/*
 		 * since we're treating this fault as a 'write'
 		 * we must hold the top object lock exclusively
@@ -2500,9 +2511,10 @@ RetryFault:
 			}
 			ASSERT_PAGE_DECRYPTED(m);
 
-			if (m->object->code_signed && !m->cs_validated) {
+			if (m->object->code_signed && map != kernel_map &&
+			    (!m->cs_validated || m->wpmapped)) {
 				/*
-				 * We will need to validate this page
+				 * We might need to validate this page
 				 * against its code signature, so we
 				 * want to hold the VM object exclusively.
 				 */
@@ -2547,8 +2559,23 @@ RetryFault:
 			 *		--> must disallow write.
 			 */
 
-			if (object == cur_object && object->copy == VM_OBJECT_NULL)
+			if (object == cur_object && object->copy == VM_OBJECT_NULL) {
+				if ((fault_type & VM_PROT_WRITE) == 0) {
+					/*
+					 * This is not a "write" fault, so we
+					 * might not have taken the object lock
+					 * exclusively and we might not be able
+					 * to update the "wpmapped" bit in
+					 * vm_fault_enter().
+					 * Let's just grant read access to
+					 * the page for now and we'll
+					 * soft-fault again if we need write
+					 * access later...
+					 */
+					prot &= ~VM_PROT_WRITE;
+				}
 				goto FastPmapEnter;
+			}
 
 			if ((fault_type & VM_PROT_WRITE) == 0) {
 
@@ -4117,12 +4144,50 @@ vm_page_validate_cs(
 	boolean_t		validated, tainted;
 	boolean_t		busy_page;
 
-	vm_object_lock_assert_exclusive(page->object);
-	assert(!page->cs_validated);
+	vm_object_lock_assert_held(page->object);
 
 	if (!cs_validation) {
 		return;
 	}
+
+	if (page->cs_validated && !page->cs_tainted && page->wpmapped) {
+		vm_object_lock_assert_exclusive(page->object);
+
+		/*
+		 * This page has already been validated and found to
+		 * be valid.  However, it was mapped for "write" access
+		 * sometime in the past, so we have to check if it was
+		 * modified.  If so, it needs to be revalidated.
+		 * If the page was already found to be "tainted", no
+		 * need to re-validate.
+		 */
+		if (!page->dirty) {
+			vm_cs_query_modified++;
+			page->dirty = pmap_is_modified(page->phys_page);
+		}
+		if (page->dirty) {
+			/*
+			 * The page is dirty, so let's clear its
+			 * "validated" bit and re-validate it.
+			 */
+			if (cs_debug) {
+				printf("CODESIGNING: vm_page_validate_cs: "
+				       "page %p obj %p off 0x%llx "
+				       "was modified\n",
+				       page, page->object, page->offset);
+			}
+			page->cs_validated = FALSE;
+			vm_cs_validated_dirtied++;
+		}
+	}
+
+	if (page->cs_validated) {
+		return;
+	}
+
+	vm_object_lock_assert_exclusive(page->object);
+
+	vm_cs_validates++;
 
 	object = page->object;
 	assert(object->code_signed);

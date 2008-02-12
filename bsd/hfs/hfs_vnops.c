@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1728,9 +1728,10 @@ hfs_vnop_remove(ap)
 
 	hfs_lock_truncate(cp, TRUE);
 
-	if ((error = hfs_lockpair(dcp, cp, HFS_EXCLUSIVE_LOCK)))
-		goto out;
-
+	if ((error = hfs_lockpair(dcp, cp, HFS_EXCLUSIVE_LOCK))) {
+		hfs_unlock_truncate(cp, TRUE);
+		return (error);
+	}
 	error = hfs_removefile(dvp, vp, ap->a_cnp, ap->a_flags, 0, 0);
 
 	//
@@ -1748,9 +1749,14 @@ hfs_vnop_remove(ap)
 	    recycle_rsrc = 1;
 	}
 
-	hfs_unlockpair(dcp, cp);
-out:
+	/*
+	 * Drop the truncate lock before unlocking the cnode
+	 * (which can potentially perform a vnode_put and
+	 * recycle the vnode which in turn might require the
+	 * truncate lock)
+	 */
 	hfs_unlock_truncate(cp, TRUE);
+	hfs_unlockpair(dcp, cp);
 
 	if (recycle_rsrc && vnode_getwithvid(rvp, rvid) == 0) {
 		vnode_recycle(rvp);
@@ -1798,7 +1804,7 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 	int lockflags;
 	int error = 0;
 	int started_tr = 0;
-	int isbigfile = 0, hasxattrs=0, isdir=0;
+	int isbigfile = 0, defer_remove=0, isdir=0;
 
 	cp = VTOC(vp);
 	dcp = VTOC(dvp);
@@ -1866,11 +1872,22 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 	 * (needed for hfs_truncate)
 	 */
 	if (isdir == 0 && (cp->c_blocks - VTOF(vp)->ff_blocks)) {
-		error = hfs_vgetrsrc(hfsmp, vp, &rvp, FALSE);
-		if (error)
-			goto out;
-		/* Defer the vnode_put on rvp until the hfs_unlock(). */
-		cp->c_flag |= C_NEED_RVNODE_PUT;
+		/*
+		 * We must avoid calling hfs_vgetrsrc() when we have
+		 * an active resource fork vnode to avoid deadlocks
+		 * when that vnode is in the VL_TERMINATE state. We
+		 * can defer removing the file and its resource fork
+		 * until the call to hfs_vnop_inactive() occurs.
+		 */
+		if (cp->c_rsrc_vp) {
+	    		defer_remove = 1;
+		} else {
+			error = hfs_vgetrsrc(hfsmp, vp, &rvp, FALSE);
+			if (error)
+				goto out;
+			/* Defer the vnode_put on rvp until the hfs_unlock(). */
+			cp->c_flag |= C_NEED_RVNODE_PUT;
+		}
 	}
 	/* Check if this file is being used. */
 	if (isdir == 0) {
@@ -1887,7 +1904,7 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 	   individual transactions in case there are too many */
 	if ((hfsmp->hfs_attribute_vp != NULL) &&
 	    (cp->c_attr.ca_recflags & kHFSHasAttributesMask) != 0) {
-	    hasxattrs = 1;
+	    defer_remove = 1;
 	}
 
 	/*
@@ -1976,10 +1993,10 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 
 	/*
 	 * There are two cases to consider:
-	 *  1. File is busy/big   ==> move/rename the file
+	 *  1. File is busy/big/defer_remove ==> move/rename the file
 	 *  2. File is not in use ==> remove the file
 	 */
-	if (dataforkbusy || rsrcforkbusy || isbigfile || hasxattrs) {
+	if (dataforkbusy || rsrcforkbusy || isbigfile || defer_remove) {
 		char delname[32];
 		struct cat_desc to_desc;
 		struct cat_desc todir_desc;
@@ -3191,6 +3208,7 @@ hfs_update(struct vnode *vp, __unused int waitfor)
 	struct cat_fork *dataforkp = NULL;
 	struct cat_fork *rsrcforkp = NULL;
 	struct cat_fork datafork;
+	struct cat_fork rsrcfork;
 	struct hfsmount *hfsmp;
 	int lockflags;
 	int error;
@@ -3270,6 +3288,18 @@ hfs_update(struct vnode *vp, __unused int waitfor)
 		datafork.cf_blocks = (cp->c_datafork->ff_blocks - cp->c_datafork->ff_unallocblocks);
 		datafork.cf_size   = datafork.cf_blocks * HFSTOVCB(hfsmp)->blockSize;
 		dataforkp = &datafork;
+	}
+
+	/*
+	 * For resource forks with delayed allocations, make sure
+	 * the block count and file size match the number of blocks
+	 * actually allocated to the file on disk.
+	 */
+	if (rsrcforkp && (cp->c_rsrcfork->ff_unallocblocks != 0)) {
+		bcopy(rsrcforkp, &rsrcfork, sizeof(rsrcfork));
+		rsrcfork.cf_blocks = (cp->c_rsrcfork->ff_blocks - cp->c_rsrcfork->ff_unallocblocks);
+		rsrcfork.cf_size   = rsrcfork.cf_blocks * HFSTOVCB(hfsmp)->blockSize;
+		rsrcforkp = &rsrcfork;
 	}
 
 	/*
@@ -3585,6 +3615,7 @@ hfs_vgetrsrc(struct hfsmount *hfsmp, struct vnode *vp, struct vnode **rvpp, int 
 	int error;
 	int vid;
 
+restart:
 	/* Attempt to use exising vnode */
 	if ((rvp = cp->c_rsrc_vp)) {
 	        vid = vnode_vid(rvp);
@@ -3607,15 +3638,22 @@ hfs_vgetrsrc(struct hfsmount *hfsmp, struct vnode *vp, struct vnode **rvpp, int 
 
 		error = vnode_getwithvid(rvp, vid);
 
-		if (can_drop_lock)
+		if (can_drop_lock) {
 			(void) hfs_lock(cp, HFS_FORCE_LOCK);
-
+			/*
+			 * When our lock was relinquished, the resource fork
+			 * could have been recycled.  Check for this and try
+			 * again.
+			 */
+			if (error == ENOENT)
+				goto restart;
+		}
 		if (error) {
 			const char * name = (const char *)VTOC(vp)->c_desc.cd_nameptr;
 
 			if (name)
-				printf("hfs_vgetrsrc: couldn't get"
-					" resource fork for %s\n", name);
+				printf("hfs_vgetrsrc: couldn't get resource"
+				       " fork for %s, err %d\n", name, error);
 			return (error);
 		}
 	} else {

@@ -1462,13 +1462,6 @@ findpcb:
 				 * Grow the congestion window, if the
 				 * connection is cwnd bound.
 				 */
-			    	if (tp->snd_cwnd < tp->snd_wnd) {
-					tp->t_bytes_acked += acked;
-					if (tp->t_bytes_acked > tp->snd_cwnd) {
-						tp->t_bytes_acked -= tp->snd_cwnd;
-						tp->snd_cwnd += tp->t_maxseg;
-					}
-				}
 				sbdrop(&so->so_snd, acked);
 				if (SEQ_GT(tp->snd_una, tp->snd_recover) &&
 				    SEQ_LEQ(th->th_ack, tp->snd_recover))
@@ -1794,7 +1787,6 @@ findpcb:
 				tp->ecn_flags &= ~TE_SENDIPECT;
 			}
 			
-			soisconnected(so);
 #if CONFIG_MACF_NET && CONFIG_MACF_SOCKET
 			/* XXXMAC: recursive lock: SOCK_LOCK(so); */
 			mac_socketpeer_label_associate_mbuf(m, so);
@@ -1835,6 +1827,10 @@ findpcb:
 				tp->t_state = TCPS_ESTABLISHED;
 				tp->t_timer[TCPT_KEEP] = TCP_KEEPIDLE(tp);
 			}
+			/* soisconnected may lead to socket_unlock in case of upcalls,
+			 * make sure this is done when everything is setup.
+			 */
+			soisconnected(so);
 		} else {
 		/*
 		 *  Received initial SYN in SYN-SENT[*] state => simul-
@@ -2223,7 +2219,6 @@ trimthenstep6:
 	case TCPS_SYN_RECEIVED:
 
 		tcpstat.tcps_connects++;
-		soisconnected(so);
 
 		/* Do window scaling? */
 		if ((tp->t_flags & (TF_RCVD_SCALE|TF_REQ_SCALE)) ==
@@ -2252,7 +2247,13 @@ trimthenstep6:
 			(void) tcp_reass(tp, (struct tcphdr *)0, &tlen,
 			    (struct mbuf *)0);
 		tp->snd_wl1 = th->th_seq - 1;
+
 		/* FALLTHROUGH */
+
+		/* soisconnected may lead to socket_unlock in case of upcalls,
+		 * make sure this is done when everything is setup.
+		 */
+		soisconnected(so);
 
 	/*
 	 * In ESTABLISHED state: drop duplicate ACKs; ACK out of range
@@ -2542,29 +2543,44 @@ process_ACK:
 			register u_int cw = tp->snd_cwnd;
 			register u_int incr = tp->t_maxseg;
 
-			if (cw >= tp->snd_ssthresh) {
-				tp->t_bytes_acked += acked;
-				if (tp->t_bytes_acked >= cw) {
+			if ((acked > incr) && tcp_do_rfc3465) {
+				if (cw >= tp->snd_ssthresh) {
+					tp->t_bytes_acked += acked;
+					if (tp->t_bytes_acked >= cw) {
 					/* Time to increase the window. */
-					tp->t_bytes_acked -= cw;
-				} else {
+						tp->t_bytes_acked -= cw;
+					} else {
 					/* No need to increase yet. */
-					incr = 0;
-				}
-			} else {
-				/*
-				 * If the user explicitly enables RFC3465
-				 * use 2*SMSS for the "L" param.  Otherwise
-				 * use the more conservative 1*SMSS.
-				 *
-				 * (See RFC 3465 2.3 Choosing the Limit)
-				 */
-				u_int abc_lim;
+						incr = 0;
+					}
+				} else {
+					/*
+					 * If the user explicitly enables RFC3465
+					 * use 2*SMSS for the "L" param.  Otherwise
+					 * use the more conservative 1*SMSS.
+					 *
+					 * (See RFC 3465 2.3 Choosing the Limit)
+					 */
+					u_int abc_lim;
 
-				abc_lim = (tcp_do_rfc3465 == 0) ?
-				    incr : incr * 2;
-				incr = min(acked, abc_lim);
+					abc_lim = (tcp_do_rfc3465 == 0) ?
+					    incr : incr * 2;
+					incr = lmin(acked, abc_lim);
+				}
 			}
+			else {
+				/*
+  				 * If the window gives us less than ssthresh packets
+			   	 * in flight, open exponentially (segsz per packet).
+				 * Otherwise open linearly: segsz per window
+				 * (segsz^2 / cwnd per packet).
+				 */
+		
+					if (cw >= tp->snd_ssthresh) {
+						incr = incr * incr / cw;
+					}
+			}
+
 
 			tp->snd_cwnd = min(cw+incr, TCP_MAXWIN<<tp->snd_scale);
 		}
@@ -2577,7 +2593,6 @@ process_ACK:
 			tp->snd_wnd -= acked;
 			ourfinisacked = 0;
 		}
-		sowwakeup(so);
 		/* detect una wraparound */
 		if ((tcp_do_newreno || tp->sack_enable) &&
 		    !IN_FASTRECOVERY(tp) &&
@@ -2595,6 +2610,12 @@ process_ACK:
 		}
 		if (SEQ_LT(tp->snd_nxt, tp->snd_una))
 			tp->snd_nxt = tp->snd_una;
+			
+		/*
+		 * sowwakeup must happen after snd_una, et al. are updated so that
+		 * the sequence numbers are in sync with so_snd
+		 */
+		sowwakeup(so);
 
 		switch (tp->t_state) {
 
@@ -2613,9 +2634,9 @@ process_ACK:
 				 * we'll hang forever.
 				 */
 				if (so->so_state & SS_CANTRCVMORE) {
-					soisdisconnected(so);
 					tp->t_timer[TCPT_2MSL] = tcp_maxidle;
 					add_to_time_wait(tp);
+					soisdisconnected(so);
 				}
 				tp->t_state = TCPS_FIN_WAIT_2;
 				goto drop;

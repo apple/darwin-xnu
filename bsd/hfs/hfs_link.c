@@ -1059,13 +1059,14 @@ __private_extern__
 void
 hfs_relorigin(struct cnode *cp, cnid_t parentcnid)
 {
-	linkorigin_t *origin = NULL;
+	linkorigin_t *origin, *prev;
 	void * thread = current_thread();
 
-	TAILQ_FOREACH(origin, &cp->c_originlist, lo_link) {
+	TAILQ_FOREACH_SAFE(origin, &cp->c_originlist, lo_link, prev) {
 		if ((origin->lo_thread == thread) ||
 		    (origin->lo_parentcnid == parentcnid)) {
 			TAILQ_REMOVE(&cp->c_originlist, origin, lo_link);
+			FREE(origin, M_TEMP);
 			break;
 		}
 	}

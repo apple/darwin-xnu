@@ -457,8 +457,11 @@ fast_syscall_init64(void)
 	 */
 	wrmsr64(MSR_IA32_KERNEL_GS_BASE,
 		UBER64((unsigned long)current_cpu_datap()));
+
+#if ONLY_SAFE_FOR_LINDA_SERIAL
 	kprintf("fast_syscall_init64() KERNEL_GS_BASE=0x%016llx\n",
 		rdmsr64(MSR_IA32_KERNEL_GS_BASE));
+#endif
 }
 
 /*
@@ -725,7 +728,9 @@ cpu_desc_load64(cpu_data_t *cdp)
 	
 	ml_load_desc64();
 
+#if ONLY_SAFE_FOR_LINDA_SERIAL
 	kprintf("64-bit descriptor tables loaded\n");
+#endif
 }
 
 void

@@ -1218,7 +1218,16 @@ dtrace_copyinstr(user_addr_t src, uintptr_t dst, size_t len)
 	size_t actual;
 	
 	if (dtrace_copycheck( src, dst, len )) {
-		if (copyinstr((const user_addr_t)src, (char *)dst, (vm_size_t)len, &actual)) {
+		/*  copyin as many as 'len' bytes. */
+		int error = copyinstr((const user_addr_t)src, (char *)dst, (vm_size_t)len, &actual);
+
+		/*
+		 * ENAMETOOLONG is returned when 'len' bytes have been copied in but the NUL terminator was
+		 * not encountered. That does not require raising CPU_DTRACE_BADADDR, and we press on.
+		 * Note that we do *not* stuff a NUL terminator when returning ENAMETOOLONG, that's left
+		 * to the caller.
+		 */
+		if (error && error != ENAMETOOLONG) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_BADADDR);
 			cpu_core[CPU->cpu_id].cpuc_dtrace_illval = src;
 		}
@@ -1244,6 +1253,13 @@ dtrace_copyoutstr(uintptr_t src, user_addr_t dst, size_t len)
 	size_t actual;
 
 	if (dtrace_copycheck( dst, src, len )) {
+
+		/*
+		 * ENAMETOOLONG is returned when 'len' bytes have been copied out but the NUL terminator was
+		 * not encountered. We raise CPU_DTRACE_BADADDR in that case.
+		 * Note that we do *not* stuff a NUL terminator when returning ENAMETOOLONG, that's left
+		 * to the caller.
+		 */
 		if (copyoutstr((const void *)src, dst, (size_t)len, &actual)) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_BADADDR);
 			cpu_core[CPU->cpu_id].cpuc_dtrace_illval = dst;

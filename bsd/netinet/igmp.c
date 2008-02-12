@@ -110,7 +110,7 @@ static MALLOC_DEFINE(M_IGMP, "igmp", "igmp state");
 #endif
 
 static struct router_info *
-		find_rti(struct ifnet *ifp);
+		find_rti(struct ifnet *ifp, int wait);
 
 static struct igmpstat igmpstat;
 
@@ -155,7 +155,7 @@ igmp_init(void)
 
 static struct router_info *
 find_rti(
-	struct ifnet *ifp)
+	struct ifnet *ifp, int wait)
 {
 	struct router_info *rti = Head;
 	
@@ -173,7 +173,7 @@ find_rti(
 		rti = rti->rti_next;
 	}
 	
-	MALLOC(rti, struct router_info *, sizeof *rti, M_IGMP, M_NOWAIT);
+	MALLOC(rti, struct router_info *, sizeof *rti, M_IGMP, wait);
 	if (rti != NULL)
 	{
 		rti->rti_ifp = ifp;
@@ -243,7 +243,7 @@ igmp_input(
 	timer = igmp->igmp_code * PR_FASTHZ / IGMP_TIMER_SCALE;
 	if (timer == 0)
 		timer = 1;
-	rti = find_rti(ifp);
+	rti = find_rti(ifp, M_NOWAIT);
 	if (rti == NULL) {
 		m_freem(m);
 		return;
@@ -398,7 +398,7 @@ igmp_joingroup(struct in_multi *inm)
 		inm->inm_timer = 0;
 		inm->inm_state = IGMP_OTHERMEMBER;
 	} else {
-		inm->inm_rti = find_rti(inm->inm_ifp);
+		inm->inm_rti = find_rti(inm->inm_ifp, M_WAITOK);
 		if (inm->inm_rti == NULL) return ENOMEM;
 		igmp_sendpkt(inm, inm->inm_rti->rti_type, 0);
 		inm->inm_timer = IGMP_RANDOM_DELAY(
@@ -438,7 +438,7 @@ igmp_fasttimo(void)
 	while (inm != NULL) {
 		if (inm->inm_timer == 0) {
 			/* do nothing */
-		} else if (--inm->inm_timer == 0) {
+		} else if ((--inm->inm_timer == 0) && (inm->inm_rti != NULL)) {
 			igmp_sendpkt(inm, inm->inm_rti->rti_type, 0);
 			inm->inm_state = IGMP_IREPORTEDLAST;
 		} else {

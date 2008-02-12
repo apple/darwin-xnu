@@ -138,14 +138,14 @@ LEAF(_##name, 0)					;\
 	BRANCH_EXTERN(cerror)  				;\
 2:
 
-#if defined(__SYSCALL_I386_ARG_BYTES) && ((__SYSCALL_I386_ARG_BYTES >= 4) && (__SYSCALL_I386_ARG_BYTES <= 20))
+#if defined(__SYSCALL_32BIT_ARG_BYTES) && ((__SYSCALL_32BIT_ARG_BYTES >= 4) && (__SYSCALL_32BIT_ARG_BYTES <= 20))
 #define UNIX_SYSCALL_NONAME(name, nargs)			\
-	movl	$(SYS_##name | (__SYSCALL_I386_ARG_BYTES << I386_SYSCALL_ARG_BYTES_SHIFT)), %eax		;\
+	movl	$(SYS_##name | (__SYSCALL_32BIT_ARG_BYTES << I386_SYSCALL_ARG_BYTES_SHIFT)), %eax		;\
 	UNIX_SYSCALL_SYSENTER					;\
 	jnb	2f						;\
 	BRANCH_EXTERN(cerror)					;\
 2:
-#else /* __SYSCALL_I386_ARG_BYTES < 4 || > 20 */
+#else /* __SYSCALL_32BIT_ARG_BYTES < 4 || > 20 */
 #define UNIX_SYSCALL_NONAME(name, nargs)		\
 	.globl	cerror					;\
 	movl	$ SYS_##name, %eax			;\

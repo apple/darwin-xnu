@@ -432,6 +432,7 @@ struct _ipfw_dyn_rule {
  * Main firewall chains definitions and global var's definitions.
  */
 #ifdef KERNEL
+#if IPFIREWALL
 
 #define	IP_FW_PORT_DYNT_FLAG	0x10000
 #define	IP_FW_PORT_TEE_FLAG	0x20000
@@ -457,6 +458,7 @@ struct ip_fw_args {
 	u_int16_t	divert_rule;	/* divert cookie		*/
 	u_int32_t	retval;
 };
+//struct ip_fw_args;
 
 /*
  * Function definitions.
@@ -476,6 +478,7 @@ extern ip_fw_ctl_t *ip_fw_ctl_ptr;
 extern int fw_one_pass;
 extern int fw_enable;
 #define	IPFW_LOADED	(ip_fw_chk_ptr != NULL)
+#endif /* IPFIREWALL */
 #endif /* KERNEL */
 
 #endif /* !__LP64__ */

@@ -167,8 +167,10 @@ extern int ipsec_bypass;
 
 extern int slowlink_wsize;	/* window correction for slow links */
 extern u_long  route_generation;
+#if IPFIREWALL
 extern int fw_enable; 		/* firewall check for packet chaining */
 extern int fw_bypass; 		/* firewall check: disable packet chaining if there is rules */
+#endif /* IPFIREWALL */
 
 extern vm_size_t	so_cache_zone_element_size;
 
@@ -677,10 +679,19 @@ after_sack_rexmit:
 		long adv = lmin(recwin, (long)TCP_MAXWIN << tp->rcv_scale) -
 			(tp->rcv_adv - tp->rcv_nxt);
 
-		if (adv >= (long) (2 * tp->t_maxseg))
-			goto send;
-		if (2 * adv >= (long) so->so_rcv.sb_hiwat)
-			goto send;
+		if (adv >= (long) (2 * tp->t_maxseg)) {
+			
+			/* 
+			 * Update only if the resulting scaled value of the window changed, or
+			 * if there is a change in the sequence since the last ack.
+			 * This avoids what appears as dupe ACKS (see rdar://5640997)
+			 */
+
+			if ((tp->last_ack_sent != tp->rcv_nxt) || (((recwin + adv) >> tp->rcv_scale) > recwin)) 
+				goto send;
+		}
+		if (2 * adv >= (long) so->so_rcv.sb_hiwat) 
+				goto send;
 	}
 
 	/*
@@ -1239,6 +1250,8 @@ send:
 		tp->sackhint.sack_bytes_rexmit += len;
 	}
 	th->th_ack = htonl(tp->rcv_nxt);
+	tp->last_ack_sent = tp->rcv_nxt;
+
 	if (optlen) {
 		bcopy(opt, th + 1, optlen);
 		th->th_off = (sizeof (struct tcphdr) + optlen) >> 2;
@@ -1623,6 +1636,11 @@ tcp_ip_output(struct socket *so, struct tcpcb *tp, struct mbuf *pkt,
 	boolean_t chain;
 	boolean_t unlocked = FALSE;
 
+	/* Make sure ACK/DELACK conditions are cleared before
+	 * we unlock the socket.
+	 */
+
+	tp->t_flags &= ~(TF_ACKNOW | TF_DELACK);
 	/*
 	 * If allowed, unlock TCP socket while in IP 
 	 * but only if the connection is established and
@@ -1642,11 +1660,15 @@ tcp_ip_output(struct socket *so, struct tcpcb *tp, struct mbuf *pkt,
 	 * - there is a non default rule set for the firewall
 	 */
 
-	chain = tcp_packet_chaining > 1 &&
+	chain = tcp_packet_chaining > 1
 #if IPSEC
-		ipsec_bypass &&
+		&& ipsec_bypass
 #endif
-		(fw_enable == 0 || fw_bypass);
+#if IPFIREWALL
+		&& (fw_enable == 0 || fw_bypass)
+#endif
+		; // I'm important, not extraneous
+
 
 	while (pkt != NULL) {
 		struct mbuf *npkt = pkt->m_nextpkt;

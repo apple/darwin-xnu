@@ -370,6 +370,7 @@ unsigned int vm_page_speculative_target = 0;
 
 vm_object_t 	vm_pageout_scan_wants_object = VM_OBJECT_NULL;
 
+unsigned long vm_cs_validated_resets = 0;
 
 /*
  *	Routine:	vm_backing_store_disable
@@ -1632,12 +1633,30 @@ consider_inactive:
 				vm_purgeable_q_advance_all(1);
 		}
 
-		if (object->copy == VM_OBJECT_NULL && 
-		    (object->purgable == VM_PURGABLE_EMPTY ||
-		     object->purgable == VM_PURGABLE_VOLATILE)) {
-		        assert(m->wire_count == 0);     /* if it's wired, we can't put it on our queue */
-			/* just stick it back on! */
-			goto reactivate_page;
+		/* If the object is empty, the page must be reclaimed even if dirty or used. */
+		/* If the page belongs to a volatile object, we stick it back on. */
+		if (object->copy == VM_OBJECT_NULL) {
+			if(object->purgable == VM_PURGABLE_EMPTY && !m->cleaning) {
+				m->busy = TRUE;
+				if (m->pmapped == TRUE) {
+					/* unmap the page */
+					refmod_state = pmap_disconnect(m->phys_page);
+					if (refmod_state & VM_MEM_MODIFIED) {
+						m->dirty = TRUE;
+					}
+				}
+				if (m->dirty || m->precious) {
+					/* we saved the cost of cleaning this page ! */
+					vm_page_purged_count++;
+				}
+				goto reclaim_page;
+			}
+			if (object->purgable == VM_PURGABLE_VOLATILE) {
+				/* if it's wired, we can't put it on our queue */
+				assert(m->wire_count == 0);
+				/* just stick it back on! */
+				goto reactivate_page;
+			}
 		}
 		m->pageq.next = NULL;
 		m->pageq.prev = NULL;
@@ -2578,6 +2597,7 @@ vm_object_upl_request(
 	wpl_array_t 		lite_list = NULL;
 	vm_object_t		last_copy_object;
 	int                     delayed_unlock = 0;
+	int			j;
 
 	if (cntrl_flags & ~UPL_VALID_FLAGS) {
 		/*
@@ -2711,11 +2731,34 @@ vm_object_upl_request(
 			}
 			vm_object_unlock(object);
 			VM_PAGE_GRAB_FICTITIOUS(alias_page);
-			vm_object_lock(object);
+			goto relock;
 		}
-		if (delayed_unlock == 0)
-		        vm_page_lock_queues();
+		if (delayed_unlock == 0) {
+			/*
+			 * pageout_scan takes the vm_page_lock_queues first
+			 * then tries for the object lock... to avoid what
+			 * is effectively a lock inversion, we'll go to the
+			 * trouble of taking them in that same order... otherwise
+			 * if this object contains the majority of the pages resident
+			 * in the UBC (or a small set of large objects actively being
+			 * worked on contain the majority of the pages), we could
+			 * cause the pageout_scan thread to 'starve' in its attempt
+			 * to find pages to move to the free queue, since it has to
+			 * successfully acquire the object lock of any candidate page
+			 * before it can steal/clean it.
+			 */
+			vm_object_unlock(object);
+relock:
+			for (j = 0; ; j++) {
+				vm_page_lock_queues();
 
+				if (vm_object_lock_try(object))
+					break;
+				vm_page_unlock_queues();
+				mutex_pause(j);
+			}
+			delayed_unlock = 1;
+		}
 		if (cntrl_flags & UPL_COPYOUT_FROM) {
 		        upl->flags |= UPL_PAGE_SYNC_DONE;
 
@@ -2848,6 +2891,7 @@ check_busy:
 				dst_page->busy = was_busy;
 
 				vm_page_lock_queues();
+				delayed_unlock = 1;
 			}
 			if (dst_page->pageout_queue == TRUE)
 			        /*
@@ -3001,6 +3045,7 @@ check_busy:
 					upl_cow_again_pages += xfer_size >> PAGE_SHIFT;
 
 					vm_page_lock_queues();
+					delayed_unlock = 1;
 				}
 				/*
 				 * remember the copy object we synced with
@@ -3070,14 +3115,8 @@ check_busy:
 				}
 				/*
 				 * need to allocate a page
-				 * vm_page_alloc may grab the
-				 * queues lock for a purgeable object
-				 * so drop it
 				 */
-				delayed_unlock = 0;
-				vm_page_unlock_queues();
-
-		 		dst_page = vm_page_alloc(object, dst_offset);
+		 		dst_page = vm_page_grab();
 
 				if (dst_page == VM_PAGE_NULL) {
 				        if ( (cntrl_flags & (UPL_RET_ONLY_ABSENT | UPL_NOBLOCK)) == (UPL_RET_ONLY_ABSENT | UPL_NOBLOCK)) {
@@ -3096,14 +3135,41 @@ check_busy:
 					 * then try again for the same
 					 * offset...
 					 */
+					delayed_unlock = 0;
+					vm_page_unlock_queues();
+
 					vm_object_unlock(object);
 					VM_PAGE_WAIT();
-					vm_object_lock(object);
+
+					/*
+					 * pageout_scan takes the vm_page_lock_queues first
+					 * then tries for the object lock... to avoid what
+					 * is effectively a lock inversion, we'll go to the
+					 * trouble of taking them in that same order... otherwise
+					 * if this object contains the majority of the pages resident
+					 * in the UBC (or a small set of large objects actively being
+					 * worked on contain the majority of the pages), we could
+					 * cause the pageout_scan thread to 'starve' in its attempt
+					 * to find pages to move to the free queue, since it has to
+					 * successfully acquire the object lock of any candidate page
+					 * before it can steal/clean it.
+					 */
+					for (j = 0; ; j++) {
+						vm_page_lock_queues();
+
+						if (vm_object_lock_try(object))
+							break;
+						vm_page_unlock_queues();
+						mutex_pause(j);
+					}
+					delayed_unlock = 1;
 
 					continue;
 				}
-				dst_page->busy = FALSE;
+				vm_page_insert_internal(dst_page, object, dst_offset, TRUE);
+
 				dst_page->absent = TRUE;
+				dst_page->busy = FALSE;
 
 				if (cntrl_flags & UPL_RET_ONLY_ABSENT) {
 				        /*
@@ -3116,7 +3182,6 @@ check_busy:
 					 */
 				        dst_page->clustered = TRUE;
 				}
-				vm_page_lock_queues();
 			}
 			/*
 			 * ENCRYPTED SWAP:
@@ -3268,7 +3333,29 @@ check_busy:
 		}
 delay_unlock_queues:
 		if (delayed_unlock++ > UPL_DELAYED_UNLOCK_LIMIT) {
+			/*
+			 * pageout_scan takes the vm_page_lock_queues first
+			 * then tries for the object lock... to avoid what
+			 * is effectively a lock inversion, we'll go to the
+			 * trouble of taking them in that same order... otherwise
+			 * if this object contains the majority of the pages resident
+			 * in the UBC (or a small set of large objects actively being
+			 * worked on contain the majority of the pages), we could
+			 * cause the pageout_scan thread to 'starve' in its attempt
+			 * to find pages to move to the free queue, since it has to
+			 * successfully acquire the object lock of any candidate page
+			 * before it can steal/clean it.
+			 */
+			vm_object_unlock(object);
 			mutex_yield(&vm_page_queue_lock);
+
+			for (j = 0; ; j++) {
+				if (vm_object_lock_try(object))
+					break;
+				vm_page_unlock_queues();
+				mutex_pause(j);
+				vm_page_lock_queues();
+			}
 		        delayed_unlock = 1;
 		}
 try_next_page:
@@ -3279,7 +3366,7 @@ try_next_page:
 	if (alias_page != NULL) {
 	        if (delayed_unlock == 0) {
 		        vm_page_lock_queues();
-			delayed_unlock++;
+			delayed_unlock = 1;
 		}
 		vm_page_free(alias_page);
 	}
@@ -3760,6 +3847,7 @@ vm_map_enter_upl(
 			cache_attr = ((unsigned int)m->object->wimg_bits) & VM_WIMG_MASK;
 
 			m->pmapped = TRUE;
+			m->wpmapped = TRUE;
 	
 			PMAP_ENTER(map->pmap, addr, m, VM_PROT_ALL, cache_attr, TRUE);
 		}
@@ -3844,6 +3932,7 @@ upl_commit_range(
 	int                     delayed_unlock = 0;
 	int			clear_refmod = 0;
 	int			pgpgout_count = 0;
+	int			j;
 
 	*empty = FALSE;
 
@@ -3887,16 +3976,34 @@ upl_commit_range(
 	} else {
 		shadow_object = object;
 	}
-	vm_object_lock(shadow_object);
-
 	entry = offset/PAGE_SIZE;
 	target_offset = (vm_object_offset_t)offset;
 
+	/*
+	 * pageout_scan takes the vm_page_lock_queues first
+	 * then tries for the object lock... to avoid what
+	 * is effectively a lock inversion, we'll go to the
+	 * trouble of taking them in that same order... otherwise
+	 * if this object contains the majority of the pages resident
+	 * in the UBC (or a small set of large objects actively being
+	 * worked on contain the majority of the pages), we could
+	 * cause the pageout_scan thread to 'starve' in its attempt
+	 * to find pages to move to the free queue, since it has to
+	 * successfully acquire the object lock of any candidate page
+	 * before it can steal/clean it.
+	 */
+	for (j = 0; ; j++) {
+		vm_page_lock_queues();
+
+		if (vm_object_lock_try(shadow_object))
+			break;
+		vm_page_unlock_queues();
+		mutex_pause(j);
+	}
+	delayed_unlock = 1;
+
 	while (xfer_size) {
 		vm_page_t	t, m;
-
-		if (delayed_unlock == 0)
-		        vm_page_lock_queues();
 
 		m = VM_PAGE_NULL;
 
@@ -3937,6 +4044,17 @@ upl_commit_range(
 				        m->dirty = TRUE;
 				else if (flags & UPL_COMMIT_CLEAR_DIRTY) {
 				        m->dirty = FALSE;
+					if (m->cs_validated && !m->cs_tainted) {
+						/*
+						 * CODE SIGNING:
+						 * This page is no longer dirty
+						 * but could have been modified,
+						 * so it will need to be
+						 * re-validated.
+						 */
+						m->cs_validated = FALSE;
+						vm_cs_validated_resets++;
+					}
 					clear_refmod |= VM_MEM_MODIFIED;
 				}
 				if (flags & UPL_COMMIT_INACTIVATE)
@@ -3964,6 +4082,17 @@ upl_commit_range(
 			 */
 			if (flags & UPL_COMMIT_CLEAR_DIRTY) {
 			        m->dirty = FALSE;
+				if (m->cs_validated && !m->cs_tainted) {
+					/*
+					 * CODE SIGNING:
+					 * This page is no longer dirty
+					 * but could have been modified,
+					 * so it will need to be
+					 * re-validated.
+					 */
+					m->cs_validated = FALSE;
+					vm_cs_validated_resets++;
+				}
 				clear_refmod |= VM_MEM_MODIFIED;
 			}
 			if (clear_refmod)
@@ -4003,6 +4132,17 @@ upl_commit_range(
 				if (m->wanted) vm_pageout_target_collisions++;
 #endif
 				m->dirty = FALSE;
+				if (m->cs_validated && !m->cs_tainted) {
+					/*
+					 * CODE SIGNING:
+					 * This page is no longer dirty
+					 * but could have been modified,
+					 * so it will need to be
+					 * re-validated.
+					 */
+					m->cs_validated = FALSE;
+					vm_cs_validated_resets++;
+				}
 
 				if (m->pmapped && (pmap_disconnect(m->phys_page) & VM_MEM_MODIFIED))
 				        m->dirty = TRUE;
@@ -4049,7 +4189,7 @@ upl_commit_range(
 				goto commit_next_page;
 			}
 #if MACH_CLUSTER_STATS
-			if (m->pmapped)
+			if (m->wpmapped)
 			        m->dirty = pmap_is_modified(m->phys_page);
 
 			if (m->dirty)   vm_pageout_cluster_dirtied++;
@@ -4057,6 +4197,17 @@ upl_commit_range(
 			if (m->wanted)  vm_pageout_cluster_collisions++;
 #endif
 			m->dirty = FALSE;
+			if (m->cs_validated && !m->cs_tainted) {
+				/*
+				 * CODE SIGNING:
+				 * This page is no longer dirty
+				 * but could have been modified,
+				 * so it will need to be
+				 * re-validated.
+				 */
+				m->cs_validated = FALSE;
+				vm_cs_validated_resets++;
+			}
 
 			if ((m->busy) && (m->cleaning)) {
 			        /*
@@ -4122,7 +4273,29 @@ commit_next_page:
 		entry++;
 
 		if (delayed_unlock++ > UPL_DELAYED_UNLOCK_LIMIT) {
+			/*
+			 * pageout_scan takes the vm_page_lock_queues first
+			 * then tries for the object lock... to avoid what
+			 * is effectively a lock inversion, we'll go to the
+			 * trouble of taking them in that same order... otherwise
+			 * if this object contains the majority of the pages resident
+			 * in the UBC (or a small set of large objects actively being
+			 * worked on contain the majority of the pages), we could
+			 * cause the pageout_scan thread to 'starve' in its attempt
+			 * to find pages to move to the free queue, since it has to
+			 * successfully acquire the object lock of any candidate page
+			 * before it can steal/clean it.
+			 */
+			vm_object_unlock(shadow_object);
 			mutex_yield(&vm_page_queue_lock);
+
+			for (j = 0; ; j++) {
+				if (vm_object_lock_try(shadow_object))
+					break;
+				vm_page_unlock_queues();
+				mutex_pause(j);
+				vm_page_lock_queues();
+			}
 		        delayed_unlock = 1;
 		}
 	}
@@ -4199,6 +4372,7 @@ upl_abort_range(
 	wpl_array_t 	 	lite_list;
 	int			occupied;
 	int			delayed_unlock = 0;
+	int			j;
 
 	*empty = FALSE;
 
@@ -4233,16 +4407,34 @@ upl_abort_range(
 	} else
 		shadow_object = object;
 
-	vm_object_lock(shadow_object);
-
 	entry = offset/PAGE_SIZE;
 	target_offset = (vm_object_offset_t)offset;
 
+	/*
+	 * pageout_scan takes the vm_page_lock_queues first
+	 * then tries for the object lock... to avoid what
+	 * is effectively a lock inversion, we'll go to the
+	 * trouble of taking them in that same order... otherwise
+	 * if this object contains the majority of the pages resident
+	 * in the UBC (or a small set of large objects actively being
+	 * worked on contain the majority of the pages), we could
+	 * cause the pageout_scan thread to 'starve' in its attempt
+	 * to find pages to move to the free queue, since it has to
+	 * successfully acquire the object lock of any candidate page
+	 * before it can steal/clean it.
+	 */
+	for (j = 0; ; j++) {
+		vm_page_lock_queues();
+
+		if (vm_object_lock_try(shadow_object))
+			break;
+		vm_page_unlock_queues();
+		mutex_pause(j);
+	}
+	delayed_unlock = 1;
+
 	while (xfer_size) {
 		vm_page_t	t, m;
-
-		if (delayed_unlock == 0)
-		        vm_page_lock_queues();
 
 		m = VM_PAGE_NULL;
 
@@ -4352,7 +4544,29 @@ upl_abort_range(
 			}
 		}
 		if (delayed_unlock++ > UPL_DELAYED_UNLOCK_LIMIT) {
+			/*
+			 * pageout_scan takes the vm_page_lock_queues first
+			 * then tries for the object lock... to avoid what
+			 * is effectively a lock inversion, we'll go to the
+			 * trouble of taking them in that same order... otherwise
+			 * if this object contains the majority of the pages resident
+			 * in the UBC (or a small set of large objects actively being
+			 * worked on contain the majority of the pages), we could
+			 * cause the pageout_scan thread to 'starve' in its attempt
+			 * to find pages to move to the free queue, since it has to
+			 * successfully acquire the object lock of any candidate page
+			 * before it can steal/clean it.
+			 */
+			vm_object_unlock(shadow_object);
 			mutex_yield(&vm_page_queue_lock);
+
+			for (j = 0; ; j++) {
+				if (vm_object_lock_try(shadow_object))
+					break;
+				vm_page_unlock_queues();
+				mutex_pause(j);
+				vm_page_lock_queues();
+			}
 		        delayed_unlock = 1;
 		}
 		target_offset += PAGE_SIZE_64;
@@ -5230,6 +5444,7 @@ vm_paging_map_object(
 			pmap_sync_page_data_phys(page->phys_page);
 		}
 		page->pmapped = TRUE;
+		page->wpmapped = TRUE;
 		cache_attr = ((unsigned int) object->wimg_bits) & VM_WIMG_MASK;
 
 		//assert(pmap_verify_free(page->phys_page));
@@ -5656,6 +5871,17 @@ vm_page_decrypt(
 	 * and the decryption doesn't count.
 	 */
 	page->dirty = FALSE;
+	if (page->cs_validated && !page->cs_tainted) {
+		/*
+		 * CODE SIGNING:
+		 * This page is no longer dirty
+		 * but could have been modified,
+		 * so it will need to be
+		 * re-validated.
+		 */
+		page->cs_validated = FALSE;
+		vm_cs_validated_resets++;
+	}
 	pmap_clear_refmod(page->phys_page, VM_MEM_MODIFIED | VM_MEM_REFERENCED);
 
 	page->encrypted = FALSE;
@@ -5676,6 +5902,7 @@ vm_page_decrypt(
 	 */
 	assert(pmap_verify_free(page->phys_page));
 	page->pmapped = FALSE;
+	page->wpmapped = FALSE;
 
 	vm_object_paging_end(page->object);
 }

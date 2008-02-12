@@ -2048,13 +2048,14 @@ if_down_all(void)
 	u_int32_t	count;
 	u_int32_t	i;
 
-	if (ifnet_list_get(IFNET_FAMILY_ANY, &ifp, &count) != 0) {
+	if (ifnet_list_get_all(IFNET_FAMILY_ANY, &ifp, &count) == 0) {
 		for (i = 0; i < count; i++) {
 			if_down(ifp[i]);
+			dlil_proto_unplumb_all(ifp[i]);
 		}
 		ifnet_list_free(ifp);
 	}
-	
+
 	return 0;
 }
 

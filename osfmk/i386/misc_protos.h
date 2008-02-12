@@ -126,7 +126,7 @@ extern void	rtc_clock_stepping(
 extern void	rtc_clock_stepped(
 			uint32_t new_frequency,
 			uint32_t old_frequency);
-extern void	rtc_clock_napped(uint64_t);
+extern void	rtc_clock_napped(uint64_t, uint64_t);
 
 extern void     x86_lowmem_free(void);
 

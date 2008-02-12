@@ -43,6 +43,7 @@ extern "C" {
 
 extern dev_t mdevadd(int devid, ppnum_t base, unsigned int size, int phys);
 extern dev_t mdevlookup(int devid);
+extern void mdevremoveall(void);
 
 kern_return_t
 IOKitBSDInit( void )
@@ -776,14 +777,19 @@ iofrootx:
 void IOSecureBSDRoot(const char * rootName)
 {
 #if CONFIG_EMBEDDED
+    IOReturn         result;
     IOPlatformExpert *pe;
-    const OSSymbol *functionName = OSSymbol::withCStringNoCopy("SecureRootName");
+    const OSSymbol   *functionName = OSSymbol::withCStringNoCopy("SecureRootName");
     
     while ((pe = IOService::getPlatform()) == 0) IOSleep(1 * 1000);
     
-    pe->callPlatformFunction(functionName, false, (void *)rootName, (void *)0, (void *)0, (void *)0);
+    // Returns kIOReturnNotPrivileged is the root device is not secure.
+    // Returns kIOReturnUnsupported if "SecureRootName" is not implemented.
+    result = pe->callPlatformFunction(functionName, false, (void *)rootName, (void *)0, (void *)0, (void *)0);
     
     functionName->release();
+    
+    if (result == kIOReturnNotPrivileged) mdevremoveall();
 #endif
 }
 

@@ -93,10 +93,12 @@
  * Sysctl's related to data/stack execution.  See osfmk/vm/vm_map.c
  */
 
+#ifndef SECURE_KERNEL
 extern int allow_stack_exec, allow_data_exec;
 
 SYSCTL_INT(_vm, OID_AUTO, allow_stack_exec, CTLFLAG_RW, &allow_stack_exec, 0, "");
 SYSCTL_INT(_vm, OID_AUTO, allow_data_exec, CTLFLAG_RW, &allow_data_exec, 0, "");
+#endif /* !SECURE_KERNEL */
 
 #if CONFIG_NO_PRINTF_STRINGS
 void
@@ -819,7 +821,7 @@ shared_region_map_np(
 	memory_object_size_t		file_size;
 	user_addr_t			user_mappings;
 	struct shared_file_mapping_np	*mappings;
-#define SFM_MAX_STACK	4
+#define SFM_MAX_STACK	8
 	struct shared_file_mapping_np	stack_mappings[SFM_MAX_STACK];
 	unsigned int			mappings_count;
 	vm_size_t			mappings_size;

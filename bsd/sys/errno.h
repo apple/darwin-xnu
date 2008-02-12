@@ -257,5 +257,6 @@ __END_DECLS
 /* pseudo-errors returned inside kernel to modify return to process */
 #define	ERESTART	(-1)		/* restart syscall */
 #define	EJUSTRETURN	(-2)		/* don't modify regs, just return */
+#define ERECYCLE    (-5)		/* restart lookup under heavy vnode pressure/recycling */
 #endif
 #endif /* _SYS_ERRNO_H_ */

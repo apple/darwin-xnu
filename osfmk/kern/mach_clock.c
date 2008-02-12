@@ -106,9 +106,7 @@ hertz_tick(
 #endif
 {
 	processor_t		processor = current_processor();
-#if !GPROF
 	thread_t		thread = current_thread();
-#endif
 	timer_t			state;
 
 	if (usermode) {
@@ -117,8 +115,11 @@ hertz_tick(
 		state = &PROCESSOR_DATA(processor, user_state);
 	}
 	else {
-		TIMER_BUMP(&thread->system_timer, ticks);
-
+		/* If this thread is idling, do not charge that time as system time */
+		if ((thread->state & TH_IDLE) == 0) {
+			TIMER_BUMP(&thread->system_timer, ticks);
+		}
+        
 		if (processor->state == PROCESSOR_IDLE)
 			state = &PROCESSOR_DATA(processor, idle_state);
 		else

@@ -46,6 +46,7 @@
 #include <IOKit/system.h>
 
 #include <libkern/c++/OSContainers.h>
+#include <libkern/crypto/sha1.h>
 
 extern "C" {
 #include <machine/machine_routines.h>
@@ -858,29 +859,57 @@ void PESetGMTTimeOfDay(long secs)
 void IOPlatformExpert::registerNVRAMController(IONVRAMController * caller)
 {
     OSData *          data;
-    IORegistryEntry * nvram;
-    OSString *        string;
+    IORegistryEntry * entry;
+    OSString *        string = 0;
+    char              uuid[ 36 + 1 ];
 
-    nvram = IORegistryEntry::fromPath( "/options", gIODTPlane );
-    if ( nvram )
+    entry = IORegistryEntry::fromPath( "/efi/platform", gIODTPlane );
+    if ( entry )
     {
-        data = OSDynamicCast( OSData, nvram->getProperty( "platform-uuid" ) );
-        if ( data && data->getLength( ) == sizeof( uuid_t ) )
+        data = OSDynamicCast( OSData, entry->getProperty( "system-id" ) );
+        if ( data && data->getLength( ) == 16 )
         {
-            char uuid[ 36 + 1 ];
-            uuid_unparse( ( UInt8 * ) data->getBytesNoCopy( ), uuid );
+            SHA1_CTX     context;
+            uint8_t      digest[ SHA_DIGEST_LENGTH ];
+            const uuid_t space = { 0x2A, 0x06, 0x19, 0x90, 0xD3, 0x8D, 0x44, 0x40, 0xA1, 0x39, 0xC4, 0x97, 0x70, 0x37, 0x65, 0xAC };
 
+            SHA1Init( &context );
+            SHA1Update( &context, space, sizeof( space ) );
+            SHA1Update( &context, data->getBytesNoCopy( ), data->getLength( ) );
+            SHA1Final( digest, &context );
+
+            digest[ 6 ] = ( digest[ 6 ] & 0x0F ) | 0x50;
+            digest[ 8 ] = ( digest[ 8 ] & 0x3F ) | 0x80;
+
+            uuid_unparse( digest, uuid );
             string = OSString::withCString( uuid );
-            if ( string )
-            {
-                getProvider( )->setProperty( kIOPlatformUUIDKey, string );
-                publishResource( kIOPlatformUUIDKey, string );
-
-                string->release( );
-            }
         }
 
-        nvram->release( );
+        entry->release( );
+    }
+
+    if ( string == 0 )
+    {
+        entry = IORegistryEntry::fromPath( "/options", gIODTPlane );
+        if ( entry )
+        {
+            data = OSDynamicCast( OSData, entry->getProperty( "platform-uuid" ) );
+            if ( data && data->getLength( ) == sizeof( uuid_t ) )
+            {
+                uuid_unparse( ( uint8_t * ) data->getBytesNoCopy( ), uuid );
+                string = OSString::withCString( uuid );
+            }
+
+            entry->release( );
+        }
+    }
+
+    if ( string )
+    {
+        getProvider( )->setProperty( kIOPlatformUUIDKey, string );
+        publishResource( kIOPlatformUUIDKey, string );
+
+        string->release( );
     }
 
     publishResource("IONVRAM");
@@ -1281,7 +1310,7 @@ IOReturn IOPlatformExpertDevice::setProperties( OSObject * properties )
     object = dictionary->getObject( kIOPlatformUUIDKey );
     if ( object )
     {
-        IORegistryEntry * nvram;
+        IORegistryEntry * entry;
         OSString *        string;
         uuid_t            uuid;
 
@@ -1294,11 +1323,11 @@ IOReturn IOPlatformExpertDevice::setProperties( OSObject * properties )
         status = uuid_parse( string->getCStringNoCopy( ), uuid );
         if ( status != 0 ) return kIOReturnBadArgument;
 
-        nvram = IORegistryEntry::fromPath( "/options", gIODTPlane );
-        if ( nvram )
+        entry = IORegistryEntry::fromPath( "/options", gIODTPlane );
+        if ( entry )
         {
-            nvram->setProperty( "platform-uuid", uuid, sizeof( uuid_t ) );
-            nvram->release( );
+            entry->setProperty( "platform-uuid", uuid, sizeof( uuid_t ) );
+            entry->release( );
         }
 
         setProperty( kIOPlatformUUIDKey, string );

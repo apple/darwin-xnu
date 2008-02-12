@@ -1,6 +1,11 @@
 # machine-dependent mach sources
-.if exists(${.CURDIR}/mach/${MACHINE_ARCH}/Makefile.inc)
-.include "${.CURDIR}/mach/${MACHINE_ARCH}/Makefile.inc"
+.if ${MACHINE_ARCH} == armv6
+ARCHDIR = arm
+.else
+ARCHDIR = ${MACHINE_ARCH}
+.endif
+.if exists(${.CURDIR}/mach/${ARCHDIR}/Makefile.inc)
+.include "${.CURDIR}/mach/${ARCHDIR}/Makefile.inc"
 .endif
 
 .PATH: ${.CURDIR}/mach

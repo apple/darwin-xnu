@@ -74,7 +74,7 @@
 #include <kern/kalloc.h>
 #include <kern/zalloc.h>
 
-#ifdef AUDIT
+#if AUDIT
 
 /* The zone allocator is initialized in mac_base.c. */
 zone_t mac_audit_data_zone;
@@ -393,6 +393,12 @@ int
 mac_audit(int len, u_char *data)
 {
 
+	return (0);
+}
+
+int
+mac_audit_text(__unused char *text, __unused mac_policy_handle_t handle)
+{
 	return (0);
 }
 #endif	/* !AUDIT */

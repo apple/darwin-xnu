@@ -33,9 +33,9 @@ struct token {
 
 struct token    tokens[MAX_VOLATILE];
 
-token_idx_t     token_free_idx = 0;	/* head of free queue */
-token_cnt_t     token_init_count = 1;	/* token 0 is reserved!! */
-token_cnt_t     token_new_pagecount = 0;	/* count of pages that will
+token_idx_t     token_free_idx = 0;		/* head of free queue */
+token_idx_t     token_init_idx = 1;		/* token 0 is reserved!! */
+int32_t		token_new_pagecount = 0;	/* count of pages that will
 						 * be added onto token queue */
 
 int             available_for_purge = 0;	/* increase when ripe token
@@ -96,9 +96,9 @@ vm_purgeable_token_add(purgeable_q_t queue)
 	token_idx_t     token;
 	enum purgeable_q_type i;
 
-	if (token_init_count < MAX_VOLATILE) {	/* lazy token array init */
-		token = token_init_count;
-		token_init_count++;
+	if (token_init_idx < MAX_VOLATILE) {	/* lazy token array init */
+		token = token_init_idx;
+		token_init_idx++;
 	} else if (token_free_idx) {
 		token = token_free_idx;
 		token_free_idx = tokens[token_free_idx].next;
@@ -111,9 +111,10 @@ vm_purgeable_token_add(purgeable_q_t queue)
 	 * obsolete
 	 */
 	for (i = PURGEABLE_Q_TYPE_FIFO; i < PURGEABLE_Q_TYPE_MAX; i++) {
-		purgeable_queues[i].new_pages += token_new_pagecount;
-		assert(purgeable_queues[i].new_pages >= 0);
-		assert((uint64_t) (purgeable_queues[i].new_pages) <= TOKEN_COUNT_MAX);
+		int64_t pages = purgeable_queues[i].new_pages += token_new_pagecount;
+		assert(pages >= 0);
+		assert(pages <= TOKEN_COUNT_MAX);
+		purgeable_queues[i].new_pages=pages;
 	}
 	token_new_pagecount = 0;
 
@@ -235,6 +236,20 @@ vm_purgeable_token_delete_first(purgeable_q_t queue)
 void
 vm_purgeable_q_advance_all(uint32_t num_pages)
 {
+	/* check queue counters - if they get really large, scale them back.
+	 * They tend to get that large when there is no purgeable queue action */
+	int i;
+	if(token_new_pagecount > (INT32_MAX >> 1))	/* a system idling years might get there */
+	{
+		for (i = PURGEABLE_Q_TYPE_FIFO; i < PURGEABLE_Q_TYPE_MAX; i++) {
+			int64_t pages = purgeable_queues[i].new_pages += token_new_pagecount;
+			assert(pages >= 0);
+			assert(pages <= TOKEN_COUNT_MAX);
+			purgeable_queues[i].new_pages=pages;
+		}
+		token_new_pagecount = 0;
+	}
+	
 	/*
 	 * don't need to advance obsolete queue - all items are ripe there,
 	 * always

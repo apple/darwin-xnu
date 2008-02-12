@@ -161,6 +161,7 @@ int dlil_attach_filter(ifnet_t ifp, const struct iff_filter *if_filter,
 					   interface_filter_t *filter_ref);
 void dlil_detach_filter(interface_filter_t filter);
 int dlil_detach_protocol(ifnet_t ifp, u_long protocol);
+extern void dlil_proto_unplumb_all(ifnet_t);
 
 #endif /* BSD_KERNEL_PRIVATE */
 

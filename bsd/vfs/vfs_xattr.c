@@ -3041,7 +3041,7 @@ lock_xattrfile(vnode_t xvp, short locktype, vfs_context_t context)
 	lf.l_len = 0;
 	lf.l_type = locktype; /* F_WRLCK or F_RDLCK */
 	/* Note: id is just a kernel address that's not a proc */
-	error = VNOP_ADVLOCK(xvp, (caddr_t)xvp, F_SETLK, &lf, F_FLOCK, context);
+	error = VNOP_ADVLOCK(xvp, (caddr_t)xvp, F_SETLK, &lf, F_FLOCK|F_WAIT, context);
 	return (error == ENOTSUP ? 0 : error);
 }
 

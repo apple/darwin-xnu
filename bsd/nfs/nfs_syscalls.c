@@ -781,6 +781,8 @@ nfssvc_addsock(socket_t so, mbuf_t mynam)
 	so->so_upcall = nfsrv_rcv;
 	so->so_rcv.sb_flags |= SB_UPCALL;
 	socket_unlock(so, 1);
+	/* just playin' it safe */
+	sock_setsockopt(so, SOL_SOCKET, SO_UPCALLCLOSEWAIT, &on, sizeof(on));
 
 	/* mark that the socket is not in the nfsrv_sockwg list */
 	slp->ns_wgq.tqe_next = SLPNOLIST;

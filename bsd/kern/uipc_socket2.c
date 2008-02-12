@@ -843,6 +843,7 @@ sbappendrecord(struct sockbuf *sb, struct mbuf *m0)
 		sb->sb_mb = m0;
 	}
 	sb->sb_lastrecord = m0;
+	sb->sb_mbtail = m0;
 
 	m = m0->m_next;
 	m0->m_next = 0;

@@ -2415,23 +2415,26 @@ static int
 sysctl_nx
 (__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
 {
+#ifdef SECURE_KERNEL
+	return ENOTSUP;
+#endif
 	int new_value, changed;
 	int error;
 
 	error = sysctl_io_number(req, nx_enabled, sizeof(nx_enabled), &new_value, &changed);
-    if (error)
-        return error;
+	if (error)
+		return error;
 
-    if (changed) {
+	if (changed) {
 #ifdef __i386__
 		/*
 		 * Only allow setting if NX is supported on the chip
 		 */
 		if (!(cpuid_extfeatures() & CPUID_EXTFEATURE_XD))
-            return ENOTSUP;
+			return ENOTSUP;
 #endif
-        nx_enabled = new_value;
-    }
+		nx_enabled = new_value;
+	}
 	return(error);
 }
 

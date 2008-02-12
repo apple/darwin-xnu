@@ -221,7 +221,11 @@ void dump_4GB_pdpt_thread(thread_t tp);
 #define	iswired(pte)	((pte) & INTEL_PTE_WIRED)
 
 int nx_enabled = 1;			/* enable no-execute protection */
+#ifdef CONFIG_EMBEDDED
+int allow_data_exec  = 0;	/* no exec from data, embedded is hardcore like that */
+#else
 int allow_data_exec  = VM_ABI_32;	/* 32-bit apps may execute data by default, 64-bit apps may not */
+#endif
 int allow_stack_exec = 0;		/* No apps may execute from the stack by default */
 
 int cpu_64bit  = 0;

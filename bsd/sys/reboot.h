@@ -88,6 +88,7 @@
 #define RB_UNIPROC	0x80	/* don't start slaves */
 #define RB_SAFEBOOT	0x100	/* booting safe */
 #define RB_UPSDELAY 0x200   /* Delays restart by 5 minutes */
+#define RB_QUICK	0x400	/* quick and ungraceful reboot with file system caches flushed*/
 #define RB_PANIC	0	/* reboot due to panic */
 #define RB_BOOT		1	/* reboot due to boot() */
 

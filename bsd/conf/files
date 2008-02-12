@@ -67,7 +67,6 @@ OPTIONS/vndevice			optional vndevice
 OPTIONS/audit				optional audit
 OPTIONS/config_fse			optional config_fse
 OPTIONS/sockets				optional sockets
-OPTIONS/kpidirect			optional kpidirect
 OPTIONS/development			optional development
 OPTIONS/sysv_sem			optional sysv_sem
 OPTIONS/sysv_msg			optional sysv_msg

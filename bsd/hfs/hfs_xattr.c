@@ -1504,6 +1504,8 @@ hfs_removeallattr(struct hfsmount *hfsmp, u_int32_t fileid)
 #endif
 		hfs_systemfile_unlock(hfsmp, lockflags);
 		hfs_end_transaction(hfsmp);
+		if (result)
+			break;
 	}
 exit:
 	FREE(iterator, M_TEMP);

@@ -258,6 +258,7 @@ SYSCTL_INT(_net_inet_ip, OID_AUTO, stealth, CTLFLAG_RW,
 
 
 /* Firewall hooks */
+#if IPFIREWALL
 ip_fw_chk_t *ip_fw_chk_ptr;
 int fw_enable = 1;
 int fw_bypass = 1;
@@ -268,6 +269,7 @@ ip_dn_io_t *ip_dn_io_ptr;
 #endif
 
 int (*fr_checkp)(struct ip *, int, struct ifnet *, int, struct mbuf **) = NULL;
+#endif /* IPFIREWALL */
 
 SYSCTL_NODE(_net_inet_ip, OID_AUTO, linklocal, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "link local");
 
@@ -531,7 +533,9 @@ ip_input(struct mbuf *m)
 	u_short sum;
 	struct in_addr pkt_dst;
 	u_int32_t div_info = 0;		/* packet divert/tee info */
+#if IPFIREWALL
 	struct ip_fw_args args;
+#endif
 	ipfilter_t inject_filter_ref = 0;
 	struct m_tag	*tag;
 	struct route	ipforward_rt;
@@ -557,6 +561,7 @@ ip_input(struct mbuf *m)
 	}
 #endif /* DUMMYNET */
 
+#if IPDIVERT
 	if ((tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_DIVERT, NULL)) != NULL) {
 		struct divert_tag	*div_tag;
 		
@@ -565,6 +570,8 @@ ip_input(struct mbuf *m)
 
 		m_tag_delete(m, tag);
 	}
+#endif
+
 	if ((tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_IPFORWARD, NULL)) != NULL) {
 		struct ip_fwd_tag	*ipfwd_tag;
 		
@@ -815,7 +822,11 @@ pass:
 	 * to be sent and the original packet to be freed).
 	 */
 	ip_nhops = 0;		/* for source routed packets */
+#if IPFIREWALL
 	if (hlen > sizeof (struct ip) && ip_dooptions(m, 0, args.next_hop, &ipforward_rt)) {
+#else
+	if (hlen > sizeof (struct ip) && ip_dooptions(m, 0, NULL, &ipforward_rt)) {
+#endif
 		return;
 	}
 
@@ -842,8 +853,12 @@ pass:
 	 * Cache the destination address of the packet; this may be
 	 * changed by use of 'ipfw fwd'.
 	 */
+#if IPFIREWALL
 	pkt_dst = args.next_hop == NULL ?
 	    ip->ip_dst : args.next_hop->sin_addr;
+#else
+	pkt_dst = ip->ip_dst;
+#endif
 
 	/*
 	 * Enable a consistency check between the destination address
@@ -860,8 +875,12 @@ pass:
 	 * the packets are received.
 	 */
 	checkif = ip_checkinterface && (ipforwarding == 0) && 
-	    ((m->m_pkthdr.rcvif->if_flags & IFF_LOOPBACK) == 0) &&
-	    (args.next_hop == NULL);
+	    ((m->m_pkthdr.rcvif->if_flags & IFF_LOOPBACK) == 0)
+#if IPFIREWALL
+	    && (args.next_hop == NULL);
+#else
+		;
+#endif
 
 	lck_mtx_lock(rt_mtx);
 	TAILQ_FOREACH(ia, &in_ifaddrhead, ia_link) {
@@ -989,7 +1008,11 @@ pass:
 		OSAddAtomic(1, (SInt32*)&ipstat.ips_cantforward);
 		m_freem(m);
 	} else {
+#if IPFIREWALL
 		ip_forward(m, 0, args.next_hop, &ipforward_rt);
+#else
+		ip_forward(m, 0, NULL, &ipforward_rt);
+#endif
 		if (ipforward_rt.ro_rt != NULL) {
 			rtfree(ipforward_rt.ro_rt);
 			ipforward_rt.ro_rt = NULL;
@@ -1184,6 +1207,7 @@ found:
 	 */
 	OSAddAtomic(1, (SInt32*)&ipstat.ips_delivered);
 	{
+#if IPFIREWALL
 		if (args.next_hop && ip->ip_p == IPPROTO_TCP) {
 			/* TCP needs IPFORWARD info if available */
 			struct m_tag *fwd_tag;
@@ -1212,6 +1236,9 @@ found:
 		
 			ip_proto_dispatch_in(m, hlen, ip->ip_p, 0);
 		}
+#else
+		ip_proto_dispatch_in(m, hlen, ip->ip_p, 0);
+#endif
 		
 		return;
 	}

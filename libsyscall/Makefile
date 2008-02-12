@@ -43,7 +43,7 @@ MAKEOBJDIR ?= ${OBJROOT}
 # add version string
 SRCS += libsyscall_version.c
 libsyscall_version.c:
-	/Developer/Makefiles/bin/version.pl Libsyscall > $@
+	${NEXT_ROOT}/Developer/Makefiles/bin/version.pl Libsyscall > $@
 
 CFLAGS += -I${SYMROOT}
 .include "${.CURDIR}/Makefile.inc"

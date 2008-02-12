@@ -141,7 +141,9 @@ static int vfs_getrealpath(const char * path, char * realpath, size_t bufsize, v
  *		lookup:EROFS
  *		lookup:EACCES
  *		lookup:EPERM
- *		lookup:???
+ *		lookup:ERECYCLE	 vnode was recycled from underneath us in lookup.
+ *						 This means we should re-drive lookup from this point.
+ *		lookup: ???
  *		VNOP_READLINK:???
  */
 int
@@ -150,6 +152,9 @@ namei(struct nameidata *ndp)
 	struct filedesc *fdp;	/* pointer to file descriptor state */
 	char *cp;		/* pointer into pathname argument */
 	struct vnode *dp;	/* the directory we are searching */
+	struct vnode *usedvp = ndp->ni_dvp;  /* store pointer to vp in case we must loop due to
+										   	heavy vnode pressure */
+	u_long cnpflags = ndp->ni_cnd.cn_flags; /* store in case we have to restore after loop */
 	uio_t auio;
 	int error;
 	struct componentname *cnp = &ndp->ni_cnd;
@@ -169,6 +174,8 @@ namei(struct nameidata *ndp)
 		panic ("namei: flags contaminated with nameiops");
 #endif
 	fdp = p->p_fd;
+
+vnode_recycled:
 
 	/*
 	 * Get a buffer for the name to be translated, and copy the
@@ -413,6 +420,14 @@ retry_copy:
 	}
 	cnp->cn_pnbuf = NULL;
 	ndp->ni_vp = NULLVP;
+	if (error == ERECYCLE){
+		/* vnode was recycled underneath us. re-drive lookup to start at 
+		   the beginning again, since recycling invalidated last lookup*/
+		ndp->ni_cnd.cn_flags = cnpflags;
+		ndp->ni_dvp = usedvp;
+		goto vnode_recycled;
+	}
+
 
 	return (error);
 }
@@ -462,7 +477,7 @@ retry_copy:
  *		ENOTDIR			Not a directory
  *		EROFS			Read-only file system [CREATE]
  *		EISDIR			Is a directory [CREATE]
- *		cache_lookup_path:ENOENT
+ *		cache_lookup_path:ERECYCLE  (vnode was recycled from underneath us, redrive lookup again)
  *		vnode_authorize:EROFS
  *		vnode_authorize:EACCES
  *		vnode_authorize:EPERM
@@ -495,6 +510,7 @@ lookup(struct nameidata *ndp)
 	int current_mount_generation = 0;
 	int vbusyflags = 0;
 	int nc_generation = 0;
+	vnode_t last_dp = NULLVP;
 
 	/*
 	 * Setup: break out flag bits into variables.
@@ -526,7 +542,7 @@ lookup(struct nameidata *ndp)
 dirloop: 
 	ndp->ni_vp = NULLVP;
 
-	if ( (error = cache_lookup_path(ndp, cnp, dp, ctx, &trailing_slash, &dp_authorized)) ) {
+	if ( (error = cache_lookup_path(ndp, cnp, dp, ctx, &trailing_slash, &dp_authorized, last_dp)) ) {
 		dp = NULLVP;
 		goto bad;
 	}
@@ -865,7 +881,12 @@ nextname:
 		if (*cp == '\0')
 			goto emptyname;
 
-		vnode_put(dp);
+		/*
+		 * cache_lookup_path is now responsible for dropping io ref on dp
+		 * when it is called again in the dirloop.  This ensures we hold
+		 * a ref on dp until we complete the next round of lookup.
+		 */
+		last_dp = dp;
 		goto dirloop;
 	}
 				  

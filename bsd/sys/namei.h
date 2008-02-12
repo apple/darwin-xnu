@@ -220,7 +220,7 @@ int	relookup(struct vnode *dvp, struct vnode **vpp,
  */
 void    cache_purgevfs(mount_t mp);
 int		cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp,
-			  vfs_context_t context, int *trailing_slash, int *dp_authorized);
+			  vfs_context_t context, int *trailing_slash, int *dp_authorized, vnode_t last_dp);
 
 void		vnode_cache_authorized_action(vnode_t vp, vfs_context_t context, kauth_action_t action);
 void		vnode_uncache_authorized_action(vnode_t vp, kauth_action_t action);

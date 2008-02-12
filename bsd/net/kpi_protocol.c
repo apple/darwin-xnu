@@ -266,6 +266,7 @@ proto_input_run(void)
 					}
 				}
 				if (locked) {
+					locked = 0;
 					lck_mtx_unlock(entry->domain->dom_mtx);
 				}	
 		}

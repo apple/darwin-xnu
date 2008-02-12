@@ -100,8 +100,6 @@ int			speculative_steal_index = 0;
 
 struct vm_speculative_age_q vm_page_queue_speculative[VM_PAGE_MAX_SPECULATIVE_AGE_Q + 1];
 
-static void vm_page_insert_internal(vm_page_t, vm_object_t, vm_object_offset_t, boolean_t);
-
 
 /*
  *	Associated with page of user-allocatable memory is a
@@ -406,6 +404,7 @@ vm_page_bootstrap(
 	m->laundry = FALSE;
 	m->free = FALSE;
 	m->pmapped = FALSE;
+	m->wpmapped = FALSE;
 	m->reference = FALSE;
 	m->pageout = FALSE;
 	m->dump_cleaning = FALSE;
@@ -889,7 +888,7 @@ vm_page_insert(
 }
 
 
-static void
+void
 vm_page_insert_internal(
 	vm_page_t		mem,
 	vm_object_t		object,
@@ -1546,6 +1545,7 @@ vm_page_grablo(void)
 		assert(mem->free);
 		assert(mem->busy);
 		assert(!mem->pmapped);
+		assert(!mem->wpmapped);
 
 		mem->pageq.next = NULL;
 		mem->pageq.prev = NULL;
@@ -1613,6 +1613,7 @@ return_page_from_cpu_list:
 		assert(mem->busy);
 		assert(!mem->encrypted);
 		assert(!mem->pmapped);
+		assert(!mem->wpmapped);
 
 		return mem;
 	}
@@ -1723,6 +1724,7 @@ return_page_from_cpu_list:
 			assert(!mem->free);
 			assert(!mem->encrypted);
 			assert(!mem->pmapped);
+			assert(!mem->wpmapped);
 		}
 		PROCESSOR_DATA(current_processor(), free_pages) = head->pageq.next;
 		PROCESSOR_DATA(current_processor(), start_color) = color;
@@ -2090,6 +2092,7 @@ vm_page_free_prepare(
 	mem->encrypted_cleaning = FALSE;
 	mem->deactivated = FALSE;
 	mem->pmapped = FALSE;
+	mem->wpmapped = FALSE;
 
 	if (mem->private) {
 		mem->private = FALSE;
@@ -2805,11 +2808,9 @@ vm_page_copy(
 	dest_m->encrypted = FALSE;
 
 	if (src_m->object != VM_OBJECT_NULL &&
-	    src_m->object->code_signed &&
-	    !src_m->cs_validated) {
+	    src_m->object->code_signed) {
 		/*
-		 * We're copying a not-yet-validated page from a
-		 * code-signed object.
+		 * We're copying a page from a code-signed object.
 		 * Whoever ends up mapping the copy page might care about
 		 * the original page's integrity, so let's validate the
 		 * source page now.

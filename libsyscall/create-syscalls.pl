@@ -102,7 +102,7 @@ my %TypeBytes = (
 
 ##########################################################################
 # Make a __xxx.s file: if it exists in the $CustomDir, just copy it, otherwise
-# create one.  We define the macro __SYSCALL_I386_ARG_BYTES so that SYS.h could
+# create one.  We define the macro __SYSCALL_32BIT_ARG_BYTES so that SYS.h could
 # use that to define __SYSCALL dependent on the arguments' total size.
 ##########################################################################
 sub make_s {
@@ -119,7 +119,7 @@ sub make_s {
     } else {
 	my $f = IO::File->new($path, 'w');
 	die "$MyName: $path: $!\n" unless defined($f);
-	print $f "#define __SYSCALL_I386_ARG_BYTES $bytes\n\n";
+	print $f "#define __SYSCALL_32BIT_ARG_BYTES $bytes\n\n";
 	print $f "#include \"SYS.h\"\n\n";
 	print $f "__SYSCALL($pseudo, $name, $args)\n";
 	print "Creating $path\n";

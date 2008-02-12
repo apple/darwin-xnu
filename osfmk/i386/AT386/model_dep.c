@@ -670,11 +670,13 @@ panic_io_port_read(void) {
 /* For use with the MP rendezvous mechanism
  */
 
+#if !CONFIG_EMBEDDED
 static void
 machine_halt_cpu(__unused void *arg) {
 	panic_io_port_read();
 	pmCPUHalt(PM_HALT_DEBUG);
 }
+#endif
 
 void
 Debugger(

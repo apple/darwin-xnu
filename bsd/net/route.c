@@ -382,7 +382,7 @@ rtfree_locked(struct rtentry *rt)
 	 * close routine typically issues RTM_DELETE which clears the RTF_UP
 	 * flag on the entry so that the code below reclaims the storage.
 	 */
-	if (rnh->rnh_close && rt->rt_refcnt == 0)
+	if (rnh && rnh->rnh_close && rt->rt_refcnt == 0)
 		rnh->rnh_close((struct radix_node *)rt, rnh);
 
 	/*

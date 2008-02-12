@@ -160,13 +160,16 @@ tsc_init(void)
 	 * Get the TSC increment.  The TSC is incremented by this
 	 * on every bus tick.  Calculate the TSC conversion factors
 	 * to and from nano-seconds.
+	 * The tsc granularity is also called the "bus ratio". If the N/2 bit
+	 * is set this indicates the bus ration is 0.5 more than this - i.e.
+	 * that the true bus ratio is (2*tscGranularity + 1)/2.
 	 */
 	if (cpuid_info()->cpuid_family == CPU_FAMILY_PENTIUM_M) {
 		uint64_t	prfsts;
 
 		prfsts = rdmsr64(IA32_PERF_STS);
 		tscGranularity = (uint32_t)bitfield(prfsts, 44, 40);
-		N_by_2_bus_ratio = prfsts & bit(46);
+		N_by_2_bus_ratio = (prfsts & bit(46)) != 0;
 
 	} else {
 		panic("rtclock_init: unknown CPU family: 0x%X\n",
@@ -174,20 +177,20 @@ tsc_init(void)
 	}
 
 	if (N_by_2_bus_ratio)
-		tscFCvtt2n = busFCvtt2n * 2 / (uint64_t)tscGranularity;
+		tscFCvtt2n = busFCvtt2n * 2 / (1 + 2*tscGranularity);
 	else
-		tscFCvtt2n = busFCvtt2n / (uint64_t)tscGranularity;
+		tscFCvtt2n = busFCvtt2n / tscGranularity;
 
 	tscFreq = ((1 * Giga)  << 32) / tscFCvtt2n;
 	tscFCvtn2t = 0xFFFFFFFFFFFFFFFFULL / tscFCvtt2n;
 
 	kprintf(" TSC: Frequency = %6d.%04dMHz, "
-			"cvtt2n = %08X.%08X, cvtn2t = %08X.%08X, gran = %lld\n",
+			"cvtt2n = %08X.%08X, cvtn2t = %08X.%08X, gran = %lld%s\n",
 			(uint32_t)(tscFreq / Mega),
 			(uint32_t)(tscFreq % Mega), 
 			(uint32_t)(tscFCvtt2n >> 32), (uint32_t)tscFCvtt2n,
 			(uint32_t)(tscFCvtn2t >> 32), (uint32_t)tscFCvtn2t,
-			tscGranularity);
+			tscGranularity, N_by_2_bus_ratio ? " (N/2)" : "");
 
 	/*
 	 * Calculate conversion from BUS to TSC

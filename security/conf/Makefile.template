@@ -26,7 +26,7 @@ include $(MakeInc_def)
 #
 # XXX: CFLAGS
 #
-CFLAGS+= -DKERNEL -DBSD_KERNEL_PRIVATE \
+CFLAGS+= -I. -imacros meta_features.h -DKERNEL -DBSD_KERNEL_PRIVATE \
 	-Wall -Wno-four-char-constants -fno-common
 
 #

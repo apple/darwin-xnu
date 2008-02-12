@@ -2843,8 +2843,8 @@ end_transaction(transaction *tr, int force_it, errno_t (*callback)(void*), void 
 		blhdr->checksum = 0;
 		blhdr->checksum = calc_checksum((char *)blhdr, BLHDR_CHECKSUM_SIZE);
 
-		if (kmem_alloc(kernel_map, (vm_offset_t *)&bparray, tr->blhdr->num_blocks * sizeof(struct buf *))) {
-		    panic("can't allocate %lu bytes for bparray\n", tr->blhdr->num_blocks * sizeof(struct buf *));
+		if (kmem_alloc(kernel_map, (vm_offset_t *)&bparray, blhdr->num_blocks * sizeof(struct buf *))) {
+		    panic("can't allocate %lu bytes for bparray\n", blhdr->num_blocks * sizeof(struct buf *));
 		}
 
 		// calculate individual block checksums
@@ -2867,7 +2867,7 @@ end_transaction(transaction *tr, int force_it, errno_t (*callback)(void*), void 
 		    blhdr->binfo[i].b.bp = bparray[i];
 		}
 
-		kmem_free(kernel_map, (vm_offset_t)bparray, tr->blhdr->num_blocks * sizeof(struct buf *));
+		kmem_free(kernel_map, (vm_offset_t)bparray, blhdr->num_blocks * sizeof(struct buf *));
 
 		if (ret != amt) {
 			printf("jnl: %s: end_transaction: only wrote %d of %d bytes to the journal!\n",

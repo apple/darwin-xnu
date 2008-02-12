@@ -137,9 +137,9 @@ static int sendit(struct proc *, int, struct user_msghdr *, uio_t, int,
 static int recvit(struct proc *, int, struct user_msghdr *, uio_t, user_addr_t,
     register_t *);
 static int getsockaddr(struct socket *, struct sockaddr **, user_addr_t,
-    size_t);
+    size_t, boolean_t);
 static int getsockaddr_s(struct socket *, struct sockaddr_storage *,
-    user_addr_t, size_t);
+    user_addr_t, size_t, boolean_t);
 #if SENDFILE
 static void alloc_sendpkt(int, size_t, unsigned int *, struct mbuf **,
     boolean_t);
@@ -251,9 +251,9 @@ bind(__unused proc_t p, struct bind_args *uap, __unused register_t *retval)
 		goto out;
 	}
 	if (uap->namelen > sizeof (ss)) {
-		error = getsockaddr(so, &sa, uap->name, uap->namelen);
+		error = getsockaddr(so, &sa, uap->name, uap->namelen, TRUE);
 	} else {
-		error = getsockaddr_s(so, &ss, uap->name, uap->namelen);
+		error = getsockaddr_s(so, &ss, uap->name, uap->namelen, TRUE);
 		if (error == 0) {
 			sa = (struct sockaddr *)&ss;
 			want_free = FALSE;
@@ -595,6 +595,7 @@ connect_nocancel(__unused proc_t p, struct connect_nocancel_args *uap, __unused 
 	boolean_t want_free = TRUE;
 	int error;
 	int fd = uap->s;
+	boolean_t dgram;
 
 	AUDIT_ARG(fd, uap->s);
 	error = file_socket(fd, &so);
@@ -605,11 +606,17 @@ connect_nocancel(__unused proc_t p, struct connect_nocancel_args *uap, __unused 
 		goto out;
 	}
 
+	/*
+	 * Ask getsockaddr{_s} to not translate AF_UNSPEC to AF_INET
+	 * if this is a datagram socket; translate for other types.
+	 */
+	dgram = (so->so_type == SOCK_DGRAM);
+
 	/* Get socket address now before we obtain socket lock */
 	if (uap->namelen > sizeof (ss)) {
-		error = getsockaddr(so, &sa, uap->name, uap->namelen);
+		error = getsockaddr(so, &sa, uap->name, uap->namelen, !dgram);
 	} else {
-		error = getsockaddr_s(so, &ss, uap->name, uap->namelen);
+		error = getsockaddr_s(so, &ss, uap->name, uap->namelen, !dgram);
 		if (error == 0) {
 			sa = (struct sockaddr *)&ss;
 			want_free = FALSE;
@@ -827,10 +834,10 @@ sendit(struct proc *p, int s, struct user_msghdr *mp, uio_t uiop,
 	if (mp->msg_name != USER_ADDR_NULL) {
 		if (mp->msg_namelen > sizeof (ss)) {
 			error = getsockaddr(so, &to, mp->msg_name,
-			    mp->msg_namelen);
+			    mp->msg_namelen, TRUE);
 		} else {
 			error = getsockaddr_s(so, &ss, mp->msg_name,
-			    mp->msg_namelen);
+			    mp->msg_namelen, TRUE);
 			if (error == 0) {
 				to = (struct sockaddr *)&ss;
 				want_free = FALSE;
@@ -1840,7 +1847,7 @@ sockargs(struct mbuf **mp, user_addr_t data, int buflen, int type)
  */
 static int
 getsockaddr(struct socket *so, struct sockaddr **namp, user_addr_t uaddr,
-    size_t len)
+    size_t len, boolean_t translate_unspec)
 {
 	struct sockaddr *sa;
 	int error;
@@ -1865,7 +1872,7 @@ getsockaddr(struct socket *so, struct sockaddr **namp, user_addr_t uaddr,
 		 * sockets we leave it unchanged and let the lower layer
 		 * handle it.
 		 */
-		if (sa->sa_family == AF_UNSPEC &&
+		if (translate_unspec && sa->sa_family == AF_UNSPEC &&
 		    INP_CHECK_SOCKAF(so, AF_INET) &&
 		    len == sizeof (struct sockaddr_in))
 			sa->sa_family = AF_INET;
@@ -1878,7 +1885,7 @@ getsockaddr(struct socket *so, struct sockaddr **namp, user_addr_t uaddr,
 
 static int
 getsockaddr_s(struct socket *so, struct sockaddr_storage *ss,
-    user_addr_t uaddr, size_t len)
+    user_addr_t uaddr, size_t len, boolean_t translate_unspec)
 {
 	int error;
 
@@ -1902,7 +1909,7 @@ getsockaddr_s(struct socket *so, struct sockaddr_storage *ss,
 		 * sockets we leave it unchanged and let the lower layer
 		 * handle it.
 		 */
-		if (ss->ss_family == AF_UNSPEC &&
+		if (translate_unspec && ss->ss_family == AF_UNSPEC &&
 		    INP_CHECK_SOCKAF(so, AF_INET) &&
 		    len == sizeof (struct sockaddr_in))
 			ss->ss_family = AF_INET;

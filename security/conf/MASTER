@@ -55,7 +55,7 @@ ident		SECURITY
 # Note: MAC options must be set in both bsd/conf and security/conf MASTER files
 #
 options		KDEBUG		# kernel tracing		# <kdebug>
-options		AUDIT		# Security event auditing
+options		AUDIT		# Security event auditing	# <audit>
 options		CONFIG_LCTX	# Login Context
 
 options		CONFIG_DTRACE 	# dtrace support	# <config_dtrace>

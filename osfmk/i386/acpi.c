@@ -173,7 +173,11 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	acpi_sleep_cpu(func, refcon);
 #endif
 
-	/* reset UART if kprintf is enabled */
+	/* Reset UART if kprintf is enabled.
+	 * However kprintf should not be used before rtc_sleep_wakeup()
+	 * for compatibility with firewire kprintf.
+	 */
+
 	if (FALSE == disable_serial_output)
 		serial_init();
 

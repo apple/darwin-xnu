@@ -248,12 +248,14 @@ SYSCTL_UINT(_security_mac, OID_AUTO, label_mbufs, CTLFLAG_RW,
 	&mac_label_mbufs, 0, "Label all MBUFs");
 #endif
 
+#if AUDIT
 /*
  * mac_audit_data_zone is the zone used for data pushed into the audit
  * record by policies. Using a zone simplifies memory management of this
  * data, and allows tracking of the amount of data in flight.
  */
 extern zone_t mac_audit_data_zone;
+#endif
 
 /*
  * mac_policy_list holds the list of policy modules.  Modules with a
@@ -540,9 +542,11 @@ mac_policy_initbsd(void)
 	struct mac_policy_conf *mpc;
 	u_int i;
 
+#if AUDIT
 	mac_audit_data_zone = zinit(MAC_AUDIT_DATA_LIMIT,
 				    AQ_HIWATER * MAC_AUDIT_DATA_LIMIT,
 				    8192, "mac_audit_data_zone");
+#endif
 
 	printf("MAC Framework successfully initialized\n");
 

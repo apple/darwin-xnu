@@ -113,7 +113,7 @@ struct IODMACommandInternal
     UInt8  fCopyContig;
     UInt8  fPrepared;
     UInt8  fDoubleBuffer;
-    UInt8  __pad[1];
+    UInt8  fNewMD;
 
     ppnum_t  fCopyPageAlloc;
     ppnum_t  fCopyPageCount;

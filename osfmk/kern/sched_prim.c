@@ -150,6 +150,7 @@ void		(*pm_tick_callout)(void)	= NULL;
 void wait_queues_init(void) __attribute__((section("__TEXT, initcode")));
 
 static void load_shift_init(void) __attribute__((section("__TEXT, initcode")));
+static void preempt_pri_init(void) __attribute__((section("__TEXT, initcode")));
 
 static thread_t	thread_select_idle(
 					thread_t			thread,
@@ -180,8 +181,6 @@ boolean_t	thread_runnable(
 				thread_t		thread);
 
 #endif	/*DEBUG*/
-
-
 
 /*
  *	State machine
@@ -243,6 +242,7 @@ struct wait_queue wait_queues[NUMQUEUES];
 	((((int)(event) < 0)? ~(int)(event): (int)(event)) % NUMQUEUES)
 
 int8_t		sched_load_shifts[NRQS];
+int			sched_preempt_pri[NRQBM];
 
 void
 sched_init(void)
@@ -262,6 +262,7 @@ sched_init(void)
 
 	wait_queues_init();
 	load_shift_init();
+	preempt_pri_init();
 	simple_lock_init(&rt_lock, 0);
 	run_queue_init(&rt_runq);
 	sched_tick = 0;
@@ -299,8 +300,14 @@ sched_timebase_init(void)
 	/* scheduler tick interval */
 	clock_interval_to_absolutetime_interval(USEC_PER_SEC >> SCHED_TICK_SHIFT,
 													NSEC_PER_USEC, &abstime);
-	assert((abstime >> 32) == 0 && (uint32_t)abstime != 0);
 	sched_tick_interval = abstime;
+
+#if DEBUG
+	printf("Quantum: %d. Smallest quantum: %d. Min Rt/Max Rt: %d/%d."
+		" Tick: %d.\n",
+		std_quantum, min_std_quantum, min_rt_quantum, max_rt_quantum,
+		sched_tick_interval);
+#endif
 
 	/*
 	 * Compute conversion factor from usage to
@@ -341,6 +348,18 @@ load_shift_init(void)
 		for (j <<= 1; i < j; ++i)
 			*p++ = k;
 	}
+}
+
+static void
+preempt_pri_init(void)
+{
+	int		i, *p = sched_preempt_pri;
+
+	for (i = BASEPRI_FOREGROUND + 1; i < MINPRI_KERNEL; ++i)
+		setbit(i, p);
+
+	for (i = BASEPRI_PREEMPT; i <= MAXPRI; ++i)
+		setbit(i, p);
 }
 
 /*
@@ -1200,8 +1219,8 @@ thread_select(
 						((queue_entry_t)thread)->next->prev = q;
 						q->next = ((queue_entry_t)thread)->next;
 						thread->runq = PROCESSOR_NULL;
-						assert(thread->sched_mode & TH_MODE_PREEMPT);
 						runq->count--; runq->urgency--;
+						assert(runq->urgency >= 0);
 						if (queue_empty(q)) {
 							if (runq->highq != IDLEPRI)
 								clrbit(MAXPRI - runq->highq, runq->bitmap);
@@ -1916,8 +1935,9 @@ run_queue_dequeue(
 
 	thread->runq = PROCESSOR_NULL;
 	rq->count--;
-	if (thread->sched_mode & TH_MODE_PREEMPT)
-		rq->urgency--;
+	if (testbit(rq->highq, sched_preempt_pri)) {
+		rq->urgency--; assert(rq->urgency >= 0);
+	}
 	if (queue_empty(queue)) {
 		if (rq->highq != IDLEPRI)
 			clrbit(MAXPRI - rq->highq, rq->bitmap);
@@ -1971,7 +1991,6 @@ realtime_queue_insert(
 	}
 
 	thread->runq = RT_RUNQ;
-	assert(thread->sched_mode & TH_MODE_PREEMPT);
 	rq->count++; rq->urgency++;
 
 	simple_unlock(&rt_lock);
@@ -2060,7 +2079,7 @@ processor_enqueue(
 		enqueue_head(queue, (queue_entry_t)thread);
 
 	thread->runq = processor;
-	if (thread->sched_mode & TH_MODE_PREEMPT)
+	if (testbit(thread->sched_pri, sched_preempt_pri))
 		rq->urgency++;
 	rq->count++;
 
@@ -2106,7 +2125,7 @@ processor_setrun(
 	/*
 	 *	Set preemption mode.
 	 */
-	if (thread->sched_mode & TH_MODE_PREEMPT)
+	if (testbit(thread->sched_pri, sched_preempt_pri))
 		preempt = (AST_PREEMPT | AST_URGENT);
 	else
 	if (thread->sched_mode & TH_MODE_TIMESHARE && thread->priority < BASEPRI_BACKGROUND)
@@ -2409,8 +2428,9 @@ processor_queue_shutdown(
 
 				thread->runq = PROCESSOR_NULL;
 				rq->count--;
-				if (thread->sched_mode & TH_MODE_PREEMPT)
-					rq->urgency--;
+				if (testbit(pri, sched_preempt_pri)) {
+					rq->urgency--; assert(rq->urgency >= 0);
+				}
 				if (queue_empty(queue)) {
 					if (pri != IDLEPRI)
 						clrbit(MAXPRI - pri, rq->bitmap);
@@ -2524,15 +2544,6 @@ set_sched_pri(
 {
 	boolean_t		removed = run_queue_remove(thread);
 
-	if (	!(thread->sched_mode & TH_MODE_TIMESHARE)				&&
-			(priority >= BASEPRI_PREEMPT						||
-			 (thread->task_priority < MINPRI_KERNEL			&&
-			  thread->task_priority >= BASEPRI_BACKGROUND	&&
-			  priority > thread->task_priority)					)	)
-		thread->sched_mode |= TH_MODE_PREEMPT;
-	else
-		thread->sched_mode &= ~TH_MODE_PREEMPT;
-
 	thread->sched_pri = priority;
 	if (removed)
 		thread_setrun(thread, SCHED_PREEMPT | SCHED_TAILQ);
@@ -2630,9 +2641,9 @@ run_queue_remove(
 			 */
 			remqueue(&rq->queues[0], (queue_entry_t)thread);
 			rq->count--;
-			if (thread->sched_mode & TH_MODE_PREEMPT)
-				rq->urgency--;
-			assert(rq->urgency >= 0);
+			if (testbit(thread->sched_pri, sched_preempt_pri)) {
+				rq->urgency--; assert(rq->urgency >= 0);
+			}
 
 			if (queue_empty(rq->queues + thread->sched_pri)) {
 				/* update run queue status */
@@ -2741,8 +2752,9 @@ steal_thread(
 
 				thread->runq = PROCESSOR_NULL;
 				rq->count--;
-				if (thread->sched_mode & TH_MODE_PREEMPT)
-					rq->urgency--;
+				if (testbit(pri, sched_preempt_pri)) {
+					rq->urgency--; assert(rq->urgency >= 0);
+				}
 				if (queue_empty(queue)) {
 					if (pri != IDLEPRI)
 						clrbit(MAXPRI - pri, rq->bitmap);
@@ -2807,9 +2819,6 @@ processor_idle(
 			break;
 	}
 
-	KERNEL_DEBUG_CONSTANT(
-		MACHDBG_CODE(DBG_MACH_SCHED,MACH_IDLE) | DBG_FUNC_END, (int)thread, 0, 0, 0, 0);
-
 	timer_switch(&PROCESSOR_DATA(processor, idle_state),
 									mach_absolute_time(), &PROCESSOR_DATA(processor, system_state));
 	PROCESSOR_DATA(processor, current_state) = &PROCESSOR_DATA(processor, system_state);
@@ -2829,8 +2838,8 @@ processor_idle(
 		processor->next_thread = THREAD_NULL;
 		processor->state = PROCESSOR_RUNNING;
 
-		if (	processor->runq.highq > new_thread->sched_pri	||
-				rt_runq.highq >= new_thread->sched_pri			) {
+		if (	processor->runq.highq > new_thread->sched_pri					||
+				(rt_runq.highq > 0 && rt_runq.highq >= new_thread->sched_pri)	) {
 			processor->deadline = UINT64_MAX;
 
 			pset_unlock(pset);
@@ -2839,10 +2848,16 @@ processor_idle(
 			thread_setrun(new_thread, SCHED_HEADQ);
 			thread_unlock(new_thread);
 
+			KERNEL_DEBUG_CONSTANT(
+				MACHDBG_CODE(DBG_MACH_SCHED,MACH_IDLE) | DBG_FUNC_END, (int)thread, (int)state, 0, 0, 0);
+	
 			return (THREAD_NULL);
 		}
 
 		pset_unlock(pset);
+
+		KERNEL_DEBUG_CONSTANT(
+			MACHDBG_CODE(DBG_MACH_SCHED,MACH_IDLE) | DBG_FUNC_END, (int)thread, (int)state, (int)new_thread, 0, 0);
 
 		return (new_thread);
 	}
@@ -2870,11 +2885,17 @@ processor_idle(
 			thread_setrun(new_thread, SCHED_HEADQ);
 			thread_unlock(new_thread);
 
+			KERNEL_DEBUG_CONSTANT(
+				MACHDBG_CODE(DBG_MACH_SCHED,MACH_IDLE) | DBG_FUNC_END, (int)thread, (int)state, 0, 0, 0);
+
 			return (THREAD_NULL);
 		}
 	}
 
 	pset_unlock(pset);
+
+	KERNEL_DEBUG_CONSTANT(
+		MACHDBG_CODE(DBG_MACH_SCHED,MACH_IDLE) | DBG_FUNC_END, (int)thread, (int)state, 0, 0, 0);
 
 	return (THREAD_NULL);
 }

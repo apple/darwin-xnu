@@ -75,7 +75,7 @@ struct aiocb {
 
 struct user_aiocb {
 	int		aio_fildes;		/* File descriptor */
-	off_t		aio_offset;		/* File offset */
+	off_t		aio_offset __attribute((aligned(8))); /* File offset */
 	user_addr_t	aio_buf __attribute((aligned(8)));		/* Location of buffer */
 	user_size_t	aio_nbytes;		/* Length of transfer */
 	int		aio_reqprio;	/* Request priority offset */

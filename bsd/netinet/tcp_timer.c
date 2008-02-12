@@ -358,7 +358,7 @@ static int bg_cnt = 0;
 void
 tcp_slowtimo()
 {
-	struct inpcb *inp;
+	struct inpcb *inp, *nxt;
 	struct tcpcb *tp;
 	struct socket *so;
 	int i;
@@ -537,12 +537,12 @@ twunlock:
 	}
 
 
-    	LIST_FOREACH(inp, &tcb, inp_list) {
+    	LIST_FOREACH_SAFE(inp, &tcb, inp_list, nxt) {
 		tcp_garbage_collect(inp, 0);
 	}
 
 	/* Now cleanup the time wait ones */
-    	LIST_FOREACH(inp, &time_wait_slots[cur_tw_slot], inp_list) {
+    	LIST_FOREACH_SAFE(inp, &time_wait_slots[cur_tw_slot], inp_list, nxt) {
 		tcp_garbage_collect(inp, 1);
 	}
 

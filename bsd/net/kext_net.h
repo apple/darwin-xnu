@@ -48,8 +48,9 @@
 
 struct socket_filter;
 
-#define	SFEF_DETACHUSEZERO	0x1	// Detach when use reaches zero
-#define	SFEF_UNREGISTERING	0x2	// Remove due to unregister
+#define	SFEF_DETACHUSEZERO	0x1	/* Detach when use reaches zero */
+#define	SFEF_UNREGISTERING	0x2	/* Remove due to unregister */
+#define	SFEF_DETACHXREF		0x4	/* Extra reference held for detach */
 
 struct socket_filter_entry {
 	struct socket_filter_entry	*sfe_next_onsocket;

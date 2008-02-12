@@ -104,7 +104,7 @@ int nd6_debug = 0;
 static int nd6_inuse, nd6_allocated;
 
 struct llinfo_nd6 llinfo_nd6 = {&llinfo_nd6, &llinfo_nd6, NULL, NULL, 0, 0, 0, 0, 0 };
-size_t nd_ifinfo_indexlim = 8;
+size_t nd_ifinfo_indexlim = 32; /* increased for 5589193 */
 struct nd_ifinfo *nd_ifinfo = NULL;
 struct nd_drhead nd_defrouter;
 struct nd_prhead nd_prefix = { 0 };
@@ -166,7 +166,13 @@ nd6_ifattach(
 		bzero(q, n);
 		if (nd_ifinfo) {
 			bcopy((caddr_t)nd_ifinfo, q, n/2);
+			/* Radar 5589193:
+			 * SU fix purposely leaks the old nd_ifinfo array
+			 * if we grow the arraw to more than 32 interfaces
+			 * Fix for future release is to use proper locking.
+
 			FREE((caddr_t)nd_ifinfo, M_IP6NDP);
+			*/
 		}
 		nd_ifinfo = (struct nd_ifinfo *)q;
 	}

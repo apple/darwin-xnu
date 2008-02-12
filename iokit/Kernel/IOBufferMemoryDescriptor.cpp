@@ -500,7 +500,7 @@ void IOBufferMemoryDescriptor::free()
     IOOptionBits     options   = _options;
     vm_size_t        size      = _capacity;
     void *           buffer    = _buffer;
-    IOVirtualAddress source    = _ranges.v64->address;
+    mach_vm_address_t source   = (_ranges.v) ? _ranges.v64->address : 0;
     IOMemoryMap *    map       = 0;
     vm_offset_t      alignment = _alignment;
 
@@ -524,7 +524,7 @@ void IOBufferMemoryDescriptor::free()
     else if (buffer)
     {
 	if (kIOMemoryTypePhysical64 == (flags & kIOMemoryTypeMask))
-	    IOFreePhysical((mach_vm_address_t) source, size);
+	    IOFreePhysical(source, size);
         else if (options & kIOMemoryPhysicallyContiguous)
             IOKernelFreeContiguous((mach_vm_address_t) buffer, size);
         else if (alignment > 1)

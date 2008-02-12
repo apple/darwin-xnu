@@ -252,13 +252,24 @@ enum {
     kInflowForciblyEnabledBit = (1 << 0)
 };
 
+/* kIOPMMessageInternalBatteryFullyDischarged
+ * The battery has drained completely to its "Fully Discharged" state. 
+ */
 #define kIOPMMessageInternalBatteryFullyDischarged  \
                 iokit_family_msg(sub_iokit_powermanagement, 0x120)
+
+/* kIOPMMessageSystemPowerEventOccurred
+ * Some major system thermal property has changed, and interested clients may
+ * modify their behavior.
+ */
+#define kIOPMMessageSystemPowerEventOccurred  \
+                iokit_family_msg(sub_iokit_powermanagement, 0x130)
 
 
 /*******************************************************************************
  *
  * Power commands issued to root domain
+ * Use with IOPMrootDomain::receivePowerNotification()
  *
  * These commands are issued from system drivers only:
  *      ApplePMU, AppleSMU, IOGraphics, AppleACPIFamily
@@ -277,6 +288,7 @@ enum {
   kIOPMOverTemp                 = (1<<9),  // system dangerously hot
   kIOPMClamshellOpened          = (1<<10)  // clamshell was opened
 };
+
 
 /*******************************************************************************
  *
@@ -377,6 +389,76 @@ enum {
 // before the battery is settled.
 #define kIOPMPSPostDishargeWaitSecondsKey      "PostDischargeWaitSeconds"
 
+
+/* CPU Power Management status keys
+ * Pass as arguments to IOPMrootDomain::systemPowerEventOccurred
+ * Or as arguments to IOPMSystemPowerEventOccurred()
+ * Or to decode the dictionary obtained from IOPMCopyCPUPowerStatus()
+ * These keys reflect restrictions placed on the CPU by the system
+ * to bring the CPU's power consumption within allowable thermal and 
+ * power constraints.
+ */
+
+
+/* kIOPMGraphicsPowerLimitsKey
+ *   The key representing the dictionary of graphics power limits.
+ *   The dictionary contains the other kIOPMCPUPower keys & their associated
+ *   values (e.g. Speed limit, Processor Count, and Schedule limits).
+ */
+#define kIOPMGraphicsPowerLimitsKey                     "Graphics_Power_Limits"
+
+/* kIOPMGraphicsPowerLimitPerformanceKey
+ *   The key representing the percent of overall performance made available
+ *   by the graphics chip as a percentage (integer 0 - 100).
+ */
+#define kIOPMGraphicsPowerLimitPerformanceKey           "Graphics_Power_Performance"
+
+
+
+/* kIOPMCPUPowerLimitsKey
+ *   The key representing the dictionary of CPU Power Limits.
+ *   The dictionary contains the other kIOPMCPUPower keys & their associated
+ *   values (e.g. Speed limit, Processor Count, and Schedule limits).
+ */
+#define kIOPMCPUPowerLimitsKey                          "CPU_Power_Limits"
+
+/* kIOPMCPUPowerLimitProcessorSpeedKey defines the speed & voltage limits placed 
+ *   on the CPU.
+ *   Represented as a percentage (0-100) of maximum CPU speed.
+ */
+#define kIOPMCPUPowerLimitProcessorSpeedKey             "CPU_Speed_Limit"
+
+/* kIOPMCPUPowerLimitProcessorCountKey reflects how many, if any, CPUs have been
+ *   taken offline. Represented as an integer number of CPUs (0 - Max CPUs).
+ */
+#define kIOPMCPUPowerLimitProcessorCountKey             "CPU_Available_CPUs"
+
+/* kIOPMCPUPowerLimitSchedulerTimeKey represents the percentage (0-100) of CPU time 
+ *   available. 100% at normal operation. The OS may limit this time for a percentage
+ *   less than 100%.
+ */
+#define kIOPMCPUPowerLimitSchedulerTimeKey              "CPU_Scheduler_Limit"
+
+
+/* Thermal Level Warning Key
+ * Indicates the thermal constraints placed on the system. This value may 
+ * cause clients to action to consume fewer system resources.
+ * The value associated with this warning is defined by the platform.
+ */
+#define kIOPMThermalLevelWarningKey                     "Thermal_Level_Warning"
+
+/* Thermal Warning Level values
+ *      kIOPMThermalWarningLevelNormal - under normal operating conditions
+ *      kIOPMThermalWarningLevelDanger - thermal pressure may cause system slowdown
+ *      kIOPMThermalWarningLevelCrisis - thermal conditions may cause imminent shutdown
+ *
+ * The platform may define additional thermal levels if necessary.
+ */
+enum {
+  kIOPMThermalWarningLevelNormal    = 0,
+  kIOPMThermalWarningLevelDanger    = 5,
+  kIOPMThermalWarningLevelCrisis    = 10
+};
 
 
 // PM Settings Controller setting types

@@ -46,12 +46,7 @@ enum purgeable_q_type {
 	PURGEABLE_Q_TYPE_MAX
 };
 
-/* 
- * It appears there's a 16 vs 32 size mismatch when using
- * CONFIG_TOKEN_QUEUE_SMALL and the resulting math can lead to a large 
- * negative value for new_pages in vm_purgeable.c.
- */
-#if (CONFIG_TOKEN_QUEUE_SMALL == 1) && 0
+#if (CONFIG_TOKEN_QUEUE_SMALL == 1)
 typedef uint16_t token_idx_t;
 typedef uint16_t token_cnt_t;
 #define MAX_VOLATILE 0x01000
@@ -80,7 +75,7 @@ struct purgeable_q {
 typedef struct purgeable_q * purgeable_q_t;
 
 extern struct purgeable_q purgeable_queues[PURGEABLE_Q_TYPE_MAX];
-extern token_cnt_t token_new_pagecount;
+extern int32_t token_new_pagecount;
 extern int available_for_purge;
 
 

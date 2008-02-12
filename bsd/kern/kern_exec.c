@@ -1548,6 +1548,7 @@ int
 posix_spawn(proc_t ap, struct posix_spawn_args *uap, register_t *retval)
 {
 	proc_t p = ap;		/* quiet bogus GCC vfork() warning */
+	user_addr_t pid = uap->pid;
 	register_t ival[2];		/* dummy retval for vfork() */
 	struct image_params image_params, *imgp;
 	struct vnode_attr va;
@@ -1809,8 +1810,8 @@ bad:
 		 *
 		 * If the parent wants the pid, copy it out
 		 */
-		if (uap->pid != USER_ADDR_NULL)
-			(void)suword(uap->pid, p->p_pid);
+		if (pid != USER_ADDR_NULL)
+			(void)suword(pid, p->p_pid);
 		retval[0] = error;
 		/*
 		 * Override inherited code signing flags with the

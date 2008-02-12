@@ -35,6 +35,7 @@
 #include <kern/lock.h>
 #include <kern/locks.h>
 #include <kern/thread_call.h>
+#include <kern/thread.h>
 #include <machine/machine_routines.h>
 #include <sys/syslog.h>
 #include <sys/ucred.h>

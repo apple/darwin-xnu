@@ -561,25 +561,20 @@ lck_mtx_lock_wait (
 	priority = self->sched_pri;
 	if (priority < self->priority)
 		priority = self->priority;
-	if (priority > MINPRI_KERNEL)
-		priority = MINPRI_KERNEL;
-	else
 	if (priority < BASEPRI_DEFAULT)
 		priority = BASEPRI_DEFAULT;
 
 	thread_lock(holder);
 	if (mutex->lck_mtx_pri == 0)
 		holder->promotions++;
-	if (holder->priority < MINPRI_KERNEL) {
-		holder->sched_mode |= TH_MODE_PROMOTED;
-		if (	mutex->lck_mtx_pri < priority	&&
+	holder->sched_mode |= TH_MODE_PROMOTED;
+	if (		mutex->lck_mtx_pri < priority	&&
 				holder->sched_pri < priority		) {
-			KERNEL_DEBUG_CONSTANT(
-				MACHDBG_CODE(DBG_MACH_SCHED,MACH_PROMOTE) | DBG_FUNC_NONE,
+		KERNEL_DEBUG_CONSTANT(
+			MACHDBG_CODE(DBG_MACH_SCHED,MACH_PROMOTE) | DBG_FUNC_NONE,
 					holder->sched_pri, priority, (int)holder, (int)lck, 0);
 
-			set_sched_pri(holder, priority);
-		}
+		set_sched_pri(holder, priority);
 	}
 	thread_unlock(holder);
 	splx(s);
@@ -654,15 +649,13 @@ lck_mtx_lock_acquire(
 
 		thread_lock(thread);
 		thread->promotions++;
-		if (thread->priority < MINPRI_KERNEL) {
-			thread->sched_mode |= TH_MODE_PROMOTED;
-			if (thread->sched_pri < priority) {
-				KERNEL_DEBUG_CONSTANT(
-					MACHDBG_CODE(DBG_MACH_SCHED,MACH_PROMOTE) | DBG_FUNC_NONE,
+		thread->sched_mode |= TH_MODE_PROMOTED;
+		if (thread->sched_pri < priority) {
+			KERNEL_DEBUG_CONSTANT(
+				MACHDBG_CODE(DBG_MACH_SCHED,MACH_PROMOTE) | DBG_FUNC_NONE,
 						thread->sched_pri, priority, 0, (int)lck, 0);
 
-				set_sched_pri(thread, priority);
-			}
+			set_sched_pri(thread, priority);
 		}
 		thread_unlock(thread);
 		splx(s);

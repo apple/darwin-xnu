@@ -159,7 +159,7 @@ void _pthread_start(pthread_t self, mach_port_t kport, void *(*fun)(void *), voi
 #define PTHREAD_START_SETSCHED	0x02000000
 #define PTHREAD_START_DETACHED	0x04000000
 #define PTHREAD_START_POLICY_BITSHIFT 16
-#define PTHREAD_START_POLICY_MASK 0xffff
+#define PTHREAD_START_POLICY_MASK 0xff
 #define PTHREAD_START_IMPORTANCE_MASK 0xffff
 
 #define SCHED_OTHER      POLICY_TIMESHARE
@@ -958,7 +958,8 @@ bsdthread_create(__unused struct proc *p, struct bsdthread_create_args  *uap, us
 			extinfo.timeshare = 0;
 		thread_policy_set(th, THREAD_EXTENDED_POLICY, (thread_policy_t)&extinfo, THREAD_EXTENDED_POLICY_COUNT);
 
-		precedinfo.importance = importance;
+#define BASEPRI_DEFAULT 31
+		precedinfo.importance = (importance - BASEPRI_DEFAULT);
 		thread_policy_set(th, THREAD_PRECEDENCE_POLICY, (thread_policy_t)&precedinfo, THREAD_PRECEDENCE_POLICY_COUNT);
 	}
 

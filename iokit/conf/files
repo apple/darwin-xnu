@@ -3,7 +3,6 @@
 OPTIONS/iokitcpp					optional iokitcpp
 OPTIONS/kdebug						optional kdebug
 OPTIONS/networking					optional networking
-OPTIONS/kpidirect					optional kpidirect
 OPTIONS/hibernation					optional hibernation
 OPTIONS/crypto						optional crypto
 OPTIONS/config_dtrace				optional config_dtrace

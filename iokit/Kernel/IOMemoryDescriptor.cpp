@@ -1017,6 +1017,8 @@ void IOGeneralMemoryDescriptor::free()
 	    IODelete(_ranges.v64, IOAddressRange, _rangesCount);
 	else
 	    IODelete(_ranges.v, IOVirtualRange, _rangesCount);
+
+	_ranges.v = NULL;
     }
 
     if (reserved && reserved->devicePager)

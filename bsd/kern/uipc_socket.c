@@ -837,8 +837,12 @@ soclose_wait_locked(struct socket *so)
 		mutex_held = so->so_proto->pr_domain->dom_mtx;
 	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
 
-	/* Double check here and return if there's no outstanding upcall */
-	if (!(so->so_flags & SOF_UPCALLINUSE))
+	/*
+	 * Double check here and return if there's no outstanding upcall;
+	 * otherwise proceed further only if SOF_UPCALLCLOSEWAIT is set.
+	 */
+	if (!(so->so_flags & SOF_UPCALLINUSE) ||
+	    !(so->so_flags & SOF_UPCALLCLOSEWAIT))
 		return;
 
 	so->so_flags |= SOF_CLOSEWAIT;
@@ -3195,6 +3199,19 @@ sosetopt(struct socket *so, struct sockopt *sopt)
 #endif /* MAC_SOCKET */
 			break;
 
+#ifdef __APPLE_API_PRIVATE
+		case SO_UPCALLCLOSEWAIT:
+			error = sooptcopyin(sopt, &optval, sizeof (optval),
+			    sizeof (optval));
+			if (error)
+				goto bad;
+			if (optval)
+				so->so_flags |= SOF_UPCALLCLOSEWAIT;
+			else
+				so->so_flags &= ~SOF_UPCALLCLOSEWAIT;
+			break;
+#endif
+
 		default:
 			error = ENOPROTOOPT;
 			break;
@@ -3462,6 +3479,12 @@ integer:
 			error = EOPNOTSUPP;
 #endif /* MAC_SOCKET */
 			break;
+
+#ifdef __APPLE_API_PRIVATE
+		case SO_UPCALLCLOSEWAIT:
+			optval = (so->so_flags & SOF_UPCALLCLOSEWAIT);
+			goto integer;
+#endif
 
 		default:
 			error = ENOPROTOOPT;

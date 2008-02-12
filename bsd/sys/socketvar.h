@@ -229,6 +229,7 @@ struct socket {
 #ifdef __APPLE_API_PRIVATE
 #define SOF_NOTIFYCONFLICT 0x400	/* notify that a bind was done on a port already in use */
 #endif
+#define	SOF_UPCALLCLOSEWAIT 0x800 /* block on close until an upcall returns  */
 	int	so_usecount;	/* refcounting of socket use */;
 	int	so_retaincnt;
 	u_int32_t so_filteruse;	/* usecount for the socket filters */

@@ -569,6 +569,7 @@ bsd_init(void)
 	/*
 	 * Initialize the calendar.
 	 */
+	bsd_init_kprintf("calling IOKitInitializeTime\n");
 	IOKitInitializeTime();
 
 	if (turn_on_log_leaks && !new_nkdbufs)
@@ -1031,7 +1032,9 @@ parse_bsd_args(void)
 	if (PE_parse_boot_arg("nbuf", &max_nbuf_headers)) {
 		customnbuf = 1;
 	}
+#if !defined(SECURE_KERNEL)
 	PE_parse_boot_arg("kmem", &setup_kmem);
+#endif
 	PE_parse_boot_arg("trace", &new_nkdbufs);
 
 	if (PE_parse_boot_arg("msgbuf", &msgbuf)) {

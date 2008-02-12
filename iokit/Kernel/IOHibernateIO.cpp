@@ -1598,7 +1598,10 @@ IOHibernateSystemWake(void)
 		const OSSymbol * sym = OSSymbol::withCStringNoCopy(kIOHibernateRTCVariablesKey);
 
 		if (sym) {
-			gIOOptionsEntry->removeProperty(sym);
+			if (gIOOptionsEntry->getProperty(sym)) {
+				gIOOptionsEntry->removeProperty(sym);
+				gIOOptionsEntry->sync();
+			}
 			sym->release();
 		}
 	}

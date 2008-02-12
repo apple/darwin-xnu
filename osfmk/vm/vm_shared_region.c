@@ -101,6 +101,8 @@
 #include <kern/ipc_tt.h>
 #include <kern/kalloc.h>
 
+#include <mach/mach_vm.h>
+
 #include <vm/vm_map.h>
 #include <vm/vm_shared_region.h>
 
@@ -770,6 +772,9 @@ vm_shared_region_map_file(
 	unsigned int		i;
 	mach_port_t		map_port;
 	mach_vm_offset_t	target_address;
+	vm_object_t		object;
+	vm_object_size_t	obj_size;
+
 
 	kr = KERN_SUCCESS;
 
@@ -844,51 +849,143 @@ vm_shared_region_map_file(
 		target_address =
 			mappings[i].sfm_address - sr_base_address;
 
-		/* establish that mapping, OK if it's to "already" there */
-		kr = vm_map_enter_mem_object(
-			sr_map,
-			&target_address,
-			vm_map_round_page(mappings[i].sfm_size),
-			0,
-			VM_FLAGS_FIXED | VM_FLAGS_ALREADY,
-			map_port,
-			mappings[i].sfm_file_offset,
-			TRUE,
-			mappings[i].sfm_init_prot & VM_PROT_ALL,
-			mappings[i].sfm_max_prot & VM_PROT_ALL,
-			VM_INHERIT_DEFAULT);
-		if (kr == KERN_MEMORY_PRESENT) {
-			/* this exact mapping was already there: that's fine */
-			SHARED_REGION_TRACE_INFO(
-				("shared_region: mapping[%d]: "
-				 "address:0x%016llx size:0x%016llx "
-				 "offset:0x%016llx "
-				 "maxprot:0x%x prot:0x%x already mapped...\n",
-				 i,
-				 (long long)mappings[i].sfm_address,
-				 (long long)mappings[i].sfm_size,
-				 (long long)mappings[i].sfm_file_offset,
-				 mappings[i].sfm_max_prot,
-				 mappings[i].sfm_init_prot));
-			kr = KERN_SUCCESS;
-		} else if (kr != KERN_SUCCESS) {
-			/* this mapping failed ! */
-			SHARED_REGION_TRACE_ERROR(
-				("shared_region: mapping[%d]: "
-				 "address:0x%016llx size:0x%016llx "
-				 "offset:0x%016llx "
-				 "maxprot:0x%x prot:0x%x failed 0x%x\n",
-				 i,
-				 (long long)mappings[i].sfm_address,
-				 (long long)mappings[i].sfm_size,
-				 (long long)mappings[i].sfm_file_offset,
-				 mappings[i].sfm_max_prot,
-				 mappings[i].sfm_init_prot,
-				 kr));
-			break;
+		/* establish that mapping, OK if it's "already" there */
+		if (map_port == MACH_PORT_NULL) {
+			/*
+			 * We want to map some anonymous memory in a
+			 * shared region.
+			 * We have to create the VM object now, so that it
+			 * can be mapped "copy-on-write".
+			 */
+			obj_size = vm_map_round_page(mappings[i].sfm_size);
+			object = vm_object_allocate(obj_size);
+			if (object == VM_OBJECT_NULL) {
+				kr = KERN_RESOURCE_SHORTAGE;
+			} else {
+				kr = vm_map_enter(
+					sr_map,
+					&target_address,
+					vm_map_round_page(mappings[i].sfm_size),
+					0,
+					VM_FLAGS_FIXED | VM_FLAGS_ALREADY,
+					object,
+					0,
+					TRUE,
+					mappings[i].sfm_init_prot & VM_PROT_ALL,
+					mappings[i].sfm_max_prot & VM_PROT_ALL,
+					VM_INHERIT_DEFAULT);
+			}
+		} else {
+			object = VM_OBJECT_NULL; /* no anonymous memory here */
+			kr = vm_map_enter_mem_object(
+				sr_map,
+				&target_address,
+				vm_map_round_page(mappings[i].sfm_size),
+				0,
+				VM_FLAGS_FIXED | VM_FLAGS_ALREADY,
+				map_port,
+				mappings[i].sfm_file_offset,
+				TRUE,
+				mappings[i].sfm_init_prot & VM_PROT_ALL,
+				mappings[i].sfm_max_prot & VM_PROT_ALL,
+				VM_INHERIT_DEFAULT);
 		}
 
-		/* we're protected by "sr_mapping_in_progress" */
+		if (kr != KERN_SUCCESS) {
+			if (map_port == MACH_PORT_NULL) {
+				/*
+				 * Get rid of the VM object we just created
+				 * but failed to map.
+				 */
+				vm_object_deallocate(object);
+				object = VM_OBJECT_NULL;
+			}
+			if (kr == KERN_MEMORY_PRESENT) {
+				/*
+				 * This exact mapping was already there:
+				 * that's fine.
+				 */
+				SHARED_REGION_TRACE_INFO(
+					("shared_region: mapping[%d]: "
+					 "address:0x%016llx size:0x%016llx "
+					 "offset:0x%016llx "
+					 "maxprot:0x%x prot:0x%x "
+					 "already mapped...\n",
+					 i,
+					 (long long)mappings[i].sfm_address,
+					 (long long)mappings[i].sfm_size,
+					 (long long)mappings[i].sfm_file_offset,
+					 mappings[i].sfm_max_prot,
+					 mappings[i].sfm_init_prot));
+				/*
+				 * We didn't establish this mapping ourselves;
+				 * let's reset its size, so that we do not
+				 * attempt to undo it if an error occurs later.
+				 */
+				mappings[i].sfm_size = 0;
+				kr = KERN_SUCCESS;
+			} else {
+				unsigned int j;
+
+				/* this mapping failed ! */
+				SHARED_REGION_TRACE_ERROR(
+					("shared_region: mapping[%d]: "
+					 "address:0x%016llx size:0x%016llx "
+					 "offset:0x%016llx "
+					 "maxprot:0x%x prot:0x%x failed 0x%x\n",
+					 i,
+					 (long long)mappings[i].sfm_address,
+					 (long long)mappings[i].sfm_size,
+					 (long long)mappings[i].sfm_file_offset,
+					 mappings[i].sfm_max_prot,
+					 mappings[i].sfm_init_prot,
+					 kr));
+
+				/*
+				 * Undo the mappings we've established so far.
+				 */
+				for (j = 0; j < i; j++) {
+					kern_return_t kr2;
+
+					if (mappings[j].sfm_size == 0) {
+						/*
+						 * We didn't establish this
+						 * mapping, so nothing to undo.
+						 */
+						continue;
+					}
+					SHARED_REGION_TRACE_INFO(
+						("shared_region: mapping[%d]: "
+						 "address:0x%016llx "
+						 "size:0x%016llx "
+						 "offset:0x%016llx "
+						 "maxprot:0x%x prot:0x%x: "
+						 "undoing...\n",
+						 j,
+						 (long long)mappings[j].sfm_address,
+						 (long long)mappings[j].sfm_size,
+						 (long long)mappings[j].sfm_file_offset,
+						 mappings[j].sfm_max_prot,
+						 mappings[j].sfm_init_prot));
+					kr2 = mach_vm_deallocate(
+						sr_map,
+						(mappings[j].sfm_address -
+						 sr_base_address),
+						mappings[j].sfm_size);
+					assert(kr2 == KERN_SUCCESS);
+				}
+
+				break;
+			}
+
+		}
+
+		/*
+		 * Record the first (chronologically) mapping in
+		 * this shared region.
+		 * We're protected by "sr_mapping_in_progress" here,
+		 * so no need to lock "shared_region".
+		 */
 		if (shared_region->sr_first_mapping == (mach_vm_offset_t) -1) {
 			shared_region->sr_first_mapping = target_address;
 		}

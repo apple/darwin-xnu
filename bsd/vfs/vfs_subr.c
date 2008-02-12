@@ -2785,19 +2785,23 @@ vfs_init_io_attributes(vnode_t devvp, mount_t mp)
 }
 
 static struct klist fs_klist;
+lck_grp_t *fs_klist_lck_grp;
+lck_mtx_t *fs_klist_lock;
 
 void
 vfs_event_init(void)
 {
-
 	klist_init(&fs_klist);
+	fs_klist_lck_grp = lck_grp_alloc_init("fs_klist", NULL);
+	fs_klist_lock = lck_mtx_alloc_init(fs_klist_lck_grp, NULL);
 }
 
 void
 vfs_event_signal(__unused fsid_t *fsid, u_int32_t event, __unused intptr_t data)
 {
-
+	lck_mtx_lock(fs_klist_lock);
 	KNOTE(&fs_klist, event);
+	lck_mtx_unlock(fs_klist_lock);
 }
 
 /*
@@ -3124,16 +3128,19 @@ static int
 filt_fsattach(struct knote *kn)
 {
 
+	lck_mtx_lock(fs_klist_lock);
 	kn->kn_flags |= EV_CLEAR;
 	KNOTE_ATTACH(&fs_klist, kn);
+	lck_mtx_unlock(fs_klist_lock);
 	return (0);
 }
 
 static void
 filt_fsdetach(struct knote *kn)
 {
-
+	lck_mtx_lock(fs_klist_lock);
 	KNOTE_DETACH(&fs_klist, kn);
+	lck_mtx_unlock(fs_klist_lock);
 }
 
 static int
@@ -3794,11 +3801,18 @@ vnode_reclaim_internal(struct vnode * vp, int locked, int reuse, int flags)
 		vgone(vp, flags);		/* clean and reclaim the vnode */
 
 	/*
-	 * give the vnode a new identity so
-	 * that vnode_getwithvid will fail
-	 * on any stale cache accesses
+	 * give the vnode a new identity so that vnode_getwithvid will fail
+	 * on any stale cache accesses...
+	 * grab the list_lock so that if we're in "new_vnode"
+	 * behind the list_lock trying to steal this vnode, the v_id is stable...
+	 * once new_vnode drops the list_lock, it will block trying to take
+	 * the vnode lock until we release it... at that point it will evaluate
+	 * whether the v_vid has changed
 	 */
+	vnode_list_lock();
 	vp->v_id++;
+	vnode_list_unlock();
+
 	if (isfifo) {
 		struct fifoinfo * fip;
 
