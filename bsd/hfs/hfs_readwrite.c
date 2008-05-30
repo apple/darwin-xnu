@@ -1046,7 +1046,7 @@ do_bulk_access_check(struct hfsmount *hfsmp, struct vnode *vp,
 	tmp_user_access.num_files = accessp->num_files;
 	tmp_user_access.map_size  = 0;
 	tmp_user_access.file_ids  = CAST_USER_ADDR_T(accessp->file_ids);
-	tmp_user_access.bitmap    = (user_addr_t)NULL;
+	tmp_user_access.bitmap    = USER_ADDR_NULL;
 	tmp_user_access.access    = CAST_USER_ADDR_T(accessp->access);
 	tmp_user_access.num_parents = 0;
 	user_access_structp = &tmp_user_access;

@@ -153,8 +153,11 @@ kdp_getstate(
     state->esi = saved_state->esi;
     state->ebp = saved_state->ebp;
 
-    if ((saved_state->cs & 0x3) == 0){	/* Kernel State */
-    	state->esp = (unsigned int) &saved_state->uesp;
+    if ((saved_state->cs & SEL_PL) == SEL_PL_K) { /* Kernel state? */
+	    if (cpu_mode_is64bit())
+		    state->esp = (uint32_t) saved_state->uesp;
+	    else
+		    state->esp = ((uint32_t)saved_state) + offsetof(x86_saved_state_t, ss_32) + sizeof(x86_saved_state32_t);
         state->ss = KERNEL_DS;
     } else {
     	state->esp = saved_state->uesp;
@@ -193,8 +196,6 @@ kdp_setstate(
     saved_state->frame.eflags |=  ( EFL_IF | EFL_SET );
 #endif
     saved_state->eip = state->eip;
-    saved_state->fs = state->fs;
-    saved_state->gs = state->gs;
 }
 
 
@@ -493,6 +494,7 @@ kdp_ml_get_breakinsn(void)
 {
   return 0xcc;
 }
+
 extern pmap_t kdp_pmap;
 extern uint32_t kdp_src_high32;
 

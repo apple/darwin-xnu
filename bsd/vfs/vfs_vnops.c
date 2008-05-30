@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -482,15 +482,13 @@ vn_close(struct vnode *vp, int flags, vfs_context_t ctx)
 #endif
 
 #if NAMEDRSRCFORK
-	/* Clean up resource fork shadow file if needed. */
+	/* Sync data from resource fork shadow file if needed. */
 	if ((vp->v_flag & VISNAMEDSTREAM) && 
 	    (vp->v_parent != NULLVP) &&
 	    !(vp->v_parent->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS)) {
 		if (flags & FWASWRITTEN) {
 			(void) vnode_flushnamedstream(vp->v_parent, vp, ctx);
 		}
-		/* XXX failure ignored */
-		vnode_relenamedstream(vp->v_parent, vp, ctx);
 	}
 #endif
 	error = VNOP_CLOSE(vp, flags, ctx);

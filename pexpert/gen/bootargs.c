@@ -31,7 +31,7 @@ extern boolean_t isargsep( char c);
 extern int argstrcpy(char *from, char *to);
 extern int getval(char *s, int *val);
 
-int argstrcpy2(char *from,char *to, unsigned maxlen);
+static int argstrcpy2(char *from,char *to, unsigned maxlen);
 
 #define	NUM	0
 #define	STR	1
@@ -159,7 +159,7 @@ argstrcpy(
 	return(i);
 }
 
-int
+static int
 argstrcpy2(
 	char *from, 
 	char *to,

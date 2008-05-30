@@ -223,7 +223,7 @@ struct	vnode *rootvp;
 int boothowto = RB_DEBUG;
 
 void lightning_bolt(void *);
-extern kern_return_t IOFindBSDRoot(char *, dev_t *, u_int32_t *);
+extern kern_return_t IOFindBSDRoot(char *, unsigned int, dev_t *, u_int32_t *);
 extern void IOSecureBSDRoot(const char * rootName);
 extern kern_return_t IOKitBSDInit(void );
 extern void kminit(void);
@@ -962,7 +962,7 @@ setconf(void)
 	 * which needs to be under network funnel. Right thing to do
 	 * here is to drop the funnel alltogether and regrab it afterwards
 	 */
-	err = IOFindBSDRoot( rootdevice, &rootdev, &flags );
+	err = IOFindBSDRoot(rootdevice, sizeof(rootdevice), &rootdev, &flags);
 	if( err) {
 		printf("setconf: IOFindBSDRoot returned an error (%d);"
 			"setting rootdevice to 'sd0a'.\n", err); /* XXX DEBUG TEMP */

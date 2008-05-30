@@ -2910,7 +2910,7 @@ ppsratecheck(lasttime, curpps, maxpps)
 
 #if 1 /* DIAGNOSTIC? */
 	/* be careful about wrap-around */
-	if (*curpps + 1 > *curpps)
+	if (*curpps + 1 > 0)
 		*curpps = *curpps + 1;
 #else
 	/*

@@ -116,8 +116,8 @@ typedef struct ipc_mqueue {
 extern int ipc_mqueue_full;
 extern int ipc_mqueue_rcv;
 
-#define IPC_MQUEUE_FULL		(event64_t)&ipc_mqueue_full
-#define IPC_MQUEUE_RECEIVE	(event64_t)&ipc_mqueue_rcv
+#define IPC_MQUEUE_FULL		CAST_EVENT64_T(&ipc_mqueue_full)
+#define IPC_MQUEUE_RECEIVE	CAST_EVENT64_T(&ipc_mqueue_rcv)
 
 /*
  * Exported interfaces

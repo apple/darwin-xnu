@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -120,8 +120,9 @@ processor_up(
 	init_ast_check(processor);
 	pset = processor->processor_set;
 	pset_lock(pset);
-	pset->processor_count++;
-	enqueue_head(&pset->active_queue, (queue_entry_t)processor);
+	if (++pset->processor_count == 1)
+		pset->low_pri = processor;
+	enqueue_tail(&pset->active_queue, (queue_entry_t)processor);
 	processor->state = PROCESSOR_RUNNING;
 	(void)hw_atomic_add(&processor_avail_count, 1);
 	pset_unlock(pset);
@@ -318,10 +319,9 @@ processor_offline(
 
 	pset = processor->processor_set;
 	pset_lock(pset);
-	pset->processor_count--;
 	processor->state = PROCESSOR_OFF_LINE;
-	if (processor == pset->low_hint)
-		pset->low_hint = PROCESSOR_NULL;
+	if (--pset->processor_count == 0)
+		pset->low_pri = PROCESSOR_NULL;
 	(void)hw_atomic_sub(&processor_avail_count, 1);
 	pset_unlock(pset);
 	ml_cpu_down();

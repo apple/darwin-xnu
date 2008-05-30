@@ -1347,7 +1347,7 @@ vm_pageout_scan_delay:
 			percent_avail = 
 				(vm_page_active_count + vm_page_inactive_count + 
 				 vm_page_speculative_count + vm_page_free_count +
-				 vm_page_purgeable_count ) * 100 /
+				 (IP_VALID(memory_manager_default)?0:vm_page_purgeable_count) ) * 100 /
 				atop_64(max_mem);
 			if (percent_avail >= (kern_memorystatus_level + 5) || 
 			    percent_avail <= (kern_memorystatus_level - 5)) {
@@ -1498,7 +1498,7 @@ consider_inactive:
 						     vm_page_t, pageq);
 					m->throttled = FALSE;
 					vm_page_throttled_count--;
-
+					
 					/*
 					 * not throttled any more, so can stick
 					 * it on the inactive queue.
@@ -1514,7 +1514,7 @@ consider_inactive:
 #if MACH_ASSERT
 					vm_page_inactive_count--;	/* balance for purgeable queue asserts */
 #endif
-					vm_purgeable_q_advance_all(1);
+					vm_purgeable_q_advance_all();
 
 					queue_enter(&vm_page_queue_inactive, m,
 						    vm_page_t, pageq);
@@ -1596,7 +1596,7 @@ consider_inactive:
 #if MACH_ASSERT
 				vm_page_inactive_count--;	/* balance for purgeable queue asserts */
 #endif
-				vm_purgeable_q_advance_all(1);
+				vm_purgeable_q_advance_all();
 
 				queue_enter(&vm_page_queue_inactive, m,
 					    vm_page_t, pageq);
@@ -1630,7 +1630,7 @@ consider_inactive:
 			m->inactive = FALSE;
 			if (!m->fictitious)
 				vm_page_inactive_count--;
-				vm_purgeable_q_advance_all(1);
+				vm_purgeable_q_advance_all();
 		}
 
 		/* If the object is empty, the page must be reclaimed even if dirty or used. */
@@ -1835,7 +1835,8 @@ throttle_inactive:
 			if (!IP_VALID(memory_manager_default) &&
 				object->internal && 
 				(object->purgable == VM_PURGABLE_DENY ||
-				 object->purgable == VM_PURGABLE_NONVOLATILE)) {
+				 object->purgable == VM_PURGABLE_NONVOLATILE ||
+				 object->purgable == VM_PURGABLE_VOLATILE )) {
 			        queue_enter(&vm_page_queue_throttled, m,
 					    vm_page_t, pageq);
 				m->throttled = TRUE;
@@ -2612,11 +2613,11 @@ vm_object_upl_request(
 	        panic("vm_object_upl_request: contiguous object specified\n");
 
 
-	if ((size / PAGE_SIZE) > MAX_UPL_TRANSFER)
-		size = MAX_UPL_TRANSFER * PAGE_SIZE;
+	if ((size / PAGE_SIZE) > MAX_UPL_SIZE)
+		size = MAX_UPL_SIZE * PAGE_SIZE;
 
 	if ( (cntrl_flags & UPL_SET_INTERNAL) && page_list_count != NULL)
-	        *page_list_count = MAX_UPL_TRANSFER;
+	        *page_list_count = MAX_UPL_SIZE;
 
 	if (cntrl_flags & UPL_SET_INTERNAL) {
 	        if (cntrl_flags & UPL_SET_LITE) {
@@ -3550,8 +3551,8 @@ REDISCOVER_ENTRY:
 			return KERN_SUCCESS;
 		}
 	        if (entry->object.vm_object == VM_OBJECT_NULL || !entry->object.vm_object->phys_contiguous) {
-        		if ((*upl_size/page_size) > MAX_UPL_TRANSFER)
-               			*upl_size = MAX_UPL_TRANSFER * page_size;
+        		if ((*upl_size/page_size) > MAX_UPL_SIZE)
+               			*upl_size = MAX_UPL_SIZE * page_size;
 		}
 		/*
 		 *      Create an object if necessary.
@@ -4715,12 +4716,12 @@ vm_object_iopl_request(
 	else
 		prot = VM_PROT_READ | VM_PROT_WRITE;
 
-	if (((size/page_size) > MAX_UPL_TRANSFER) && !object->phys_contiguous)
-		size = MAX_UPL_TRANSFER * page_size;
+	if (((size/page_size) > MAX_UPL_SIZE) && !object->phys_contiguous)
+		size = MAX_UPL_SIZE * page_size;
 
 	if (cntrl_flags & UPL_SET_INTERNAL) {
 		if (page_list_count != NULL)
-			*page_list_count = MAX_UPL_TRANSFER;
+			*page_list_count = MAX_UPL_SIZE;
 	}
 	if (((cntrl_flags & UPL_SET_INTERNAL) && !(object->phys_contiguous)) &&
 	    ((page_list_count != NULL) && (*page_list_count != 0) && *page_list_count < (size/page_size)))

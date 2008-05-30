@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 1995-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -3493,6 +3493,10 @@ access(__unused proc_t p, struct access_args *uap, __unused register_t *retval)
  	int niopts;
 	struct vfs_context context;
 
+#if NAMEDRSRCFORK
+	int is_namedstream = 0;
+#endif
+
  	/*
  	 * Access is defined as checking against the process'
  	 * real identity, even if operations are checking the
@@ -3517,8 +3521,27 @@ access(__unused proc_t p, struct access_args *uap, __unused register_t *retval)
  	if (error)
  		goto out;
 
+#if NAMEDRSRCFORK
+	/* Grab reference on the shadow stream file vnode to
+	 * force an inactive on release which will mark it for
+	 * recycle
+	 */
+	if (vnode_isnamedstream(nd.ni_vp) &&
+			(nd.ni_vp->v_parent != NULLVP) &&
+			((nd.ni_vp->v_parent->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS) == 0)) {
+		is_namedstream = 1;
+		vnode_ref(nd.ni_vp);
+	}
+#endif
+
 	error = access1(nd.ni_vp, nd.ni_dvp, uap->flags, &context);
  	
+#if NAMEDRSRCFORK
+	if (is_namedstream) {
+		vnode_rele(nd.ni_vp);
+	}
+#endif
+
  	vnode_put(nd.ni_vp);
  	if (uap->flags & _DELETE_OK)
  		vnode_put(nd.ni_dvp);
@@ -3551,6 +3574,7 @@ stat2(vfs_context_t ctx, struct nameidata *ndp, user_addr_t ub, user_addr_t xsec
 	void * statptr;
 
 #if NAMEDRSRCFORK
+	int is_namedstream = 0;
 	/* stat calls are allowed for resource forks. */
 	ndp->ni_cnd.cn_flags |= CN_ALLOWRSRCFORK;
 #endif
@@ -3562,16 +3586,28 @@ stat2(vfs_context_t ctx, struct nameidata *ndp, user_addr_t ub, user_addr_t xsec
 		statptr	 = (void *)&sb64;
 	else
 		statptr	 = (void *)&sb;
+
+#if NAMEDRSRCFORK
+	/* Grab reference on the shadow stream file vnode to
+	 * force an inactive on release which will mark it for
+	 * recycle.
+	 */
+	if (vnode_isnamedstream(ndp->ni_vp) &&
+			(ndp->ni_vp->v_parent != NULLVP) &&
+			((ndp->ni_vp->v_parent->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS) == 0)) {
+		is_namedstream = 1;
+		vnode_ref (ndp->ni_vp);
+	}
+#endif
+
 	error = vn_stat(ndp->ni_vp, statptr, (xsecurity != USER_ADDR_NULL ? &fsec : NULL), isstat64, ctx);
 
 #if NAMEDRSRCFORK
-	/* Clean up resource fork shadow file if needed. */
-	if ((ndp->ni_vp->v_flag & VISNAMEDSTREAM) && 
-	    (ndp->ni_vp->v_parent != NULLVP) &&
-	    !(ndp->ni_vp->v_parent->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS)) {
-		(void) vnode_relenamedstream(ndp->ni_vp->v_parent, ndp->ni_vp, ctx);
+	if (is_namedstream) {
+		vnode_rele (ndp->ni_vp);
 	}
 #endif
+	
 	vnode_put(ndp->ni_vp);
 	nameidone(ndp);
 

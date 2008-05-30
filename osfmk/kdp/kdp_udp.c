@@ -1073,7 +1073,9 @@ kdp_raise_exception(
      * do this. I think the client and the host can get out of sync.
      */
     kdp.saved_state = saved_state;
-     
+    kdp.kdp_cpu = cpu_number();
+    kdp.kdp_thread = current_thread();
+
     if (pkt.input)
 	kdp_panic("kdp_raise_exception");
 
@@ -1416,22 +1418,19 @@ kdp_get_xnu_version(char *versionbuf)
 	char *vptr;
 
 	strlcpy(vstr, "custom", 10);
-	if (version) {
-		if (kdp_vm_read(version, versionbuf, 95)) {
-			versionbuf[94] = '\0';
-			versionpos = strnstr(versionbuf, "xnu-", 90);
-			if (versionpos) {
-				strncpy(vstr, versionpos, sizeof(vstr));
-				vstr[sizeof(vstr)-1] = '\0';
-				vptr = vstr + 4; /* Begin after "xnu-" */
-				while (*vptr && (isdigit(*vptr) || *vptr == '.'))
-					vptr++;
+	if (strlcpy(versionbuf, version, 95) < 95) {
+		versionpos = strnstr(versionbuf, "xnu-", 90);
+		if (versionpos) {
+			strncpy(vstr, versionpos, sizeof(vstr));
+			vstr[sizeof(vstr)-1] = '\0';
+			vptr = vstr + 4; /* Begin after "xnu-" */
+			while (*vptr && (isdigit(*vptr) || *vptr == '.'))
+				vptr++;
+			*vptr = '\0';
+			/* Remove trailing period, if any */
+			if (*(--vptr) == '.')
 				*vptr = '\0';
-				/* Remove trailing period, if any */
-				if (*(--vptr) == '.')
-					*vptr = '\0';
-				retval = 0;
-			}
+			retval = 0;
 		}
 	}
 	strlcpy(versionbuf, vstr, KDP_MAXPACKET);

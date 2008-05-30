@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -214,8 +214,7 @@ pset_init(
 	queue_init(&pset->idle_queue);
 	pset->idle_count = 0;
 	pset->processor_count = 0;
-	pset->high_hint = PROCESSOR_NULL;
-	pset->low_hint = PROCESSOR_NULL;
+	pset->low_pri = PROCESSOR_NULL;
 	pset_lock_init(pset);
 	pset->pset_self = IP_NULL;
 	pset->pset_name_self = IP_NULL;

@@ -67,7 +67,7 @@ imageboot_needed(void)
 	if (root_path == NULL)
 		panic("%s: M_NAMEI zone exhausted", __FUNCTION__);
 
-	if(PE_parse_boot_arg("rp", root_path) == TRUE) {
+	if(PE_parse_boot_argn("rp", root_path, MAXPATHLEN) == TRUE) {
 		/* Got it, now verify scheme */
 
 		if (strncmp(root_path, kIBFilePrefix,
@@ -105,7 +105,7 @@ imageboot_setup()
 	if (root_path == NULL)
 		return (ENOMEM);
 
-	if(PE_parse_boot_arg("rp", root_path) == FALSE) {
+	if(PE_parse_boot_argn("rp", root_path, MAXPATHLEN) == FALSE) {
 		error = ENOENT;
 		goto done;
 	}

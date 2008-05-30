@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -144,8 +144,6 @@ uint32_t	sched_fixed_shift;
 uint32_t	sched_run_count, sched_share_count;
 uint32_t	sched_load_average, sched_mach_factor;
 
-void		(*pm_tick_callout)(void)	= NULL;
-
 /* Forwards */
 void wait_queues_init(void) __attribute__((section("__TEXT, initcode")));
 
@@ -164,6 +162,9 @@ static thread_t	choose_thread(
 					processor_t			processor);
 
 static thread_t	steal_thread(
+					processor_set_t		pset);
+
+static thread_t	steal_processor_thread(
 					processor_t			processor);
 
 static void		thread_update_scan(void);
@@ -300,14 +301,8 @@ sched_timebase_init(void)
 	/* scheduler tick interval */
 	clock_interval_to_absolutetime_interval(USEC_PER_SEC >> SCHED_TICK_SHIFT,
 													NSEC_PER_USEC, &abstime);
+	assert((abstime >> 32) == 0 && (uint32_t)abstime != 0);
 	sched_tick_interval = abstime;
-
-#if DEBUG
-	printf("Quantum: %d. Smallest quantum: %d. Min Rt/Max Rt: %d/%d."
-		" Tick: %d.\n",
-		std_quantum, min_std_quantum, min_rt_quantum, max_rt_quantum,
-		sched_tick_interval);
-#endif
 
 	/*
 	 * Compute conversion factor from usage to
@@ -1174,7 +1169,7 @@ thread_select(
 	processor_t			processor)
 {
 	processor_set_t		pset = processor->processor_set;
-	thread_t			new_thread;
+	thread_t			new_thread = THREAD_NULL;
 	boolean_t			other_runnable;
 
 	do {
@@ -1246,8 +1241,7 @@ thread_select(
 
 				/* I am the highest priority runnable (non-idle) thread */
 
-				pset_hint_low(pset, processor);
-				pset_hint_high(pset, processor);
+				pset_pri_hint(pset, processor, processor->current_pri);
 
 				processor->deadline = UINT64_MAX;
 
@@ -1266,14 +1260,18 @@ thread_select(
 		 *	No runnable threads, attempt to steal
 		 *	from other processors.
 		 */
-		if (pset->high_hint != PROCESSOR_NULL && pset->high_hint->runq.count > 0) {
-			new_thread = steal_thread(pset->high_hint);
-			if (new_thread != THREAD_NULL) {
-				pset_unlock(pset);
+		new_thread = steal_thread(pset);
+		if (new_thread != THREAD_NULL)
+			return (new_thread);
 
-				return (new_thread);
-			}
-		}
+		/*
+		 *	If other threads have appeared, shortcut
+		 *	around again.
+		 */
+		if (processor->runq.count > 0 || rt_runq.count > 0)
+			continue;
+
+		pset_lock(pset);
 
 		/*
 		 *	Nothing is runnable, so set this processor idle if it
@@ -1284,7 +1282,7 @@ thread_select(
 			processor->state = PROCESSOR_IDLE;
 
 			enqueue_head(&pset->idle_queue, (queue_entry_t)processor);
-			pset->low_hint = processor;
+			pset->low_pri = processor;
 			pset->idle_count++;
 		}
 
@@ -1354,6 +1352,9 @@ thread_select_idle(
 	 */
 	spllo(); new_thread = processor_idle(thread, processor);
 
+	/*
+	 *	Return at splsched.
+	 */
 	(*thread->sched_call)(SCHED_CALL_UNBLOCK, thread);
 
 	thread_lock(thread);
@@ -2019,7 +2020,7 @@ realtime_setrun(
 	if (processor->state == PROCESSOR_IDLE) {
 		remqueue(&pset->idle_queue, (queue_entry_t)processor);
 		pset->idle_count--;
-		enqueue_head(&pset->active_queue, (queue_entry_t)processor);
+		enqueue_tail(&pset->active_queue, (queue_entry_t)processor);
 
 		processor->next_thread = thread;
 		processor->deadline = thread->realtime.deadline;
@@ -2110,7 +2111,7 @@ processor_setrun(
 	if (processor->state == PROCESSOR_IDLE) {
 		remqueue(&pset->idle_queue, (queue_entry_t)processor);
 		pset->idle_count--;
-		enqueue_head(&pset->active_queue, (queue_entry_t)processor);
+		enqueue_tail(&pset->active_queue, (queue_entry_t)processor);
 
 		processor->next_thread = thread;
 		processor->deadline = UINT64_MAX;
@@ -2135,8 +2136,6 @@ processor_setrun(
 
 	if (!processor_enqueue(processor, thread, options))
 		preempt = AST_NONE;
-
-	pset_hint_high(pset, processor);
 
 	if (preempt != AST_NONE) {
 		if (processor == current_processor()) {
@@ -2182,7 +2181,7 @@ choose_next_pset(
 		nset = next_pset(nset);
 	} while (nset->processor_count < 1 && nset != pset);
 
-	return ((nset != pset)? nset: pset);
+	return (nset);
 }
 
 /*
@@ -2202,7 +2201,19 @@ choose_processor(
 	thread_t			thread)
 {
 	processor_set_t		nset, cset = pset;
-	processor_t			processor;
+	processor_t			processor = thread->last_processor;
+
+	/*
+	 *	Prefer the last processor, when appropriate.
+	 */
+	if (processor != PROCESSOR_NULL) {
+		if (processor->processor_set != pset ||
+				processor->state == PROCESSOR_SHUTDOWN || processor->state == PROCESSOR_OFF_LINE)
+			processor = PROCESSOR_NULL;
+		else
+		if (processor->state == PROCESSOR_IDLE || processor->current_pri < thread->sched_pri)
+			return (processor);
+	}
 
 	/*
 	 *	Iterate through the processor sets to locate
@@ -2227,23 +2238,26 @@ choose_processor(
 
 				processor = (processor_t)queue_next((queue_entry_t)processor);
 			}
+
+			processor = PROCESSOR_NULL;
 		}
 		else {
 			/*
-			 *	Choose the low hint processor in the processor set if available.
+			 *	Check the low hint processor in the processor set if available.
 			 */
-			processor = cset->low_hint;
-			if (processor != PROCESSOR_NULL &&
-						processor->state != PROCESSOR_SHUTDOWN && processor->state != PROCESSOR_OFF_LINE)
-				return (processor);
+			if (cset->low_pri != PROCESSOR_NULL &&
+						cset->low_pri->state != PROCESSOR_SHUTDOWN && cset->low_pri->state != PROCESSOR_OFF_LINE) {
+				if (processor == PROCESSOR_NULL || cset->low_pri->current_pri < thread->sched_pri)
+					processor = cset->low_pri;
+			}
 
 			/*
-			 *	Choose any active processor if the hint was invalid.
+			 *	Otherwise, choose an available processor in the set.
 			 */
-			processor = (processor_t)dequeue_head(&cset->active_queue);
-			if (processor != PROCESSOR_NULL) {
-				enqueue_tail(&cset->active_queue, (queue_entry_t)processor);
-				return (processor);
+			if (processor == PROCESSOR_NULL) {
+				processor = (processor_t)dequeue_head(&cset->active_queue);
+				if (processor != PROCESSOR_NULL)
+					enqueue_tail(&cset->active_queue, (queue_entry_t)processor);
 			}
 		}
 
@@ -2261,16 +2275,48 @@ choose_processor(
 	} while (nset != pset);
 
 	/*
-	 *	If all else fails choose the current processor,
-	 *	this routine must return a running processor.
+	 *	Make sure that we pick a running processor,
+	 *	and that the correct processor set is locked.
 	 */
-	processor = current_processor();
-	if (cset != processor->processor_set) {
-		pset_unlock(cset);
+	do {
+		/*
+		 *	If we haven't been able to choose a processor,
+		 *	pick the current one and return it.
+		 */
+		if (processor == PROCESSOR_NULL) {
+			processor = current_processor();
 
-		cset = processor->processor_set;
-		pset_lock(cset);
-	}
+			/*
+			 *	Check that the correct processor set is
+			 *	returned locked.
+			 */
+			if (cset != processor->processor_set) {
+				pset_unlock(cset);
+
+				cset = processor->processor_set;
+				pset_lock(cset);
+			}
+
+			return (processor);
+		}
+
+		/*
+		 *	Check that the processor set for the chosen
+		 *	processor is locked.
+		 */
+		if (cset != processor->processor_set) {
+			pset_unlock(cset);
+
+			cset = processor->processor_set;
+			pset_lock(cset);
+		}
+
+		/*
+		 *	We must verify that the chosen processor is still available.
+		 */
+		if (processor->state == PROCESSOR_SHUTDOWN || processor->state == PROCESSOR_OFF_LINE)
+			processor = PROCESSOR_NULL;
+	} while (processor == PROCESSOR_NULL);
 
 	return (processor);
 }
@@ -2329,9 +2375,6 @@ thread_setrun(
 			/*
 			 *	Choose a different processor in certain cases.
 			 */
-			if (processor->state == PROCESSOR_SHUTDOWN || processor->state == PROCESSOR_OFF_LINE)
-				processor = choose_processor(pset, thread);
-			else
 			if (thread->sched_pri >= BASEPRI_RTQUEUES) {
 				/*
 				 *	If the processor is executing an RT thread with
@@ -2342,38 +2385,26 @@ thread_setrun(
 					processor = choose_processor(pset, thread);
 			}
 			else
-			if (processor->state != PROCESSOR_IDLE && pset->idle_count > 0) {
 				processor = choose_processor(pset, thread);
-			}
-			else {
-				processor_set_t		nset = choose_next_pset(pset);
-
-				/*
-				 *	Bump into a lesser loaded processor set if appropriate.
-				 */
-				if (pset != nset && (nset->low_hint == PROCESSOR_NULL ||
-												(pset->idle_count == 0 && nset->idle_count > 0) ||
-														processor->runq.count > nset->low_hint->runq.count)) {
-					pset_unlock(pset);
-
-					pset = nset;
-					pset_lock(pset);
-
-					processor = choose_processor(pset, thread);
-				}
-			}
 		}
 		else {
 			/*
 			 *	No Affinity case:
 			 *
-			 *	Choose a processor from the current processor set.
+			 *	Utilitize a per task hint to spread threads
+			 *	among the available processor sets.
 			 */
-			processor = current_processor();
-			pset = processor->processor_set;
+			task_t		task = thread->task;
+
+			pset = task->pset_hint;
+			if (pset == PROCESSOR_SET_NULL)
+				pset = current_processor()->processor_set;
+
+			pset = choose_next_pset(pset);
 			pset_lock(pset);
 
 			processor = choose_processor(pset, thread);
+			task->pset_hint = processor->processor_set;
 		}
 	}
 	else {
@@ -2673,8 +2704,7 @@ run_queue_remove(
  *	choose_thread:
  *
  *	Choose a thread to execute from the run queues
- *	and return it.  May steal a thread from another
- *	processor.
+ *	and return it.
  *
  *	Called with pset scheduling lock and rt lock held,
  *	released on return.
@@ -2689,28 +2719,9 @@ choose_thread(
 	if (processor->runq.count > 0 && processor->runq.highq >= rt_runq.highq) {
 		simple_unlock(&rt_lock);
 
-		pset_hint_low(pset, processor);
-
-		if (pset->high_hint != PROCESSOR_NULL) {
-			if (processor != pset->high_hint) {
-				if (processor->runq.count >= pset->high_hint->runq.count)
-					pset->high_hint = processor;
-				else
-				if (pset->high_hint->runq.highq > processor->runq.highq) {
-					thread = steal_thread(pset->high_hint);
-					if (thread != THREAD_NULL) {
-						processor->deadline = UINT64_MAX;
-						pset_unlock(pset);
-
-						return (thread);
-					}
-				}
-			}
-		}
-		else
-			pset->high_hint = processor;
-
 		thread = run_queue_dequeue(&processor->runq, SCHED_HEADQ);
+
+		pset_pri_hint(pset, processor, thread->sched_pri);
 
 		processor->deadline = UINT64_MAX;
 		pset_unlock(pset);
@@ -2728,21 +2739,22 @@ choose_thread(
 }
 
 /*
- *	steal_thread:
+ *	steal_processor_thread:
  *
- *	Steal a thread from a processor and return it.
+ *	Locate a thread to steal from the processor and
+ *	return it.
  *
  *	Associated pset must be locked.  Returns THREAD_NULL
  *	on failure.
  */
 static thread_t
-steal_thread(
+steal_processor_thread(
 	processor_t		processor)
 {
 	run_queue_t		rq = &processor->runq;
 	queue_t			queue = rq->queues + rq->highq;
 	int				pri = rq->highq, count = rq->count;
-	thread_t		thread = THREAD_NULL;
+	thread_t		thread;
 
 	while (count > 0) {
 		thread = (thread_t)queue_first(queue);
@@ -2770,6 +2782,58 @@ steal_thread(
 
 		queue--; pri--;
 	}
+
+	return (THREAD_NULL);
+}
+
+/*
+ *	Locate and steal a thread, beginning
+ *	at the pset.
+ *
+ *	The pset must be locked, and is returned
+ *	unlocked.
+ *
+ *	Returns the stolen thread, or THREAD_NULL on
+ *	failure.
+ */
+static thread_t
+steal_thread(
+	processor_set_t		pset)
+{
+	processor_set_t		nset, cset = pset;
+	processor_t			processor;
+	thread_t			thread;
+
+	do {
+		processor = (processor_t)queue_first(&cset->active_queue);
+		while (!queue_end(&cset->active_queue, (queue_entry_t)processor)) {
+			if (processor->runq.count > 0) {
+				thread = steal_processor_thread(processor);
+				if (thread != THREAD_NULL) {
+					remqueue(&cset->active_queue, (queue_entry_t)processor);
+					enqueue_tail(&cset->active_queue, (queue_entry_t)processor);
+
+					processor->deadline = UINT64_MAX;
+					pset_unlock(cset);
+
+					return (thread);
+				}
+			}
+
+			processor = (processor_t)queue_next((queue_entry_t)processor);
+		}
+
+		nset = next_pset(cset);
+
+		if (nset != pset) {
+			pset_unlock(cset);
+
+			cset = nset;
+			pset_lock(cset);
+		}
+	} while (nset != pset);
+
+	pset_unlock(cset);
 
 	return (THREAD_NULL);
 }
@@ -2803,20 +2867,11 @@ processor_idle(
 									mach_absolute_time(), &PROCESSOR_DATA(processor, idle_state));
 	PROCESSOR_DATA(processor, current_state) = &PROCESSOR_DATA(processor, idle_state);
 
-	while (processor->next_thread == THREAD_NULL && processor->runq.count == 0 &&
+	while (processor->next_thread == THREAD_NULL && processor->runq.count == 0 && rt_runq.count == 0 &&
 				(thread == THREAD_NULL || ((thread->state & (TH_WAIT|TH_SUSP)) == TH_WAIT && !thread->wake_active))) {
-		volatile processor_t	hint;
-
 		machine_idle();
 
 		(void)splsched();
-
-		if (pset->low_hint == PROCESSOR_NULL)
-			break;
-
-		hint = pset->high_hint;
-		if (hint != PROCESSOR_NULL && hint->runq.count > 0)
-			break;
 	}
 
 	timer_switch(&PROCESSOR_DATA(processor, idle_state),
@@ -2867,7 +2922,7 @@ processor_idle(
 		pset->idle_count--;
 
 		processor->state = PROCESSOR_RUNNING;
-		enqueue_head(&pset->active_queue, (queue_entry_t)processor);
+		enqueue_tail(&pset->active_queue, (queue_entry_t)processor);
 	}
 	else
 	if (state == PROCESSOR_SHUTDOWN) {
@@ -2900,6 +2955,11 @@ processor_idle(
 	return (THREAD_NULL);
 }
 
+/*
+ *	Each processor has a dedicated thread which
+ *	executes the idle loop when there is no suitable
+ *	previous context.
+ */
 void
 idle_thread(void)
 {
@@ -3002,9 +3062,6 @@ sched_tick_continue(void)
 	 *  may need to be updated.
 	 */
 	thread_update_scan();
-
-	if (pm_tick_callout != NULL)
-	    (*pm_tick_callout)();
 
 	clock_deadline_for_periodic_event(sched_tick_interval, abstime,
 														&sched_tick_deadline);

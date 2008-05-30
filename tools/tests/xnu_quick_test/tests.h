@@ -47,8 +47,10 @@
 #include <sys/ucred.h>
 #include <sys/vnode.h>
 #include <sys/wait.h>
-	 
+#include <TargetConditionals.h> /* for TARGET_OS_EMBEDDED */
+
 #define MY_BUFFER_SIZE (1024 * 10)
+#define ARM 	100  /* I am not sure if the value really matters? */
 #define POWERPC	238947
 #define INTEL	38947			/* 
 					 * Random values used by execve tests to 

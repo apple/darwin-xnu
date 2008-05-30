@@ -1706,6 +1706,7 @@ csops(__unused proc_t p, struct csops_args *uap, __unused register_t *retval)
 			if (buf == NULL) 
 				return(ENOMEM);
 
+			bzero(buf, usize);
 
 			error = vnode_getwithvid(tvp, vid);
 			if (error == 0) {

@@ -2429,9 +2429,9 @@ IOMemoryDescriptorMapMemEntry(vm_map_t map, ipc_port_t entry, IOOptionBits optio
     IOReturn err;
     IOMemoryDescriptorMapAllocRef ref;
 
-    ref.sharedMem	= entry;
-    ref.sourceOffset   	= offset;
-    ref.options		= options;
+    ref.sharedMem	 = entry;
+    ref.sourceOffset = trunc_page_64(offset);
+    ref.options		 = options;
 
     ref.size = length;
 

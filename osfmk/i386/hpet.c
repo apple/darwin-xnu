@@ -133,6 +133,26 @@ hpet_request(uint32_t cpu)
 	return(-1);
     }
 
+    /*
+     * Deal with the case where the CPU # passed in is past the
+     * value specified in cpus=n in boot-args.
+     */
+    if (cpu >= real_ncpus) {
+	enabled = ml_set_interrupts_enabled(FALSE);
+	lcpu = cpu_to_lcpu(cpu);
+	if (lcpu != NULL) {
+	    core = lcpu->core;
+	    pkg  = core->package;
+
+	    if (lcpu->primary) {
+		pkg->flags |= X86PKG_FL_HAS_HPET;
+	    }
+	}
+
+	ml_set_interrupts_enabled(enabled);
+	return(0);
+    }
+
     rc = (*hpet_req)(ml_get_apicid(cpu), hpet_arg, &hpetReq);
     if (rc != 0) {
 	return(rc);

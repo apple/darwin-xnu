@@ -6406,7 +6406,9 @@ vm_object_range_op(
 	if (range) {
 	        if (offset > offset_end)
 		        offset = offset_end;
-	        *range = offset - offset_beg;
+		if(offset > offset_beg)
+			*range = offset - offset_beg;
+		else *range=0;
 	}
 	return KERN_SUCCESS;
 }

@@ -28,6 +28,7 @@
 
 #include <sys/systm.h>
 #include <sys/kernel.h>
+#include <sys/param.h>
 #include <sys/file_internal.h>
 #include <sys/dirent.h>
 #include <sys/stat.h>
@@ -292,11 +293,57 @@ hfs_vnop_close(ap)
 	struct proc *p = vfs_context_proc(ap->a_context);
 	struct hfsmount *hfsmp;
 	int busy;
+	int knownrefs = 0;
+	int tooktrunclock = 0;
 
 	if ( hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK) != 0)
 		return (0);
 	cp = VTOC(vp);
 	hfsmp = VTOHFS(vp);
+
+	/*
+	 * If the rsrc fork is a named stream, it holds a usecount on 
+	 * the data fork, which prevents the data fork from getting recycled, which
+	 * then prevents the de-allocation of its extra blocks.  
+	 * Do checks for truncation on close. Purge extra extents if they
+	 * exist.  Make sure the vp is not a directory, that it has a resource
+	 * fork, and that rsrc fork is a named stream.
+	 */
+	
+	if ((vp->v_type == VREG) && (cp->c_rsrc_vp)
+			&& (vnode_isnamedstream(cp->c_rsrc_vp))) {
+		uint32_t blks;
+
+		blks = howmany(VTOF(vp)->ff_size, VTOVCB(vp)->blockSize);
+		/*
+		 *  If there are any extra blocks and there are only 2 refs on 
+		 *  this vp (ourselves + rsrc fork holding ref on us), go ahead
+		 *  and try to truncate the extra blocks away.
+		 */
+		if ((blks < VTOF(vp)->ff_blocks) && (!vnode_isinuse(vp, 2))) {
+			// release cnode lock ; must acquire truncate lock BEFORE cnode lock
+			hfs_unlock (cp);
+
+			hfs_lock_truncate(cp, TRUE);
+			tooktrunclock = 1;
+			
+			if (hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK) != 0) {
+				hfs_unlock_truncate(cp, TRUE);
+				return (0);			
+			}
+
+			//now re-test to make sure it's still valid.
+			if (cp->c_rsrc_vp) {
+				knownrefs = 1 + vnode_isnamedstream(cp->c_rsrc_vp);
+				if (!vnode_isinuse(vp, knownrefs)) {
+					blks = howmany(VTOF(vp)->ff_size, VTOVCB(vp)->blockSize);
+					if (blks < VTOF(vp)->ff_blocks) {
+						(void) hfs_truncate(vp, VTOF(vp)->ff_size, IO_NDELAY, 0, ap->a_context);
+					}
+				}
+			}
+		}
+	}
 
 	// if we froze the fs and we're exiting, then "thaw" the fs 
 	if (hfsmp->hfs_freezing_proc == p && proc_exiting(p)) {
@@ -315,7 +362,10 @@ hfs_vnop_close(ap)
 	} else if (vnode_issystem(vp) && !busy) {
 		vnode_recycle(vp);
 	}
-
+	if (tooktrunclock) {
+		hfs_unlock_truncate(cp, TRUE);
+	}
+	
 	hfs_unlock(cp);
 	return (0);
 }
@@ -1759,6 +1809,8 @@ hfs_vnop_remove(ap)
 	hfs_unlockpair(dcp, cp);
 
 	if (recycle_rsrc && vnode_getwithvid(rvp, rvid) == 0) {
+		vnode_ref(rvp);
+		vnode_rele(rvp);
 		vnode_recycle(rvp);
 		vnode_put(rvp);
 	} 
@@ -1880,7 +1932,7 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 		 * until the call to hfs_vnop_inactive() occurs.
 		 */
 		if (cp->c_rsrc_vp) {
-	    		defer_remove = 1;
+			defer_remove = 1;
 		} else {
 			error = hfs_vgetrsrc(hfsmp, vp, &rvp, FALSE);
 			if (error)
@@ -2205,6 +2257,7 @@ hfs_vnop_rename(ap)
 	struct vnode *tdvp = ap->a_tdvp;
 	struct vnode *fvp = ap->a_fvp;
 	struct vnode *fdvp = ap->a_fdvp;
+	struct vnode *rvp = NULLVP;
 	struct componentname *tcnp = ap->a_tcnp;
 	struct componentname *fcnp = ap->a_fcnp;
 	struct proc *p = vfs_context_proc(ap->a_context);
@@ -2222,7 +2275,9 @@ hfs_vnop_rename(ap)
 	int took_trunc_lock = 0;
 	int lockflags;
 	int error;
-
+	int rsrc_vid = 0;
+	int recycle_rsrc = 0;
+	
 	/* When tvp exist, take the truncate lock for the hfs_removefile(). */
 	if (tvp && (vnode_isreg(tvp) || vnode_islnk(tvp))) {
 		hfs_lock_truncate(VTOC(tvp), TRUE);
@@ -2499,7 +2554,22 @@ hfs_vnop_rename(ap)
 		if (vnode_isdir(tvp))
 			error = hfs_removedir(tdvp, tvp, tcnp, HFSRM_SKIP_RESERVE);
 		else {
+			if (tcp){
+				rvp = tcp->c_rsrc_vp;
+			}
 			error = hfs_removefile(tdvp, tvp, tcnp, 0, HFSRM_SKIP_RESERVE, 0);
+				
+			/* If the destination file had a resource fork vnode, we couldn't do 
+			 * anything about it in hfs_removefile because we didn't have a reference on it.  
+			 * We need to take action here to prevent it from leaking blocks.  If removefile 
+			 * succeeded, then squirrel away the vid of the resource fork vnode and force a 
+			 * recycle after dropping all of the locks. The vid is guaranteed not to change 
+			 * at this point because we still hold the cnode lock.
+			 */
+			if ((error == 0) && (tcp->c_flag & C_DELETED) && rvp && !vnode_isinuse(rvp, 0)) {
+				rsrc_vid = vnode_vid(rvp);	
+				recycle_rsrc = 1;
+			}
 		}
 
 		if (error)
@@ -2601,6 +2671,19 @@ out:
 		hfs_unlock_truncate(VTOC(tvp), TRUE);	
 
 	hfs_unlockfour(fdcp, fcp, tdcp, tcp);
+
+	/* Now that we've dropped locks, see if we need to force recycle on the old
+	 * destination's rsrc fork, preventing a leak of the rsrc fork's blocks.  Note that
+	 * doing the ref/rele is in order to twiddle the VL_INACTIVE bit to the vnode's flags
+	 * so that on the last vnode_put for this vnode, we will force vnop_inactive to be triggered.
+	 */
+	if ((recycle_rsrc) && (vnode_getwithvid(rvp, rsrc_vid) == 0)) {		
+		vnode_ref(rvp);
+		vnode_rele(rvp);
+		vnode_recycle(rvp);
+		vnode_put (rvp);
+	}
+
 
 	/* After tvp is removed the only acceptable error is EIO */
 	if (error && tvp_deleted)
@@ -3611,6 +3694,7 @@ int
 hfs_vgetrsrc(struct hfsmount *hfsmp, struct vnode *vp, struct vnode **rvpp, int can_drop_lock)
 {
 	struct vnode *rvp;
+	struct vnode *dvp = NULLVP;
 	struct cnode *cp = VTOC(vp);
 	int error;
 	int vid;
@@ -3706,9 +3790,12 @@ restart:
 						 "%s%s", cp->c_desc.cd_nameptr,
 						 _PATH_RSRCFORKSPEC);
 		}
-		error = hfs_getnewvnode(hfsmp, vnode_parent(vp), cn.cn_pnbuf ? &cn : NULL,
+		dvp = vnode_getparent(vp);
+		error = hfs_getnewvnode(hfsmp, dvp, cn.cn_pnbuf ? &cn : NULL,
 		                        &cp->c_desc, GNV_WANTRSRC | GNV_SKIPLOCK, &cp->c_attr,
 		                        &rsrcfork, &rvp);
+		if (dvp)
+			vnode_put(dvp);
 		if (cn.cn_pnbuf)
 			FREE_ZONE(cn.cn_pnbuf, cn.cn_pnlen, M_NAMEI);
 		if (error)

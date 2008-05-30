@@ -267,13 +267,13 @@ xpr_search(
 	if (!nxprbufs)
 		return;
 
-	n = nxprbufs;
-
 	s = splhigh();
 	simple_lock(&xprlock);
 
 	prev = db_recover;
-	if (_setjmp(db_recover = &db_jmpbuf) == 0)
+	if (_setjmp(db_recover = &db_jmpbuf) == 0) {
+	    n = nxprbufs;
+
   	    for (x = *(struct xprbuf **)xprlast ; n--; ) {
 		if (--x < xprbase)
 			x = xprlast - 1;
@@ -289,6 +289,7 @@ xpr_search(
 			  x->cpuinfo, x->timestamp);
 		db_printf(x->msg, x->arg1,x->arg2,x->arg3,x->arg4,x->arg5);
 	    }
+	}
 	db_recover = prev;
 
 	simple_unlock(&xprlock);

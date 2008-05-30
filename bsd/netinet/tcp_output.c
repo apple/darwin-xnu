@@ -717,7 +717,7 @@ after_sack_rexmit:
 	 * after the retransmission timer has been turned off.  Make sure
 	 * that the retransmission timer is set.
 	 */
-	if (tp->sack_enable && SEQ_GT(tp->snd_max, tp->snd_una) &&
+	if (tp->sack_enable && (tp->t_state >= TCPS_ESTABLISHED) && SEQ_GT(tp->snd_max, tp->snd_una) &&
 		tp->t_timer[TCPT_REXMT] == 0 &&
 	    tp->t_timer[TCPT_PERSIST] == 0) {
 			tp->t_timer[TCPT_REXMT] = tp->t_rxtcur;

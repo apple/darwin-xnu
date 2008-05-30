@@ -246,7 +246,7 @@ int do_spawn_test(int arch, int shouldfail)
 	posix_spawnattr_t attr;
 
 	char * args[] = {"helpers/arch", NULL};
-
+	
 	my_err = posix_spawnattr_init(&attr);
 	if (my_err != 0) {
 		printf("posix_spawnattr_init failed\n");
@@ -319,6 +319,9 @@ int get_architecture()
 	case CPU_TYPE_POWERPC:
 	case CPU_TYPE_POWERPC64:
 		rval = POWERPC;
+		break;
+	case CPU_TYPE_ARM:
+		rval = ARM;
 		break;
 	}
 

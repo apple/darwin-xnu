@@ -840,7 +840,7 @@ kmod_control(host_priv_t host_priv,
            /* Get the bundle id, if provided, and discard the buffer sent down.
             */
             if (*data && *dataCount) {
-                (char *)(kmem_alloc(kernel_map, (vm_offset_t *)&kext_id, id_length));
+                kmem_alloc(kernel_map, (vm_offset_t *)&kext_id, id_length);
                 if (!kext_id) {
                     return KERN_FAILURE;
                 }

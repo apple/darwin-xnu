@@ -63,6 +63,7 @@ typedef	void *event_t;		/* wait event */
 
 typedef uint64_t event64_t;		/* 64 bit wait event */
 #define		NO_EVENT64		((event64_t) 0)
+#define		CAST_EVENT64_T(a_ptr)	((event64_t)((uintptr_t)(a_ptr)))
 
 /*
  *	Possible wait_result_t values.

@@ -1765,7 +1765,7 @@ return_page_from_cpu_list:
 	percent_avail = 
 		(vm_page_active_count + vm_page_inactive_count + 
 		 vm_page_speculative_count + vm_page_free_count +
-		 vm_page_purgeable_count ) * 100 /
+		 (IP_VALID(memory_manager_default)?0:vm_page_purgeable_count) ) * 100 /
 		atop_64(max_mem);
 	if (percent_avail <= (kern_memorystatus_level - 5)) {
 		kern_memorystatus_level = percent_avail;
@@ -1879,7 +1879,7 @@ vm_page_release(
 	percent_avail = 
 		(vm_page_active_count + vm_page_inactive_count + 
 		 vm_page_speculative_count + vm_page_free_count +
-		 vm_page_purgeable_count ) * 100 /
+		 (IP_VALID(memory_manager_default)?0:vm_page_purgeable_count)  ) * 100 /
 		atop_64(max_mem);
 	if (percent_avail >= (kern_memorystatus_level + 5)) {
 		kern_memorystatus_level = percent_avail;
@@ -2256,7 +2256,7 @@ vm_page_free_list(
 		percent_avail = 
 			(vm_page_active_count + vm_page_inactive_count + 
 			 vm_page_speculative_count + vm_page_free_count +
-			 vm_page_purgeable_count ) * 100 /
+			 (IP_VALID(memory_manager_default)?0:vm_page_purgeable_count)  ) * 100 /
 			atop_64(max_mem);
 		if (percent_avail >= (kern_memorystatus_level + 5)) {
 			kern_memorystatus_level = percent_avail;
@@ -2372,7 +2372,8 @@ vm_page_unwire(
 		if (!IP_VALID(memory_manager_default) && 
 			mem->dirty && mem->object->internal && 
 			(mem->object->purgable == VM_PURGABLE_DENY ||
-			 mem->object->purgable == VM_PURGABLE_NONVOLATILE)) {
+			 mem->object->purgable == VM_PURGABLE_NONVOLATILE ||
+			 mem->object->purgable == VM_PURGABLE_VOLATILE)) {
 			queue_enter(&vm_page_queue_throttled, mem, vm_page_t, pageq);
 			vm_page_throttled_count++;
 			mem->throttled = TRUE;
@@ -2447,7 +2448,8 @@ vm_page_deactivate(
 		if (!IP_VALID(memory_manager_default) &&
 			m->dirty && m->object->internal &&
 			(m->object->purgable == VM_PURGABLE_DENY ||
-			 m->object->purgable == VM_PURGABLE_NONVOLATILE)) {
+			 m->object->purgable == VM_PURGABLE_NONVOLATILE ||
+			 m->object->purgable == VM_PURGABLE_VOLATILE )) {
 			queue_enter(&vm_page_queue_throttled, m, vm_page_t, pageq);
 			m->throttled = TRUE;
 			vm_page_throttled_count++;
@@ -2522,7 +2524,8 @@ vm_page_activate(
 		if (!IP_VALID(memory_manager_default) && 
 			!m->fictitious && m->dirty && m->object->internal && 
 			(m->object->purgable == VM_PURGABLE_DENY ||
-			 m->object->purgable == VM_PURGABLE_NONVOLATILE)) {
+			 m->object->purgable == VM_PURGABLE_NONVOLATILE ||
+			 m->object->purgable == VM_PURGABLE_VOLATILE )) {
 			queue_enter(&vm_page_queue_throttled, m, vm_page_t, pageq);
 			m->throttled = TRUE;
 			vm_page_throttled_count++;
@@ -3431,7 +3434,7 @@ cpm_allocate(
 	percent_avail = 
 		(vm_page_active_count + vm_page_inactive_count + 
 		 vm_page_speculative_count + vm_page_free_count +
-		 vm_page_purgeable_count ) * 100 /
+		 (IP_VALID(memory_manager_default)?0:vm_page_purgeable_count)  ) * 100 /
 		atop_64(max_mem);
 	if (percent_avail <= (kern_memorystatus_level - 5)) {
 		kern_memorystatus_level = percent_avail;

@@ -242,6 +242,23 @@ static void mca_dump_32bit_state(void)
 	kdb_printf("  IA32_MCG_MISC:   0x%08x\n", rdmsr32(IA32_MCG_MISC));
 }
 
+static void
+mca_report_cpu_info(void)
+{
+	uint64_t	microcode;
+	i386_cpu_info_t *infop = cpuid_info();
+
+	// microcode revision is top 32 bits of MSR_IA32_UCODE_REV
+	microcode = rdmsr64(MSR_IA32_UCODE_REV) >> 32;
+	kdb_printf("family: %d model: %d stepping: %d microcode revision %d\n", 
+		infop->cpuid_family,
+		infop->cpuid_model,
+		infop->cpuid_stepping,
+		(uint32_t) microcode);
+	kdb_printf("%s\n", infop->cpuid_brand_string);
+}
+
+
 static const char *mca_threshold_status[] = {
 	[THRESHOLD_STATUS_NO_TRACKING]	"No tracking",
 	[THRESHOLD_STATUS_GREEN]	"Green",
@@ -327,6 +344,9 @@ mca_dump(void)
 	kdb_printf(
 		"Machine-check capabilities (cpu %d) 0x%016qx:\n",
 		cpu_number(), ia32_mcg_cap.u64);
+
+	mca_report_cpu_info();
+
 	kdb_printf(
 		" %d error-reporting banks\n%s%s", mca_error_bank_count,
 		IF(mca_control_MSR_present,

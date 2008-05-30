@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -190,10 +190,12 @@ void
 ast_check(
 	processor_t		processor)
 {
+	thread_t			thread = processor->active_thread;
+
+	processor->current_pri = thread->sched_pri;
 	if (	processor->state == PROCESSOR_RUNNING		||
 			processor->state == PROCESSOR_SHUTDOWN		) {
-		thread_t			thread = processor->active_thread;
-		ast_t				preempt;
+		ast_t			preempt;
 
 		/*
 		 *	Propagate thread ast to processor.

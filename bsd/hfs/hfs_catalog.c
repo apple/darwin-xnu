@@ -2627,7 +2627,7 @@ getdirentries_callback(const CatalogKey *ckp, const CatalogRecord *crp,
 	u_int8_t type = DT_UNKNOWN;
 	u_int8_t is_mangled = 0;
 	u_int8_t *nameptr;
-	user_addr_t uiobase = (user_addr_t)NULL;
+	user_addr_t uiobase = USER_ADDR_NULL;
 	size_t namelen = 0;
 	size_t maxnamelen;
 	size_t uiosize = 0;

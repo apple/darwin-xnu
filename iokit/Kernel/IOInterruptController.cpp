@@ -87,6 +87,15 @@ IOReturn IOInterruptController::registerInterrupt(IOService *nub, int source,
   // Check if the interrupt source can/should be shared.
   canBeShared = vectorCanBeShared(vectorNumber, vector);
   IODTGetInterruptOptions(nub, source, &options);
+#if defined(__i386__) || defined(__x86_64__)
+  int   interruptType;
+  if (OSDynamicCast(IOPlatformDevice, getProvider()) &&
+      (getInterruptType(nub, source, &interruptType) == kIOReturnSuccess) &&
+      (kIOInterruptTypeLevel & interruptType))
+  {
+    options |= kIODTInterruptShared;
+  }
+#endif
   shouldBeShared = canBeShared && (options & kIODTInterruptShared);
   wasAlreadyRegisterd = vector->interruptRegistered;
   

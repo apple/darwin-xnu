@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -172,8 +172,7 @@ thread_quantum_expire(
 
 		pset_lock(pset);
 
-		pset_hint_low(pset, processor);
-		pset_hint_high(pset, processor);
+		pset_pri_hint(pset, processor, processor->current_pri);
 
 		pset_unlock(pset);
 	}

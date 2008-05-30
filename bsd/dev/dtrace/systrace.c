@@ -856,7 +856,7 @@ dtrace_machtrace_syscall(struct mach_call_args *args)
 		x86_saved_state_t   *tagged_regs = (x86_saved_state_t *)find_user_regs(current_thread());
 
 		if (is_saved_state64(tagged_regs)) {
-			code = -saved_state64(tagged_regs)->rax & SYSCALL_NUMBER_MASK;
+			code = saved_state64(tagged_regs)->rax & SYSCALL_NUMBER_MASK;
 		} else {
 			code = -saved_state32(tagged_regs)->eax;
 		}

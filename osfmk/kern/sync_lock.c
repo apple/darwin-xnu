@@ -104,10 +104,10 @@
 	MACRO_END
 
 unsigned int lock_set_event;
-#define LOCK_SET_EVENT ((event64_t)&lock_set_event)
+#define LOCK_SET_EVENT CAST_EVENT64_T(&lock_set_event)
 
 unsigned int lock_set_handoff;
-#define LOCK_SET_HANDOFF ((event64_t)&lock_set_handoff)
+#define LOCK_SET_HANDOFF CAST_EVENT64_T(&lock_set_handoff)
 
 /*
  *	ROUTINE:	lock_set_init		[private]

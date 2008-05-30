@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc.  All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc.  All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -2435,7 +2435,7 @@ static int
 nfs_vfs_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
            user_addr_t newp, size_t newlen, vfs_context_t ctx)
 {
-	int error = 0, val;
+	int error = 0, val, softnobrowse;
 	struct sysctl_req *req = NULL;
 	struct vfsidctl vc;
 	struct user_vfsidctl user_vc;
@@ -2793,9 +2793,11 @@ ustat_skip:
 		break;
 	case VFS_CTL_QUERY:
 		lck_mtx_lock(&nmp->nm_lock);
-		if (nmp->nm_state & (NFSSTA_TIMEO|NFSSTA_JUKEBOXTIMEO))
+		/* XXX don't allow users to know about/disconnect unresponsive, soft, nobrowse mounts */
+		softnobrowse = ((nmp->nm_flag & NFSMNT_SOFT) && (vfs_flags(nmp->nm_mountp) & MNT_DONTBROWSE));
+		if (!softnobrowse && (nmp->nm_state & (NFSSTA_TIMEO|NFSSTA_JUKEBOXTIMEO)))
 			vq.vq_flags |= VQ_NOTRESP;
-		if (!(nmp->nm_flag & (NFSMNT_NOLOCKS|NFSMNT_LOCALLOCKS)) &&
+		if (!softnobrowse && !(nmp->nm_flag & (NFSMNT_NOLOCKS|NFSMNT_LOCALLOCKS)) &&
 		    (nmp->nm_state & NFSSTA_LOCKTIMEO))
 			vq.vq_flags |= VQ_NOTRESP;
 		lck_mtx_unlock(&nmp->nm_lock);

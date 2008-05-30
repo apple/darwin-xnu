@@ -359,7 +359,16 @@ enum {
 #define kIOPMPSLegacyBatteryInfoKey                 "LegacyBatteryInfo"
 #define kIOPMPSBatteryHealthKey                     "BatteryHealth"
 #define kIOPMPSHealthConfidenceKey                  "HealthConfidence"
-#define kIOPMPSCapacityEstimatedKey		    "CapacityEstimated"
+#define kIOPMPSCapacityEstimatedKey	                "CapacityEstimated"
+#define kIOPMPSBatteryChargeStatusKey               "ChargeStatus"
+
+// kIOPMBatteryChargeStatusKey may have one of the following values, or may have
+// no value. If kIOPMBatteryChargeStatusKey has a NULL value (or no value) associated with it
+// then charge is proceeding normally. If one of these battery charge status reasons is listed,
+// then the charge may have been interrupted.
+#define kIOPMBatteryChargeStatusTooHot              "HighTemperature"
+#define kIOPMBatteryChargeStatusTooCold             "LowTemperature"
+#define kIOPMBatteryChargeStatusGradient            "BatteryTemperatureGradient"
 
 // Definitions for battery location, in case of multiple batteries.
 // A location of 0 is unspecified

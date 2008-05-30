@@ -106,14 +106,6 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
 	(void) hfs_lock(cp, HFS_FORCE_LOCK);
 
 	/*
-	 * Recycle named streams quickly so that the data fork vnode can
-	 * go inactive in a timely manner (so that it can be zero filled
-	 * or truncated if needed).
-	 */
-	if (vnode_isnamedstream(vp))
-		recycle = 1;
-
-	/*
 	 * We should lock cnode before checking the flags in the 
 	 * condition below and should unlock the cnode before calling 
 	 * ubc_setsize() as cluster code can call other HFS vnops which
@@ -288,7 +280,9 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
 	 */
 	if ((cp->c_flag & C_MODIFIED) ||
 	    cp->c_touch_acctime || cp->c_touch_chgtime || cp->c_touch_modtime) {
-	    	cp->c_flag |= C_FORCEUPDATE;
+		if ((cp->c_flag & C_MODIFIED) || cp->c_touch_modtime){
+			cp->c_flag |= C_FORCEUPDATE;
+		}
 		hfs_update(vp, 0);
 	}
 out:
@@ -429,8 +423,10 @@ hfs_vnop_reclaim(struct vnop_reclaim_args *ap)
 	 * force the update, or hfs_update will again skip the cat_update.
 	 */
 	if ((cp->c_flag & C_MODIFIED) ||
-	    cp->c_touch_acctime || cp->c_touch_chgtime || cp->c_touch_modtime) {
-	    	cp->c_flag |= C_FORCEUPDATE;
+		cp->c_touch_acctime || cp->c_touch_chgtime || cp->c_touch_modtime) {
+		if ((cp->c_flag & C_MODIFIED) || cp->c_touch_modtime){
+			cp->c_flag |= C_FORCEUPDATE;
+		}	
 		hfs_update(vp, 0);
 	}
 
@@ -774,11 +770,14 @@ hfs_getnewvnode(
 		 * occurred during the attachment, then cleanup the cnode.
 		 */
 		if ((cp->c_vp == NULL) && (cp->c_rsrc_vp == NULL)) {
-		        hfs_chash_abort(cp);
+			hfs_chash_abort(cp);
 			hfs_reclaim_cnode(cp);
-		} else {
-		        hfs_chashwakeup(cp, H_ALLOC | H_ATTACH);
-			hfs_unlock(cp);
+		} 
+		else {
+			hfs_chashwakeup(cp, H_ALLOC | H_ATTACH);
+			if ((flags & GNV_SKIPLOCK) == 0){
+				hfs_unlock(cp);
+			}
 		}
 		*vpp = NULL;
 		return (retval);

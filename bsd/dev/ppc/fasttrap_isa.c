@@ -76,6 +76,7 @@
 #include <mach/task.h>
 #include <vm/pmap.h>
 #include <vm/vm_map.h> /* All the bits we care about are guarded by MACH_KERNEL_PRIVATE :-( */
+extern dtrace_id_t dtrace_probeid_error;
 
 #define proc_t struct proc
 
@@ -358,9 +359,15 @@ fasttrap_return_common(ppc_saved_state_t *sv, user_addr_t pc, pid_t pid, user_ad
 			continue;							/* Yeah, skip this one... */
 
 		DTRACE_CPUFLAG_SET(CPU_DTRACE_USTACK_FP);
-		dtrace_probe(id->fti_probe->ftp_id,
-			pc - id->fti_probe->ftp_faddr,
-			sv->save_r3, sv->save_r4, 0, 0);
+		if (ISSET(current_proc()->p_lflag, P_LNOATTACH)) {
+			dtrace_probe(dtrace_probeid_error, 0 /* state */, 
+				     id->fti_probe->ftp_id, 1 /* ndx */, -1 /* offset */, 
+				     DTRACEFLT_UPRIV);
+		} else {
+			dtrace_probe(id->fti_probe->ftp_id,
+				pc - id->fti_probe->ftp_faddr,
+				sv->save_r3, sv->save_r4, 0, 0);
+		}
 		DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_USTACK_FP);
 	}
 
@@ -461,7 +468,11 @@ fasttrap_pid_probe(ppc_saved_state_t *sv)
 		for (id = tp->ftt_ids; id != NULL; id = id->fti_next) {
 			fasttrap_probe_t *probe = id->fti_probe;
 			
-			if (id->fti_ptype == DTFTP_ENTRY) {
+			if (ISSET(current_proc()->p_lflag, P_LNOATTACH)) {
+				dtrace_probe(dtrace_probeid_error, 0 /* state */, 
+				     id->fti_probe->ftp_id, 1 /* ndx */, -1 /* offset */, 
+				     DTRACEFLT_UPRIV);
+			} else if (id->fti_ptype == DTFTP_ENTRY) {
 				/*
 				 * We note that this was an entry
 				 * probe to help ustack() find the

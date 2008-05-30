@@ -110,7 +110,7 @@ endif
 # default architecture configuration = system architecture where you are running make.
 # default machine configuration for ppc = none at this time.
 # default machine configuration for i386 = none at this time.
-# default machine configuration for arm = "S5L8900XRB".
+# default machine configuration for arm = "S5L8900X".
 #
 ifndef TARGET_CONFIGS_UC
 ifdef TARGET_CONFIGS
@@ -211,7 +211,7 @@ export DSYMBUILDDIR = ./Contents/Resources/DWARF/
 # We must not use -fno-keep-inline-functions, or it will remove the dtrace
 # probes from the kernel.
 #
-export CFLAGS_GEN = -static $(DEBUG_CFLAGS) -nostdinc -nostdlib -no-cpp-precomp \
+export CFLAGS_GEN = -static $(DEBUG_CFLAGS) -nostdinc -nostdlib \
 	-fno-builtin -finline -msoft-float \
 	-fsigned-bitfields $(OTHER_CFLAGS)
 

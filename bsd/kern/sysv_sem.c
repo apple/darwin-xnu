@@ -1046,6 +1046,14 @@ semop(struct proc *p, struct semop_args *uap, register_t *retval)
 		goto semopout;
 	}
 
+	if (nsops < 0 || nsops > MAX_SOPS) {
+#ifdef SEM_DEBUG
+		printf("too many sops (max=%d, nsops=%d)\n", MAX_SOPS, nsops);
+#endif
+		eval = E2BIG;
+		goto semopout;
+	}
+
 #if CONFIG_MACF
 	/*
 	 * Initial pass thru sops to see what permissions are needed.
@@ -1063,14 +1071,6 @@ semop(struct proc *p, struct semop_args *uap, register_t *retval)
 	if (eval)
 		goto semopout;
 #endif
-
-	if (nsops < 0 || nsops > MAX_SOPS) {
-#ifdef SEM_DEBUG
-		printf("too many sops (max=%d, nsops=%d)\n", MAX_SOPS, nsops);
-#endif
-		eval = E2BIG;
-		goto semopout;
-	}
 
 	/*  OK for LP64, since sizeof(struct sembuf) is currently invariant */
 	if ((eval = copyin(uap->sops, &sops, nsops * sizeof(struct sembuf))) != 0) {

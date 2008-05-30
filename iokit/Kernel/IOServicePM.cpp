@@ -386,6 +386,7 @@ void IOService::PMinit ( void )
         fDeviceOverrides            = false;
         fMachineState               = kIOPM_Finished;
         fIdleTimerEventSource       = NULL;
+        fIdleTimerMinPowerState     = 0;
         fActivityLock               = IOLockAlloc();
         fClampOn                    = false;
         fStrictTreeOrder            = false;
@@ -1500,10 +1501,10 @@ void IOService::handlePowerDomainWillChangeTo ( IOPMRequest * request )
 	PM_ASSERT_IN_GATE();
     OUR_PMLog(kPMLogWillChange, newPowerFlags, 0);
 
-	if (!inPlane(gIOPowerPlane))
+	if (!inPlane(gIOPowerPlane) || !whichParent || !whichParent->getAwaitingAck())
 	{
 		PM_DEBUG("[%s] %s: not in power tree\n", getName(), __FUNCTION__);
-		return;
+        goto exit_no_ack;
 	}
 
 	savedParentsKnowState = fParentsKnowState;
@@ -1575,6 +1576,10 @@ void IOService::handlePowerDomainWillChangeTo ( IOPMRequest * request )
 			getName());
 		ask_parent( fDesiredPowerState );
 	}
+
+exit_no_ack:
+    // Drop the retain from notifyChild().
+    if (whichParent) whichParent->release();
 }
 
 //*********************************************************************************
@@ -1610,10 +1615,10 @@ void IOService::handlePowerDomainDidChangeTo ( IOPMRequest * request )
 	PM_ASSERT_IN_GATE();
     OUR_PMLog(kPMLogDidChange, newPowerFlags, 0);
 
-	if (!inPlane(gIOPowerPlane))
+	if (!inPlane(gIOPowerPlane) || !whichParent || !whichParent->getAwaitingAck())
 	{
 		PM_DEBUG("[%s] %s: not in power tree\n", getName(), __FUNCTION__);
-		return;
+        goto exit_no_ack;
 	}
 
 	savedParentsKnowState = fParentsKnowState;
@@ -1658,6 +1663,10 @@ void IOService::handlePowerDomainDidChangeTo ( IOPMRequest * request )
 			getName());
 		ask_parent( fDesiredPowerState );
 	}
+
+exit_no_ack:
+    // Drop the retain from notifyChild().
+    if (whichParent) whichParent->release();
 }
 
 //*********************************************************************************
@@ -3265,6 +3274,7 @@ bool IOService::notifyChild ( IOPowerConnection * theNub, bool is_prechange )
 	childRequest = acquirePMRequest( theChild, requestType );
 	if (childRequest)
 	{
+        theNub->retain();
 		childRequest->fArg0 = (void *) fHeadNoteOutputFlags;
 		childRequest->fArg1 = (void *) theNub;
 		childRequest->fArg2 = (void *) (fHeadNoteState < fCurrentPowerState);
@@ -3687,6 +3697,14 @@ void IOService::all_done ( void )
         fCurrentCapabilityFlags = powerStatePtr->capabilityFlags;
         if (fCurrentCapabilityFlags & kIOPMStaticPowerValid)
             fCurrentPowerConsumption = powerStatePtr->staticPower;
+    }
+
+    // When power rises enough to satisfy the tickle's desire for more power,
+    // the condition preventing idle-timer from dropping power is removed.
+
+    if (fCurrentPowerState >= fIdleTimerMinPowerState)
+    {
+        fIdleTimerMinPowerState = 0;
     }
 }
 
@@ -5543,13 +5561,18 @@ void IOService::executePMRequest( IOPMRequest * request )
 
 				if (request->fArg1)
 				{
-					// power rise
-					if (fDeviceDesire < (unsigned long) request->fArg0)
+					// Power rise from activity tickle.
+                    unsigned long ticklePowerState = (unsigned long) request->fArg0;
+                    if ((fDeviceDesire < ticklePowerState) &&
+                        (ticklePowerState < fNumberOfPowerStates))
+                    {
 						setDeviceDesire = true;
-				}
-				else if (fDeviceDesire)
+                        fIdleTimerMinPowerState = ticklePowerState;
+                    }
+                }
+				else if (fDeviceDesire > fIdleTimerMinPowerState)
 				{
-					// power drop and deviceDesire is not zero
+					// Power drop from idle timer expiration.
 					request->fArg0 = (void *) (fDeviceDesire - 1);
 					setDeviceDesire = true;
 				}

@@ -34,6 +34,8 @@
 #include <IOKit/IODMAController.h>
 #include <IOKit/IOEventSource.h>
 
+class IODMAController;
+
 class IODMAEventSource : public IOEventSource
 {
   OSDeclareDefaultStructors(IODMAEventSource);

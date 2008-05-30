@@ -1462,6 +1462,13 @@ findpcb:
 				 * Grow the congestion window, if the
 				 * connection is cwnd bound.
 				 */
+			    	if (tp->snd_cwnd < tp->snd_wnd) {
+					tp->t_bytes_acked += acked;
+					if (tp->t_bytes_acked > tp->snd_cwnd) {
+						tp->t_bytes_acked -= tp->snd_cwnd;
+						tp->snd_cwnd += tp->t_maxseg;
+					}
+				}
 				sbdrop(&so->so_snd, acked);
 				if (SEQ_GT(tp->snd_una, tp->snd_recover) &&
 				    SEQ_LEQ(th->th_ack, tp->snd_recover))
@@ -2543,44 +2550,29 @@ process_ACK:
 			register u_int cw = tp->snd_cwnd;
 			register u_int incr = tp->t_maxseg;
 
-			if ((acked > incr) && tcp_do_rfc3465) {
-				if (cw >= tp->snd_ssthresh) {
-					tp->t_bytes_acked += acked;
-					if (tp->t_bytes_acked >= cw) {
+			if (cw >= tp->snd_ssthresh) {
+				tp->t_bytes_acked += acked;
+				if (tp->t_bytes_acked >= cw) {
 					/* Time to increase the window. */
-						tp->t_bytes_acked -= cw;
-					} else {
-					/* No need to increase yet. */
-						incr = 0;
-					}
+					tp->t_bytes_acked -= cw;
 				} else {
-					/*
-					 * If the user explicitly enables RFC3465
-					 * use 2*SMSS for the "L" param.  Otherwise
-					 * use the more conservative 1*SMSS.
-					 *
-					 * (See RFC 3465 2.3 Choosing the Limit)
-					 */
-					u_int abc_lim;
-
-					abc_lim = (tcp_do_rfc3465 == 0) ?
-					    incr : incr * 2;
-					incr = lmin(acked, abc_lim);
+					/* No need to increase yet. */
+					incr = 0;
 				}
-			}
-			else {
+			} else {
 				/*
-  				 * If the window gives us less than ssthresh packets
-			   	 * in flight, open exponentially (segsz per packet).
-				 * Otherwise open linearly: segsz per window
-				 * (segsz^2 / cwnd per packet).
+				 * If the user explicitly enables RFC3465
+				 * use 2*SMSS for the "L" param.  Otherwise
+				 * use the more conservative 1*SMSS.
+				 *
+				 * (See RFC 3465 2.3 Choosing the Limit)
 				 */
-		
-					if (cw >= tp->snd_ssthresh) {
-						incr = incr * incr / cw;
-					}
-			}
+				u_int abc_lim;
 
+				abc_lim = (tcp_do_rfc3465 == 0) ?
+				    incr : incr * 2;
+				incr = min(acked, abc_lim);
+			}
 
 			tp->snd_cwnd = min(cw+incr, TCP_MAXWIN<<tp->snd_scale);
 		}
@@ -3559,6 +3551,9 @@ tcp_mss(tp, offer)
 		tp->snd_ssthresh = max(2 * mss, rt->rt_rmx.rmx_ssthresh);
 		tcpstat.tcps_usedssthresh++;
 	}
+	else
+		tp->snd_ssthresh = TCP_MAXWIN << TCP_MAX_WINSHIFT;
+
 	lck_mtx_unlock(rt_mtx);
 }
 

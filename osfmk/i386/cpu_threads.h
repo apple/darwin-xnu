@@ -42,9 +42,13 @@
 #define cpu_to_logical_cpu(cpu)		(cpu_to_lapic[cpu] & CPU_THREAD_MASK)
 #define cpu_is_core_cpu(cpu)		(cpu_to_logical_cpu(cpu) == 0)
 
-#define cpu_to_lcpu(cpu)		(&cpu_datap(cpu)->lcpu)
-#define cpu_to_core(cpu)		(cpu_to_lcpu(cpu)->core)
-#define cpu_to_package(cpu)		(cpu_to_core(cpu)->package)
+#define _cpu_to_lcpu(cpu)		(&cpu_datap(cpu)->lcpu)
+#define _cpu_to_core(cpu)		(_cpu_to_lcpu(cpu)->core)
+#define _cpu_to_package(cpu)		(_cpu_to_core(cpu)->package)
+
+#define cpu_to_lcpu(cpu)		((cpu_datap(cpu) != NULL) ? _cpu_to_lcpu(cpu) : NULL)
+#define cpu_to_core(cpu)		((cpu_to_lcpu(cpu) != NULL) ? _cpu_to_lcpu(cpu)->core : NULL)
+#define cpu_to_package(cpu)		((cpu_to_core(cpu) != NULL) ? _cpu_to_core(cpu)->package : NULL)
 
 /* Fast access: */
 #define x86_lcpu()			(&current_cpu_datap()->lcpu)

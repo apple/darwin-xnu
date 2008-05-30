@@ -1126,6 +1126,15 @@ replay_journal(journal *jnl)
 		last_sequence_num = blhdr->binfo[0].b.sequence_num;
 
 		if (blhdr_offset >= jnl->jhdr->end && jnl->jhdr->start <= jnl->jhdr->end) {
+		    if (last_sequence_num == 0) {
+			check_past_jnl_end = 0;
+			printf("jnl: %s: pre-sequence-num-enabled txn's - can not go further than end (%lld %lld).\n",
+			    jnl->jdev_name, jnl->jhdr->start, jnl->jhdr->end);
+			if (jnl->jhdr->start != jnl->jhdr->end) {
+			    jnl->jhdr->start = jnl->jhdr->end;
+			}
+			continue;
+		    }
 		    printf("jnl: %s: examining extra transactions starting @ %lld / 0x%llx\n", jnl->jdev_name, blhdr_offset, blhdr_offset);
 		}
 

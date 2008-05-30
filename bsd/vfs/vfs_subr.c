@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -162,6 +162,7 @@ __private_extern__ int unlink1(vfs_context_t, struct nameidata *, int);
 
 static void vnode_list_add(vnode_t);
 static void vnode_list_remove(vnode_t);
+static void vnode_list_remove_locked(vnode_t);
 
 static errno_t vnode_drain(vnode_t);
 static void vgone(vnode_t, int flags);
@@ -1316,9 +1317,9 @@ loop:
 		 * Alias, but not in use, so flush it out.
 		 */
 		if ((vp->v_iocount == 1) && (vp->v_usecount == 0)) {
-		        vnode_reclaim_internal(vp, 1, 0, 0);
+		        vnode_reclaim_internal(vp, 1, 1, 0);
+			vnode_put_locked(vp);
 			vnode_unlock(vp);
-			vnode_put(vp);
 			goto loop;
 		}
 	}
@@ -1340,8 +1341,8 @@ retnullvp:
 		if (vp != NULLVP) {
 			nvp->v_flag |= VALIASED;
 			vp->v_flag |= VALIASED;
+			vnode_put_locked(vp);
 			vnode_unlock(vp);
-			vnode_put(vp);
 		}
 		return (NULLVP);
 	}
@@ -1523,8 +1524,33 @@ vnode_list_add(vnode_t vp)
 	vnode_list_unlock();
 }
 
+
 /*
  * remove the vnode from appropriate free list.
+ * called with vnode LOCKED and
+ * the list lock held
+ */
+static void
+vnode_list_remove_locked(vnode_t vp)
+{
+	if (VONLIST(vp)) {
+		/*
+		 * the v_listflag field is
+		 * protected by the vnode_list_lock
+		 */
+	        if (vp->v_listflag & VLIST_RAGE)
+		        VREMRAGE("vnode_list_remove", vp);
+		else if (vp->v_listflag & VLIST_DEAD)
+		        VREMDEAD("vnode_list_remove", vp);
+		else
+		        VREMFREE("vnode_list_remove", vp);
+	}
+}
+
+
+/*
+ * remove the vnode from appropriate free list.
+ * called with vnode LOCKED
  */
 static void
 vnode_list_remove(vnode_t vp)
@@ -1548,24 +1574,16 @@ vnode_list_remove(vnode_t vp)
 		/*
 		 * however, we're not guaranteed that
 		 * we won't go from the on-list state
-		 * to the non-on-list state until we
+		 * to the not-on-list state until we
 		 * hold the vnode_list_lock... this 
-		 * is due to new_vnode removing vnodes
+		 * is due to "new_vnode" removing vnodes
 		 * from the free list uder the list_lock
 		 * w/o the vnode lock... so we need to
 		 * check again whether we're currently
 		 * on the free list
 		 */
-		if (VONLIST(vp)) {
-		        if (vp->v_listflag & VLIST_RAGE)
-			        VREMRAGE("vnode_list_remove", vp);
-			else if (vp->v_listflag & VLIST_DEAD)
-			        VREMDEAD("vnode_list_remove", vp);
-			else
-			        VREMFREE("vnode_list_remove", vp);
+		vnode_list_remove_locked(vp);
 
-			VLISTNONE(vp);
-		}
 		vnode_list_unlock();
 	}
 }
@@ -1675,7 +1693,7 @@ vnode_rele_internal(vnode_t vp, int fmode, int dont_reenter, int locked)
 		        goto defer_reclaim;
 		}
 		vnode_lock_convert(vp);
-	        vnode_reclaim_internal(vp, 1, 0, 0);
+	        vnode_reclaim_internal(vp, 1, 1, 0);
 	}
 	vnode_dropiocount(vp);
 	vnode_list_add(vp);
@@ -1799,11 +1817,11 @@ loop:
 #ifdef JOE_DEBUG
 			record_vp(vp, 1);
 #endif
-			vnode_reclaim_internal(vp, 1, 0, 0);
+			vnode_reclaim_internal(vp, 1, 1, 0);
 			vnode_dropiocount(vp);
 			vnode_list_add(vp);
-
 			vnode_unlock(vp);
+
 			reclaimed++;
 			mount_lock(mp);
 			continue;
@@ -1819,7 +1837,7 @@ loop:
 #ifdef JOE_DEBUG
 				record_vp(vp, 1);
 #endif
-				vnode_reclaim_internal(vp, 1, 0, 0);
+				vnode_reclaim_internal(vp, 1, 1, 0);
 				vnode_dropiocount(vp);
 				vnode_list_add(vp);
 				vnode_unlock(vp);
@@ -1878,6 +1896,10 @@ vclean(vnode_t vp, int flags)
 	int already_terminating;
 	int clflags = 0;
 
+#if NAMEDSTREAMS
+	int is_namedstream;
+#endif
+
 	/*
 	 * Check to see if the vnode is in use.
 	 * If so we have to reference it before we clean it out
@@ -1907,6 +1929,10 @@ vclean(vnode_t vp, int flags)
 	 * it might be on...
 	 */
 	insmntque(vp, (struct mount *)0);
+
+#if NAMEDSTREAMS
+	is_namedstream = vnode_isnamedstream(vp);
+#endif
 
 	vnode_unlock(vp);
 
@@ -1945,6 +1971,15 @@ vclean(vnode_t vp, int flags)
 	}
 	if (active || need_inactive) 
 		VNOP_INACTIVE(vp, ctx);
+
+#if NAMEDSTREAMS
+	/* Delete the shadow stream file before we reclaim its vnode */
+	if ((is_namedstream != 0) &&
+			(vp->v_parent != NULLVP) &&
+			((vp->v_parent->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS) == 0)) {
+		vnode_relenamedstream(vp->v_parent, vp, ctx);
+	}
+#endif
 
 	/*
 	 * Destroy ubc named reference
@@ -2029,7 +2064,7 @@ vn_revoke(vnode_t vp, __unused int flags, __unused vfs_context_t a_context)
 					SPECHASH_LOCK();	
 					break;
 				}
-				vnode_reclaim_internal(vq, 0, 0, 0);
+				vnode_reclaim_internal(vq, 0, 1, 0);
 				vnode_put(vq);
 				SPECHASH_LOCK();
 				break;
@@ -2057,6 +2092,7 @@ vnode_recycle(struct vnode *vp)
 		return(0);
 	} 
 	vnode_reclaim_internal(vp, 1, 0, 0);
+
 	vnode_unlock(vp);
 
 	return (1);
@@ -2209,9 +2245,9 @@ loop:
 				/*
 				 * Alias, but not in use, so flush it out.
 				 */
-				vnode_reclaim_internal(vq, 1, 0, 0);
+				vnode_reclaim_internal(vq, 1, 1, 0);
+				vnode_put_locked(vq);
 				vnode_unlock(vq);
-				vnode_put(vq);
 				goto loop;
 			}
 			count += (vq->v_usecount - vq->v_kusecount);
@@ -3265,6 +3301,7 @@ retry:
 		mac_vnode_label_init(vp);
 #endif /* MAC */
 
+		vp->v_iocount = 1;
 		goto done;
 	}
 
@@ -3359,17 +3396,7 @@ retry:
 steal_this_vp:
 	vpid = vp->v_id;
 
-	/*
-	 * the v_listflag field is
-	 * protected by the vnode_list_lock
-	 */
-	if (vp->v_listflag & VLIST_DEAD)
-	        VREMDEAD("new_vnode", vp);
-	else if (vp->v_listflag & VLIST_RAGE)
-	        VREMRAGE("new_vnode", vp);
-	else
-	        VREMFREE("new_vnode", vp);
-	VLISTNONE(vp);
+	vnode_list_remove_locked(vp);
 
 	vnode_list_unlock();
 	vnode_lock_spin(vp);
@@ -3421,7 +3448,6 @@ steal_this_vp:
 		if (vp->v_lflag & VL_DEAD)
 			panic("new_vnode: the vnode is VL_DEAD but not VBAD");
 		vnode_lock_convert(vp);
-
 		(void)vnode_reclaim_internal(vp, 1, 1, 0);
 
 		if ((VONLIST(vp)))
@@ -3452,6 +3478,7 @@ steal_this_vp:
 	}
 #endif /* MAC */
 
+	vp->v_iocount = 1;
 	vp->v_lflag = 0;
 	vp->v_writecount = 0;
         vp->v_references = 0;
@@ -3580,7 +3607,7 @@ retry:
 
 	if ((vp->v_lflag & (VL_MARKTERM | VL_TERMINATE | VL_DEAD)) == VL_MARKTERM) {
 	        vnode_lock_convert(vp);
-	        vnode_reclaim_internal(vp, 1, 0, 0);
+	        vnode_reclaim_internal(vp, 1, 1, 0);
 	}
 	vnode_dropiocount(vp);
 	vnode_list_add(vp);
@@ -3808,9 +3835,19 @@ vnode_reclaim_internal(struct vnode * vp, int locked, int reuse, int flags)
 	 * once new_vnode drops the list_lock, it will block trying to take
 	 * the vnode lock until we release it... at that point it will evaluate
 	 * whether the v_vid has changed
+	 * also need to make sure that the vnode isn't on a list where "new_vnode"
+	 * can find it after the v_id has been bumped until we are completely done
+	 * with the vnode (i.e. putting it back on a list has to be the very last
+	 * thing we do to this vnode... many of the callers of vnode_reclaim_internal
+	 * are holding an io_count on the vnode... they need to drop the io_count
+	 * BEFORE doing a vnode_list_add or make sure to hold the vnode lock until
+	 * they are completely done with the vnode
 	 */
 	vnode_list_lock();
+
+	vnode_list_remove_locked(vp);
 	vp->v_id++;
+
 	vnode_list_unlock();
 
 	if (isfifo) {
@@ -3826,7 +3863,7 @@ vnode_reclaim_internal(struct vnode * vp, int locked, int reuse, int flags)
 	if (vp->v_data)
 		panic("vnode_reclaim_internal: cleaned vnode isn't");
 	if (vp->v_numoutput)
-		panic("vnode_reclaim_internal: Clean vnode has pending I/O's");
+		panic("vnode_reclaim_internal: clean vnode has pending I/O's");
 	if (UBCINFOEXISTS(vp))
 		panic("vnode_reclaim_internal: ubcinfo not cleaned");
 	if (vp->v_parent)
@@ -3844,12 +3881,11 @@ vnode_reclaim_internal(struct vnode * vp, int locked, int reuse, int flags)
 		vp->v_lflag &= ~VL_TERMWANT;
 		wakeup(&vp->v_lflag);
 	}
-	if (!reuse && vp->v_usecount == 0) {
+	if (!reuse) {
 	        /*
 		 * make sure we get on the
-		 * dead list
+		 * dead list if appropriate
 		 */
-	        vnode_list_remove(vp);
 	        vnode_list_add(vp);
 	}
 	if (!locked)
@@ -3857,9 +3893,6 @@ vnode_reclaim_internal(struct vnode * vp, int locked, int reuse, int flags)
 }
 
 /* USAGE:
- * The following api creates a vnode and associates all the parameter specified in vnode_fsparam
- * structure and returns a vnode handle with a reference. device aliasing is handled here so checkalias
- * is obsoleted by this.
  *  vnode_create(int flavor, size_t size, void * param,  vnode_t  *vp)
  */
 int  
@@ -3884,7 +3917,6 @@ vnode_create(int flavor, size_t size, void *data, vnode_t *vpp)
 			vp->v_op = param->vnfs_vops;
 			vp->v_type = param->vnfs_vtype;
 			vp->v_data = param->vnfs_fsnode;
-			vp->v_iocount = 1;
 
 			if (param->vnfs_markroot)
 				vp->v_flag |= VROOT;
@@ -6532,6 +6564,22 @@ errno_t rmdir_remove_orphaned_appleDouble(vnode_t vp , vfs_context_t ctx, int * 
 			cpos += dp->d_reclen;
 			dp = (struct dirent*)cpos;
 		}
+		
+		/*
+		 * workaround for HFS/NFS setting eofflag before end of file 
+		 */
+		if (vp->v_tag == VT_HFS && nentries > 2)
+			eofflag=0;
+
+		if (vp->v_tag == VT_NFS) {
+			if (eofflag && !full_erase_flag) {
+				full_erase_flag = 1;
+				eofflag = 0;
+				uio_reset(auio, 0, UIO_SYSSPACE, UIO_READ);
+			}
+			else if (!eofflag && full_erase_flag)
+				full_erase_flag = 0;
+		}
 
 	} while (!eofflag);
 	/*
@@ -6542,6 +6590,7 @@ errno_t rmdir_remove_orphaned_appleDouble(vnode_t vp , vfs_context_t ctx, int * 
 
 	uio_reset(auio, 0, UIO_SYSSPACE, UIO_READ);
 	eofflag = 0;
+	full_erase_flag = 0;
 
 	do {
 		siz = UIO_BUFF_SIZE;

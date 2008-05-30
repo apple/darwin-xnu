@@ -104,7 +104,7 @@ panic_ui_initialize(const unsigned char * system_clut)
 
 	/* Convert xnu-####.###.obj~### into ####.###~### */
 
-	if (version) {
+	if (version[0]) {
 		const char *versionpos = strnstr(version, "xnu-", VERSIONBUF_LEN);
 
 		if (versionpos) {

@@ -517,7 +517,7 @@ OSErr MapFileBlockC (
 	//      offset in sectors from start of allocation block space
 	//
 	temp = (daddr64_t)((offset - (off_t)((off_t)(firstFABN) * (off_t)(allocBlockSize)))/sectorSize);
-	temp += startBlock * sectorsPerBlock;
+	temp += (daddr64_t)startBlock * (daddr64_t)sectorsPerBlock;
 
 	/* Add in any volume offsets */
 	if (vcb->vcbSigWord == kHFSPlusSigWord)

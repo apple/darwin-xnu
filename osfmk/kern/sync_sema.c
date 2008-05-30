@@ -59,7 +59,7 @@
 #include <kern/mach_param.h>
 
 static unsigned int semaphore_event;
-#define SEMAPHORE_EVENT ((event64_t)&semaphore_event)
+#define SEMAPHORE_EVENT CAST_EVENT64_T(&semaphore_event)
 
 zone_t semaphore_zone;
 unsigned int semaphore_max = SEMAPHORE_MAX;

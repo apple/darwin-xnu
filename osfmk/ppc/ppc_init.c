@@ -165,7 +165,7 @@ ppc_init(
 	BootProcInfo.VMX_owner = NULL;
 	BootProcInfo.pp_cbfr = console_per_proc_alloc(TRUE);
 	BootProcInfo.rtcPop = EndOfAllTime;
-	BootProcInfo.pp2ndPage = (addr64_t)&BootProcInfo;	/* Initial physical address of the second page */
+	BootProcInfo.pp2ndPage = (addr64_t)(uintptr_t)&BootProcInfo;	/* Initial physical address of the second page */
 
  	BootProcInfo.pms.pmsStamp = 0;						/* Dummy transition time */
  	BootProcInfo.pms.pmsPop = EndOfAllTime;				/* Set the pop way into the future */

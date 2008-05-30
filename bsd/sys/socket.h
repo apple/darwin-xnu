@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -596,22 +596,22 @@ struct cmsgcred {
 
 /* given pointer to struct cmsghdr, return pointer to data */
 #define	CMSG_DATA(cmsg)		((unsigned char *)(cmsg) + \
-				 __DARWIN_ALIGN(sizeof(struct cmsghdr)))
+				 __DARWIN_ALIGN32(sizeof(struct cmsghdr)))
 
 /* given pointer to struct cmsghdr, return pointer to next cmsghdr */
 #define	CMSG_NXTHDR(mhdr, cmsg)	\
-	(((unsigned char *)(cmsg) + __DARWIN_ALIGN((__darwin_intptr_t)(cmsg)->cmsg_len) + \
-	  __DARWIN_ALIGN(sizeof(struct cmsghdr)) > \
+	(((unsigned char *)(cmsg) + __DARWIN_ALIGN32((uint32_t)(cmsg)->cmsg_len) + \
+	  __DARWIN_ALIGN32(sizeof(struct cmsghdr)) > \
 	    (unsigned char *)(mhdr)->msg_control + (mhdr)->msg_controllen) ? \
 	    (struct cmsghdr *)0L /* NULL */ : \
-	    (struct cmsghdr *)((unsigned char *)(cmsg) + __DARWIN_ALIGN((__darwin_intptr_t)(cmsg)->cmsg_len)))
+	    (struct cmsghdr *)((unsigned char *)(cmsg) + __DARWIN_ALIGN32((uint32_t)(cmsg)->cmsg_len)))
 
 #define	CMSG_FIRSTHDR(mhdr)	((struct cmsghdr *)(mhdr)->msg_control)
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /* RFC 2292 additions */
-#define	CMSG_SPACE(l)		(__DARWIN_ALIGN(sizeof(struct cmsghdr)) + __DARWIN_ALIGN(l))
-#define	CMSG_LEN(l)		(__DARWIN_ALIGN(sizeof(struct cmsghdr)) + (l))
+#define	CMSG_SPACE(l)		(__DARWIN_ALIGN32(sizeof(struct cmsghdr)) + __DARWIN_ALIGN32(l))
+#define	CMSG_LEN(l)		(__DARWIN_ALIGN32(sizeof(struct cmsghdr)) + (l))
 
 #ifdef KERNEL
 #define	CMSG_ALIGN(n)	__DARWIN_ALIGN(n)

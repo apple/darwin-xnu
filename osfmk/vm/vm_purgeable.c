@@ -23,15 +23,19 @@
 
 #include <mach/mach_types.h>
 #include <vm/vm_page.h>
+#include <vm/vm_kern.h>		/* kmem_alloc */
 #include <vm/vm_purgeable_internal.h>
 #include <sys/kdebug.h>
+#include <kern/sched_prim.h>
 
 struct token {
 	token_cnt_t     count;
 	token_idx_t     next;
 };
 
-struct token    tokens[MAX_VOLATILE];
+struct token	*tokens;
+token_idx_t	token_q_max_cnt = 0;
+vm_size_t	token_q_cur_size = 0;
 
 token_idx_t     token_free_idx = 0;		/* head of free queue */
 token_idx_t     token_init_idx = 1;		/* token 0 is reserved!! */
@@ -43,6 +47,8 @@ int             available_for_purge = 0;	/* increase when ripe token
 						 * token removed protect with
 						 * page_queue_lock */
 
+static int token_q_allocating = 0;		/* flag to singlethread allocator */
+
 struct purgeable_q purgeable_queues[PURGEABLE_Q_TYPE_MAX];
 
 #define TOKEN_ADD           0x40/* 0x100 */
@@ -52,7 +58,6 @@ struct purgeable_q purgeable_queues[PURGEABLE_Q_TYPE_MAX];
 #define OBJECT_ADDED        0x50/* 0x140 */
 #define OBJECT_REMOVED      0x51/* 0x144 */
 
-static void     vm_purgeable_q_advance(uint32_t num_pages, purgeable_q_t queue);
 static token_idx_t vm_purgeable_token_remove_first(purgeable_q_t queue);
 
 #if MACH_ASSERT
@@ -96,16 +101,78 @@ vm_purgeable_token_add(purgeable_q_t queue)
 	token_idx_t     token;
 	enum purgeable_q_type i;
 
-	if (token_init_idx < MAX_VOLATILE) {	/* lazy token array init */
-		token = token_init_idx;
-		token_init_idx++;
-	} else if (token_free_idx) {
+find_available_token:
+
+	if (token_free_idx) {				/* unused tokens available */
 		token = token_free_idx;
 		token_free_idx = tokens[token_free_idx].next;
-	} else {
-		return KERN_FAILURE;
+	} else if (token_init_idx < token_q_max_cnt) {	/* lazy token array init */
+		token = token_init_idx;
+		token_init_idx++;
+	} else {					/* allocate more memory */
+		/* Wait if another thread is inside the memory alloc section */
+		while(token_q_allocating) {
+			wait_result_t res = thread_sleep_mutex((event_t)&token_q_allocating, 
+							       &vm_page_queue_lock,
+							       THREAD_UNINT);
+			if(res != THREAD_AWAKENED) return KERN_ABORTED;
+		};
+		
+		/* Check whether memory is still maxed out */
+		if(token_init_idx < token_q_max_cnt)
+			goto find_available_token;
+		
+		/* Still no memory. Allocate some. */
+		token_q_allocating = 1;
+		
+		/* Drop page queue lock so we can allocate */
+		vm_page_unlock_queues();
+		
+		struct token *new_loc;
+		vm_size_t alloc_size = token_q_cur_size + PAGE_SIZE;
+		kern_return_t result;
+		
+		if (token_q_cur_size) {
+			result=kmem_realloc(kernel_map, (vm_offset_t)tokens, token_q_cur_size,
+					    (vm_offset_t*)&new_loc, alloc_size);
+		} else {
+			result=kmem_alloc(kernel_map, (vm_offset_t*)&new_loc, alloc_size);
+		}
+		
+		vm_page_lock_queues();
+		
+		if (result) {
+			/* Unblock waiting threads */
+			token_q_allocating = 0;
+			thread_wakeup((event_t)&token_q_allocating);
+			return result;
+		}
+		
+		/* If we get here, we allocated new memory. Update pointers and
+		 * dealloc old range */
+		struct token *old_tokens=tokens;
+		tokens=new_loc;
+		vm_size_t old_token_q_cur_size=token_q_cur_size;
+		token_q_cur_size=alloc_size;
+		token_q_max_cnt = token_q_cur_size / sizeof(struct token);
+		assert (token_init_idx < token_q_max_cnt);	/* We must have a free token now */
+		
+		if (old_token_q_cur_size) {	/* clean up old mapping */
+			vm_page_unlock_queues();
+			/* kmem_realloc leaves the old region mapped. Get rid of it. */
+			kmem_free(kernel_map, (vm_offset_t)old_tokens, old_token_q_cur_size);
+			vm_page_lock_queues();
+		}
+		
+		/* Unblock waiting threads */
+		token_q_allocating = 0;
+		thread_wakeup((event_t)&token_q_allocating);
+		
+		goto find_available_token;
 	}
-
+	
+	assert (token);
+	
 	/*
 	 * the new pagecount we got need to be applied to all queues except
 	 * obsolete
@@ -234,12 +301,12 @@ vm_purgeable_token_delete_first(purgeable_q_t queue)
 
 
 void
-vm_purgeable_q_advance_all(uint32_t num_pages)
+vm_purgeable_q_advance_all()
 {
 	/* check queue counters - if they get really large, scale them back.
 	 * They tend to get that large when there is no purgeable queue action */
 	int i;
-	if(token_new_pagecount > (INT32_MAX >> 1))	/* a system idling years might get there */
+	if(token_new_pagecount > (TOKEN_NEW_PAGECOUNT_MAX >> 1))	/* a system idling years might get there */
 	{
 		for (i = PURGEABLE_Q_TYPE_FIFO; i < PURGEABLE_Q_TYPE_MAX; i++) {
 			int64_t pages = purgeable_queues[i].new_pages += token_new_pagecount;
@@ -251,62 +318,60 @@ vm_purgeable_q_advance_all(uint32_t num_pages)
 	}
 	
 	/*
-	 * don't need to advance obsolete queue - all items are ripe there,
+	 * Decrement token counters. A token counter can be zero, this means the
+	 * object is ripe to be purged. It is not purged immediately, because that
+	 * could cause several objects to be purged even if purging one would satisfy
+	 * the memory needs. Instead, the pageout thread purges one after the other
+	 * by calling vm_purgeable_object_purge_one and then rechecking the memory
+	 * balance.
+	 *
+	 * No need to advance obsolete queue - all items are ripe there,
 	 * always
 	 */
-	vm_purgeable_q_advance(num_pages, &purgeable_queues[PURGEABLE_Q_TYPE_FIFO]);
-	vm_purgeable_q_advance(num_pages, &purgeable_queues[PURGEABLE_Q_TYPE_LIFO]);
-}
+	for (i = PURGEABLE_Q_TYPE_FIFO; i < PURGEABLE_Q_TYPE_MAX; i++) {
+		purgeable_q_t queue = &purgeable_queues[i];
+		uint32_t num_pages = 1;
+		
+		/* Iterate over tokens as long as there are unripe tokens. */
+		while (queue->token_q_unripe) {
+			if (tokens[queue->token_q_unripe].count && num_pages)
+			{
+				tokens[queue->token_q_unripe].count -= 1;
+				num_pages -= 1;
+			}
 
-/*
- * Decrements token counters. A token counter can be zero, this means the
- * object is ripe to be purged. It is not purged immediately, because that
- * could cause several objects to be purged even if purging one would satisfy
- * the memory needs. Instead, the pageout thread purges one after the other
- * by calling vm_purgeable_object_purge_one and then rechecking the memory
- * balance.
- */
-static void
-vm_purgeable_q_advance(uint32_t num_pages, purgeable_q_t queue)
-{
-	/* Iterate over tokens as long as there are unripe tokens. */
-	while (queue->token_q_unripe) {
-		int             min = (tokens[queue->token_q_unripe].count < num_pages) ?
-		tokens[queue->token_q_unripe].count : num_pages;
-		tokens[queue->token_q_unripe].count -= min;
-		num_pages -= min;
-
-		if (tokens[queue->token_q_unripe].count == 0) {
-			queue->token_q_unripe = tokens[queue->token_q_unripe].next;
-			available_for_purge++;
-			KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, TOKEN_QUEUE_ADVANCE)),
-					      queue->type,
-					  tokens[queue->token_q_head].count,	/* num pages on new
-										 * first token */
-					      0,
-					      available_for_purge,
-					      0);
-			continue;	/* One token ripened. Make sure to
-					 * check the next. */
+			if (tokens[queue->token_q_unripe].count == 0) {
+				queue->token_q_unripe = tokens[queue->token_q_unripe].next;
+				available_for_purge++;
+				KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, TOKEN_QUEUE_ADVANCE)),
+						      queue->type,
+						      tokens[queue->token_q_head].count,	/* num pages on new
+											 * first token */
+						      0,
+						      available_for_purge,
+						      0);
+				continue;	/* One token ripened. Make sure to
+						 * check the next. */
+			}
+			if (num_pages == 0)
+				break;	/* Current token not ripe and no more pages.
+					 * Work done. */
 		}
-		if (num_pages == 0)
-			break;	/* Current token not ripe and no more pages.
-				 * Work done. */
-	}
 
-	/*
-	 * if there are no unripe tokens in the queue, decrement the
-	 * new_pages counter instead new_pages can be negative, but must be
-	 * canceled out by token_new_pagecount -- since inactive queue as a
-	 * whole always contains a nonnegative number of pages
-	 */
-	if (!queue->token_q_unripe) {
-		queue->new_pages -= num_pages;
-		assert((int32_t) token_new_pagecount + queue->new_pages >= 0);
-	}
+		/*
+		 * if there are no unripe tokens in the queue, decrement the
+		 * new_pages counter instead new_pages can be negative, but must be
+		 * canceled out by token_new_pagecount -- since inactive queue as a
+		 * whole always contains a nonnegative number of pages
+		 */
+		if (!queue->token_q_unripe) {
+			queue->new_pages -= num_pages;
+			assert((int32_t) token_new_pagecount + queue->new_pages >= 0);
+		}
 #if MACH_ASSERT
-	vm_purgeable_token_check_queue(queue);
+		vm_purgeable_token_check_queue(queue);
 #endif
+	}
 }
 
 /*

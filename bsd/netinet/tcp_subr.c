@@ -717,6 +717,7 @@ tcp_newtcpcb(inp)
 	tp->snd_cwnd = TCP_MAXWIN << TCP_MAX_WINSHIFT;
 	tp->snd_bwnd = TCP_MAXWIN << TCP_MAX_WINSHIFT;
 	tp->snd_ssthresh = TCP_MAXWIN << TCP_MAX_WINSHIFT;
+	tp->snd_ssthresh_prev = TCP_MAXWIN << TCP_MAX_WINSHIFT;
 	tp->t_rcvtime = 0;
 	tp->t_bw_rtttime = 0;
 	/*

@@ -175,7 +175,10 @@ LEXT(_rtc_nanotime_store)
  *
  * This is the same as the commpage nanotime routine, except that it uses the
  * kernel internal "rtc_nanotime_info" data instead of the commpage data.  The two copies
- * of data (one in the kernel and one in user space) are kept in sync by rtc_nanotime_update().
+ * of data (one in the kernel and one in user space) are kept in sync by rtc_clock_napped().
+ *
+ * Warning!  There is another copy of this code in osfmk/i386/locore.s.  The
+ * two versions must be kept in sync with each other!
  *
  * There are actually two versions of the algorithm, one each for "slow" and "fast"
  * processors.  The more common "fast" algorithm is:

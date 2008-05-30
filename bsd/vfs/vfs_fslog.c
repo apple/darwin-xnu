@@ -322,7 +322,7 @@ static int escape_str(char *str, int len, int buflen)
 				*dst-- = '\\';
 				count--;
 			}
-			*src--;
+			src--;
 		}
 	}
 

@@ -104,7 +104,7 @@ ipcomp4_input(struct mbuf *m, int off)
 	}
 
 	md = m_pulldown(m, off, sizeof(*ipcomp), NULL);
-	if (!m) {
+	if (!md) {
 		m = NULL;	/*already freed*/
 		ipseclog((LOG_DEBUG, "IPv4 IPComp input: assumption failed "
 		    "(pulldown failure)\n"));
@@ -253,7 +253,7 @@ ipcomp6_input(mp, offp)
 	off = *offp;
 
 	md = m_pulldown(m, off, sizeof(*ipcomp), NULL);
-	if (!m) {
+	if (!md) {
 		m = NULL;	/*already freed*/
 		ipseclog((LOG_DEBUG, "IPv6 IPComp input: assumption failed "
 		    "(pulldown failure)\n"));

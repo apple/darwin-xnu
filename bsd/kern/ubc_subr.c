@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -222,6 +222,13 @@ CS_CodeDirectory *findCodeDirectory(
 	    cs_valid_range(cd, cd + 1, lower_bound, upper_bound) &&
 	    cs_valid_range(cd, (const char *) cd + ntohl(cd->length),
 			   lower_bound, upper_bound) &&
+	    cs_valid_range(cd, (const char *) cd + ntohl(cd->hashOffset),
+			   lower_bound, upper_bound) &&
+	    cs_valid_range(cd, (const char *) cd +
+			   ntohl(cd->hashOffset) +
+			   (ntohl(cd->nCodeSlots) * SHA1_RESULTLEN),
+			   lower_bound, upper_bound) &&
+	    
 	    ntohl(cd->magic) == CSMAGIC_CODEDIRECTORY) {
 		return cd;
 	}
@@ -1462,10 +1469,7 @@ ubc_unmap(struct vnode *vp)
 	struct ubc_info *uip;
 	int	need_rele = 0;
 	int	need_wakeup = 0;
-#if NAMEDRSRCFORK 
-	int	named_fork = 0;
-#endif
-
+	
 	if (vnode_getwithref(vp))
 	        return;
 
@@ -1480,30 +1484,15 @@ ubc_unmap(struct vnode *vp)
 		}
 		SET(uip->ui_flags, UI_MAPBUSY);
 
-#if NAMEDRSRCFORK
-		if ((vp->v_flag & VISNAMEDSTREAM) &&
-		    (vp->v_parent != NULLVP) && 
-		    !(vp->v_parent->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS)) {
-		    	named_fork = 1;
-		}
-#endif
-
 		if (ISSET(uip->ui_flags, UI_ISMAPPED)) {
-		        CLR(uip->ui_flags, UI_ISMAPPED);
+	        CLR(uip->ui_flags, UI_ISMAPPED);
 			need_rele = 1;
 		}
 		vnode_unlock(vp);
-		
+	
 		if (need_rele) {
-		        (void)VNOP_MNOMAP(vp, vfs_context_current());
-
-#if NAMEDRSRCFORK
-			if (named_fork) {
-				vnode_relenamedstream(vp->v_parent, vp, vfs_context_current());
-			}
-#endif
-
-		        vnode_rele(vp);
+			(void) VNOP_MNOMAP(vp, vfs_context_current());
+			vnode_rele(vp);
 		}
 
 		vnode_lock_spin(vp);
@@ -1516,7 +1505,7 @@ ubc_unmap(struct vnode *vp)
 		vnode_unlock(vp);
 
 		if (need_wakeup)
-		        wakeup(&uip->ui_flags);
+		    wakeup(&uip->ui_flags);
 
 	}
 	/*
@@ -1795,7 +1784,7 @@ upl_size_t
 ubc_upl_maxbufsize(
 	void)
 {
-	return(MAX_UPL_TRANSFER * PAGE_SIZE);
+	return(MAX_UPL_SIZE * PAGE_SIZE);
 }
 
 /*
@@ -1875,7 +1864,7 @@ ubc_upl_commit(
 	kern_return_t 	kr;
 
 	pl = UPL_GET_INTERNAL_PAGE_LIST(upl);
-	kr = upl_commit(upl, pl, MAX_UPL_TRANSFER);
+	kr = upl_commit(upl, pl, MAX_UPL_SIZE);
 	upl_deallocate(upl);
 	return kr;
 }
@@ -1950,7 +1939,7 @@ ubc_upl_commit_range(
 	pl = UPL_GET_INTERNAL_PAGE_LIST(upl);
 
 	kr = upl_commit_range(upl, offset, size, flags,
-						  pl, MAX_UPL_TRANSFER, &empty);
+						  pl, MAX_UPL_SIZE, &empty);
 
 	if((flags & UPL_COMMIT_FREE_ON_EMPTY) && empty)
 		upl_deallocate(upl);
@@ -2225,7 +2214,9 @@ ubc_cs_blob_add(
 	blob_start_offset = blob->csb_base_offset + blob->csb_start_offset;
 	blob_end_offset = blob->csb_base_offset + blob->csb_end_offset;
 
-	if (blob_start_offset >= blob_end_offset) {
+	if (blob_start_offset >= blob_end_offset ||
+	    blob_start_offset < 0 ||
+	    blob_end_offset <= 0) {
 		/* reject empty or backwards blob */
 		error = EINVAL;
 		goto out;
@@ -2567,8 +2558,11 @@ cs_validate_page(
 			codeLimit = ntohl(cd->codeLimit);
 			hash = hashes(cd, atop(offset),
 				      lower_bound, upper_bound);
-			bcopy(hash, expected_hash, sizeof (expected_hash));
-			found_hash = TRUE;
+			if (hash != NULL) {
+				bcopy(hash, expected_hash,
+				      sizeof (expected_hash));
+				found_hash = TRUE;
+			}
 
 #if !CS_BLOB_KEEP_IN_KERNEL
 			/* we no longer need that blob in the kernel map */

@@ -123,10 +123,10 @@ OSDictionary * IONetworkMatching(  const char * path,
 
 	len = strlen( kIODeviceTreePlane ":" );
 	maxLen -= len;
-	if( maxLen < 0)
+	if( maxLen <= 0)
 	    continue;
 
-	strcpy( buf, kIODeviceTreePlane ":" );
+	strlcpy( buf, kIODeviceTreePlane ":", len + 1 );
 	comp = buf + len;
 
         // remove parameters following ':' from the path
@@ -136,10 +136,9 @@ OSDictionary * IONetworkMatching(  const char * path,
 
         len = skip - path;
 	maxLen -= len;
-	if( maxLen < 0)
+	if( maxLen <= 0)
 	    continue;
-        strncpy( comp, path, len );
-        comp[ len ] = 0;
+	strlcpy( comp, path, len + 1 );
 
 	matching = IOService::serviceMatching( "IONetworkInterface" );
 	if( !matching)
@@ -280,6 +279,7 @@ OSDictionary * IODiskMatching( const char * path, char * buf, int maxLen )
     long         partition = -1;
     long		 lun = -1;
     char         c;
+    int          len;
 
     // scan the tail of the path for "@unit:partition"
     do {
@@ -317,34 +317,52 @@ OSDictionary * IODiskMatching( const char * path, char * buf, int maxLen )
         if( c || unit == -1 || partition == -1)
             continue;
 		
-        maxLen -= strlen( "{" kIOPathMatchKey "='" kIODeviceTreePlane ":" );
-        maxLen -= ( alias ? strlen( alias ) : 0 ) + (look - path);
-        maxLen -= strlen( "/@hhhhhhhh,hhhhhhhh:dddddddddd';}" );
-
-        if( maxLen > 0) {
-            sprintf( buf, "{" kIOPathMatchKey "='" kIODeviceTreePlane ":" );
-            comp = buf + strlen( buf );
-			
-            if( alias) {
-                strcpy( comp, alias );
-                comp += strlen( alias );
-            }
-			
-            if ( (look - path)) {
-                strncpy( comp, path, look - path);
-                comp += look - path;
-            }
-			
-			if ( lun != -1 )
-			{
-				sprintf ( comp, "/@%lx,%lx:%ld';}", unit, lun, partition );
-			}
-			else
-			{
-            	sprintf( comp, "/@%lx:%ld';}", unit, partition );
-            }
-        } else
+        len = strlen( "{" kIOPathMatchKey "='" kIODeviceTreePlane ":" );
+        maxLen -= len;
+        if( maxLen <= 0)
             continue;
+
+        snprintf( buf, len + 1, "{" kIOPathMatchKey "='" kIODeviceTreePlane ":" );
+        comp = buf + len;
+
+        if( alias) {
+            len = strlen( alias );
+            maxLen -= len;
+            if( maxLen <= 0)
+                continue;
+
+            strlcpy( comp, alias, len + 1 );
+            comp += len;
+        }
+
+        if ( (look - path)) {
+            len = (look - path);
+            maxLen -= len;
+            if( maxLen <= 0)
+                continue;
+
+            strlcpy( comp, path, len + 1 );
+            comp += len;
+        }
+			
+        if ( lun != -1 )
+        {
+            len = strlen( "/@hhhhhhhh,hhhhhhhh:dddddddddd';}" );
+            maxLen -= len;
+            if( maxLen <= 0)
+                continue;
+
+            snprintf( comp, len + 1, "/@%lx,%lx:%ld';}", unit, lun, partition );
+        }
+        else
+        {
+            len = strlen( "/@hhhhhhhh:dddddddddd';}" );
+            maxLen -= len;
+            if( maxLen <= 0)
+                continue;
+
+            snprintf( comp, len + 1, "/@%lx:%ld';}", unit, partition );
+        }
 		
         return( OSDynamicCast(OSDictionary, OSUnserialize( buf, 0 )) );
 
@@ -371,18 +389,17 @@ OSDictionary * IOOFPathMatching( const char * path, char * buf, int maxLen )
 
 	len = strlen( kIODeviceTreePlane ":" );
 	maxLen -= len;
-	if( maxLen < 0)
+	if( maxLen <= 0)
 	    continue;
 
-	strcpy( buf, kIODeviceTreePlane ":" );
+	strlcpy( buf, kIODeviceTreePlane ":", len + 1 );
 	comp = buf + len;
 
 	len = strlen( path );
 	maxLen -= len;
-	if( maxLen < 0)
+	if( maxLen <= 0)
 	    continue;
-        strncpy( comp, path, len );
-        comp[ len ] = 0;
+	strlcpy( comp, path, len + 1 );
 
 	matching = OSDictionary::withCapacity( 1 );
 	if( !matching)
@@ -442,7 +459,7 @@ IOService * IOFindMatchingChild( IOService * service )
 
 static int didRam = 0;
 
-kern_return_t IOFindBSDRoot( char * rootName,
+kern_return_t IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 				dev_t * root, u_int32_t * oflags )
 {
     mach_timespec_t	t;
@@ -726,7 +743,7 @@ kern_return_t IOFindBSDRoot( char * rootName,
 
 	iostr = (OSString *) service->getProperty( kIOBSDNameKey );
 	if( iostr)
-	    strcpy( rootName, iostr->getCStringNoCopy() );
+	    strlcpy( rootName, iostr->getCStringNoCopy(), rootNameSize );
 	off = (OSNumber *) service->getProperty( kIOBSDMajorKey );
 	if( off)
 	    mjr = off->unsigned32BitValue();
@@ -740,7 +757,7 @@ kern_return_t IOFindBSDRoot( char * rootName,
     } else {
 
 	IOLog( "Wait for root failed\n" );
-        strcpy( rootName, "en0");
+        strlcpy( rootName, "en0", rootNameSize );
         flags |= 1;
     }
 

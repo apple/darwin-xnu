@@ -20,7 +20,8 @@ extern char  g_target_path[ PATH_MAX ];
  *  **************************************************************************************************************
  */
 int shm_tests( void * the_argp )
-{
+{	
+#if !TARGET_OS_EMBEDDED
 	int					my_err;
 	int					my_shm_id;
 	void *				my_shm_addr = NULL;
@@ -74,6 +75,10 @@ test_passed_exit:
 		shmdt( my_shm_addr );
 	}
 	return( my_err );
+#else
+	printf( "\t--> Not supported on EMBEDDED TARGET\n" );
+	return 0;
+#endif
 }
 
 

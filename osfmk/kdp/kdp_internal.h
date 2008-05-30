@@ -42,6 +42,8 @@ typedef struct {
     unsigned short		exception_port;
     unsigned char		exception_seq;
     boolean_t			exception_ack_needed;
+    int				kdp_cpu;
+    thread_t			kdp_thread;
 } kdp_glob_t;
 
 extern kdp_glob_t	kdp;

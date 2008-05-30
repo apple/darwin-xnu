@@ -38,6 +38,7 @@
 #include <sys/fasttrap_impl.h>
 #include <sys/dtrace.h>
 #include <sys/dtrace_impl.h>
+extern dtrace_id_t dtrace_probeid_error;
 
 #include "fasttrap_regset.h"
 
@@ -717,7 +718,10 @@ fasttrap_return_common(x86_saved_state_t *regs, user_addr_t pc, pid_t pid,
 		    id->fti_probe->ftp_fsize)
 			continue;
 
-		if (p_model == DATAMODEL_LP64) {
+		if (ISSET(current_proc()->p_lflag, P_LNOATTACH)) {
+			dtrace_probe(dtrace_probeid_error, 0 /* state */, id->fti_probe->ftp_id, 
+				     1 /* ndx */, -1 /* offset */, DTRACEFLT_UPRIV);
+		} else if (p_model == DATAMODEL_LP64) {
 			dtrace_probe(id->fti_probe->ftp_id,
 				     pc - id->fti_probe->ftp_faddr,
 				     regs64->rax, regs64->rdx, 0, 0);
@@ -1028,7 +1032,10 @@ fasttrap_pid_probe32(x86_saved_state_t *regs)
 		for (id = tp->ftt_ids; id != NULL; id = id->fti_next) {
 			fasttrap_probe_t *probe = id->fti_probe;
 			
-			if (id->fti_ptype == DTFTP_ENTRY) {
+			if (ISSET(current_proc()->p_lflag, P_LNOATTACH)) {
+				dtrace_probe(dtrace_probeid_error, 0 /* state */, probe->ftp_id, 
+					     1 /* ndx */, -1 /* offset */, DTRACEFLT_UPRIV);
+			} else if (id->fti_ptype == DTFTP_ENTRY) {
 				/*
 				 * We note that this was an entry
 				 * probe to help ustack() find the
@@ -1564,7 +1571,10 @@ fasttrap_pid_probe64(x86_saved_state_t *regs)
 		for (id = tp->ftt_ids; id != NULL; id = id->fti_next) {
 			fasttrap_probe_t *probe = id->fti_probe;
 			
-			if (id->fti_ptype == DTFTP_ENTRY) {
+			if (ISSET(current_proc()->p_lflag, P_LNOATTACH)) {
+				dtrace_probe(dtrace_probeid_error, 0 /* state */, probe->ftp_id, 
+					     1 /* ndx */, -1 /* offset */, DTRACEFLT_UPRIV);
+			} else if (id->fti_ptype == DTFTP_ENTRY) {
 				/*
 				 * We note that this was an entry
 				 * probe to help ustack() find the

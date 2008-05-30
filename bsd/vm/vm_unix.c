@@ -527,6 +527,7 @@ task_for_pid(
 	if (p->task != TASK_NULL) {
 		/* If we aren't root and target's task access port is set... */
 		if (!kauth_cred_issuser(kauth_cred_get()) &&
+			p != current_proc() &&
 			(task_get_task_access_port(p->task, &tfpport) == 0) &&
 			(tfpport != IPC_PORT_NULL)) {
 

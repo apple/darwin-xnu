@@ -3912,13 +3912,12 @@ fileproc_drain(proc_t p, struct fileproc * fp)
 
 	        lck_mtx_convert_spin(&p->p_fdmlock);
 
+		if (fp->f_fglob->fg_ops->fo_drain) {
+			(*fp->f_fglob->fg_ops->fo_drain)(fp, &context);
+		}
 		if (((fp->f_flags & FP_INSELECT)== FP_INSELECT)) {
 			wait_queue_wakeup_all((wait_queue_t)fp->f_waddr, &selwait, THREAD_INTERRUPTED);
-		} else  {
-			if (fp->f_fglob->fg_ops->fo_drain) {
-				(*fp->f_fglob->fg_ops->fo_drain)(fp, &context);
-			}
-		}
+		} 
 		p->p_fpdrainwait = 1;
 
 		msleep(&p->p_fpdrainwait, &p->p_fdmlock, PRIBIO, "fpdrain", NULL);

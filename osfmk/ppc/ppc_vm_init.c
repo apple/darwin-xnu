@@ -296,12 +296,12 @@ void ppc_vm_init(uint64_t mem_limit, boot_args *args)
 
 	}
 
-	pmap_enter(kernel_pmap, (vm_map_offset_t)&sharedPage,
+	pmap_enter(kernel_pmap, (vm_map_offset_t)(uintptr_t)&sharedPage,
 		(ppnum_t)&sharedPage >> 12, /* Make sure the sharedPage is mapped */
 		VM_PROT_READ|VM_PROT_WRITE, 
 		VM_WIMG_USE_DEFAULT, TRUE);
 
-	pmap_enter(kernel_pmap, (vm_map_offset_t)&lowGlo.lgVerCode,
+	pmap_enter(kernel_pmap, (vm_map_offset_t)(uintptr_t)&lowGlo.lgVerCode,
 		(ppnum_t)&lowGlo.lgVerCode >> 12,	/* Make sure the low memory globals are mapped */
 		VM_PROT_READ|VM_PROT_WRITE, 
 		VM_WIMG_USE_DEFAULT, TRUE);

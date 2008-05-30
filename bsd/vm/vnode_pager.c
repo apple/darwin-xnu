@@ -379,9 +379,9 @@ vnode_pagein(
 		goto out;
 	}
 	if (upl == (upl_t)NULL) {
-	        if (size > (MAX_UPL_TRANSFER * PAGE_SIZE)) {
+	        if (size > (MAX_UPL_SIZE * PAGE_SIZE)) {
 
-		  panic("vnode_pagein: size = %x\n", size);
+		  	panic("vnode_pagein: size = %x\n", size);
 
 		        result = PAGER_ERROR;
 			error  = PAGER_ERROR;
@@ -391,7 +391,7 @@ vnode_pagein(
 
 		if (upl == (upl_t)NULL) {
 
-		  panic("vnode_pagein: ubc_create_upl failed\n");
+		  	panic("vnode_pagein: ubc_create_upl failed\n");
 
 		        result =  PAGER_ABSENT;
 			error = PAGER_ABSENT;

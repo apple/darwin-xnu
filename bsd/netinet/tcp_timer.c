@@ -729,15 +729,15 @@ tcp_timers(tp, timer)
 		 * growth is 2 mss.  We don't allow the threshhold
 		 * to go below this.)
 		 */
-		{
-		u_int win = min(tp->snd_wnd, tp->snd_cwnd) / 2 / tp->t_maxseg;
-		if (win < 2)
-			win = 2;
-		tp->snd_cwnd = tp->t_maxseg;
-		tp->snd_ssthresh = win * tp->t_maxseg;
-		tp->t_bytes_acked = 0;
-		tp->t_dupacks = 0;
-		tp->t_unacksegs = 0;
+		if (tp->t_state >=  TCPS_ESTABLISHED) {
+			u_int win = min(tp->snd_wnd, tp->snd_cwnd) / 2 / tp->t_maxseg;
+			if (win < 2)
+				win = 2;
+			tp->snd_cwnd = tp->t_maxseg;
+			tp->snd_ssthresh = win * tp->t_maxseg;
+			tp->t_bytes_acked = 0;
+			tp->t_dupacks = 0;
+			tp->t_unacksegs = 0;
 		}
 		EXIT_FASTRECOVERY(tp);
 		(void) tcp_output(tp);

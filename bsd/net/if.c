@@ -653,7 +653,7 @@ ifa_ifwithnet(
 	struct ifaddr *ifa = NULL;
 	struct ifaddr *ifa_maybe = (struct ifaddr *) 0;
 	u_int af = addr->sa_family;
-	char *addr_data = addr->sa_data, *cplim;
+	const char *addr_data = addr->sa_data, *cplim;
 
 	ifnet_head_lock_shared();
 	/*
@@ -681,7 +681,7 @@ ifa_ifwithnet(
 		ifnet_lock_shared(ifp);
 		for (ifa = ifp->if_addrhead.tqh_first; ifa;
 		     ifa = ifa->ifa_link.tqe_next) {
-			char *cp, *cp2, *cp3;
+			const char *cp, *cp2, *cp3;
 
 			if (ifa->ifa_addr->sa_family != af)
 next:				continue;

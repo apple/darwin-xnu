@@ -84,6 +84,7 @@ iocpu_run_platform_actions(queue_head_t * queue, uint32_t first_priority, uint32
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+#define kBootCPUNumber  0
 
 static iocpu_platform_action_entry_t * gIOAllActionsQueue;
 static queue_head_t gIOSleepActionQueue;
@@ -293,6 +294,7 @@ void IOCPUSleepKernel(void)
 {
     long cnt, numCPUs;
     IOCPU *target;
+    IOCPU *bootCPU = NULL;
   
     kprintf("IOCPUSleepKernel\n");
 
@@ -327,12 +329,25 @@ void IOCPUSleepKernel(void)
     numCPUs = gIOCPUs->getCount();
     // Sleep the CPUs.
     cnt = numCPUs;
-    while (cnt--) {
-	target = OSDynamicCast(IOCPU, gIOCPUs->getObject(cnt));
-	if (target->getCPUState() == kIOCPUStateRunning) {
-	    target->haltCPU();
-	}
+    while (cnt--) 
+    {
+        target = OSDynamicCast(IOCPU, gIOCPUs->getObject(cnt));
+        
+        // We make certain that the bootCPU is the last to sleep
+        // We'll skip it for now, and halt it after finishing the
+        // non-boot CPU's.
+        if (target->getCPUNumber() == kBootCPUNumber) 
+        {
+            bootCPU = target;
+        } else if (target->getCPUState() == kIOCPUStateRunning) 
+        {
+            target->haltCPU();
+        }
     }
+
+    // Now sleep the boot CPU.
+    if (bootCPU)
+        bootCPU->haltCPU();
 
     iocpu_run_platform_actions(&gIOWakeActionQueue, 0, 0UL-1,
 				    NULL, NULL, NULL);
@@ -351,11 +366,16 @@ void IOCPUSleepKernel(void)
 	IOPanic("gIOWakeActionQueue");
   
     // Wake the other CPUs.
-    for (cnt = 1; cnt < numCPUs; cnt++) {
-	target = OSDynamicCast(IOCPU, gIOCPUs->getObject(cnt));
-	if (target->getCPUState() == kIOCPUStateStopped) {
-	    processor_start(target->getMachProcessor());
-	}
+    for (cnt = 0; cnt < numCPUs; cnt++) 
+    {
+        target = OSDynamicCast(IOCPU, gIOCPUs->getObject(cnt));
+        
+        // Skip the already-woken boot CPU.
+        if ((target->getCPUNumber() != kBootCPUNumber)
+            && (target->getCPUState() == kIOCPUStateStopped))
+        {
+            processor_start(target->getMachProcessor());
+        }
     }
 }
 

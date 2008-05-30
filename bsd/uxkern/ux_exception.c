@@ -126,7 +126,9 @@ ux_handler(void)
 			(void *) &ux_exception_port) != MACH_MSG_SUCCESS)
 		panic("ux_handler: object_copyin(ux_exception_port) failed");
 
+    proc_list_lock();
     thread_wakeup(&ux_exception_port);
+    proc_list_unlock();
 
     /* Message handling loop. */
 
@@ -185,10 +187,11 @@ ux_handler_init(void)
 {
 	ux_exception_port = MACH_PORT_NULL;
 	(void) kernel_thread(kernel_task, ux_handler);
+	proc_list_lock();
 	if (ux_exception_port == MACH_PORT_NULL)  {
-		assert_wait(&ux_exception_port, THREAD_UNINT);
-		thread_block(THREAD_CONTINUE_NULL);
+		(void)msleep(&ux_exception_port, proc_list_mlock, 0, "ux_handler_wait", 0);
 	}
+	proc_list_unlock();
 }
 
 kern_return_t

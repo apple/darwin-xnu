@@ -56,7 +56,8 @@ enum {
 enum {
   kOFVariablePermRootOnly = 0,
   kOFVariablePermUserRead,
-  kOFVariablePermUserWrite
+  kOFVariablePermUserWrite,
+  kOFVariablePermKernelOnly
 };
 
 class IODTNVRAM : public IOService

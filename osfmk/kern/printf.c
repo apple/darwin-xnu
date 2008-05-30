@@ -435,12 +435,13 @@ __doprnt(
 
 		    n = 0;
 
-		    while (*p != '\0') {
-			if (++n > prec || (length > 0 && n > length))
-			    break;
-
-			(*putc)(*p++, arg);
-			nprinted++;
+		    while ((n < prec) && (!(length > 0 && n >= length))) {
+			    if (*p == '\0') {
+				    break;
+			    }
+			    (*putc)(*p++, arg);
+			    nprinted++;
+			    n++;
 		    }
 
 		    if (n < length && ladjust) {

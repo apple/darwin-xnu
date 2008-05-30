@@ -536,7 +536,8 @@ vm_fault_zero_page(vm_page_t m, boolean_t no_zero_fill)
 
 	if (!IP_VALID(memory_manager_default) &&
 		(m->object->purgable == VM_PURGABLE_DENY ||
-		 m->object->purgable == VM_PURGABLE_NONVOLATILE)) {
+		 m->object->purgable == VM_PURGABLE_NONVOLATILE ||
+		 m->object->purgable == VM_PURGABLE_VOLATILE )) {
 		vm_page_lock_queues();
 
                 queue_enter(&vm_page_queue_throttled, m, vm_page_t, pageq);

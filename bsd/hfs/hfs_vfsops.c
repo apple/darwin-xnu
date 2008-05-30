@@ -75,6 +75,7 @@
 #include <sys/kauth.h>
 
 #include <sys/ubc.h>
+#include <sys/ubc_internal.h>
 #include <sys/vnode_internal.h>
 #include <sys/mount_internal.h>
 #include <sys/sysctl.h>
@@ -1608,7 +1609,7 @@ hfs_statfs(struct mount *mp, register struct vfsstatfs *sbp, __unused vfs_contex
 	freeCNIDs = (u_long)0xFFFFFFFF - (u_long)vcb->vcbNxtCNID;
 
 	sbp->f_bsize = (u_int32_t)vcb->blockSize;
-	sbp->f_iosize = (size_t)(MAX_UPL_TRANSFER * PAGE_SIZE);
+	sbp->f_iosize = (size_t)cluster_max_io_size(mp, 0);
 	sbp->f_blocks = (u_int64_t)((unsigned long)vcb->totalBlocks);
 	sbp->f_bfree = (u_int64_t)((unsigned long )hfs_freeblks(hfsmp, 0));
 	sbp->f_bavail = (u_int64_t)((unsigned long )hfs_freeblks(hfsmp, 1));
@@ -4418,7 +4419,7 @@ end_iteration:
 			if (error)
 				break;
 			error = hfs_relocate(rvp, hfsmp->hfs_metazone_end + 1, kauth_cred_get(), current_proc());
-			vnode_put(rvp);
+			VTOC(rvp)->c_flag |= C_NEED_RVNODE_PUT;
 			if (error)
 				break;
 		}
@@ -4565,7 +4566,7 @@ hfs_vfs_getattr(struct mount *mp, struct vfs_attr *fsap, __unused vfs_context_t 
 	VFSATTR_RETURN(fsap, f_filecount, (u_int64_t)hfsmp->vcbFilCnt);
 	VFSATTR_RETURN(fsap, f_dircount, (u_int64_t)hfsmp->vcbDirCnt);
 	VFSATTR_RETURN(fsap, f_maxobjcount, (u_int64_t)0xFFFFFFFF);
-	VFSATTR_RETURN(fsap, f_iosize, (size_t)(MAX_UPL_TRANSFER * PAGE_SIZE));
+	VFSATTR_RETURN(fsap, f_iosize, (size_t)cluster_max_io_size(mp, 0));
 	VFSATTR_RETURN(fsap, f_blocks, (u_int64_t)hfsmp->totalBlocks);
 	VFSATTR_RETURN(fsap, f_bfree, (u_int64_t)hfs_freeblks(hfsmp, 0));
 	VFSATTR_RETURN(fsap, f_bavail, (u_int64_t)hfs_freeblks(hfsmp, 1));

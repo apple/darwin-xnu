@@ -16,6 +16,7 @@
 #include <AvailabilityMacros.h>	/* for determination of Mac OS X version (tiger, leopard, etc.) */
 #include <libkern/OSByteOrder.h> /* for OSSwap32() */
 
+
 extern char		g_target_path[ PATH_MAX ];
 extern int		g_skip_setuid_tests;
 extern int		g_is_under_rosetta;
@@ -924,12 +925,22 @@ int access_chmod_fchmod_test( void * the_argp )
 		goto test_failed_exit;
 	}
 	else if ( my_err == -1  ) {
+		int tmp = 0;
+		tmp = getuid( );
+		
 		/* special case when running as root - we get back EPERM when running as root */
 		my_err = errno;
-		if ( (getuid( ) == 0 && my_err != EPERM) || (getuid( ) != 0 && my_err != EACCES) ) {
+#if !TARGET_OS_EMBEDDED
+		if ( ( tmp == 0 && my_err != EPERM) || (tmp != 0 && my_err != EACCES) ) {
 			printf( "access failed with errno %d - %s. \n", my_err, strerror( my_err ) );
 			goto test_failed_exit;
 		}
+#else
+		if ( ( tmp == 0 && my_err != EACCES) || (tmp != 0 && my_err != EACCES) ) {
+			printf( "access failed with errno %d - %s. \n", my_err, strerror( my_err ) );
+			goto test_failed_exit;
+		}
+#endif
 	}
 
 	/* verify correct modes are set */
@@ -994,6 +1005,7 @@ test_passed_exit:
  */
 int chown_fchown_lchown_lstat_symlink_test( void * the_argp )
 {
+#if !TARGET_OS_EMBEDDED
 	int				my_err, my_group_count, i;
 	int				my_fd = -1;
 	char *			my_pathp = NULL;
@@ -1039,6 +1051,8 @@ int chown_fchown_lchown_lstat_symlink_test( void * the_argp )
 	
 	/* set up by getting a list of groups */
 	my_group_count = getgroups( NGROUPS_MAX, &my_groups[0] );
+	printf("my_group_count: %d\n", my_group_count);
+	
 	if ( my_group_count == -1 || my_group_count < 1 ) {
 		printf( "getgroups call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
 		goto test_failed_exit;
@@ -1053,6 +1067,9 @@ int chown_fchown_lchown_lstat_symlink_test( void * the_argp )
 	/* now change group owner to something other than current value */
 	my_orig_gid = my_sb.st_gid;
 	my_orig_uid = my_sb.st_uid;
+	
+	printf( "st_gid: %d, st_uid: %d, my_group_count: %d\n" );
+	
 	for ( i = 0; i < my_group_count; i++ ) {
 		if ( my_orig_gid != my_groups[ i ] ) {
 			if ( my_new_gid1 == 0 ) {
@@ -1174,6 +1191,10 @@ test_passed_exit:
 		free( my_link_pathp );
 	 }
 	return( my_err );
+#else
+	printf( "\t--> Test not designed for EMBEDDED TARGET\n" );
+	return 0;
+#endif
 }
 
 /*  **************************************************************************************************************
@@ -1361,7 +1382,7 @@ int fs_stat_tests( void * the_argp )
 		printf( "statfs and getattrlist results do not match for volume block size  \n" );
 		goto test_failed_exit;
 	} 
-	
+		
 	my_err = 0;
 	goto test_passed_exit;
 
@@ -1377,6 +1398,7 @@ test_passed_exit:
 	 if ( my_buffer64p != NULL ) {
 		free( my_buffer64p );
 	 }
+	 
 	return( my_err );
 }
 
@@ -1903,8 +1925,7 @@ int execve_kill_vfork_test( void * the_argp )
 	char *	errmsg = NULL; 
 	char * argvs[2] = {"", NULL};
 	int bits = get_bits();		/* Gets actual processor bit-ness. */
-
-
+	
 	if (bits != 32 && bits != 64) {
 		printf("Determination of processor bit-ness failed, get_bits() returned %d.\n", get_bits());
 		return(-1);
@@ -1914,6 +1935,7 @@ int execve_kill_vfork_test( void * the_argp )
 		errmsg = "get_architecture() could not determine the CPU architecture.\n";
 		goto test_failed_exit;
 	}
+	
 	if (get_architecture() == INTEL) {
 		if	(bits == 64 && sizeof(long) == 8) {
 			/*
@@ -2076,6 +2098,21 @@ int execve_kill_vfork_test( void * the_argp )
 				goto test_failed_exit;
 		}
 	}
+	else if(get_architecture() == ARM) {
+		if	(bits == 32) {
+
+			/* Running on arm hardware. Check cases 2. */
+			errmsg = "execve failed: from arm forking and exec()ing 32-bit arm process.\n";
+			argvs[0] = "sleep-arm";
+			if (do_execve_test("helpers/sleep-arm", argvs, NULL, 1))
+				goto test_failed_exit;
+
+			/* Test posix_spawn for arm (should succeed) */
+			errmsg = NULL;
+			if (do_spawn_test(CPU_TYPE_ARM, 0))
+				goto test_failed_exit;
+		}
+	}
 	else {
 		/* Just in case someone decides we need more architectures in the future */
 		printf("get_architecture() returned unknown architecture");
@@ -2097,6 +2134,7 @@ test_failed_exit:
  */
 int groups_test( void * the_argp )
 {
+#if !TARGET_OS_EMBEDDED
 	int			my_err, i;
 	int			my_group_count, my_orig_group_count;
 	gid_t		my_real_gid;
@@ -2116,6 +2154,8 @@ int groups_test( void * the_argp )
 
 	/* start by getting list of groups the current user belongs to */
 	my_orig_group_count = getgroups( NGROUPS_MAX, &my_groups[0] );
+	printf("my_orig_group_count: %d\n", my_orig_group_count);
+
 	if ( my_orig_group_count == -1 || my_orig_group_count < 1 ) {
 		printf( "getgroups call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
 		goto test_failed_exit;
@@ -2148,6 +2188,8 @@ int groups_test( void * the_argp )
 	}
 
 	my_group_count = getgroups( NGROUPS_MAX, &my_groups[0] );
+	printf("my_group_count: %d\n", my_group_count);
+	
 	if ( my_group_count == -1 || my_group_count < 1 ) {
 		printf( "getgroups call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
 		goto test_failed_exit;
@@ -2224,6 +2266,10 @@ test_failed_exit:
 	
 test_passed_exit:
 	return( my_err );
+#else
+	printf( "\t--> Test not designed for EMBEDDED TARGET\n" );
+	return 0;
+#endif
 }
 
 
@@ -3192,10 +3238,10 @@ int process_group_test( void * the_argp )
 	my_pid = getpid( );
 	my_process_group = getpgrp( );
 	 
-	
 	/* test getpgrp and getpgid - they should return the same results when 0 is passed to getpgid */
 	if ( my_process_group != getpgid( 0 ) ) {
 		printf( "getpgrp and getpgid did not return the same process group ID \n" );
+		printf( "getpgid: %d, my_process_group: %d\n", getpgid( 0 ), my_process_group );
 		goto test_failed_exit;
 	}
 
@@ -3868,6 +3914,7 @@ test_passed_exit:
  */
 int quotactl_test( void * the_argp )
 {
+#if !TARGET_OS_EMBEDDED
 	int				my_err;
 	int				is_quotas_on = 0;
 	struct dqblk	my_quota_blk;
@@ -3905,6 +3952,10 @@ test_failed_exit:
 	
 test_passed_exit:
 	return( my_err );
+#else
+	printf( "\t--> Not supported on EMBEDDED TARGET\n" );
+	return 0;
+#endif
 }
 
 /*  **************************************************************************************************************
@@ -4080,6 +4131,7 @@ int directory_tests( void * the_argp )
 	my_attrlist.bitmapcount = ATTR_BIT_MAP_COUNT;
 	my_attrlist.commonattr = (ATTR_CMN_OBJTYPE | ATTR_CMN_OBJID | ATTR_CMN_BKUPTIME); 
 	my_err = getattrlist( my_pathp, &my_attrlist, &my_attr_buf[0], sizeof(my_attr_buf[0]), 0 );
+
 	if ( my_err != 0 ) {
 		if ( errno == ENOTSUP && is_ufs ) {
 			/* getattr calls not supported on ufs */
@@ -4147,7 +4199,8 @@ int directory_tests( void * the_argp )
 	goto test_passed_exit;
 
 test_failed_exit:
-	my_err = -1;
+	if(my_err != 0)
+		my_err = -1;
 	
 test_passed_exit:
 	if ( my_fd != -1 )
@@ -4201,6 +4254,7 @@ int exchangedata_test( void * the_argp )
 	/* create a test file */
 	my_err = create_random_name( my_file1_pathp, 1 );
 	if ( my_err != 0 ) {
+		printf( "create_random_name my_err: %d\n", my_err );
 		goto test_failed_exit;
 	}
 	my_fd1 = open( my_file1_pathp, O_RDWR, 0 );
@@ -4226,6 +4280,7 @@ int exchangedata_test( void * the_argp )
 	/* create a test file */
 	my_err = create_random_name( my_file2_pathp, 1 );
 	if ( my_err != 0 ) {
+		printf( "create_random_name my_err: %d\n", my_err );
 		goto test_failed_exit;
 	}
 	my_fd2 = open( my_file2_pathp, O_RDWR, 0 );
@@ -4514,6 +4569,7 @@ test_passed_exit:
  */
 int aio_tests( void * the_argp )
 {
+#if !TARGET_OS_EMBEDDED
 	int					my_err, i;
 	char *				my_pathp;
 	struct aiocb *		my_aiocbp;
@@ -4776,6 +4832,10 @@ test_passed_exit:
 		}
 	}
 	return( my_err );
+#else
+	printf( "\t--> Not supported on EMBEDDED TARGET\n" );
+	return 0;
+#endif
 }
 
 
@@ -4981,6 +5041,7 @@ test_passed_exit:
  */
 int message_queue_tests( void * the_argp )
 {
+#if !TARGET_OS_EMBEDDED
 	int					my_err;
 	int					my_msg_queue_id = -1;
 	ssize_t				my_result;
@@ -5076,6 +5137,10 @@ test_passed_exit:
 		msgctl( my_msg_queue_id, IPC_RMID, NULL );
 	}
 	return( my_err );
+#else
+	printf( "\t--> Not supported on EMBEDDED TARGET \n" );
+	return 0;
+#endif
 }
 
 

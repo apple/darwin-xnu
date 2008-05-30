@@ -380,6 +380,7 @@ typedef struct memory_object_attr_info	memory_object_attr_info_data_t;
  */
 #ifdef PRIVATE
 #define MAX_UPL_TRANSFER 256
+#define MAX_UPL_SIZE    4096
 
 struct upl_page_info {
 	ppnum_t		phys_addr;	/* physical page index number */

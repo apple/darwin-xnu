@@ -508,7 +508,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
     // (as long as it's not an event type that can never be the
     // same as a previous event)
     //
-    if (type != FSE_CREATE_FILE && type != FSE_DELETE && type != FSE_RENAME && type != FSE_EXCHANGE) {
+    if (type != FSE_CREATE_FILE && type != FSE_DELETE && type != FSE_RENAME && type != FSE_EXCHANGE && type != FSE_CHOWN) {
 	void *ptr=NULL;
 	int   vid=0, was_str=0, nlen=0;
 
@@ -963,7 +963,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 		VATTR_WANTED(&va, va_mode);
 		VATTR_WANTED(&va, va_uid);
 		VATTR_WANTED(&va, va_gid);
-		if ((ret = vnode_getattr(vp, &va, ctx)) != 0) {
+		if ((ret = vnode_getattr(vp, &va, vfs_context_kernel())) != 0) {
 		    // printf("add_fsevent: failed to getattr on vp %p (%d)\n", cur->fref.vp, ret);
 		    cur->str = NULL;
 		    error = EINVAL;
@@ -2551,7 +2551,7 @@ release_pathbuff(char *path)
 }
 
 int
-get_fse_info(struct vnode *vp, fse_info *fse, vfs_context_t ctx)
+get_fse_info(struct vnode *vp, fse_info *fse, __unused vfs_context_t ctx)
 {
     struct vnode_attr va;
 
@@ -2569,7 +2569,7 @@ get_fse_info(struct vnode *vp, fse_info *fse, vfs_context_t ctx)
 	}
     }
     
-    if (vnode_getattr(vp, &va, ctx) != 0) {
+    if (vnode_getattr(vp, &va, vfs_context_kernel()) != 0) {
 	memset(fse, 0, sizeof(fse_info));
 	return -1;
     }

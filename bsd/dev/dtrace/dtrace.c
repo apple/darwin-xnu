@@ -1003,6 +1003,11 @@ dtrace_priv_proc_destructive(dtrace_state_t *state)
 {
 	int action = state->dts_cred.dcr_action;
 
+#if defined(__APPLE__)
+	if (ISSET(current_proc()->p_lflag, P_LNOATTACH))
+		goto bad;
+#endif /* __APPLE__ */
+
 	if (((action & DTRACE_CRA_PROC_DESTRUCTIVE_ALLZONE) == 0) &&
 	    dtrace_priv_proc_common_zone(state) == 0)
 		goto bad;
@@ -1026,6 +1031,11 @@ bad:
 static int
 dtrace_priv_proc_control(dtrace_state_t *state)
 {
+#if defined(__APPLE__)
+	if (ISSET(current_proc()->p_lflag, P_LNOATTACH))
+		goto bad;
+#endif /* __APPLE__ */
+
 	if (state->dts_cred.dcr_action & DTRACE_CRA_PROC_CONTROL)
 		return (1);
 
@@ -1034,6 +1044,9 @@ dtrace_priv_proc_control(dtrace_state_t *state)
 	    dtrace_priv_proc_common_nocd())
 		return (1);
 
+#if defined(__APPLE__)
+bad:
+#endif /* __APPLE__ */
 	cpu_core[CPU->cpu_id].cpuc_dtrace_flags |= CPU_DTRACE_UPRIV;
 
 	return (0);
@@ -1042,9 +1055,17 @@ dtrace_priv_proc_control(dtrace_state_t *state)
 static int
 dtrace_priv_proc(dtrace_state_t *state)
 {
+#if defined(__APPLE__)
+	if (ISSET(current_proc()->p_lflag, P_LNOATTACH))
+		goto bad;
+#endif /* __APPLE__ */
+
 	if (state->dts_cred.dcr_action & DTRACE_CRA_PROC)
 		return (1);
 
+#if defined(__APPLE__)
+bad:
+#endif /* __APPLE__ */
 	cpu_core[CPU->cpu_id].cpuc_dtrace_flags |= CPU_DTRACE_UPRIV;
 
 	return (0);
@@ -3040,7 +3061,12 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 
 		if (subr == DIF_SUBR_COPYIN) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
+#if !defined(__APPLE__)
 			dtrace_copyin(tupregs[0].dttk_value, dest, size);
+#else
+			if (dtrace_priv_proc(state))
+				dtrace_copyin(tupregs[0].dttk_value, dest, size);
+#endif /* __APPLE__ */
 			DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
 		}
 
@@ -3065,7 +3091,12 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		}
 
 		DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
+#if !defined(__APPLE__)
 		dtrace_copyin(tupregs[0].dttk_value, dest, size);
+#else
+		if (dtrace_priv_proc(state))
+			dtrace_copyin(tupregs[0].dttk_value, dest, size);
+#endif /* __APPLE__ */
 		DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
 		break;
 	}
@@ -3090,7 +3121,12 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		}
 
 		DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
+#if !defined(__APPLE__)
 		dtrace_copyinstr(tupregs[0].dttk_value, dest, size);
+#else
+		if (dtrace_priv_proc(state))
+			dtrace_copyinstr(tupregs[0].dttk_value, dest, size);
+#endif /* __APPLE__ */
 		DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
 
 		((char *)dest)[size - 1] = '\0';
@@ -5295,6 +5331,31 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 	now = dtrace_gethrtime(); /* must not precede dtrace_calc_thread_recent_vtime() call! */
 #endif /* __APPLE__ */
 
+#if defined(__APPLE__)
+	/*
+	 * A provider may call dtrace_probe_error() in lieu of dtrace_probe() in some circumstances.
+	 * See, e.g. fasttrap_isa.c. However the provider has no access to ECB context, so passes
+	 * NULL through "arg0" and the probe_id of the ovedrriden probe as arg1. Detect that here
+	 * and cons up a viable state (from the probe_id).
+	 */
+	if (dtrace_probeid_error == id && NULL == arg0) {
+		dtrace_id_t ftp_id = (dtrace_id_t)arg1;
+		dtrace_probe_t *ftp_probe = dtrace_probes[ftp_id - 1];
+		dtrace_ecb_t *ftp_ecb = ftp_probe->dtpr_ecb;
+
+		if (NULL != ftp_ecb) {
+			dtrace_state_t *ftp_state = ftp_ecb->dte_state;
+
+			arg0 = (uint64_t)(uintptr_t)ftp_state;
+			arg1 = ftp_ecb->dte_epid;
+			/*
+			 * args[2-4] established by caller.
+			 */
+			ftp_state->dts_arg_error_illval = -1; /* arg5 */
+		}
+	}
+#endif /* __APPLE__ */
+
 	mstate.dtms_probe = probe;
 	mstate.dtms_arg[0] = arg0;
 	mstate.dtms_arg[1] = arg1;
@@ -5367,16 +5428,6 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 				continue;
 			}
 		}
-
-#if defined(__APPLE__)
-        /*
-         * If the thread on which this probe has fired belongs to a process marked P_LNOATTACH
-         * then this enabling is not permitted to observe it. Move along, nothing to see here.
-         */
-        if (ISSET(current_proc()->p_lflag, P_LNOATTACH)) {
-            continue;
-        }
-#endif /* __APPLE__ */
 
 		if (ecb->dte_cond) {
 			/*

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -400,7 +400,13 @@ vnode_getnamedstream(vnode_t vp, vnode_t *svpp, const char *name, enum nsoperati
 		vnode_lock(svp);
 		svp->v_flag |= VISNAMEDSTREAM;
 		vnode_unlock(svp);
-		/* Make the file it's parent. */
+		/* Make the file its parent. 
+		 * Note: This parent link helps us distinguish vnodes for 
+		 * shadow stream files from vnodes for resource fork on file
+		 * systems that support named streams natively (both have
+		 * VISNAMEDSTREAM set) by allowing access to mount structure
+		 * for checking MNTK_NAMED_STREAMS bit at many places in the code
+		 */
 		vnode_update_identity(svp, vp, NULL, 0, 0, VNODE_UPDATE_PARENT);
 	}		
 
@@ -426,8 +432,14 @@ vnode_makenamedstream(vnode_t vp, vnode_t *svpp, const char *name, int flags, vf
 		/* Tag the vnode. */
 		vnode_lock(svp);
 		svp->v_flag |= VISNAMEDSTREAM;
-		vnode_unlock(svp);
-		/* Make the file it's parent. */
+		vnode_unlock(svp);		
+		/* Make the file its parent. 
+		 * Note: This parent link helps us distinguish vnodes for 
+		 * shadow stream files from vnodes for resource fork on file
+		 * systems that support named streams natively (both have
+		 * VISNAMEDSTREAM set) by allowing access to mount structure
+		 * for checking MNTK_NAMED_STREAMS bit at many places in the code
+		 */
 		vnode_update_identity(svp, vp, NULL, 0, 0, VNODE_UPDATE_PARENT);
 	}
 	return (error);
@@ -453,6 +465,15 @@ vnode_removenamedstream(vnode_t vp, vnode_t svp, const char *name, int flags, vf
 
 /*
  * Release a named stream shadow file.
+ *
+ * Note: This function is called from two places where we do not need 
+ * to check if the vnode has any references held before deleting the 
+ * shadow file.  Once from vclean() when the vnode is being reclaimed 
+ * and we do not hold any references on the vnode.  Second time from 
+ * default_getnamedstream() when we get an error during shadow stream 
+ * file initialization so that other processes who are waiting for the 
+ * shadow stream file initialization by the creator will get opportunity 
+ * to create and initialize the file again.
  */
 errno_t
 vnode_relenamedstream(vnode_t vp, vnode_t svp, vfs_context_t context)
@@ -462,9 +483,6 @@ vnode_relenamedstream(vnode_t vp, vnode_t svp, vfs_context_t context)
 	char tmpname[48];
 	errno_t err;
 
-	if (vnode_isinuse(svp, 1)) {
-		return (EBUSY);
-	}
 	cache_purge(svp);
 
 	vnode_lock(svp);
@@ -484,11 +502,8 @@ vnode_relenamedstream(vnode_t vp, vnode_t svp, vfs_context_t context)
 	if (err != 0) {
 		return err;
 	}
-	/* Check for busy svp one last time. */
-	if (vnode_isinuse(svp, 1) == 0) {
-		(void) VNOP_REMOVE(dvp, svp, &cn, 0, context);
-		(void) vnode_recycle(svp);
-	}
+	
+	(void) VNOP_REMOVE(dvp, svp, &cn, 0, context);
 	vnode_put(dvp);
 
 	return (0);
@@ -786,9 +801,12 @@ out:
 			wakeup((caddr_t)&svp->v_parent);
 			vnode_unlock(svp);
 		} else {
-			/* On post create errors, get rid of shadow file. */
-			(void)vnode_relenamedstream(vp, svp, context);
-
+			/* On post create errors, get rid of the shadow file. This
+			 * way, if there is another process waiting for initialization
+			 * of the shadow file by the current process, it will wake up
+			 * and retry by creating and initializing the shadow file again.
+			 */
+			(void) vnode_relenamedstream(vp, svp, context);
 			wakeup((caddr_t)&svp->v_parent);
 		}
 	}

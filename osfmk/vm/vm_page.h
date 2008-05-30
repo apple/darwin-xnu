@@ -620,7 +620,7 @@ extern void		vm_page_validate_cs(vm_page_t	page);
 		mem->inactive = FALSE;				\
 		if (!mem->fictitious) {				\
 			vm_page_inactive_count--;		\
-			vm_purgeable_q_advance_all(1);		\
+			vm_purgeable_q_advance_all();		\
 		} else {					\
 			assert(mem->phys_page ==		\
 			       vm_page_fictitious_addr);	\

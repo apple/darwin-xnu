@@ -144,7 +144,9 @@ __private_extern__ void	ubc_destroy_named(vnode_t);
 
 /* internal only */
 __private_extern__ void	cluster_release(struct ubc_info *);
-
+__private_extern__ uint32_t cluster_max_io_size(mount_t, int);
+ 
+ 
 
 /* Flags for ubc_getobject() */
 #define UBC_FLAGS_NONE		0x0000

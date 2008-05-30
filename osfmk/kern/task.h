@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -130,6 +130,7 @@ struct task {
 	queue_head_t		threads;
 	int			thread_count;
 	uint32_t		active_thread_count;
+	processor_set_t			pset_hint;
 	struct affinity_space	*affinity_space;
 
 	/* User-visible scheduling information */

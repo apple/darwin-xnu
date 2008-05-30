@@ -226,30 +226,35 @@ Entry(timer_grab)
  * Nanotime returned in %edx:%eax.
  * Computed from tsc based on the scale factor
  * and an implicit 32 bit shift.
+ * This code must match what _rtc_nanotime_read does in
+ * i386/machine_routines_asm.s.  Failure to do so can
+ * result in "weird" timing results.
  *
  * Uses %eax, %ebx, %ecx, %edx, %esi, %edi.
  */
 #define RNT_INFO		_rtc_nanotime_info
-#define NANOTIME														  \
-0:	movl	RNT_INFO+RNT_TSC_BASE,%esi									; \
-	movl	RNT_INFO+RNT_TSC_BASE+4,%edi								; \
-	rdtsc																; \
-	subl	%esi,%eax						/* tsc - tsc_base */		; \
-	sbbl	%edi,%edx													; \
-	movl	RNT_INFO+RNT_SCALE,%ecx										; \
-	movl	%edx,%ebx						/* delta * scale */			; \
-	mull	%ecx														; \
-	movl	%ebx,%eax													; \
-	movl	%edx,%ebx													; \
-	mull	%ecx														; \
-	addl	%ebx,%eax													; \
-	adcl	$0,%edx							/* add carry into hi */		; \
-	addl	RNT_INFO+RNT_NS_BASE,%eax		/* add ns_base lo */		; \
-	adcl	RNT_INFO+RNT_NS_BASE+4,%edx		/* add ns_base hi */		; \
-	cmpl	RNT_INFO+RNT_TSC_BASE,%esi									; \
-	jne	0b									/* repeat if changed */		; \
-	cmpl	RNT_INFO+RNT_TSC_BASE+4,%edi								; \
-	jne	0b
+#define NANOTIME							\
+	lea	RNT_INFO,%edi						; \
+0:									; \
+	movl	RNT_GENERATION(%edi),%esi	/* being updated? */	; \
+	testl	%esi,%esi						; \
+	jz	0b				/* wait until done */	; \
+	rdtsc								; \
+	subl	RNT_TSC_BASE(%edi),%eax					; \
+	sbbl	RNT_TSC_BASE+4(%edi),%edx	/* tsc - tsc_base */	; \
+	movl	RNT_SCALE(%edi),%ecx		/* * scale factor */	; \
+	movl	%edx,%ebx						; \
+	mull	%ecx							; \
+	movl	%ebx,%eax						; \
+	movl	%edx,%ebx						; \
+	mull	%ecx							; \
+	addl	%ebx,%eax						; \
+	adcl	$0,%edx							; \
+	addl	RNT_NS_BASE(%edi),%eax		/* + ns_base */		; \
+	adcl	RNT_NS_BASE+4(%edi),%edx				; \
+	cmpl	RNT_GENERATION(%edi),%esi	/* check for update */	; \
+	jne	0b				/* do it all again */
+
 
 /*
  * Add 64-bit delta in register dreg : areg to timer pointed to by register treg.

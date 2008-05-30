@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -229,7 +229,8 @@ x86_core_alloc(int cpu)
     core->pcore_num = cpup->cpu_phys_number / lcpus_per_core;
     core->lcore_num = core->pcore_num % cpuid_info()->cpuid_cores_per_package;
 
-    core->flags = X86CORE_FL_PRESENT | X86CORE_FL_READY;
+    core->flags = X86CORE_FL_PRESENT | X86CORE_FL_READY
+	        | X86CORE_FL_HALTED | X86CORE_FL_IDLE;
 
     return(core);
 }

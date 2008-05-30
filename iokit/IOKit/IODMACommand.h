@@ -388,7 +388,7 @@ private:
 			Segment64     segment,
 			void         *segments,
 			UInt32        segmentIndex);
-    IOReturn IODMACommand::walkAll(UInt8 op);
+    IOReturn walkAll(UInt8 op);
 
 public:
 

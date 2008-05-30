@@ -362,7 +362,7 @@ pmap_bootstrap(uint64_t msize, vm_offset_t *first_avail, unsigned int kmapsize)
 	 * Initialize kernel pmap
 	 */
 	kernel_pmap = &kernel_pmap_store;
-	kernel_pmap_phys = (addr64_t)&kernel_pmap_store;
+	kernel_pmap_phys = (addr64_t)(uintptr_t)&kernel_pmap_store;
 	cursor_pmap = &kernel_pmap_store;
 
 	kernel_pmap->pmap_link.next = (queue_t)kernel_pmap;		/* Set up anchor forward */

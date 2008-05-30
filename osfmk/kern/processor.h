@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -86,8 +86,7 @@ struct processor_set {
 	queue_head_t		idle_queue;		/* idle processors */
 	int					idle_count;
 
-	processor_t			low_hint;
-	processor_t			high_hint;
+	processor_t			low_pri;
 
 	int					processor_count;
 
@@ -180,28 +179,12 @@ extern processor_t	cpu_to_processor(
 
 /* Update hints */
 
-#define pset_hint_low(ps, p)	\
-MACRO_BEGIN														\
-	if ((ps)->low_hint != PROCESSOR_NULL) {						\
-		if ((p) != (ps)->low_hint) {							\
-			if ((p)->runq.count < (ps)->low_hint->runq.count)	\
-				(ps)->low_hint = (p);							\
-		}														\
-	}															\
-	else														\
-		(ps)->low_hint = (p);									\
-MACRO_END
-
-#define pset_hint_high(ps, p)	\
-MACRO_BEGIN														\
-	if ((ps)->high_hint != PROCESSOR_NULL) {					\
-		if ((p) != (ps)->high_hint) {							\
-			if ((p)->runq.count > (ps)->high_hint->runq.count)	\
-				(ps)->high_hint = (p);							\
-		}														\
-	}															\
-	else														\
-		(ps)->high_hint = (p);									\
+#define pset_pri_hint(ps, p, pri)		\
+MACRO_BEGIN												\
+	if ((p) != (ps)->low_pri) {							\
+		if ((pri) < (ps)->low_pri->current_pri)			\
+			(ps)->low_pri = (p);						\
+	}													\
 MACRO_END
 
 extern void		processor_bootstrap(void) __attribute__((section("__TEXT, initcode")));
