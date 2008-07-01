@@ -4330,6 +4330,9 @@ advisory_read_ext(vnode_t vp, off_t filesize, off_t f_offset, int resid, int (*c
 	if ( !UBCINFOEXISTS(vp))
 		return(EINVAL);
 
+	if (resid < 0)
+		return(EINVAL);
+
 	max_io_size = cluster_max_io_size(vp->v_mount, CL_READ);
 	
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 60)) | DBG_FUNC_START,
