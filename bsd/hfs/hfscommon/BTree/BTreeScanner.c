@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1996-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -199,8 +199,11 @@ static int FindNextLeafNode(	BTScanState *scanState, Boolean avoidIO )
 		
 		fref = scanState->btcb->fileRefNum;
 		
-		/* This node was read from disk, so it must be swapped/checked. */
-		err = hfs_swap_BTNode(&block, fref, kSwapBTNodeBigToHost);
+		/* This node was read from disk, so it must be swapped/checked.
+		 * Since we are reading multiple nodes, we might have read an 
+		 * unused node.  Therefore we allow swapping of unused nodes.
+		 */
+		err = hfs_swap_BTNode(&block, fref, kSwapBTNodeBigToHost, true);
 		if ( err != noErr ) {
 			printf("FindNextLeafNode: Error from hfs_swap_BTNode (node %u)\n", scanState->nodeNum);
 			continue;

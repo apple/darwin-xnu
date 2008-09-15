@@ -118,6 +118,9 @@ lck_grp_t *  hfs_mutex_group;
 lck_grp_t *  hfs_rwlock_group;
 
 extern struct vnodeopv_desc hfs_vnodeop_opv_desc;
+/* not static so we can re-use in hfs_readwrite.c for build_path */
+int hfs_vfs_vget(struct mount *mp, ino64_t ino, struct vnode **vpp, vfs_context_t context);
+
 
 static int hfs_changefs(struct mount *mp, struct hfs_mount_args *args);
 static int hfs_fhtovp(struct mount *mp, int fhlen, unsigned char *fhp, struct vnode **vpp, vfs_context_t context);
@@ -136,7 +139,6 @@ static int hfs_sync(struct mount *mp, int waitfor, vfs_context_t context);
 static int hfs_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp, 
                       user_addr_t newp, size_t newlen, vfs_context_t context);
 static int hfs_unmount(struct mount *mp, int mntflags, vfs_context_t context);
-static int hfs_vfs_vget(struct mount *mp, ino64_t ino, struct vnode **vpp, vfs_context_t context);
 static int hfs_vptofh(struct vnode *vp, int *fhlenp, unsigned char *fhp, vfs_context_t context);
 
 static int hfs_reclaimspace(struct hfsmount *hfsmp, u_long startblk, u_long reclaimblks, vfs_context_t context);
@@ -372,13 +374,18 @@ hfs_changefs_callback(struct vnode *vp, void *cargs)
 	struct cat_desc cndesc;
 	struct cat_attr cnattr;
 	struct hfs_changefs_cargs *args;
+	int lockflags;
+	int error;
 
 	args = (struct hfs_changefs_cargs *)cargs;
 
 	cp = VTOC(vp);
 	vcb = HFSTOVCB(args->hfsmp);
 
-	if (cat_lookup(args->hfsmp, &cp->c_desc, 0, &cndesc, &cnattr, NULL, NULL)) {
+	lockflags = hfs_systemfile_lock(args->hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
+	error = cat_lookup(args->hfsmp, &cp->c_desc, 0, &cndesc, &cnattr, NULL, NULL);
+	hfs_systemfile_unlock(args->hfsmp, lockflags);
+	if (error) {
 	        /*
 		 * If we couldn't find this guy skip to the next one
 		 */
@@ -526,8 +533,9 @@ hfs_changefs(struct mount *mp, struct hfs_mount_args *args)
 	 *
 	 * hfs_changefs_callback will be called for each vnode
 	 * hung off of this mount point
-	 * the vnode will be
-	 * properly referenced and unreferenced around the callback
+	 *
+	 * The vnode will be properly referenced and unreferenced 
+	 * around the callback
 	 */
 	cargs.hfsmp = hfsmp;
 	cargs.namefix = namefix;
@@ -561,6 +569,7 @@ hfs_reload_callback(struct vnode *vp, void *cargs)
 {
 	struct cnode *cp;
 	struct hfs_reload_cargs *args;
+	int lockflags;
 
 	args = (struct hfs_reload_cargs *)cargs;
 	/*
@@ -585,8 +594,12 @@ hfs_reload_callback(struct vnode *vp, void *cargs)
 		datafork = cp->c_datafork ? &cp->c_datafork->ff_data : NULL;
 
 		/* lookup by fileID since name could have changed */
-		if ((args->error = cat_idlookup(args->hfsmp, cp->c_fileid, 0, &desc, &cp->c_attr, datafork)))
+		lockflags = hfs_systemfile_lock(args->hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
+		args->error = cat_idlookup(args->hfsmp, cp->c_fileid, 0, &desc, &cp->c_attr, datafork);
+		hfs_systemfile_unlock(args->hfsmp, lockflags);
+		if (args->error) {
 		        return (VNODE_RETURNED_DONE);
+		}
 
 		/* update cnode's catalog descriptor */
 		(void) replace_desc(cp, &desc);
@@ -2276,33 +2289,48 @@ hfs_sysctl(int *name, __unused u_int namelen, user_addr_t oldp, size_t *oldlenp,
 	return (ENOTSUP);
 }
 
-
-static int
+/* hfs_vfs_vget is not static since it is used in hfs_readwrite.c to support the
+ * build_path ioctl.  We use it to leverage the code below that updates the origin
+ * cache if necessary.
+ */
+int
 hfs_vfs_vget(struct mount *mp, ino64_t ino, struct vnode **vpp, __unused vfs_context_t context)
 {
 	int error;
+	int lockflags;
+	struct hfsmount *hfsmp;
 
-	error = hfs_vget(VFSTOHFS(mp), (cnid_t)ino, vpp, 1);
+	hfsmp = VFSTOHFS(mp);
+
+	error = hfs_vget(hfsmp, (cnid_t)ino, vpp, 1);
 	if (error)
 		return (error);
 
 	/*
 	 * ADLs may need to have their origin state updated
-	 * since build_path needs a valid parent.
+	 * since build_path needs a valid parent. The same is true
+	 * for hardlinked files as well. There isn't a race window here in re-acquiring
+	 * the cnode lock since we aren't pulling any data out of the cnode; instead, we're
+	 * going back to the catalog.
 	 */
-	if (vnode_isdir(*vpp) &&
-	    (VTOC(*vpp)->c_flag & C_HARDLINK) &&
+	if ((VTOC(*vpp)->c_flag & C_HARDLINK) &&
 	    (hfs_lock(VTOC(*vpp), HFS_EXCLUSIVE_LOCK) == 0)) {
 		cnode_t *cp = VTOC(*vpp);
 		struct cat_desc cdesc;
 		
-		if (!hfs_haslinkorigin(cp) &&
-		    (cat_findname(VFSTOHFS(mp), (cnid_t)ino, &cdesc) == 0)) {
-			if (cdesc.cd_parentcnid !=
-			    VFSTOHFS(mp)->hfs_private_desc[DIR_HARDLINKS].cd_cnid) {
-				hfs_savelinkorigin(cp, cdesc.cd_parentcnid);
+		if (!hfs_haslinkorigin(cp)) {
+			lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
+		    error = cat_findname(hfsmp, (cnid_t)ino, &cdesc);
+			hfs_systemfile_unlock(hfsmp, lockflags);
+			if (error == 0) {
+				if ((cdesc.cd_parentcnid !=
+			    	hfsmp->hfs_private_desc[DIR_HARDLINKS].cd_cnid) && 
+			   		(cdesc.cd_parentcnid != 
+					hfsmp->hfs_private_desc[FILE_HARDLINKS].cd_cnid)) {
+					hfs_savelinkorigin(cp, cdesc.cd_parentcnid);
+				}
+				cat_releasedesc(&cdesc);
 			}
-			cat_releasedesc(&cdesc);
 		}
 		hfs_unlock(cp);
 	}
@@ -2413,6 +2441,7 @@ hfs_vget(struct hfsmount *hfsmp, cnid_t cnid, struct vnode **vpp, int skiplock)
 		cnid_t nextlinkid;
 		cnid_t prevlinkid;
 		struct cat_desc linkdesc;
+		int lockflags;
 
 		cnattr.ca_linkref = linkref;
 
@@ -2422,7 +2451,10 @@ hfs_vget(struct hfsmount *hfsmp, cnid_t cnid, struct vnode **vpp, int skiplock)
 		 */
 		if ((hfs_lookuplink(hfsmp, linkref, &prevlinkid,  &nextlinkid) == 0) &&
 		    (nextlinkid != 0)) {
-			if (cat_findname(hfsmp, nextlinkid, &linkdesc) == 0) {
+			lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
+			error = cat_findname(hfsmp, nextlinkid, &linkdesc);
+			hfs_systemfile_unlock(hfsmp, lockflags);
+			if (error == 0) {
 				cat_releasedesc(&cndesc);
 				bcopy(&linkdesc, &cndesc, sizeof(linkdesc));
 			}
@@ -2452,7 +2484,7 @@ hfs_vget(struct hfsmount *hfsmp, cnid_t cnid, struct vnode **vpp, int skiplock)
 	
 		error = hfs_getnewvnode(hfsmp, NULLVP, &cn, &cndesc, 0, &cnattr, &cnfork, &vp);
 
-		if (error == 0 && (VTOC(vp)->c_flag & C_HARDLINK) && vnode_isdir(vp)) {
+		if ((error == 0) && (VTOC(vp)->c_flag & C_HARDLINK)) {
 			hfs_savelinkorigin(VTOC(vp), cndesc.cd_parentcnid);
 		}
 		FREE_ZONE(cn.cn_pnbuf, cn.cn_pnlen, M_NAMEI);

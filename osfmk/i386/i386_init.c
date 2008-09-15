@@ -120,6 +120,7 @@ i386_init(vm_offset_t boot_args_start)
 	uint64_t	maxmemtouse;
 	unsigned int	cpus;
 	boolean_t	legacy_mode;
+	boolean_t	fidn;
 
 	postcode(I386_INIT_ENTRY);
 
@@ -187,8 +188,10 @@ i386_init(vm_offset_t boot_args_start)
 	if (!PE_parse_boot_arg("himemory_mode", &vm_himemory_mode))
 	        vm_himemory_mode = 0;
 
-	if (!PE_parse_boot_arg("immediate_NMI", &force_immediate_debugger_NMI))
+	if (!PE_parse_boot_argn("immediate_NMI", &fidn, sizeof (fidn)))
 		force_immediate_debugger_NMI = FALSE;
+	else
+		force_immediate_debugger_NMI = fidn;
 
 	/*
 	 * At this point we check whether we are a 64-bit processor

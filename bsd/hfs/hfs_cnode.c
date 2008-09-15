@@ -127,8 +127,10 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
 	 */
 	if (v_type == VDIR) {
 		hfs_reldirhints(cp, 0);
-		if (cp->c_flag & C_HARDLINK)
-			hfs_relorigins(cp);
+	}		
+	
+	if (cp->c_flag & C_HARDLINK) {
+		hfs_relorigins(cp);
 	}
 
 	if (cp->c_datafork)
@@ -471,6 +473,10 @@ hfs_vnop_reclaim(struct vnop_reclaim_args *ap)
 		 */
 		if (vnode_isdir(vp)) {
 			hfs_reldirhints(cp, 0);
+		}
+		
+		if (cp->c_flag & C_HARDLINK) {
+			hfs_relorigins(cp);
 		}
 	}
 	/* Release the file fork and related data */

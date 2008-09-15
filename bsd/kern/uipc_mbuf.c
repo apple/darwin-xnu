@@ -3011,8 +3011,9 @@ m_copy_pkthdr(struct mbuf *to, struct mbuf *from)
 #endif /* MAC_NET */
 	to->m_pkthdr = from->m_pkthdr;		/* especially tags */
 	m_tag_init(from);			/* purge tags from src */
-	to->m_flags = from->m_flags & M_COPYFLAGS;
-	to->m_data = (to)->m_pktdat;
+	to->m_flags = (from->m_flags & M_COPYFLAGS) | (to->m_flags & M_EXT);
+	if ((to->m_flags & M_EXT) == 0)
+		to->m_data = to->m_pktdat;
 }
 
 /*

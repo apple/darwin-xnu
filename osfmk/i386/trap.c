@@ -735,7 +735,7 @@ panic_double_fault(
 	/*
 	 * Print backtrace leading to first fault:
 	 */
-	panic_i386_backtrace((void *) my_ktss->ebp, 10);
+	panic_i386_backtrace((void *) my_ktss->ebp, 10, NULL, FALSE, NULL);
 #endif
 
 	panic("Double fault at 0x%08x, thread:%p, code:0x%x, "

@@ -4493,6 +4493,20 @@ vm_offset_t pmap_high_map(pt_entry_t pte, enum high_cpu_types e)
   return  vaddr;
 }
 
+static inline void
+pmap_cpuset_NMIPI(cpu_set cpu_mask) {
+	unsigned int cpu, cpu_bit;
+	uint64_t deadline;
+
+	for (cpu = 0, cpu_bit = 1; cpu < real_ncpus; cpu++, cpu_bit <<= 1) {
+		if (cpu_mask & cpu_bit)
+			cpu_NMI_interrupt(cpu);
+	}
+	deadline = mach_absolute_time() + (LockTimeOut >> 2);
+	while (mach_absolute_time() < deadline)
+		cpu_pause();
+}
+
 
 /*
  * Called with pmap locked, we:
@@ -4551,28 +4565,33 @@ pmap_flush_tlbs(pmap_t	pmap)
 		   (int) pmap, cpus_to_signal, flush_self, 0, 0);
 
 	if (cpus_to_signal) {
+		cpu_set	cpus_to_respond = cpus_to_signal;
+
 		deadline = mach_absolute_time() + LockTimeOut;
 		/*
 		 * Wait for those other cpus to acknowledge
 		 */
-		for (cpu = 0, cpu_bit = 1; cpu < real_ncpus; cpu++, cpu_bit <<= 1) {
-			while ((cpus_to_signal & cpu_bit) != 0) {
-			        if (!cpu_datap(cpu)->cpu_running ||
-				    cpu_datap(cpu)->cpu_tlb_invalid == FALSE ||
-				    !CPU_CR3_IS_ACTIVE(cpu)) {
-				        cpus_to_signal &= ~cpu_bit;
-					break;
-				}
-				if (mach_absolute_time() > deadline) {
-					force_immediate_debugger_NMI = TRUE;
-				        panic("pmap_flush_tlbs() timeout: "
-								"cpu %d failing to respond to interrupts, pmap=%p cpus_to_signal=%lx",
-								cpu, pmap, cpus_to_signal);
-				}
-				cpu_pause();
+		while (cpus_to_respond != 0) {
+			if (mach_absolute_time() > deadline) {
+				pmap_tlb_flush_timeout = TRUE;
+				pmap_cpuset_NMIPI(cpus_to_respond);
+				panic("pmap_flush_tlbs() timeout: "
+				    "cpu(s) failing to respond to interrupts, pmap=%p cpus_to_respond=0x%lx",
+				    pmap, cpus_to_respond);
 			}
-		        if (cpus_to_signal == 0)
-			        break;
+
+			for (cpu = 0, cpu_bit = 1; cpu < real_ncpus; cpu++, cpu_bit <<= 1) {
+				if ((cpus_to_respond & cpu_bit) != 0) {
+					if (!cpu_datap(cpu)->cpu_running ||
+					    cpu_datap(cpu)->cpu_tlb_invalid == FALSE ||
+					    !CPU_CR3_IS_ACTIVE(cpu)) {
+						cpus_to_respond &= ~cpu_bit;
+					}
+					cpu_pause();
+				}
+				if (cpus_to_respond == 0)
+					break;
+			}
 		}
 	}
 
@@ -4584,7 +4603,6 @@ pmap_flush_tlbs(pmap_t	pmap)
 	 */
 	if (flush_self)
 		flush_tlb();
-
 
 	PMAP_TRACE(PMAP_CODE(PMAP__FLUSH_TLBS) | DBG_FUNC_END,
 		   (int) pmap, cpus_to_signal, flush_self, 0, 0);

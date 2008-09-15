@@ -67,6 +67,8 @@
 
 #include <net/net_osdep.h>
 
+extern u_long  route_generation;
+
 static __inline__ void*
 _cast_non_const(const void * ptr) {
 	union {
@@ -172,7 +174,10 @@ in6_gif_output(
 	ip6->ip6_flow |= htonl((u_int32_t)otos << 20);
 
 	if (dst->sin6_family != sin6_dst->sin6_family ||
-	     !IN6_ARE_ADDR_EQUAL(&dst->sin6_addr, &sin6_dst->sin6_addr)) {
+	    !IN6_ARE_ADDR_EQUAL(&dst->sin6_addr, &sin6_dst->sin6_addr) ||
+	    (sc->gif_ro6.ro_rt != NULL &&
+	    (sc->gif_ro6.ro_rt->generation_id != route_generation ||
+	    sc->gif_ro6.ro_rt->rt_ifp == ifp))) {
 		/* cache route doesn't match */
 		bzero(dst, sizeof(*dst));
 		dst->sin6_family = sin6_dst->sin6_family;
@@ -195,7 +200,7 @@ in6_gif_output(
 		}
 
 		/* if it constitutes infinite encapsulation, punt. */
-		if (sc->gif_ro.ro_rt->rt_ifp == ifp) {
+		if (sc->gif_ro6.ro_rt->rt_ifp == ifp) {
 			m_freem(m);
 			return ENETUNREACH;	/*XXX*/
 		}

@@ -286,11 +286,11 @@ cat_releasedesc(struct cat_desc *descp)
 
 /*
  * These Catalog functions allow access to the HFS Catalog (database).
- * The catalog b-tree lock must be aquired before calling any of these routines.
+ * The catalog b-tree lock must be acquired before calling any of these routines.
  */
 
 /*
- * cat_lookup - lookup a catalog node using a cnode decriptor
+ * cat_lookup - lookup a catalog node using a cnode descriptor
  *
  * Note: The caller is responsible for releasing the output
  * catalog descriptor (when supplied outdescp is non-null).

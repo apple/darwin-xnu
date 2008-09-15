@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2002, 2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000, 2002, 2005-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -191,13 +191,15 @@ Result:
 
 OSStatus	GetNode		(BTreeControlBlockPtr	 btreePtr,
 						 u_int32_t				 nodeNum,
+			   			 u_int32_t				 flags, 
 						 NodeRec				*nodePtr )
 {
 	OSStatus			err;
 	GetBlockProcPtr		getNodeProc;
+	u_int32_t			options;
 	
 
-	//€€ is nodeNum within proper range?
+	// is nodeNum within proper range?
 	if( nodeNum >= btreePtr->totalNodes )
 	{
 		Panic("\pGetNode:nodeNum >= totalNodes");
@@ -206,17 +208,22 @@ OSStatus	GetNode		(BTreeControlBlockPtr	 btreePtr,
 	}
 	
 	nodePtr->blockSize = btreePtr->nodeSize;	// indicate the size of a node
+
+	options = kGetBlock;
+	if ( flags & kGetNodeHint ) 
+	{
+		options |= kGetBlockHint;
+	}
 	
 	getNodeProc = btreePtr->getBlockProc;
 	err = getNodeProc (btreePtr->fileRefNum,
 					   nodeNum,
-					   kGetBlock,
+					   options,
 					   nodePtr );
 
 	if (err != noErr)
 	{
 		Panic ("\pGetNode: getNodeProc returned error.");
-	//	nodePtr->buffer = nil;
 		goto ErrorExit;
 	}
 	++btreePtr->numGetNodes;

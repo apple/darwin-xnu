@@ -141,13 +141,19 @@
 	call	EXT(fn)			;\
 	movl	%edi, %esp
 
-#define CCALL3(fn, arg1, arg2, arg3)	\
+/*
+ * CCALL5 is used for callee functions with 3 arguments but
+ * where arg2 (a3:a2) and arg3 (a5:a4) are 64-bit values.
+ */
+#define CCALL5(fn, a1, a2, a3, a4, a5)	\
 	movl	%esp, %edi		;\
-	subl	$12, %esp		;\
+	subl	$20, %esp		;\
 	andl	$0xFFFFFFF0, %esp	;\
-	movl	arg3, 8(%esp)		;\
-	movl	arg2, 4(%esp)		;\
-	movl	arg1, 0(%esp)		;\
+	movl	a5, 16(%esp)		;\
+	movl	a4, 12(%esp)		;\
+	movl	a3,  8(%esp)		;\
+	movl	a2,  4(%esp)		;\
+	movl	a1,  0(%esp)		;\
 	call	EXT(fn)			;\
 	movl	%edi, %esp
 
@@ -297,13 +303,13 @@ Entry(timer_grab)
  * Update time on user trap entry.
  * Uses %eax,%ebx,%ecx,%edx,%esi,%edi.
  */
-#define	TIME_TRAP_UENTRY	TIMER_EVENT(USER,SYSTEM)
+#define	TIME_TRAP_UENTRY			TIMER_EVENT(USER,SYSTEM)
 
 /*
  * update time on user trap exit.
  * Uses %eax,%ebx,%ecx,%edx,%esi,%edi.
  */
-#define	TIME_TRAP_UEXIT		TIMER_EVENT(SYSTEM,USER)
+#define	TIME_TRAP_UEXIT				TIMER_EVENT(SYSTEM,USER)
 
 /*
  * update time on interrupt entry.
@@ -926,7 +932,7 @@ Entry(lo_diag_scall)
 	popl	%esp			// Get back the original stack
 	jmp	EXT(return_to_user)	// Normal return, do not check asts...
 2:	
-	CCALL3(i386_exception, $EXC_SYSCALL, $0x6000, $1)
+	CCALL5(i386_exception, $EXC_SYSCALL, $0x6000, $0, $1, $0)
 		// pass what would be the diag syscall
 		// error return - cause an exception
 	/* no return */
@@ -950,6 +956,8 @@ Entry(lo_diag_scall)
  */
 
 Entry(lo_syscall)
+	TIME_TRAP_UENTRY
+
 	/*
 	 * We can be here either for a mach, unix machdep or diag syscall,
 	 * as indicated by the syscall class:
@@ -972,13 +980,11 @@ Entry(lo_syscall)
 	sti
 
 	/* Syscall class unknown */
-	CCALL3(i386_exception, $(EXC_SYSCALL), %eax, $1)
+	CCALL5(i386_exception, $(EXC_SYSCALL), %eax, $0, $1, $0)
 	/* no return */
 
 
 Entry(lo64_unix_scall)
-	TIME_TRAP_UENTRY
-
 	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
 	movl	ACT_TASK(%ecx),%ebx			/* point to current task  */
 	addl	$1,TASK_SYSCALLS_UNIX(%ebx)	/* increment call count   */
@@ -1007,8 +1013,6 @@ Entry(lo64_unix_scall)
 
 
 Entry(lo64_mach_scall)
-	TIME_TRAP_UENTRY
-
 	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
 	movl	ACT_TASK(%ecx),%ebx			/* point to current task  */
 	addl	$1,TASK_SYSCALLS_MACH(%ebx)	/* increment call count   */
@@ -1037,8 +1041,6 @@ Entry(lo64_mach_scall)
 
 
 Entry(lo64_mdep_scall)
-	TIME_TRAP_UENTRY
-
 	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
 	movl	ACT_TASK(%ecx),%ebx			/* point to current task  */
 
@@ -1066,8 +1068,6 @@ Entry(lo64_mdep_scall)
 
 
 Entry(lo64_diag_scall)
-	TIME_TRAP_UENTRY
-
 	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
 	movl	ACT_TASK(%ecx),%ebx			/* point to current task  */
 
@@ -1094,7 +1094,7 @@ Entry(lo64_diag_scall)
 	popl	%esp			// Get back the original stack
 	jmp	EXT(return_to_user)	// Normal return, do not check asts...
 2:	
-	CCALL3(i386_exception, $EXC_SYSCALL, $0x6000, $1)
+	CCALL5(i386_exception, $EXC_SYSCALL, $0x6000, $0, $1, $0)
 		// pass what would be the diag syscall
 		// error return - cause an exception
 	/* no return */

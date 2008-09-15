@@ -192,7 +192,8 @@ extern	int	kdb_debug;
 extern	int	kdb_active[];
 
 extern	volatile boolean_t mp_kdp_trap;
-extern boolean_t force_immediate_debugger_NMI;
+extern  volatile boolean_t force_immediate_debugger_NMI;
+extern  volatile boolean_t pmap_tlb_flush_timeout;
 
 extern	void	mp_kdp_enter(void);
 extern	void	mp_kdp_exit(void);

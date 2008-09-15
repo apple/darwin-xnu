@@ -2423,7 +2423,6 @@ cluster_write_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t old
 	long long        zero_cnt1;
 	off_t            zero_off1;
 	struct cl_extent cl;
-        int              intersection;
 	struct cl_writebehind *wbp;
 	int              bflag;
  	u_int            max_cluster_pgcount;
@@ -2604,7 +2603,7 @@ cluster_write_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t old
 				 * to release the rest of the pages in the upl without modifying
 				 * there state and mark the failed page in error
 				 */
-				ubc_upl_abort_range(upl, 0, PAGE_SIZE, UPL_ABORT_DUMP_PAGES);
+				ubc_upl_abort_range(upl, 0, PAGE_SIZE, UPL_ABORT_DUMP_PAGES|UPL_ABORT_FREE_ON_EMPTY);
 
 				if (upl_size > PAGE_SIZE)
 				        ubc_upl_abort_range(upl, 0, upl_size, UPL_ABORT_FREE_ON_EMPTY);
@@ -2640,7 +2639,7 @@ cluster_write_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t old
 					 * need to release the rest of the pages in the upl without
 					 * modifying there state and mark the failed page in error
 					 */
-					ubc_upl_abort_range(upl, upl_offset, PAGE_SIZE, UPL_ABORT_DUMP_PAGES);
+					ubc_upl_abort_range(upl, upl_offset, PAGE_SIZE, UPL_ABORT_DUMP_PAGES|UPL_ABORT_FREE_ON_EMPTY);
 
 					if (upl_size > PAGE_SIZE)
 					        ubc_upl_abort_range(upl, 0, upl_size, UPL_ABORT_FREE_ON_EMPTY);
@@ -2745,6 +2744,33 @@ cluster_write_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t old
 				 */
 			        cluster_zero(upl, io_size, upl_size - io_size, NULL); 
 			}
+			/*
+			 * release the upl now if we hold one since...
+			 * 1) pages in it may be present in the sparse cluster map
+			 *    and may span 2 separate buckets there... if they do and 
+			 *    we happen to have to flush a bucket to make room and it intersects
+			 *    this upl, a deadlock may result on page BUSY
+			 * 2) we're delaying the I/O... from this point forward we're just updating
+			 *    the cluster state... no need to hold the pages, so commit them
+			 * 3) IO_SYNC is set...
+			 *    because we had to ask for a UPL that provides currenty non-present pages, the
+			 *    UPL has been automatically set to clear the dirty flags (both software and hardware)
+			 *    upon committing it... this is not the behavior we want since it's possible for
+			 *    pages currently present as part of a mapped file to be dirtied while the I/O is in flight.
+			 *    we'll pick these pages back up later with the correct behavior specified.
+			 * 4) we don't want to hold pages busy in a UPL and then block on the cluster lock... if a flush
+			 *    of this vnode is in progress, we will deadlock if the pages being flushed intersect the pages
+			 *    we hold since the flushing context is holding the cluster lock.
+			 */
+			ubc_upl_commit_range(upl, 0, upl_size,
+					     UPL_COMMIT_SET_DIRTY | UPL_COMMIT_INACTIVATE | UPL_COMMIT_FREE_ON_EMPTY);
+check_cluster:
+			/*
+			 * calculate the last logical block number 
+			 * that this delayed I/O encompassed
+			 */
+			cl.e_addr = (daddr64_t)((upl_f_offset + (off_t)upl_size) / PAGE_SIZE_64);
+
 			if (flags & IO_SYNC)
 			        /*
 				 * if the IO_SYNC flag is set than we need to 
@@ -2752,18 +2778,12 @@ cluster_write_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t old
 				 * the I/O
 				 */
 			        goto issue_io;
-check_cluster:
+
 			/*
 			 * take the lock to protect our accesses
 			 * of the writebehind and sparse cluster state
 			 */
 			wbp = cluster_get_wbp(vp, CLW_ALLOCATE | CLW_RETURNLOCKED);
-
-			/*
-			 * calculate the last logical block number 
-			 * that this delayed I/O encompassed
-			 */
-			cl.e_addr = (daddr64_t)((upl_f_offset + (off_t)upl_size) / PAGE_SIZE_64);
 
 			if (wbp->cl_scmap) {
 
@@ -2771,16 +2791,7 @@ check_cluster:
 				        /*
 					 * we've fallen into the sparse
 					 * cluster method of delaying dirty pages
-					 * first, we need to release the upl if we hold one
-					 * since pages in it may be present in the sparse cluster map
-					 * and may span 2 separate buckets there... if they do and 
-					 * we happen to have to flush a bucket to make room and it intersects
-					 * this upl, a deadlock may result on page BUSY
 					 */
-				        if (upl_size)
-					        ubc_upl_commit_range(upl, 0, upl_size,
-								     UPL_COMMIT_SET_DIRTY | UPL_COMMIT_INACTIVATE | UPL_COMMIT_FREE_ON_EMPTY);
-
 					sparse_cluster_add(wbp, vp, &cl, newEOF, callback, callback_arg);
 
 					lck_mtx_unlock(&wbp->cl_lockw);
@@ -2793,21 +2804,10 @@ check_cluster:
 				 * to uncached writes on the file, so go ahead
 				 * and push whatever's in the sparse map
 				 * and switch back to normal clustering
-				 *
-				 * see the comment above concerning a possible deadlock...
 				 */
-			        if (upl_size) {
-				        ubc_upl_commit_range(upl, 0, upl_size,
-							     UPL_COMMIT_SET_DIRTY | UPL_COMMIT_INACTIVATE | UPL_COMMIT_FREE_ON_EMPTY);
-					/*
-					 * setting upl_size to 0 keeps us from committing a
-					 * second time in the start_new_cluster path
-					 */
-					upl_size = 0;
-				}
-				sparse_cluster_push(wbp, vp, newEOF, PUSH_ALL, callback, callback_arg);
-
 				wbp->cl_number = 0;
+
+				sparse_cluster_push(wbp, vp, newEOF, PUSH_ALL, callback, callback_arg);
 				/*
 				 * no clusters of either type present at this point
 				 * so just go directly to start_new_cluster since
@@ -2817,8 +2817,6 @@ check_cluster:
 				 */
 				goto start_new_cluster;
 			}		    
-			upl_offset = 0;
-
 			if (wbp->cl_number == 0)
 			        /*
 				 * no clusters currently present
@@ -2862,21 +2860,6 @@ check_cluster:
 						 */
 					        wbp->cl_clusters[cl_index].e_addr = wbp->cl_clusters[cl_index].b_addr + max_cluster_pgcount;
 
-						if (upl_size) {
-						        daddr64_t start_pg_in_upl;
-
-							start_pg_in_upl = (daddr64_t)(upl_f_offset / PAGE_SIZE_64);
-							
-							if (start_pg_in_upl < wbp->cl_clusters[cl_index].e_addr) {
-							        intersection = (int)((wbp->cl_clusters[cl_index].e_addr - start_pg_in_upl) * PAGE_SIZE);
-
-								ubc_upl_commit_range(upl, upl_offset, intersection,
-										     UPL_COMMIT_SET_DIRTY | UPL_COMMIT_INACTIVATE | UPL_COMMIT_FREE_ON_EMPTY);
-								upl_f_offset += intersection;
-								upl_offset   += intersection;
-								upl_size     -= intersection;
-							}
-						}
 						cl.b_addr = wbp->cl_clusters[cl_index].e_addr;
 					}
 					/*
@@ -2930,21 +2913,6 @@ check_cluster:
 						 */
 					        wbp->cl_clusters[cl_index].b_addr = wbp->cl_clusters[cl_index].e_addr - max_cluster_pgcount;
 
-						if (upl_size) {
-						        intersection = (int)((cl.e_addr - wbp->cl_clusters[cl_index].b_addr) * PAGE_SIZE);
-
-							if ((u_int)intersection > upl_size)
-							        /*
-								 * because the current write may consist of a number of pages found in the cache
-								 * which are not part of the UPL, we may have an intersection that exceeds
-								 * the size of the UPL that is also part of this write
-								 */
-							        intersection = upl_size;
-
-						        ubc_upl_commit_range(upl, upl_offset + (upl_size - intersection), intersection,
-									     UPL_COMMIT_SET_DIRTY | UPL_COMMIT_INACTIVATE | UPL_COMMIT_FREE_ON_EMPTY);
-							upl_size -= intersection;
-						}
 						cl.e_addr = wbp->cl_clusters[cl_index].b_addr;
 					}
 					/*
@@ -2999,16 +2967,7 @@ check_cluster:
 				 * no more room in the normal cluster mechanism
 				 * so let's switch to the more expansive but expensive
 				 * sparse mechanism....
-				 * first, we need to release the upl if we hold one
-				 * since pages in it may be present in the sparse cluster map (after the cluster_switch)
-				 * and may span 2 separate buckets there... if they do and 
-				 * we happen to have to flush a bucket to make room and it intersects
-				 * this upl, a deadlock may result on page BUSY
 				 */
-			        if (upl_size)
-				        ubc_upl_commit_range(upl, upl_offset, upl_size,
-							     UPL_COMMIT_SET_DIRTY | UPL_COMMIT_INACTIVATE | UPL_COMMIT_FREE_ON_EMPTY);
-
 			        sparse_cluster_switch(wbp, vp, newEOF, callback, callback_arg);
 				sparse_cluster_add(wbp, vp, &cl, newEOF, callback, callback_arg);
 
@@ -3042,33 +3001,19 @@ start_new_cluster:
 
 			wbp->cl_number++;
 delay_io:
-			if (upl_size)
-			        ubc_upl_commit_range(upl, upl_offset, upl_size,
-						     UPL_COMMIT_SET_DIRTY | UPL_COMMIT_INACTIVATE | UPL_COMMIT_FREE_ON_EMPTY);
-
 			lck_mtx_unlock(&wbp->cl_lockw);
 
 			continue;
 issue_io:
 			/*
-			 * we don't hold the vnode lock at this point
+			 * we don't hold the lock at this point
 			 *
-			 * because we had to ask for a UPL that provides currenty non-present pages, the
-			 * UPL has been automatically set to clear the dirty flags (both software and hardware)
-			 * upon committing it... this is not the behavior we want since it's possible for
-			 * pages currently present as part of a mapped file to be dirtied while the I/O is in flight.
-			 * in order to maintain some semblance of coherency with mapped writes
-			 * we need to drop the current upl and pick it back up with COPYOUT_FROM set
+			 * we've already dropped the current upl, so pick it back up with COPYOUT_FROM set
 			 * so that we correctly deal with a change in state of the hardware modify bit...
 			 * we do this via cluster_push_now... by passing along the IO_SYNC flag, we force
 			 * cluster_push_now to wait until all the I/Os have completed... cluster_push_now is also
 			 * responsible for generating the correct sized I/O(s)
 			 */
-		        ubc_upl_commit_range(upl, 0, upl_size,
-					     UPL_COMMIT_SET_DIRTY | UPL_COMMIT_INACTIVATE | UPL_COMMIT_FREE_ON_EMPTY);
-
-			cl.e_addr = (upl_f_offset + (off_t)upl_size) / PAGE_SIZE_64;
-
 			retval = cluster_push_now(vp, &cl, newEOF, flags, callback, callback_arg);
 		}
 	}
@@ -4646,19 +4591,6 @@ cluster_try_push(struct cl_writebehind *wbp, vnode_t vp, off_t EOF, int push_fla
 		                goto dont_try;
 		}
 	}
-	/*
-	 * drop the lock while we're firing off the I/Os...
-	 * this is safe since I'm working off of a private sorted copy
-	 * of the clusters, and I'm going to re-evaluate the public
-	 * state after I retake the lock
-	 *
-	 * we need to drop it to avoid a lock inversion when trying to
-	 * grab pages into the UPL... another thread in 'write' may
-	 * have these pages in its UPL and be blocked trying to
-	 * gain the write-behind lock for this vnode
-	 */
-	lck_mtx_unlock(&wbp->cl_lockw);
-
 	for (cl_index = 0; cl_index < cl_len; cl_index++) {
 	        int	flags;
 		struct	cl_extent cl;
@@ -4690,8 +4622,6 @@ cluster_try_push(struct cl_writebehind *wbp, vnode_t vp, off_t EOF, int push_fla
 		if ( !(push_flag & PUSH_ALL) )
 		        break;
 	}
-	lck_mtx_lock(&wbp->cl_lockw);
-
 dont_try:
 	if (cl_len > cl_pushed) {
 	       /*
@@ -4979,22 +4909,7 @@ sparse_cluster_push(struct cl_writebehind *wbp, vnode_t vp, off_t EOF, int push_
 
 		wbp->cl_scdirty -= (int)(cl.e_addr - cl.b_addr);
 
-		/*
-		 * drop the lock while we're firing off the I/Os...
-		 * this is safe since I've already updated the state
-		 * this lock is protecting and I'm going to re-evaluate
-		 * the public state after I retake the lock
-		 *
-		 * we need to drop it to avoid a lock inversion when trying to
-		 * grab pages into the UPL... another thread in 'write' may
-		 * have these pages in its UPL and be blocked trying to
-		 * gain the write-behind lock for this vnode
-		 */
-		lck_mtx_unlock(&wbp->cl_lockw);
-
 		cluster_push_now(vp, &cl, EOF, push_flag & IO_PASSIVE, callback, callback_arg);
-
-		lck_mtx_lock(&wbp->cl_lockw);
 
 		if ( !(push_flag & PUSH_ALL) )
 		        break;

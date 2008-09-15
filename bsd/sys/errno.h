@@ -258,5 +258,6 @@ __END_DECLS
 #define	ERESTART	(-1)		/* restart syscall */
 #define	EJUSTRETURN	(-2)		/* don't modify regs, just return */
 #define ERECYCLE    (-5)		/* restart lookup under heavy vnode pressure/recycling */
+#define EREDRIVEOPEN	(-6)
 #endif
 #endif /* _SYS_ERRNO_H_ */

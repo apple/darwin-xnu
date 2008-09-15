@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -240,7 +240,7 @@ OSStatus	SearchTree	(BTreeControlBlockPtr	 btreePtr,
             goto ErrorExit;
         }
         
-        err = GetNode (btreePtr, curNodeNum, &nodeRec);
+        err = GetNode (btreePtr, curNodeNum, 0, &nodeRec);
         if (err != noErr)
         {
                 goto ErrorExit;
@@ -472,7 +472,7 @@ OSStatus	InsertLevel (BTreeControlBlockPtr		 btreePtr,
 
 		PanicIf ( parentNodeNum == 0, "\p InsertLevel: parent node is zero!?");
 
-		err = GetNode (btreePtr, parentNodeNum, &parentNode);	// released as target node in next level up
+		err = GetNode (btreePtr, parentNodeNum, 0, &parentNode);	// released as target node in next level up
 		M_ExitOnError (err);
 #if defined(applec) && !defined(__SC__)
 		if (DEBUG_BUILD && level > 1)
@@ -609,7 +609,7 @@ static OSErr	InsertNode	(BTreeControlBlockPtr	 btreePtr,
 
 		if ( leftNode->buffer == nil )
 		{
-			err = GetNode (btreePtr, leftNodeNum, leftNode);	// will be released by caller or a split below
+			err = GetNode (btreePtr, leftNodeNum, 0, leftNode);	// will be released by caller or a split below
 			M_ExitOnError (err);
 			// XXXdbg
 			ModifyBlockStart(btreePtr->fileRefNum, leftNode);
@@ -730,7 +730,7 @@ OSStatus	DeleteTree			(BTreeControlBlockPtr		 btreePtr,
 		siblingNodeNum = targetNodePtr->bLink;				// Left Sibling Node
 		if ( siblingNodeNum != 0 )
 		{
-			err = GetNode (btreePtr, siblingNodeNum, &siblingNode);
+			err = GetNode (btreePtr, siblingNodeNum, 0, &siblingNode);
 			M_ExitOnError (err);
 
 			// XXXdbg
@@ -748,7 +748,7 @@ OSStatus	DeleteTree			(BTreeControlBlockPtr		 btreePtr,
 		siblingNodeNum = targetNodePtr->fLink;				// Right Sibling Node
 		if ( siblingNodeNum != 0 )
 		{
-			err = GetNode (btreePtr, siblingNodeNum, &siblingNode);
+			err = GetNode (btreePtr, siblingNodeNum, 0, &siblingNode);
 			M_ExitOnError (err);
 
 			// XXXdbg
@@ -803,7 +803,7 @@ OSStatus	DeleteTree			(BTreeControlBlockPtr		 btreePtr,
 
 		//// Get Parent Node and index
 		index = treePathTable [level].index;
-		err = GetNode (btreePtr, treePathTable[level].node, &parentNode);
+		err = GetNode (btreePtr, treePathTable[level].node, 0, &parentNode);
 		M_ExitOnError (err);
 
 		if ( updateRequired )
@@ -889,7 +889,7 @@ static OSStatus	CollapseTree	(BTreeControlBlockPtr		btreePtr,
 		M_ExitOnError (err);
 		
 		//// Get New Root Node
-		err = GetNode (btreePtr, btreePtr->rootNode, blockPtr);
+		err = GetNode (btreePtr, btreePtr->rootNode, 0, blockPtr);
 		M_ExitOnError (err);
 
 		// XXXdbg

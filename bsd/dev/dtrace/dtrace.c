@@ -1071,6 +1071,21 @@ bad:
 	return (0);
 }
 
+#if defined(__APPLE__)
+/* dtrace_priv_proc() omitting the P_LNOATTACH check. For PID and EXECNAME accesses. */
+static int
+dtrace_priv_proc_relaxed(dtrace_state_t *state)
+{
+
+	if (state->dts_cred.dcr_action & DTRACE_CRA_PROC)
+		return (1);
+
+	cpu_core[CPU->cpu_id].cpuc_dtrace_flags |= CPU_DTRACE_UPRIV;
+
+	return (0);
+}
+#endif /* __APPLE__ */
+
 static int
 dtrace_priv_kernel(dtrace_state_t *state)
 {
@@ -2709,7 +2724,7 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 
 #else
 	case DIF_VAR_PID:
-		if (!dtrace_priv_proc(state))
+		if (!dtrace_priv_proc_relaxed(state))
 			return (0);
 
 		/*
@@ -2738,7 +2753,7 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 		return ((uint64_t)curthread->t_procp->p_ppid);
 #else
 	case DIF_VAR_PPID:
-		if (!dtrace_priv_proc(state))
+		if (!dtrace_priv_proc_relaxed(state))
 			return (0);
 
 		/*
@@ -2800,7 +2815,7 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 		    mstate->dtms_scratch_base + mstate->dtms_scratch_size)
 			return 0;
 			
-		if (!dtrace_priv_proc(state))
+		if (!dtrace_priv_proc_relaxed(state))
 			return (0);
 
 		mstate->dtms_scratch_ptr += scratch_size;

@@ -731,6 +731,8 @@ debug_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 	/* all sysctl names at this level are name and field */
 	if (namelen != 2)
 		return (ENOTDIR);		/* overloaded */
+	if (name[0] < 0 || name[0] >= CTL_DEBUG_MAXID)
+                return (ENOTSUP);
 	cdp = debugvars[name[0]];
 	if (cdp->debugname == 0)
 		return (ENOTSUP);

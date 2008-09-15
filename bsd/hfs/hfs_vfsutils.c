@@ -243,13 +243,6 @@ OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
       	/* mark the volume dirty (clear clean unmount bit) */
 	vcb->vcbAtrb &=	~kHFSVolumeUnmountedMask;
 
-	/*
-	 * all done with system files so we can unlock now...
-	 */
-	hfs_unlock(VTOC(hfsmp->hfs_allocation_vp));
-	hfs_unlock(VTOC(hfsmp->hfs_catalog_vp));
-	hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
-
     if (error == noErr)
       {
 		error = cat_idlookup(hfsmp, kHFSRootFolderID, 0, NULL, NULL, NULL);
@@ -262,6 +255,14 @@ OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
             MarkVCBDirty( vcb );								//	mark VCB dirty so it will be written
           }
       }
+
+	/*
+	 * all done with system files so we can unlock now...
+	 */
+	hfs_unlock(VTOC(hfsmp->hfs_allocation_vp));
+	hfs_unlock(VTOC(hfsmp->hfs_catalog_vp));
+	hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
+
     goto	CmdDone;
 
     //--	Release any resources allocated so far before exiting with an error:

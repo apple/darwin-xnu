@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -83,7 +83,8 @@ int
 hfs_swap_BTNode (
     BlockDescriptor *src,
     vnode_t vp,
-    enum HFSBTSwapDirection direction
+    enum HFSBTSwapDirection direction,
+    u_int8_t allow_empty_node
 )
 {
     BTNodeDescriptor *srcDesc = src->buffer;
@@ -177,9 +178,13 @@ hfs_swap_BTNode (
              * Sanity check: must be even, and within the node itself.
              *
              * We may be called to swap an unused node, which contains all zeroes.
-             * This is why we allow the record offset to be zero.
+			 * Unused nodes are expected only when allow_empty_node is true.
+			 * If it is false and record offset is zero, return error.
              */
-            if ((srcOffs[i] & 1) || (srcOffs[i] < sizeof(BTNodeDescriptor) && srcOffs[i] != 0) || (srcOffs[i] >= src->blockSize)) {
+            if ((srcOffs[i] & 1) || (
+			    (allow_empty_node == false) && (srcOffs[i] == 0)) ||
+				(srcOffs[i] < sizeof(BTNodeDescriptor) && srcOffs[i] != 0) || 
+				(srcOffs[i] >= src->blockSize)) { 
             	printf("hfs_swap_BTNode: record #%d invalid offset (0x%04X)\n", srcDesc->numRecords-i-1, srcOffs[i]);
             	error = fsBTInvalidHeaderErr;
             	goto fail;
@@ -306,9 +311,15 @@ hfs_swap_BTNode (
              * Sanity check: must be even, and within the node itself.
              *
              * We may be called to swap an unused node, which contains all zeroes.
+	    	 * This can happen when the last record from a node gets deleted.
              * This is why we allow the record offset to be zero.
+	     	 * Unused nodes are expected only when allow_empty_node is true 
+	     	 * (the caller should set it to true for kSwapBTNodeBigToHost). 
              */
-            if ((srcOffs[i] & 1) || (srcOffs[i] < sizeof(BTNodeDescriptor) && srcOffs[i] != 0) || (srcOffs[i] >= src->blockSize)) {
+            if ((srcOffs[i] & 1) || 
+			    ((allow_empty_node == false) && (srcOffs[i] == 0)) ||
+				(srcOffs[i] < sizeof(BTNodeDescriptor) && srcOffs[i] != 0) || 
+				(srcOffs[i] >= src->blockSize)) {
             	panic("hfs_UNswap_BTNode: record #%d invalid offset (0x%04X)\n", srcDesc->numRecords-i-1, srcOffs[i]);
             	error = fsBTInvalidHeaderErr;
             	goto fail;

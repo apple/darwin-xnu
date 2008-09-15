@@ -384,7 +384,7 @@ hfs_vnop_getattr(struct vnop_getattr_args *ap)
 
 	struct vnode *vp = ap->a_vp;
 	struct vnode_attr *vap = ap->a_vap;
-	struct vnode *rvp = NULL;
+	struct vnode *rvp = NULLVP;
 	struct hfsmount *hfsmp;
 	struct cnode *cp;
 	uint64_t data_size;
@@ -516,11 +516,11 @@ hfs_vnop_getattr(struct vnop_getattr_args *ap)
 			}
 
 			if (cp->c_blocks - VTOF(vp)->ff_blocks) {
+				/* We deal with resource fork vnode iocount at the end of the function */
 				error = hfs_vgetrsrc(hfsmp, vp, &rvp, TRUE);
 				if (error) {
 					goto out;
 				}
-		
 				rcp = VTOC(rvp);
 				if (rcp && rcp->c_rsrcfork) {
 					total_size += rcp->c_rsrcfork->ff_size;
@@ -592,8 +592,15 @@ hfs_vnop_getattr(struct vnop_getattr_args *ap)
 	 * which are hardlink-ignorant, will ask for va_linkid.
 	 */
 	vap->va_fileid = (u_int64_t)cp->c_fileid;
-	/* Hardlinked directories have multiple cnids and parents (one per link). */
-	if ((v_type == VDIR) && (cp->c_flag & C_HARDLINK)) {
+	/* 
+	 * We need to use the origin cache for both hardlinked files 
+	 * and directories. Hardlinked directories have multiple cnids 
+	 * and parents (one per link). Hardlinked files also have their 
+	 * own parents and link IDs separate from the indirect inode number. 
+	 * If we don't use the cache, we could end up vending the wrong ID 
+	 * because the cnode will only reflect the link that was looked up most recently.
+	 */
+	if (cp->c_flag & C_HARDLINK) {
 		vap->va_linkid = (u_int64_t)hfs_currentcnid(cp);
 		vap->va_parentid = (u_int64_t)hfs_currentparent(cp);
 	} else {
@@ -617,70 +624,79 @@ hfs_vnop_getattr(struct vnop_getattr_args *ap)
 	                     VNODE_ATTR_va_encoding | VNODE_ATTR_va_rdev |
 	                     VNODE_ATTR_va_data_size;
 
-	/* if this is the root, let VFS to find out the mount name, which may be different from the real name */
+	/* If this is the root, let VFS to find out the mount name, which may be different from the real name.
+	 * Otherwise, we need to just take care for hardlinked files, which need to be looked up, if necessary
+	 */
 	if (VATTR_IS_ACTIVE(vap, va_name) && (cp->c_cnid != kHFSRootFolderID)) {
-		/* Return the name for ATTR_CMN_NAME */
-		if (cp->c_desc.cd_namelen == 0) {
-		    if ((cp->c_flag & C_HARDLINK) && ((cp->c_flag & C_DELETED) == 0 || (cp->c_linkcount > 1))) {
-			cnid_t nextlinkid;
-			cnid_t prevlinkid;
-			struct vnode *file_vp;
-			
-			if ((error = hfs_lookuplink(hfsmp, cp->c_fileid, &prevlinkid, &nextlinkid))) {
-			    goto out;
-			}
+		struct cat_desc linkdesc;
+		int lockflags;
+		int uselinkdesc = 0;
+		cnid_t nextlinkid = 0;
+		cnid_t prevlinkid = 0;	
 
-			//
-			// don't bother trying to get a linkid that's the same
-			// as the current cnid
-			//
-			if (nextlinkid == VTOC(vp)->c_cnid) {
-			    if (prevlinkid == VTOC(vp)->c_cnid) {
-				hfs_unlock(cp);
-				goto out2;
-			    } else {
-				nextlinkid = prevlinkid;
-			    }
+		/* Get the name for ATTR_CMN_NAME.  We need to take special care for hardlinks      
+		 * here because the info. for the link ID requested by getattrlist may be
+		 * different than what's currently in the cnode.  This is because the cnode     
+		 * will be filled in with the information for the most recent link ID that went
+		 * through namei/lookup().  If there are competing lookups for hardlinks that point 
+		 * to the same inode, one (or more) getattrlists could be vended incorrect name information.
+		 * Also, we need to beware of open-unlinked files which could have a namelen of 0.  Note
+		 * that if another hardlink sibling of this file is being unlinked, that could also thrash
+		 * the name fields but it should *not* be treated like an open-unlinked file here.
+		 */
+		if ((cp->c_flag & C_HARDLINK) &&
+				((cp->c_desc.cd_namelen == 0) || (vap->va_linkid != cp->c_cnid))) {
+			/* If we have no name and our linkID is the raw inode number, then we may
+			 * have an open-unlinked file.  Go to the next link in this case. 
+			 */
+			if ((cp->c_desc.cd_namelen == 0) && (vap->va_linkid == cp->c_fileid)) {
+				if ((error = hfs_lookuplink(hfsmp, vap->va_linkid, &prevlinkid, &nextlinkid))) {
+					goto out;
+				}
 			}
-			    
-			hfs_unlock(cp);
-
-			if (nextlinkid == 0 || (error = hfs_vget(hfsmp, nextlinkid, &file_vp, 1))) {
-			    if (prevlinkid == 0 || (error = hfs_vget(hfsmp, prevlinkid, &file_vp, 1))) {
-				goto out2;
-			    }
+			else {
+				nextlinkid = vap->va_linkid;
 			}
-				
-			cp = VTOC(file_vp);
-			if (hfs_lock(cp, HFS_SHARED_LOCK) == 0) {
-			    if (cp->c_desc.cd_namelen) {
-				strlcpy(vap->va_name, (const char *)cp->c_desc.cd_nameptr, MAXPATHLEN);
-			    }
-			    hfs_unlock(cp);
-			    vnode_put(file_vp);
-			    goto out2;
+			/* Now probe the catalog for the linkID.  Note that we don't know if we have
+			 * the exclusive lock here for the cnode, so we can't just update the descriptor.  
+			 * Instead, we should just store the descriptor's value locally and then use it to pass
+			 * out the name value as needed below.
+			 */
+			if (nextlinkid) {
+				lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
+				error = cat_findname(hfsmp, nextlinkid, &linkdesc);	
+				hfs_systemfile_unlock(hfsmp, lockflags);
+				if (error == 0) {
+					uselinkdesc = 1;
+				}
 			}
-			
-			if (vnode_name(file_vp)) {
-			    strlcpy(vap->va_name, vnode_name(file_vp), MAXPATHLEN);
-			} else {
-			    error = ENOENT;
-			}
-			vnode_put(file_vp);
-			goto out2;
-		    } else {
-			error = ENOENT;
-			goto out;
-		    }
-		} else {
-		    strlcpy(vap->va_name, (const char *)cp->c_desc.cd_nameptr, MAXPATHLEN);
-		    VATTR_SET_SUPPORTED(vap, va_name);
+		}
+		
+		/* By this point, we either patched the name above, and the c_desc points 
+		 * to correct data, or it already did, in which case we just proceed by copying
+		 * the name into the VAP.  Note that we will never set va_name to supported if
+		 * nextlinkid is never initialized.  This could happen in the degenerate case above
+		 * involving the raw inode number, where it has no nextlinkid.  In this case, we will
+		 * simply not export the name as supported.
+		 */
+		if (uselinkdesc) {
+			strlcpy(vap->va_name, (const char *)linkdesc.cd_nameptr, MAXPATHLEN);
+			VATTR_SET_SUPPORTED(vap, va_name);
+			cat_releasedesc(&linkdesc);	
+		}
+		else if (cp->c_desc.cd_namelen) {
+			strlcpy(vap->va_name, (const char *)cp->c_desc.cd_nameptr, MAXPATHLEN);
+			VATTR_SET_SUPPORTED(vap, va_name);
 		}
 	}
 
 out:
 	hfs_unlock(cp);
-out2:
+	/* 
+	 * We need to drop the iocount on the rsrc fork vnode only *after* we've 
+	 * released the cnode lock, since vnode_put can trigger an inactive call, which
+	 * will go back into the HFS and try to acquire a cnode lock.  	 
+	 */
 	if (rvp) {
 		vnode_put(rvp);
 	}

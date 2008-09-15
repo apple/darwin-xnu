@@ -126,10 +126,10 @@ static void 	mp_broadcast_action(void);
 
 static int		NMIInterruptHandler(x86_saved_state_t *regs);
 static boolean_t	cpu_signal_pending(int cpu, mp_event_t event);
-static void		cpu_NMI_interrupt(int cpu);
 
 boolean_t 	smp_initialized = FALSE;
-boolean_t	force_immediate_debugger_NMI = FALSE;
+volatile boolean_t	force_immediate_debugger_NMI = FALSE;
+volatile boolean_t	pmap_tlb_flush_timeout = FALSE;
 
 decl_simple_lock_data(,mp_kdp_lock);
 
@@ -931,10 +931,22 @@ cpu_signal_handler(x86_saved_state_t *regs)
 static int __attribute__((noinline))
 NMIInterruptHandler(x86_saved_state_t *regs)
 {
-	boolean_t state = ml_set_interrupts_enabled(FALSE);
+	void 	*stackptr;
+	
 	sync_iss_to_iks_unconditionally(regs);
+	__asm__ volatile("movl %%ebp, %0" : "=m" (stackptr));
+
+	if (pmap_tlb_flush_timeout == TRUE && current_cpu_datap()->cpu_tlb_invalid) {
+		panic_i386_backtrace(stackptr, 10, "Panic: Unresponsive processor\n", TRUE, regs);
+		panic_io_port_read();
+		mca_check_save();
+		if (pmsafe_debug)
+			pmSafeMode(&current_cpu_datap()->lcpu, PM_SAFE_FL_SAFE);
+		for(;;) {
+			cpu_pause();
+		}
+	}
 	mp_kdp_wait(FALSE);
-	(void) ml_set_interrupts_enabled(state);
 	return 1;
 }
 
@@ -1003,7 +1015,7 @@ cpu_interrupt(int cpu)
 /*
  * Send a true NMI via the local APIC to the specified CPU.
  */
-static void
+void
 cpu_NMI_interrupt(int cpu)
 {
 	boolean_t	state;

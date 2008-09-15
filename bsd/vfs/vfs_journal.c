@@ -2082,7 +2082,7 @@ check_free_space(journal *jnl, int desired_size)
 
 			lcl_counter = 0;
 			while (jnl->old_start[i] & 0x8000000000000000LL) {
-				if (lcl_counter++ > 100) {
+				if (lcl_counter++ > 1000) {
 					panic("jnl: check_free_space: tr starting @ 0x%llx not flushing (jnl %p).\n",
 						  jnl->old_start[i], jnl);
 				}

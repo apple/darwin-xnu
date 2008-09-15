@@ -303,33 +303,31 @@ again:
 			}
 			/* Ask the file system for its parent id and for its name (optional). */
 			ret = vnode_getattr(vp, &va, ctx);
+
 			if (fixhardlink) {
-				if (vp->v_name || VATTR_IS_SUPPORTED(&va, va_name)) {
-					if (ret == 0) {
-						str = va.va_name;
-					} else if (vp->v_name) {
-						str = vp->v_name;
-						ret = 0;
-					} else {
-						ret = ENOENT;
-						goto bad_news;
-					}
+				if ((ret == 0) && (VATTR_IS_SUPPORTED(&va, va_name))) {
+					str = va.va_name;
+				} else if (vp->v_name) {
+					str = vp->v_name;
+					ret = 0;
+				} else {
+					ret = ENOENT;
+					goto bad_news;
+				}
+				len = strlen(str);
 
-					len = strlen(str);
-
-					/* Check that there's enough space. */
-					if ((end - buff) < (len + 1)) {
-						ret = ENOSPC;
-					} else {
-						/* Copy the name backwards. */
-						str += len;
-				
-						for (; len > 0; len--) {
-						       *--end = *--str;
-						}
-						/* Add a path separator. */
-						*--end = '/';
+				/* Check that there's enough space. */
+				if ((end - buff) < (len + 1)) {
+					ret = ENOSPC;
+				} else {
+					/* Copy the name backwards. */
+					str += len;
+					
+					for (; len > 0; len--) {
+						*--end = *--str;
 					}
+					/* Add a path separator. */
+					*--end = '/';
 				}
 			  bad_news:
 				FREE_ZONE(va.va_name, MAXPATHLEN, M_NAMEI);
@@ -1644,7 +1642,7 @@ cache_purge(vnode_t vp)
         struct namecache *ncp;
 	kauth_cred_t tcred = NULL;
 
-	if ((LIST_FIRST(&vp->v_nclinks) == NULL) && (LIST_FIRST(&vp->v_ncchildren) == NULL))
+	if ((LIST_FIRST(&vp->v_nclinks) == NULL) && (LIST_FIRST(&vp->v_ncchildren) == NULL) && (vp->v_cred == NOCRED))
 	        return;
 
 	NAME_CACHE_LOCK();

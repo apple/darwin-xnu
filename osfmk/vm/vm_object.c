@@ -1914,7 +1914,7 @@ vm_object_pmap_protect(
 			for (phys_addr = phys_start;
 			     phys_addr < phys_end;
 			     phys_addr += PAGE_SIZE_64) {
-				pmap_page_protect(phys_addr >> 12, prot);
+				pmap_page_protect(phys_addr >> PAGE_SHIFT, prot);
 			}
 		}
 		return;
@@ -4766,7 +4766,7 @@ vm_object_populate_with_private(
 		
 		/* shadows on contiguous memory are not allowed */
 		/* we therefore can use the offset field */
-		object->shadow_offset = (vm_object_offset_t)(phys_page << 12);
+		object->shadow_offset = (vm_object_offset_t)phys_page << PAGE_SHIFT;
 		object->size = size;
 	}
 	vm_object_unlock(object);
@@ -6195,7 +6195,7 @@ vm_object_page_op(
 		if(object->phys_contiguous) {
 			if (phys_entry) {
 				*phys_entry = (ppnum_t)
-					(object->shadow_offset >> 12);
+					(object->shadow_offset >> PAGE_SHIFT);
 			}
 			vm_object_unlock(object);
 			return KERN_SUCCESS;

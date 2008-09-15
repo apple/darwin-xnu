@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000, 2002-2003, 2005-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -93,7 +93,8 @@ enum HFSBTSwapDirection {
 	kSwapBTNodeHeaderRecordOnly	=	3
 };
 
-int  hfs_swap_BTNode (BlockDescriptor *src, vnode_t vp, enum HFSBTSwapDirection direction);
+int  hfs_swap_BTNode (BlockDescriptor *src, vnode_t vp, enum HFSBTSwapDirection direction, 
+	u_int8_t allow_empty_node);
 
 #ifdef __cplusplus
 }

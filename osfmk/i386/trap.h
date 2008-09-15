@@ -145,7 +145,7 @@ extern perfCallback perfTrapHook;
 extern perfCallback perfASTHook;
 extern perfCallback perfIntHook;
 
-extern void		panic_i386_backtrace(void *, int);
+extern void		panic_i386_backtrace(void *, int, const char *, boolean_t, x86_saved_state_t *);
 #if MACH_KDP
 extern boolean_t	kdp_i386_trap(
 				unsigned int,

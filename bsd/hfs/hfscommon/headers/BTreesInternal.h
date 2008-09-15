@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -144,6 +144,7 @@ typedef FSBufferDescriptor *FSBufferDescriptorPtr;
 */
 enum {
 		kGetBlock			= 0x00000000,
+		kGetBlockHint		= 0x00000001,	// if set, the block is being looked up using hint
 		kForceReadBlock		= 0x00000002,	//€€ how does this relate to Read/Verify? Do we need this?
 		kGetEmptyBlock		= 0x00000008
 };

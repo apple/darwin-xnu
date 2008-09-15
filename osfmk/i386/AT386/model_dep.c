@@ -714,7 +714,7 @@ Debugger(
 		__asm__ volatile("movl %%ebp, %0" : "=m" (stackptr));
 
 		/* Print backtrace - callee is internally synchronized */
-		panic_i386_backtrace(stackptr, 16);
+		panic_i386_backtrace(stackptr, 16, NULL, FALSE, NULL);
 
 		/* everything should be printed now so copy to NVRAM
 		 */
@@ -725,6 +725,7 @@ Debugger(
 		   */
 		    if (commit_paniclog_to_nvram) {
 			unsigned int bufpos;
+			uintptr_t cr0;
 
                         debug_putc(0);
 
@@ -749,8 +750,17 @@ Debugger(
 			 * since we can subsequently halt the system.
 			 */
 			kprintf("Attempting to commit panic log to NVRAM\n");
+/* The following sequence is a workaround for:
+ * <rdar://problem/5915669> SnowLeopard10A67: AppleEFINVRAM should not invoke
+ * any routines that use floating point (MMX in this case) when saving panic
+ * logs to nvram/flash.
+ */
+			cr0 = get_cr0();
+			clear_ts();
+
                         pi_size = PESavePanicInfo((unsigned char *)debug_buf,
 			    pi_size );
+			set_cr0(cr0);
 
 			/* Uncompress in-place, to permit examination of
 			 * the panic log by debuggers.
@@ -939,10 +949,11 @@ panic_print_symbol_name(vm_address_t search)
 #define DUMPFRAMES 32
 #define PBT_TIMEOUT_CYCLES (5 * 1000 * 1000 * 1000ULL)
 void
-panic_i386_backtrace(void *_frame, int nframes)
+panic_i386_backtrace(void *_frame, int nframes, const char *msg, boolean_t regdump, x86_saved_state_t *regs)
 {
 	cframe_t	*frame = (cframe_t *)_frame;
 	vm_offset_t raddrs[DUMPFRAMES];
+	vm_offset_t PC = 0;
 	int frame_index;
 	volatile uint32_t *ppbtcnt = &pbtcnt;
 	uint64_t bt_tsc_timeout;
@@ -959,8 +970,25 @@ panic_i386_backtrace(void *_frame, int nframes)
 
 	PE_parse_boot_arg("keepsyms", &keepsyms);
 
-	kdb_printf("Backtrace, "
-	    "Format - Frame : Return Address (4 potential args on stack) \n");
+	if (msg != NULL) {
+		kdb_printf(msg);
+	}
+
+	if ((regdump == TRUE) && (regs != NULL)) {
+		x86_saved_state32_t	*ss32p = saved_state32(regs);
+
+		kdb_printf(
+		    "EAX: 0x%08x, EBX: 0x%08x, ECX: 0x%08x, EDX: 0x%08x\n"
+		    "CR2: 0x%08x, EBP: 0x%08x, ESI: 0x%08x, EDI: 0x%08x\n"
+		    "EFL: 0x%08x, EIP: 0x%08x, CS:  0x%08x, DS:  0x%08x\n",
+		    ss32p->eax,ss32p->ebx,ss32p->ecx,ss32p->edx,
+		    ss32p->cr2,ss32p->ebp,ss32p->esi,ss32p->edi,
+		    ss32p->efl,ss32p->eip,ss32p->cs, ss32p->ds);
+		PC = ss32p->eip;
+	}
+
+	kdb_printf("Backtrace (CPU %d), "
+		"Frame : Return Address (4 potential args on stack)\n", cpu_number());
 
 	for (frame_index = 0; frame_index < nframes; frame_index++) {
 		vm_offset_t curframep = (vm_offset_t) frame;
@@ -1019,6 +1047,9 @@ out:
 	 */
 	if (frame_index)
 		kmod_dump((vm_offset_t *)&raddrs[0], frame_index);
+
+	if (PC != 0)
+		kmod_dump(&PC, 1);
 
 	panic_display_system_configuration();
 	/* Release print backtrace lock, to permit other callers in the

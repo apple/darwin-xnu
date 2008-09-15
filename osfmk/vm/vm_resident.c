@@ -2164,18 +2164,23 @@ vm_page_free_list(
 		nxt = (vm_page_t)(mem->pageq.next);
 
 		if (!mem->fictitious) {
-			mem->free = TRUE;
+			if (mem->phys_page <= vm_lopage_poolend && mem->phys_page >= vm_lopage_poolstart) {
+				mem->pageq.next = NULL;
+				vm_page_release(mem);
+			} else {
+				mem->free = TRUE;
 
-			color = mem->phys_page & vm_color_mask;
-			if (queue_empty(&free_list[color])) {
-				inuse[color] = inuse_list_head;
-				inuse_list_head = color;
+				color = mem->phys_page & vm_color_mask;
+				if (queue_empty(&free_list[color])) {
+					inuse[color] = inuse_list_head;
+					inuse_list_head = color;
+				}
+				queue_enter_first(&free_list[color],
+						  mem,
+						  vm_page_t,
+						  pageq);
+				pg_count++;
 			}
-			queue_enter_first(&free_list[color],
-					  mem,
-					  vm_page_t,
-					  pageq);
-			pg_count++;
 		} else {
 			assert(mem->phys_page == vm_page_fictitious_addr ||
 			       mem->phys_page == vm_page_guard_addr);

@@ -354,7 +354,7 @@ noreplaycheck:
 
 	/* strip off the trailing pad area. */
 	m_adj(m, -taillen);
-
+	ip = mtod(m, struct ip *);
 #ifdef IPLEN_FLIPPED
 	ip->ip_len = ip->ip_len - taillen;
 #else
@@ -795,7 +795,7 @@ noreplaycheck:
 
 	/* strip off the trailing pad area. */
 	m_adj(m, -taillen);
-
+	ip6 = mtod(m, struct ip6_hdr *);
 	ip6->ip6_plen = htons(ntohs(ip6->ip6_plen) - taillen);
 
 	/* was it transmitted over the IPsec tunnel SA? */

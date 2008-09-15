@@ -397,30 +397,6 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr *addr,
 			m->m_pkthdr.rcvif = ifa->ifa_ifp;
 			ifafree(ifa);
 		}
-		
-		if ((~IF_HWASSIST_CSUM_FLAGS(m->m_pkthdr.rcvif->if_hwassist) & 
-				m->m_pkthdr.csum_flags) == 0) {
-			if (m->m_pkthdr.csum_flags & CSUM_DELAY_DATA) {
-				m->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA;
-			}
-			m->m_pkthdr.csum_flags |=
-				CSUM_DATA_VALID | CSUM_PSEUDO_HDR |
-				CSUM_IP_CHECKED | CSUM_IP_VALID;
-			m->m_pkthdr.csum_data = 0xffff;
-		}
-		else if (m->m_pkthdr.csum_flags & CSUM_DELAY_DATA) {
-			int	hlen;
-			
-#ifdef _IP_VHL
-			hlen = IP_VHL_HL(ip->ip_vhl) << 2;
-#else
-			hlen = ip->ip_hl << 2;
-#endif
-			in_delayed_cksum(m);
-			m->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA;
-			ip->ip_sum = in_cksum(m, hlen);
-		}
-
 #if CONFIG_MACF_NET
 		mac_mbuf_label_associate_socket(so, m);
 #endif

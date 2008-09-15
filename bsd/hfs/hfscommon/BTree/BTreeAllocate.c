@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003, 2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003, 2005-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -451,7 +451,7 @@ OSStatus	ExtendBTree	(BTreeControlBlockPtr	btreePtr,
 			err = UpdateNode (btreePtr, &mapNode, 0, kLockTransaction);
 			M_ExitOnError (err);
 			
-			err = GetNode (btreePtr, nextNodeNum, &mapNode);
+			err = GetNode (btreePtr, nextNodeNum, 0, &mapNode);
 			M_ExitOnError (err);
 			
 			// XXXdbg
@@ -558,7 +558,7 @@ OSStatus	GetMapNode (BTreeControlBlockPtr	  btreePtr,
 		err = ReleaseNode (btreePtr, nodePtr);
 		M_ExitOnError (err);
 		
-		err = GetNode (btreePtr, nextNodeNum, nodePtr);
+		err = GetNode (btreePtr, nextNodeNum, 0, nodePtr);
 		M_ExitOnError (err);
 		
 		if ( ((NodeDescPtr)nodePtr->buffer)->kind != kBTMapNode)
@@ -570,7 +570,7 @@ OSStatus	GetMapNode (BTreeControlBlockPtr	  btreePtr,
 		++btreePtr->numMapNodesRead;
 		mapIndex = 0;
 	} else {
-		err = GetNode (btreePtr, kHeaderNodeNum, nodePtr);
+		err = GetNode (btreePtr, kHeaderNodeNum, 0, nodePtr);
 		M_ExitOnError (err);
 		
 		if ( ((NodeDescPtr)nodePtr->buffer)->kind != kBTHeaderNode)

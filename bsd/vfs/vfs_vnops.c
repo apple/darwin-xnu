@@ -427,8 +427,10 @@ bad:
 		 * Check for a race against unlink.  We had a vnode
 		 * but according to vnode_authorize or VNOP_OPEN it
 		 * no longer exists.
+		 *
+		 * EREDRIVEOPEN: means that we were hit by the tty allocation race.
 		 */
-		if ((error == ENOENT) && (*fmodep & O_CREAT)) {
+		if (((error == ENOENT) && (*fmodep & O_CREAT)) || (error == EREDRIVEOPEN)) {
 			goto again;
 		}
 	}

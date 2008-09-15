@@ -93,6 +93,8 @@
 
 #include <net/net_osdep.h>
 
+extern u_long  route_generation;
+
 int ip_gif_ttl = GIF_TTL;
 SYSCTL_INT(_net_inet_ip, IPCTL_GIF_TTL, gifttl, CTLFLAG_RW,
 	&ip_gif_ttl,	0, "");
@@ -189,7 +191,10 @@ in_gif_output(
 	bcopy(&iphdr, mtod(m, struct ip *), sizeof(struct ip));
 
 	if (dst->sin_family != sin_dst->sin_family ||
-	    dst->sin_addr.s_addr != sin_dst->sin_addr.s_addr) {
+	    dst->sin_addr.s_addr != sin_dst->sin_addr.s_addr ||
+	    (sc->gif_ro.ro_rt != NULL &&
+	    (sc->gif_ro.ro_rt->generation_id != route_generation ||
+	    sc->gif_ro.ro_rt->rt_ifp == ifp))) {
 		/* cache route doesn't match */
 		dst->sin_family = sin_dst->sin_family;
 		dst->sin_len = sizeof(struct sockaddr_in);

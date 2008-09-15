@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -80,6 +80,8 @@ enum {
 
 /* from bsd/vfs/vfs_cluster.c */
 extern int is_file_clean(vnode_t vp, off_t filesize);
+/* from bsd/hfs/hfs_vfsops.c */
+extern int hfs_vfs_vget(struct mount *mp, ino64_t ino, struct vnode **vpp, vfs_context_t context);
 
 static int  hfs_clonelink(struct vnode *, int, kauth_cred_t, struct proc *);
 static int  hfs_clonefile(struct vnode *, int, int, int);
@@ -1328,7 +1330,11 @@ hfs_vnop_ioctl( struct vnop_ioctl_args /* {
 		bufptr = (char *)ap->a_data;
 		cnid = strtoul(bufptr, NULL, 10);
 
-		if ((error = hfs_vget(hfsmp, cnid, &file_vp, 1))) {
+		/* We need to call hfs_vfs_vget to leverage the code that will fix the
+		 * origin list for us if needed, as opposed to calling hfs_vget, since
+		 * we will need it for the subsequent build_path call.  
+		 */
+		if ((error = hfs_vfs_vget(HFSTOVFS(hfsmp), cnid, &file_vp, context))) {
 			return (error);
 		}
 		error = build_path(file_vp, bufptr, sizeof(pathname_t), &outlen, 0, context);
@@ -3029,7 +3035,7 @@ hfs_vnop_bwrite(struct vnop_bwrite_args *ap)
 			block.blockSize = buf_count(bp);
     
 			/* Endian un-swap B-Tree node */
-			retval = hfs_swap_BTNode (&block, vp, kSwapBTNodeHostToBig);
+			retval = hfs_swap_BTNode (&block, vp, kSwapBTNodeHostToBig, false);
 			if (retval)
 				panic("hfs_vnop_bwrite: about to write corrupt node!\n");
 		}

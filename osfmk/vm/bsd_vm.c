@@ -1026,7 +1026,7 @@ int
 fill_procregioninfo(task_t task, uint64_t arg, struct proc_regioninfo_internal *pinfo, uint32_t  *vnodeaddr, uint32_t  *vid)
 {
 
-	vm_map_t map = task->map;
+	vm_map_t map;
 	vm_map_offset_t	address = (vm_map_offset_t )arg;
 	vm_map_entry_t		tmp_entry;
 	vm_map_entry_t		entry;
@@ -1034,16 +1034,23 @@ fill_procregioninfo(task_t task, uint64_t arg, struct proc_regioninfo_internal *
 	vm_region_extended_info_data_t extended;
 	vm_region_top_info_data_t top;
 
-
-	if (map == VM_MAP_NULL) 
-		return(0);
-
+	    task_lock(task);
+	    map = task->map;
+	    if (map == VM_MAP_NULL) 
+	    {
+			task_unlock(task);
+			return(0);
+	    }
+	    vm_map_reference(map); 
+	    task_unlock(task);
+	    
 	    vm_map_lock_read(map);
 
 	    start = address;
 	    if (!vm_map_lookup_entry(map, start, &tmp_entry)) {
 		if ((entry = tmp_entry->vme_next) == vm_map_to_entry(map)) {
 			vm_map_unlock_read(map);
+	    		vm_map_deallocate(map); 
 		   	return(0);
 		}
 	    } else {
@@ -1108,11 +1115,13 @@ fill_procregioninfo(task_t task, uint64_t arg, struct proc_regioninfo_internal *
 
 		if (fill_vnodeinfoforaddr(entry, vnodeaddr, vid) ==0) {
 			vm_map_unlock_read(map);
+	    		vm_map_deallocate(map); 
 			return(1);
 		}
 	    }
 
 	    vm_map_unlock_read(map);
+	    vm_map_deallocate(map); 
 	    return(1);
 }
 

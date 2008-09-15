@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -369,19 +369,23 @@ extern OSStatus TreeIsDirty(BTreeControlBlockPtr btreePtr);
 
 OSStatus	GetNode					(BTreeControlBlockPtr	 btreePtr,
 									 u_int32_t				 nodeNum,
+									 u_int32_t 				 flags, 
 									 NodeRec				*returnNodePtr );
+
+/* Flags for GetNode() */
+#define		kGetNodeHint	0x1		/* If set, the node is being looked up using a hint */
 
 OSStatus	GetLeftSiblingNode		(BTreeControlBlockPtr	 btreePtr,
 									 NodeDescPtr			 node,
 									 NodeRec				*left );
 
-#define		GetLeftSiblingNode(btree,node,left)			GetNode ((btree), ((NodeDescPtr)(node))->bLink, (left))
+#define		GetLeftSiblingNode(btree,node,left)			GetNode ((btree), ((NodeDescPtr)(node))->bLink, 0, (left))
 
 OSStatus	GetRightSiblingNode		(BTreeControlBlockPtr	 btreePtr,
 									 NodeDescPtr			 node,
 									 NodeRec				*right );
 
-#define		GetRightSiblingNode(btree,node,right)		GetNode ((btree), ((NodeDescPtr)(node))->fLink, (right))
+#define		GetRightSiblingNode(btree,node,right)		GetNode ((btree), ((NodeDescPtr)(node))->fLink, 0, (right))
 
 
 OSStatus	GetNewNode				(BTreeControlBlockPtr	 btreePtr,

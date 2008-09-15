@@ -3265,7 +3265,6 @@ new_vnode(vnode_t *vpp)
         struct timeval current_tv;
         struct unsafe_fsnode *l_unsafefs = 0;
 	proc_t  curproc = current_proc();
-	pid_t current_pid = proc_pid(curproc);
 
 retry:
 	microuptime(&current_tv);
@@ -3315,11 +3314,11 @@ retry:
 		    if ( !(vp->v_listflag & VLIST_RAGE) || !(vp->v_flag & VRAGE))
 		        panic("new_vnode: vp on RAGE list not marked both VLIST_RAGE and VRAGE");
 
-		    // skip vnodes which have a dependency on this process
-		    // (i.e. they're vnodes in a disk image and this process
-		    // is diskimages-helper)
+		    // if we're a dependency-capable process, skip vnodes that can
+		    // cause recycling deadlocks. (i.e. this process is diskimages
+		    // helper and the vnode is in a disk image).
 		    //
-		    if (vp->v_mount && vp->v_mount->mnt_dependent_pid != current_pid && vp->v_mount->mnt_dependent_process != curproc) {
+		    if ((curproc->p_flag & P_DEPENDENCY_CAPABLE) == 0 || vp->v_mount == NULL || vp->v_mount->mnt_dependent_process == NULL) {
 			break;
 		    }
 
@@ -3339,11 +3338,11 @@ retry:
 		 */
 		walk_count = 0;
 		TAILQ_FOREACH(vp, &vnode_free_list, v_freelist) {
-		    // skip vnodes which have a dependency on this process
-		    // (i.e. they're vnodes in a disk image and this process
-		    // is diskimages-helper)
+		    // if we're a dependency-capable process, skip vnodes that can
+		    // cause recycling deadlocks. (i.e. this process is diskimages
+		    // helper and the vnode is in a disk image)
 		    //
-		    if (vp->v_mount && vp->v_mount->mnt_dependent_pid != current_pid && vp->v_mount->mnt_dependent_process != curproc) {
+		    if ((curproc->p_flag & P_DEPENDENCY_CAPABLE) == 0 || vp->v_mount == NULL || vp->v_mount->mnt_dependent_process == NULL) {
 			break;
 		    }
 

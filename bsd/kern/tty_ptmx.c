@@ -367,6 +367,16 @@ ptmx_get_ioctl(int minor, int open_flag)
 			_state.pis_total += PTMX_GROW_VECTOR;
 			if (old_pis_ioctl_list)
 				FREE(old_pis_ioctl_list, M_TTYS);
+		} 
+		
+		if (_state.pis_ioctl_list[minor] != NULL) {
+			ttyfree(new_ptmx_ioctl->pt_tty);
+			DEVFS_UNLOCK();
+			FREE(new_ptmx_ioctl, M_TTYS);
+
+			/* Special error value so we know to redrive the open, we've been raced */
+			return (struct ptmx_ioctl*)-1; 
+
 		}
 
 		/* Vector is large enough; grab a new ptmx_ioctl */
@@ -419,8 +429,6 @@ ptmx_free_ioctl(int minor, int open_flag)
 	if (!(_state.pis_ioctl_list[minor]->pt_flags & (PF_OPEN_M|PF_OPEN_S))) {
 		/* Mark as free so it can be reallocated later */
 		old_ptmx_ioctl = _state.pis_ioctl_list[ minor];
-		_state.pis_ioctl_list[ minor] = NULL;
-		_state.pis_free++;
 	}
 	DEVFS_UNLOCK();
 
@@ -436,6 +444,12 @@ ptmx_free_ioctl(int minor, int open_flag)
 			devfs_remove(old_ptmx_ioctl->pt_devhandle);
 		ttyfree(old_ptmx_ioctl->pt_tty);
 		FREE(old_ptmx_ioctl, M_TTYS);
+
+		/* Don't remove the entry until the devfs slot is free */
+		DEVFS_LOCK();
+		_state.pis_ioctl_list[ minor] = NULL;
+		_state.pis_free++;
+		DEVFS_UNLOCK();
 	}
 
 	return (0);	/* Success */
@@ -767,9 +781,11 @@ ptmx_open(dev_t dev, __unused int flag, __unused int devtype, __unused proc_t p)
 	int error = 0;
 	boolean_t   funnel_state;
 
-
-	if ((pti = ptmx_get_ioctl(minor(dev), PF_OPEN_M)) == NULL) {
+	pti = ptmx_get_ioctl(minor(dev), PF_OPEN_M);
+	if (pti == NULL) {
 	        return (ENXIO);
+	} else if (pti == (struct ptmx_ioctl*)-1) {
+		return (EREDRIVEOPEN);
 	}
 	tp = pti->pt_tty;
 
