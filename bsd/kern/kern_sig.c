@@ -2709,7 +2709,7 @@ bsd_ast(thread_t thread)
 
 }
 
-/* ptrace set runnalbe */
+/* ptrace set runnable */
 void
 pt_setrunnable(proc_t p)
 {
@@ -2723,7 +2723,9 @@ pt_setrunnable(proc_t p)
 		proc_unlock(p);
 		if (p->sigwait) {
 			wakeup((caddr_t)&(p->sigwait));
-			task_release(task);
+			if ((p->p_lflag & P_LSIGEXC) == 0) {	// 5878479
+				task_release(task);
+			}
 		}
 	}
 }

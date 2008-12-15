@@ -371,6 +371,9 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr *addr,
 #if CONFIG_MACF_NET
 		mac_mbuf_label_associate_inpcb(inp, m);
 #endif
+#if CONFIG_IP_EDGEHOLE
+		ip_edgehole_mbuf_tag(inp, m);
+#endif
 		error = ip_output(m,
 			    inp->inp_options, &inp->inp_route,
 			(so->so_options & SO_DONTROUTE) |

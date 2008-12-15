@@ -35,6 +35,7 @@
 #ifdef	KERNEL_PRIVATE
 
 extern unsigned int	systemLogDiags;
+extern char debug_buf[];
 
 #ifdef MACH_KERNEL_PRIVATE
 
@@ -49,7 +50,7 @@ extern unsigned int     current_debugger;
 
 extern unsigned int     active_debugger;
 extern unsigned int 	debug_mode; 
-extern unsigned int	disable_debug_output;
+extern unsigned int 	disable_debug_output; 
 
 extern unsigned int     panicDebugging;
 extern unsigned int	logPanicDataToScreen;
@@ -71,7 +72,6 @@ extern const char		*panicstr;
 extern volatile unsigned int	nestedpanic;
 extern int unsigned long panic_caller;
 
-extern char *debug_buf;
 extern char *debug_buf_ptr;
 extern unsigned int debug_buf_size;
 
@@ -102,6 +102,7 @@ void	panic_display_system_configuration(void);
 #define DB_KERN_DUMP_ON_NMI         0x800 /* Trigger core dump on NMI */
 #define DB_DBG_POST_CORE            0x1000 /*Wait in debugger after NMI core */
 #define DB_PANICLOG_DUMP            0x2000 /* Send paniclog on panic,not core*/
+
 
 #endif	/* KERNEL_PRIVATE */
 

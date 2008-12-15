@@ -116,7 +116,9 @@ hfs_swap_BTNode (
     	/*
     	 * When first opening a BTree, we have to read the header node before the
     	 * control block is initialized.  In this case, totalNodes will be zero,
-    	 * so skip the bounds checking.
+    	 * so skip the bounds checking. Also, we should ignore the header node when
+		 * checking for invalid forwards and backwards links, since the header node's
+		 * links can point back to itself legitimately.
     	 */
     	if (btcb->totalNodes != 0) {
 			if (srcDesc->fLink >= btcb->totalNodes) {
@@ -129,6 +131,20 @@ hfs_swap_BTNode (
 				error = fsBTInvalidHeaderErr;
 				goto fail;
 			}
+			
+			if ((src->blockNum != 0) && (srcDesc->fLink == (u_int32_t) src->blockNum)) {
+				printf("hfs_swap_BTNode: invalid forward link (0x%08x == 0x%08x)\n",
+						srcDesc->fLink, (u_int32_t) src->blockNum);
+				error = fsBTInvalidHeaderErr;
+				goto fail;
+			}
+			if ((src->blockNum != 0) && (srcDesc->bLink == (u_int32_t) src->blockNum)) {
+				printf("hfs_swap_BTNode: invalid backward link (0x%08x == 0x%08x)\n",
+						srcDesc->bLink, (u_int32_t) src->blockNum);
+				error = fsBTInvalidHeaderErr;
+				goto fail;
+			}
+
 		}
 		
 		/* 
@@ -254,17 +270,34 @@ hfs_swap_BTNode (
     if (direction == kSwapBTNodeHostToBig) {
 		/*
 		 * Sanity check and swap the forward and backward links.
+		 * Ignore the header node since its forward and backwards links can legitimately
+		 * point to itself.
 		 */
 		if (srcDesc->fLink >= btcb->totalNodes) {
 			panic("hfs_UNswap_BTNode: invalid forward link (0x%08X)\n", srcDesc->fLink);
 			error = fsBTInvalidHeaderErr;
 			goto fail;
 		}
+		if ((src->blockNum != 0) && (srcDesc->fLink == (u_int32_t) src->blockNum)) {
+			panic ("hfs_UNswap_BTNode: invalid forward link (0x%08x == 0x%08x)\n", 
+					srcDesc->fLink, (u_int32_t) src->blockNum);
+			error = fsBTInvalidHeaderErr;
+			goto fail;
+		}
+		
 		if (srcDesc->bLink >= btcb->totalNodes) {
 			panic("hfs_UNswap_BTNode: invalid backward link (0x%08X)\n", srcDesc->bLink);
 			error = fsBTInvalidHeaderErr;
 			goto fail;
 		}
+		if ((src->blockNum != 0) && (srcDesc->bLink == (u_int32_t) src->blockNum)) {
+			panic ("hfs_UNswap_BTNode: invalid backward link (0x%08x == 0x%08x)\n", 
+					srcDesc->bLink, (u_int32_t) src->blockNum);
+			error = fsBTInvalidHeaderErr;
+			goto fail;
+		}
+
+
         srcDesc->fLink		= SWAP_BE32 (srcDesc->fLink);
         srcDesc->bLink		= SWAP_BE32 (srcDesc->bLink);
     

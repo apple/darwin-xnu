@@ -144,7 +144,10 @@ typedef const struct memory_object_pager_ops {
 		memory_object_offset_t offset,
 		vm_size_t size,
 		vm_sync_t sync_flags);
-	kern_return_t (*memory_object_unmap)(
+	kern_return_t (*memory_object_map)(
+		memory_object_t mem_obj,
+		vm_prot_t prot);
+	kern_return_t (*memory_object_last_unmap)(
 		memory_object_t mem_obj);
 	const char *memory_object_pager_name;
 } * memory_object_pager_ops_t;
@@ -386,15 +389,17 @@ struct upl_page_info {
 	ppnum_t		phys_addr;	/* physical page index number */
         unsigned int
 #ifdef  XNU_KERNEL_PRIVATE
-                        pageout:1,      /* page is to be removed on commit */
-                        absent:1,       /* No valid data in this page */
-                        dirty:1,        /* Page must be cleaned (O) */
-			precious:1,     /* must be cleaned, we have only copy */
-			device:1,	/* no page data, mapped dev memory */
-	                speculative:1,  /* page is valid, but not yet accessed */
-                        :0;		/* force to long boundary */
+		pageout:1,      /* page is to be removed on commit */
+		absent:1,       /* No valid data in this page */
+		dirty:1,        /* Page must be cleaned (O) */
+		precious:1,     /* must be cleaned, we have only copy */
+		device:1,	/* no page data, mapped dev memory */
+		speculative:1,  /* page is valid, but not yet accessed */
+		cs_validated:1,	/* CODE SIGNING: page was validated */
+		cs_tainted:1,	/* CODE SIGNING: page is tainted */
+		:0;		/* force to long boundary */
 #else
-			opaque;		/* use upl_page_xxx() accessor funcs */
+		opaque;		/* use upl_page_xxx() accessor funcs */
 #endif /* XNU_KERNEL_PRIVATE */
 };
 
@@ -532,6 +537,9 @@ typedef uint32_t	upl_size_t;	/* page-aligned byte size */
 #define UPL_COMMIT_INACTIVATE		0x8
 #define UPL_COMMIT_NOTIFY_EMPTY		0x10
 #define UPL_COMMIT_ALLOW_ACCESS		0x20
+#define UPL_COMMIT_CS_VALIDATED		0x40
+
+#define UPL_COMMIT_KERNEL_ONLY_FLAGS	(UPL_COMMIT_CS_VALIDATED)
 
 /* flags for return of state from vm_map_get_upl,  vm_upl address space */
 /* based call */
@@ -609,6 +617,14 @@ typedef uint32_t	upl_size_t;	/* page-aligned byte size */
 #define UPL_CLR_PAGE_FREE_ON_COMMIT(upl, index) \
 	(((upl)[(index)].phys_addr != 0) ?       \
 	 ((upl)[(index)].pageout = FALSE) : FALSE)
+
+/* modifier macros for upl_t */
+
+#define UPL_SET_CS_VALIDATED(upl, index, value) \
+	((upl)[(index)].cs_validated = ((value) ? TRUE : FALSE))
+
+#define UPL_SET_CS_TAINTED(upl, index, value) \
+	((upl)[(index)].cs_tainted = ((value) ? TRUE : FALSE))
 
 /* The call prototyped below is used strictly by UPL_GET_INTERNAL_PAGE_LIST */
 

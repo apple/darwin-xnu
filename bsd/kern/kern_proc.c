@@ -155,7 +155,9 @@ lck_attr_t * lctx_lck_attr;
 static	void	lctxinit(void);
 #endif
 
+#if DEBUG
 #define __PROC_INTERNAL_DEBUG 1
+#endif
 /* Name to give to core files */
 __private_extern__ char corefilename[MAXPATHLEN+1] = {"/cores/core.%P"};
 
@@ -284,16 +286,22 @@ out:
 int
 isinferior(proc_t p, proc_t t)
 {
-int retval = 0;
+	int retval = 0;
+	int nchecked = 0;
+	proc_t start = p;
 
 	/* if p==t they are not inferior */
 	if (p == t)
 		return(0);
 
 	proc_list_lock();
-	for (; p != t; p = p->p_pptr)
-		if (p->p_pid == 0)
+	for (; p != t; p = p->p_pptr) {
+		nchecked++;
+
+		/* Detect here if we're in a cycle */
+		if ((p->p_pid == 0) || (p->p_pptr == start) || (nchecked >= nprocs))
 			goto out;
+	}
 	retval = 1;
 out:
 	proc_list_unlock();
@@ -548,9 +556,9 @@ proc_childdrainend(proc_t p)
 }
 
 void
-proc_checkdeadrefs(proc_t p)
+proc_checkdeadrefs(__unused proc_t p)
 {
-//#if __PROC_INTERNAL_DEBUG
+#if __PROC_INTERNAL_DEBUG
 	if ((p->p_listflag  & P_LIST_INHASH) != 0)
 		panic("proc being freed and still in hash %x: %x\n", (unsigned int)p, (unsigned int)p->p_listflag);
 	if (p->p_childrencnt != 0)
@@ -559,7 +567,7 @@ proc_checkdeadrefs(proc_t p)
 		panic("proc being freed and pending refcount %x:%x\n", (unsigned int)p, (unsigned int)p->p_refcount);
 	if (p->p_parentref != 0)
 		panic("proc being freed and pending parentrefs %x:%x\n", (unsigned int)p, (unsigned int)p->p_parentref);
-//#endif
+#endif
 }
 
 int
@@ -753,6 +761,18 @@ int
 proc_is64bit(proc_t p)
 {
 	return(IS_64BIT_PROCESS(p));
+}
+
+int
+proc_pidversion(proc_t p)
+{
+	return(p->p_idversion);
+}
+
+int
+proc_getcdhash(proc_t p, unsigned char *cdhash)
+{
+	return vn_getcdhash(p->p_textvp, p->p_textoff, cdhash);
 }
 
 void
@@ -1705,7 +1725,6 @@ csops(__unused proc_t p, struct csops_args *uap, __unused register_t *retval)
 			buf = (char *)kalloc(usize);
 			if (buf == NULL) 
 				return(ENOMEM);
-
 			bzero(buf, usize);
 
 			error = vnode_getwithvid(tvp, vid);
@@ -2456,7 +2475,8 @@ SYSCTL_INT(_vm, OID_AUTO, cs_force_hard, CTLFLAG_RW, &cs_force_hard, 0, "");
 SYSCTL_INT(_vm, OID_AUTO, cs_debug, CTLFLAG_RW, &cs_debug, 0, "");
 
 int
-cs_invalid_page(void)
+cs_invalid_page(
+	addr64_t vaddr)
 {
 	struct proc	*p;
 	int		retval;
@@ -2475,48 +2495,41 @@ cs_invalid_page(void)
 	if (cs_force_hard)
 		p->p_csflags |= CS_HARD;
 
-	if (p->p_csflags & CS_VALID) {
-		p->p_csflags &= ~CS_VALID;
-
-		proc_unlock(p);
-		cs_procs_invalidated++;
-		printf("CODE SIGNING: cs_invalid_page: "
-		       "p=%d[%s] clearing CS_VALID\n",
-		       p->p_pid, p->p_comm);
-		proc_lock(p);
-
-
-		if (p->p_csflags & CS_KILL) {
-			proc_unlock(p);
-			if (cs_debug) {
-				printf("CODE SIGNING: cs_invalid_page: "
-				       "p=%d[%s] honoring CS_KILL\n",
-				       p->p_pid, p->p_comm);
-			}
-			cs_procs_killed++;
-			psignal(p, SIGKILL);
-			proc_lock(p);
-		}
-		
-		if (p->p_csflags & CS_HARD) {
-			proc_unlock(p);
-			if (cs_debug) {
-				printf("CODE SIGNING: cs_invalid_page: "
-				       "p=%d[%s] honoring CS_HARD\n",
-				       p->p_pid, p->p_comm);
-			}
-			retval = 1;
-		} else {
-			proc_unlock(p);
-			retval = 0;
-		}
-	} else {
+	/* CS_KILL triggers us to send a kill signal. Nothing else. */
+	if (p->p_csflags & CS_KILL) {
 		proc_unlock(p);
 		if (cs_debug) {
-			printf("CODE SIGNING: cs_invalid_page: "
-			       "p=%d[%s] ignored...\n",
-			       p->p_pid, p->p_comm);
+			printf("CODE SIGNING: cs_invalid_page(0x%llx): "
+			       "p=%d[%s] honoring CS_KILL\n",
+			       vaddr, p->p_pid, p->p_comm);
 		}
+		cs_procs_killed++;
+		psignal(p, SIGKILL);
+		proc_lock(p);
+	}
+	
+	/* CS_HARD means fail the mapping operation so the process stays valid. */
+	if (p->p_csflags & CS_HARD) {
+		proc_unlock(p);
+		if (cs_debug) {
+			printf("CODE SIGNING: cs_invalid_page(0x%llx): "
+			       "p=%d[%s] honoring CS_HARD\n",
+			       vaddr, p->p_pid, p->p_comm);
+		}
+		retval = 1;
+	} else {
+		if (p->p_csflags & CS_VALID) {
+			p->p_csflags &= ~CS_VALID;
+			
+			proc_unlock(p);
+			cs_procs_invalidated++;
+			printf("CODE SIGNING: cs_invalid_page(0x%llx): "
+			       "p=%d[%s] clearing CS_VALID\n",
+			       vaddr, p->p_pid, p->p_comm);
+		} else {
+			proc_unlock(p);
+		}
+		
 		retval = 0;
 	}
 

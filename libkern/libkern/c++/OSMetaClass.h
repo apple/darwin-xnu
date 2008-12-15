@@ -48,6 +48,14 @@ class OSSerialize;
 
 #define APPLE_KEXT_VTABLE_PADDING   1
 
+#if defined(__LP64__)
+#define	APPLE_KEXT_LEGACY_ABI	0
+#elif defined(__arm__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 2))
+#define	APPLE_KEXT_LEGACY_ABI	0
+#else
+#define	APPLE_KEXT_LEGACY_ABI	1
+#endif
+
 #if APPLE_KEXT_VTABLE_PADDING
 #define APPLE_KEXT_PAD_METHOD	    virtual
 #define APPLE_KEXT_PAD_IMPL(index)  gMetaClass.reservedCalled(index)
@@ -100,12 +108,13 @@ public:
 #define OSCheckTypeInst(typeinst, inst) \
     OSMetaClassBase::checkTypeInst(inst, typeinst)
     
+typedef void (*_ptf_t)(void);
+
+#if APPLE_KEXT_LEGACY_ABI
 
 // Arcane evil code interprets a C++ pointer to function as specified in the
 // -fapple-kext ABI, i.e. the gcc-2.95 generated code.  IT DOES NOT ALLOW
 // the conversion of functions that are from MULTIPLY inherited classes.
-
-typedef void (*_ptf_t)(void);
 
 static inline _ptf_t
 _ptmf2ptf(const OSMetaClassBase *self, void (OSMetaClassBase::*func)(void))
@@ -140,6 +149,43 @@ _ptmf2ptf(const OSMetaClassBase *self, void (OSMetaClassBase::*func)(void))
 	return (*u.vtablep)[map.fptmf2.fVInd - 1];
     }
 }
+
+#else /* !APPLE_KEXT_LEGACY_ABI */
+
+
+// Slightly less arcane and slightly less evil code to do
+// the same for kexts compiled with the standard Itanium C++
+// ABI
+
+static inline _ptf_t
+_ptmf2ptf(const OSMetaClassBase *self, void (OSMetaClassBase::*func)(void))
+{
+    union {
+	void (OSMetaClassBase::*fIn)(void);
+	uintptr_t fVTOffset;
+	_ptf_t fPFN;
+    } map;
+
+    map.fIn = func;
+
+    if (map.fVTOffset & 1) {
+	// virtual
+	union {
+	    const OSMetaClassBase *fObj;
+	    _ptf_t **vtablep;
+	} u;
+	u.fObj = self;
+
+	// Virtual member function so dereference vtable
+	return *(_ptf_t *)(((uintptr_t)*u.vtablep) + map.fVTOffset - 1);
+    } else {
+	// Not virtual, i.e. plain member func
+	return map.fPFN;
+    }
+}
+
+
+#endif /* !APPLE_KEXT_LEGACY_ABI */
 
 /*! @function OSMemberFunctionCast
     @abstract Convert a pointer to a member function to a c-style pointer to function.  No warnings are generated.

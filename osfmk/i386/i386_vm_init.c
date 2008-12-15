@@ -196,7 +196,7 @@ i386_vm_init(uint64_t	maxmem,
 	 * Compute the memory size.
 	 */
 
-	if ((1 == vm_himemory_mode) || PE_parse_boot_arg("-x", &safeboot)) {
+	if ((1 == vm_himemory_mode) || PE_parse_boot_argn("-x", &safeboot, sizeof (safeboot))) {
 	        maxpg = 1 << (32 - I386_PGSHIFT);
 	}
 	avail_remaining = 0;
@@ -440,12 +440,12 @@ i386_vm_init(uint64_t	maxmem,
 
 	kprintf("Physical memory %llu MB\n", sane_size/MEG);
 
-	if (!PE_parse_boot_arg("max_valid_dma_addr", &maxdmaaddr))
+	if (!PE_parse_boot_argn("max_valid_dma_addr", &maxdmaaddr, sizeof (maxdmaaddr)))
 	        max_valid_dma_address = 1024ULL * 1024ULL * 4096ULL;
 	else
 	        max_valid_dma_address = ((uint64_t) maxdmaaddr) * 1024ULL * 1024ULL;
 
-	if (!PE_parse_boot_arg("maxbouncepool", &maxbouncepoolsize))
+	if (!PE_parse_boot_argn("maxbouncepool", &maxbouncepoolsize, sizeof (maxbouncepoolsize)))
 	        maxbouncepoolsize = MAXBOUNCEPOOL;
 	else
 	        maxbouncepoolsize = maxbouncepoolsize * (1024 * 1024);
@@ -455,7 +455,7 @@ i386_vm_init(uint64_t	maxmem,
 	 * in order to correctly determine the size of the mbuf pool
 	 * that will be reserved
 	 */
-	if (!PE_parse_boot_arg("maxloreserve", &maxloreserve))
+	if (!PE_parse_boot_argn("maxloreserve", &maxloreserve, sizeof (maxloreserve)))
 	        maxloreserve = MAXLORESERVE + bsd_mbuf_cluster_reserve();
 	else
 	        maxloreserve = maxloreserve * (1024 * 1024);

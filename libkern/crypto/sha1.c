@@ -55,6 +55,7 @@
 
 #include <sys/types.h>
 #include <sys/systm.h>
+#include <libkern/OSAtomic.h>
 #include <libkern/crypto/sha1.h>
 
 #define	memset(x, y, z)	bzero(x, z);
@@ -141,7 +142,16 @@ static unsigned char PADDING[64] = { 0x80, /* zeros */ };
 static void SHA1Transform(u_int32_t, u_int32_t, u_int32_t, u_int32_t,
     u_int32_t, const u_int8_t *, SHA1_CTX *);
 
+void _SHA1Update(SHA1_CTX *context, const void *inpp, size_t inputLen);
+
 void SHA1Final_r(SHA1_CTX *, void *);
+
+typedef kern_return_t (*InKernelPerformSHA1Func)(void *ref, const void *data, size_t dataLen, u_int32_t *inHash, u_int32_t options, u_int32_t *outHash, Boolean usePhysicalAddress); 
+void sha1_hardware_hook(Boolean option, InKernelPerformSHA1Func func, void *ref);
+static void *SHA1Ref;
+InKernelPerformSHA1Func performSHA1WithinKernelOnly; 
+#define SHA1_USE_HARDWARE_THRESHOLD 2048 //bytes 
+
 
 /*
  * SHA1 initialization. Begins a SHA1 operation, writing a new context.
@@ -166,7 +176,7 @@ SHA1Init(SHA1_CTX *context)
  * context.
  */
 void
-SHA1Update(SHA1_CTX *context, const void *inpp, size_t inputLen)
+_SHA1Update(SHA1_CTX *context, const void *inpp, size_t inputLen)
 {
 	u_int32_t i, index, partLen;
 	const unsigned char *input = (const unsigned char *)inpp;
@@ -208,6 +218,105 @@ SHA1Update(SHA1_CTX *context, const void *inpp, size_t inputLen)
 
 	/* Buffer remaining input */
 	memcpy(&context->buffer[index], &input[i], inputLen - i);
+}
+
+
+
+
+/*
+ * This function is called by the SHA1 hardware kext during its init. 
+ * This will register the function to call to perform SHA1 using hardware. 
+ */
+void sha1_hardware_hook(Boolean option, InKernelPerformSHA1Func func, void *ref)
+{
+	if(option) {
+		// Establish the hook. The hardware is ready.
+		OSCompareAndSwap((uintptr_t)NULL, (uintptr_t)ref, (uintptr_t *)&SHA1Ref); 
+
+		if(!OSCompareAndSwap((uintptr_t)NULL, (uintptr_t)func, (uintptr_t *)&performSHA1WithinKernelOnly)) {
+			panic("sha1_hardware_hook: Called twice.. Should never happen\n");
+		}
+	}
+	else {
+		// The hardware is going away. Tear down the hook. 	
+		performSHA1WithinKernelOnly = NULL;
+		SHA1Ref = NULL;
+	}
+}
+
+static u_int32_t SHA1UpdateWithHardware(SHA1_CTX *context, const unsigned char *data, size_t dataLen, Boolean usePhysicalAddress)
+{
+	u_int32_t *inHashBuffer = context->state;
+	u_int32_t options = 0;
+	int result;
+
+	result = performSHA1WithinKernelOnly(SHA1Ref, data, dataLen, inHashBuffer, options, inHashBuffer, usePhysicalAddress);
+	if(result != KERN_SUCCESS) {
+		//The hardware failed to hash for some reason. Fall back to software. 
+		return 0;
+	}
+
+	//Update the context with the total length.
+        /* Update number of bits */
+        if ((context->bcount[1] += (dataLen << 3)) < (dataLen << 3))
+                context->bcount[0]++;
+        context->bcount[0] += (dataLen >> 29);
+	return dataLen;
+}
+
+/*
+ * This is function is only called in from the pagefault path or from page_copy().
+ * So we assume that we can safely convert the virtual address to the physical address and use it.
+ * Assumptions: The passed in address(inpp) is a kernel virtual address 
+ * and a physical page has been faulted in. 
+ * The inputLen passed in should always be less than or equal to a  page size (4096) 
+ * and inpp should be on a page boundary. 
+ * "performSHA1WithinKernelOnly" is initialized only when the hardware driver exists and is ready.
+ */
+void SHA1UpdateUsePhysicalAddress(SHA1_CTX *context, const void *inpp, size_t inputLen)
+{
+	Boolean usePhysicalAddress = TRUE;
+	if((inputLen == PAGE_SIZE) && performSHA1WithinKernelOnly) { // If hardware exists and is ready.
+		if(SHA1UpdateWithHardware(context, (const unsigned char *)inpp, inputLen, usePhysicalAddress))
+			return;
+		//else for some reason the hardware failed.. 
+		//fall through to software and try the hash in software. 
+	}
+	//Use the software implementation since the hardware is absent or 
+	// has not been initialized yet or inputLen !=  PAGE_SIZE. 
+	_SHA1Update(context, inpp, inputLen);
+}
+
+/*
+ * A wrapper around _SHA1Update() to pick between software or hardware based SHA1. 
+ *
+ */
+void SHA1Update(SHA1_CTX *context, const void *inpp, size_t inputLen)
+{
+	const unsigned char *input = (const unsigned char *)inpp;
+	Boolean usePhysicalAddress = FALSE;
+	u_int32_t index;
+	
+	if((inputLen > SHA1_USE_HARDWARE_THRESHOLD) && performSHA1WithinKernelOnly) { 
+		index = (context->bcount[1] >> 3) & 0x3F;
+		if(index != 0) {  //bytes left in the context. Handle them first.
+			u_int32_t partLen = 64 - index;
+			memcpy(&context->buffer[index], input, partLen);
+			_SHA1Update(context, inpp, inputLen);
+			inputLen -= partLen; 
+			input += partLen; 
+		}
+		
+		u_int32_t lenForHardware = inputLen & (~0x3F); //multiple of 64
+		u_int32_t bytesHashed = 0;
+		bytesHashed = SHA1UpdateWithHardware(context, input, lenForHardware, usePhysicalAddress); 	
+		
+		inputLen -= bytesHashed;
+		input += bytesHashed;
+	}
+
+	//Fall through to the software implementation.
+	_SHA1Update(context, input, inputLen);
 }
 
 /*

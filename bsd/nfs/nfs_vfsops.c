@@ -572,14 +572,15 @@ nfs_vfs_getattr(mount_t mp, struct vfs_attr *fsap, vfs_context_t ctx)
 			if (nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_CASE_PRESERVING)
 				caps |= VOL_CAP_FMT_CASE_PRESERVING;
 		}
+		/* Note: VOL_CAP_FMT_2TB_FILESIZE is actually used to test for "large file support" */
 		if (NFS_BITMAP_ISSET(nmp->nm_fsattr.nfsa_bitmap, NFS_FATTR_MAXFILESIZE)) {
-			/* Is server's max file size at least 2TB? */
-			if (nmp->nm_fsattr.nfsa_maxfilesize >= 0x20000000000ULL)
+			/* Is server's max file size at least 4GB? */
+			if (nmp->nm_fsattr.nfsa_maxfilesize >= 0x100000000ULL)
 				caps |= VOL_CAP_FMT_2TB_FILESIZE;
 		} else if (nfsvers >= NFS_VER3) {
 			/*
 			 * NFSv3 and up supports 64 bits of file size.
-			 * So, we'll just assume maxfilesize >= 2TB
+			 * So, we'll just assume maxfilesize >= 4GB
 			 */
 			caps |= VOL_CAP_FMT_2TB_FILESIZE;
 		}
@@ -780,8 +781,7 @@ nfs3_fsinfo(struct nfsmount *nmp, nfsnode_t np, vfs_context_t ctx)
 	if (maxsize < nmp->nm_readdirsize)
 		nmp->nm_readdirsize = maxsize;
 
-	nfsm_chain_get_64(error, &nmrep, maxsize);
-	nmp->nm_fsattr.nfsa_maxfilesize = maxsize;
+	nfsm_chain_get_64(error, &nmrep, nmp->nm_fsattr.nfsa_maxfilesize);
 
 	nfsm_chain_adv(error, &nmrep, 2 * NFSX_UNSIGNED); // skip time_delta
 
@@ -906,7 +906,7 @@ tryagain:
 		//PWC hack until we have a real "mount" tool to remount root rw
 		int rw_root=0;
 		int flags = MNT_ROOTFS|MNT_RDONLY;
-		PE_parse_boot_arg("-rwroot_hack", &rw_root);
+		PE_parse_boot_argn("-rwroot_hack", &rw_root, sizeof (rw_root));
 		if(rw_root)
 		{
 			flags = MNT_ROOTFS;

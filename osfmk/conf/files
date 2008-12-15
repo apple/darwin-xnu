@@ -47,6 +47,7 @@ OPTIONS/mach_ipc_test		optional mach_ipc_test
 OPTIONS/mach_kdb		optional mach_kdb
 OPTIONS/mach_kgdb		optional mach_kgdb
 OPTIONS/mach_kdp		optional mach_kdp
+OPTIONS/config_serial_kdp		optional config_serial_kdp
 OPTIONS/mach_kprof		optional mach_kprof
 OPTIONS/mach_ldebug		optional mach_ldebug
 OPTIONS/mach_mp_debug		optional mach_mp_debug
@@ -123,6 +124,7 @@ osfmk/ddb/db_write_cmd.c		optional mach_kdb
 osfmk/ddb/tr.c			optional mach_tr
 osfmk/kdp/kdp.c			optional mach_kdp
 osfmk/kdp/kdp_udp.c			optional mach_kdp
+osfmk/kdp/kdp_serial.c			optional config_serial_kdp
 osfmk/ipc/ipc_entry.c			standard
 osfmk/ipc/ipc_hash.c			standard
 osfmk/ipc/ipc_init.c			standard

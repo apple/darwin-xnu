@@ -520,6 +520,7 @@ vm_object_bootstrap(void)
 	/* cache bitfields */
 	vm_object_template.wimg_bits = VM_WIMG_DEFAULT;
 	vm_object_template.code_signed = FALSE;
+	vm_object_template.mapping_in_progress = FALSE;
 	vm_object_template.not_in_use = 0;
 #ifdef UPL_DEBUG
 	vm_object_template.uplq.prev = NULL;
@@ -753,10 +754,12 @@ vm_object_deallocate(
 			/* more mappers for this object */
 
 			if (pager != MEMORY_OBJECT_NULL) {
+				vm_object_mapping_wait(object, THREAD_UNINT);
+				vm_object_mapping_begin(object);
 				vm_object_unlock(object);
 				vm_object_cache_unlock();
 					
-				memory_object_unmap(pager);
+				memory_object_last_unmap(pager);
 
 				try_failed_count = 0;
 				for (;;) {
@@ -777,6 +780,8 @@ vm_object_deallocate(
 					mutex_pause(try_failed_count);  /* wait a bit */
 				}
 				assert(object->ref_count > 0);
+
+				vm_object_mapping_end(object);
 			}
 		}
 
@@ -2210,7 +2215,12 @@ vm_object_copy_slowly(
 					/* fall thru */
 
 				case VM_FAULT_INTERRUPTED:
+					vm_object_lock(new_object);
+					vm_page_lock_queues();
 					vm_page_free(new_page);
+					vm_page_unlock_queues();
+					vm_object_unlock(new_object);
+
 					vm_object_deallocate(new_object);
 					vm_object_deallocate(src_object);
 					*_result_object = VM_OBJECT_NULL;
@@ -2225,9 +2235,11 @@ vm_object_copy_slowly(
 					 *	    any page fails [chosen]
 					 */
 
+					vm_object_lock(new_object);
 					vm_page_lock_queues();
 					vm_page_free(new_page);
 					vm_page_unlock_queues();
+					vm_object_unlock(new_object);
 
 					vm_object_deallocate(new_object);
 					vm_object_deallocate(src_object);
@@ -3663,7 +3675,7 @@ vm_object_do_bypass(
 	 *	Since its ref_count was at least 2, it
 	 *	will not vanish; so we don't need to call
 	 *	vm_object_deallocate.
-	 *	[FBDP: that doesn't seem to be true any more]
+	 *	[with a caveat for "named" objects]
 	 * 
 	 *	The res_count on the backing object is
 	 *	conditionally decremented.  It's possible
@@ -3681,7 +3693,8 @@ vm_object_do_bypass(
 	 *	is temporary and cachable.
 #endif
 	 */
-	if (backing_object->ref_count > 1) {
+	if (backing_object->ref_count > 2 ||
+	    (!backing_object->named && backing_object->ref_count > 1)) {
 		vm_object_lock_assert_exclusive(backing_object);
 		backing_object->ref_count--;
 #if	TASK_SWAPPER
@@ -4067,10 +4080,11 @@ vm_object_collapse(
 			 * backing object that show through to the object.
 			 */
 #if	MACH_PAGEMAP
-			if (backing_rcount || backing_object->existence_map) {
+			if (backing_rcount || backing_object->existence_map)
 #else
-			if (backing_rcount) {
+			if (backing_rcount)
 #endif	/* MACH_PAGEMAP */
+			{
 				offset = hint_offset;
 				
 				while((offset =
@@ -5132,6 +5146,9 @@ vm_object_lock_request(
 	return (KERN_SUCCESS);
 }
 
+unsigned int vm_page_purged_wired = 0;
+unsigned int vm_page_purged_busy = 0;
+unsigned int vm_page_purged_others = 0;
 /*
  * Empty a purgeable object by grabbing the physical pages assigned to it and
  * putting them on the free queue without writing them to backing store, etc.
@@ -5200,16 +5217,36 @@ vm_object_purge(vm_object_t object)
 			/* resume with the current page and a new quota */
 			purge_loop_quota = PURGE_LOOP_QUOTA;
 		}
-				
-		       
-		if (p->busy || p->cleaning || p->laundry ||
-		    p->list_req_pending) {
-			/* page is being acted upon, so don't mess with it */
-			continue;
-		}
+
 		if (p->wire_count) {
 			/* don't discard a wired page */
+			vm_page_purged_wired++;
+
+		skip_page:
+			/*
+			 * This page is no longer "purgeable",
+			 * for accounting purposes.
+			 */
+			assert(vm_page_purgeable_count > 0);
+			vm_page_purgeable_count--;
 			continue;
+		}
+
+		if (p->busy) {
+			/*
+			 * We can't reclaim a busy page but we can deactivate
+			 * it (if it's not wired) to make sure it gets
+			 * considered by vm_pageout_scan() later.
+			 */
+			vm_page_deactivate(p);
+			vm_page_purged_busy++;
+			goto skip_page;
+		}
+
+		if (p->cleaning || p->laundry || p->list_req_pending) {
+			/* page is being acted upon, so don't mess with it */
+			vm_page_purged_others++;
+			goto skip_page;
 		}
 
 		assert(!p->laundry);
@@ -5237,6 +5274,12 @@ vm_object_purge(vm_object_t object)
 		}
 
 		vm_page_free_prepare(p);
+		/*
+		 * vm_page_purgeable_count is not updated when freeing
+		 * a page from an "empty" object, so do it explicitly here.
+		 */
+		assert(vm_page_purgeable_count > 0);
+		vm_page_purgeable_count--;
 
 		/* ... and put it on our queue of pages to free */
 		assert(p->pageq.next == NULL &&
@@ -5379,11 +5422,11 @@ vm_object_purgable_control(
 
 		if (old_state != VM_PURGABLE_NONVOLATILE) {
 			vm_page_lock_queues();
-			assert(vm_page_purgeable_count >=
-			       object->resident_page_count);
-			vm_page_purgeable_count -= object->resident_page_count;
-
 			if (old_state==VM_PURGABLE_VOLATILE) {
+				assert(vm_page_purgeable_count >=
+				       object->resident_page_count);
+				vm_page_purgeable_count -= object->resident_page_count;
+
 			        assert(object->objq.next != NULL && object->objq.prev != NULL); /* object should be on a queue */
 				purgeable_q_t queue = vm_purgeable_object_remove(object);
 				assert(queue);
@@ -5397,13 +5440,14 @@ vm_object_purgable_control(
 
 	case VM_PURGABLE_VOLATILE:
 
-		if ((old_state != VM_PURGABLE_NONVOLATILE) && (old_state != VM_PURGABLE_VOLATILE))
+		if (old_state == VM_PURGABLE_EMPTY &&
+		    object->resident_page_count == 0)
 			break;
 		purgeable_q_t queue;
         
 		/* find the correct queue */
 		if ((*state&VM_PURGABLE_ORDERING_MASK) == VM_PURGABLE_ORDERING_OBSOLETE)
-		        queue = &purgeable_queues[PURGEABLE_Q_TYPE_FIFO];
+		        queue = &purgeable_queues[PURGEABLE_Q_TYPE_OBSOLETE];
 		else {
 		        if ((*state&VM_PURGABLE_BEHAVIOR_MASK) == VM_PURGABLE_BEHAVIOR_FIFO)
 			        queue = &purgeable_queues[PURGEABLE_Q_TYPE_FIFO];
@@ -5411,7 +5455,8 @@ vm_object_purgable_control(
 			        queue = &purgeable_queues[PURGEABLE_Q_TYPE_LIFO];
 		}
         
-		if (old_state == VM_PURGABLE_NONVOLATILE) {
+		if (old_state == VM_PURGABLE_NONVOLATILE ||
+		    old_state == VM_PURGABLE_EMPTY) {
 		        /* try to add token... this can fail */
 		        vm_page_lock_queues();
 
@@ -5474,10 +5519,12 @@ vm_object_purgable_control(
 				vm_purgeable_token_delete_first(old_queue);
 			}
 
-			if (old_state==VM_PURGABLE_NONVOLATILE) {
-				vm_page_purgeable_count += object->resident_page_count;
+			if (old_state==VM_PURGABLE_NONVOLATILE ||
+			    old_state == VM_PURGABLE_EMPTY) {
 				vm_page_lock_queues();
+				vm_page_purgeable_count += object->resident_page_count;
 			}
+			object->purgable = VM_PURGABLE_VOLATILE;
 			(void) vm_object_purge(object);
 			vm_page_unlock_queues();
 		}

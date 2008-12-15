@@ -123,6 +123,7 @@ struct mount {
 	lck_rw_t	mnt_rwlock;		/* mutex readwrite lock */
         lck_mtx_t	mnt_renamelock;		/* mutex that serializes renames that change shape of tree */
 	vnode_t		mnt_devvp;		/* the device mounted on for local file systems */
+	uint32_t	mnt_devbsdunit;		/* the BSD unit number of the device */
 	int32_t		mnt_crossref;		/* refernces to cover lookups  crossing into mp */
 	int32_t		mnt_iterref;		/* refernces to cover iterations; drained makes it -ve  */
  
@@ -174,8 +175,6 @@ struct mount {
 	 */
 	pid_t		mnt_dependent_pid;
 	void		*mnt_dependent_process;
-
-	struct timeval	last_normal_IO_timestamp;
 };
 
 /*
@@ -340,6 +339,15 @@ struct user_statfs {
 #endif
 };
 
+/*
+ * throttle I/Os are affected only by normal I/Os happening on the same bsd device node.  For example, disk1s3 and
+ * disk1s5 are the same device node, while disk1s3 and disk2 are not (although disk2 might be a mounted disk image file
+ * and the disk image file resides on a partition in disk1).  The following constant defines the maximum number of
+ * different bsd device nodes the algorithm can consider, and larger numbers are rounded by this maximum.  Since
+ * throttled I/O is usually useful in non-server environment only, a small number 16 is enough in most cases
+ */
+#define LOWPRI_MAX_NUM_DEV 16
+
 __BEGIN_DECLS
 
 extern int mount_generation;
@@ -376,6 +384,11 @@ int  mount_isdrained(mount_t, int);
 void mount_iterdrop(mount_t);
 void mount_iterdrain(mount_t);
 void mount_iterreset(mount_t);
+
+/* throttled I/O api */
+int throttle_get_io_policy(struct uthread **ut);
+extern void throttle_lowpri_io(boolean_t ok_to_sleep);
+int throttle_io_will_be_throttled(int lowpri_window_msecs, size_t devbsdunit);
 
 __END_DECLS
 

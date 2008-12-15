@@ -1215,7 +1215,7 @@ pmap_bootstrap(
 
 	virtual_avail = va;
 
-	if (PE_parse_boot_arg("npvhash", &npvhash)) {
+	if (PE_parse_boot_argn("npvhash", &npvhash, sizeof (npvhash))) {
 	  if (0 != ((npvhash+1) & npvhash)) {
 	    kprintf("invalid hash %d, must be ((2^N)-1), using default %d\n",npvhash,NPVHASH);
 	    npvhash = NPVHASH;
@@ -1226,7 +1226,7 @@ pmap_bootstrap(
 	printf("npvhash=%d\n",npvhash);
 
 	wpkernel = 1;
-	if (PE_parse_boot_arg("wpkernel", &boot_arg)) {
+	if (PE_parse_boot_argn("wpkernel", &boot_arg, sizeof (boot_arg))) {
 		if (boot_arg == 0)
 			wpkernel = 0;
 	}
@@ -1331,12 +1331,12 @@ pmap_bootstrap(
 	 * By default for 64-bit users loaded at 4GB, share kernel mapping.
 	 * But this may be overridden by the -no_shared_cr3 boot-arg.
 	 */
-	if (PE_parse_boot_arg("-no_shared_cr3", &no_shared_cr3)) {
+	if (PE_parse_boot_argn("-no_shared_cr3", &no_shared_cr3, sizeof (no_shared_cr3))) {
 		kprintf("Shared kernel address space disabled\n");
 	}	
 
 #ifdef	PMAP_TRACES
-	if (PE_parse_boot_arg("-pmap_trace", &pmap_trace)) {
+	if (PE_parse_boot_argn("-pmap_trace", &pmap_trace, sizeof (pmap_trace))) {
 		kprintf("Kernel traces for pmap operations enabled\n");
 	}	
 #endif	/* PMAP_TRACES */
@@ -4573,8 +4573,10 @@ pmap_flush_tlbs(pmap_t	pmap)
 		 */
 		while (cpus_to_respond != 0) {
 			if (mach_absolute_time() > deadline) {
-				pmap_tlb_flush_timeout = TRUE;
-				pmap_cpuset_NMIPI(cpus_to_respond);
+				if (!panic_active()) {
+					pmap_tlb_flush_timeout = TRUE;
+					pmap_cpuset_NMIPI(cpus_to_respond);
+				}
 				panic("pmap_flush_tlbs() timeout: "
 				    "cpu(s) failing to respond to interrupts, pmap=%p cpus_to_respond=0x%lx",
 				    pmap, cpus_to_respond);

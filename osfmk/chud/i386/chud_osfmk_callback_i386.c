@@ -46,6 +46,7 @@
 #include <chud/chud_thread.h>
 
 #include <i386/misc_protos.h>
+#include <i386/lapic.h>
 #include <i386/mp.h>
 #include <i386/machine_cpu.h>
 

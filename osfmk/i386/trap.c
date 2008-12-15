@@ -112,6 +112,9 @@
 #include <i386/machine_check.h>
 #include <mach/i386/syscall_sw.h>
 
+
+extern void throttle_lowpri_io(boolean_t);
+
 /*
  * Forward declarations
  */
@@ -163,7 +166,9 @@ thread_syscall_return(
 		}
 		regs->eax = ret;
 	}
-        thread_exception_return();
+	throttle_lowpri_io(TRUE);
+
+	thread_exception_return();
         /*NOTREACHED*/
 }
 

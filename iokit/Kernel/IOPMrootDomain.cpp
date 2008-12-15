@@ -329,7 +329,7 @@ static UInt32 computeDeltaTimeMS( const AbsoluteTime * startTime )
 // expert informs us we are the root.
 // **********************************************************************************
 
-#define kRootDomainSettingsCount        14
+#define kRootDomainSettingsCount        16
 
 static SYSCTL_STRUCT(_kern, OID_AUTO, sleeptime, 
 		     CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN, 
@@ -363,7 +363,9 @@ bool IOPMrootDomain::start ( IOService * nub )
             OSSymbol::withCString(kIOPMSettingWakeOnACChangeKey),
             OSSymbol::withCString(kIOPMSettingTimeZoneOffsetKey),
             OSSymbol::withCString(kIOPMSettingDisplaySleepUsesDimKey),
-            OSSymbol::withCString(kIOPMSettingMobileMotionModuleKey)
+            OSSymbol::withCString(kIOPMSettingMobileMotionModuleKey),
+            OSSymbol::withCString(kIOPMSettingGraphicsSwitchKey),
+            OSSymbol::withCString(kIOPMStateConsoleShutdown)
         };
     
 
@@ -2305,12 +2307,30 @@ void IOPMrootDomain::tellChangeUp ( unsigned long stateNum)
 {
     if ( stateNum == ON_STATE ) 
     {
-#if	HIBERNATION
         // Direct callout into OSMetaClass so it can disable kmod unloads
         // during sleep/wake to prevent deadlocks.
         OSMetaClassSystemSleepOrWake( kIOMessageSystemHasPoweredOn );
 
-	IOHibernateSystemPostWake();
+	if (getPowerState() == ON_STATE)
+	{
+	    // this is a quick wake from aborted sleep
+	    if (idleSeconds && !wrangler)
+	    {
+		AbsoluteTime deadline;
+		sleepASAP = false;
+		// stay awake for at least idleSeconds
+		clock_interval_to_deadline(idleSeconds, kSecondScale, &deadline);	
+		thread_call_enter_delayed(extraSleepTimer, deadline);
+		// this gets turned off when we sleep again
+		idleSleepPending = true;
+	    }
+	    tellClients(kIOMessageSystemWillPowerOn);
+	}
+#if	HIBERNATION
+	else
+	{
+	    IOHibernateSystemPostWake();
+	}
 #endif
         return tellClients(kIOMessageSystemHasPoweredOn);
     }

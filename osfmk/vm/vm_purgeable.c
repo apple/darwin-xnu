@@ -88,9 +88,14 @@ vm_purgeable_token_check_queue(purgeable_q_t queue)
 	if (unripe)
 		assert(queue->token_q_unripe == unripe);
 	assert(token_cnt == queue->debug_count_tokens);
-	our_inactive_count = page_cnt + queue->new_pages + token_new_pagecount;
-	assert(our_inactive_count >= 0);
-	assert((uint32_t) our_inactive_count == vm_page_inactive_count);
+	
+	/* obsolete queue doesn't maintain token counts */
+	if(queue->type != PURGEABLE_Q_TYPE_OBSOLETE)
+	{
+		our_inactive_count = page_cnt + queue->new_pages + token_new_pagecount;
+		assert(our_inactive_count >= 0);
+		assert((uint32_t) our_inactive_count == vm_page_inactive_count);
+	}
 }
 #endif
 
@@ -515,11 +520,12 @@ vm_purgeable_object_purge_one(void)
 	enum purgeable_q_type i;
 	int             group;
 	vm_object_t     object = 0;
+	purgeable_q_t   queue, queue2;
 
 	mutex_lock(&vm_purgeable_queue_lock);
 	/* Cycle through all queues */
 	for (i = PURGEABLE_Q_TYPE_OBSOLETE; i < PURGEABLE_Q_TYPE_MAX; i++) {
-		purgeable_q_t   queue = &purgeable_queues[i];
+		queue = &purgeable_queues[i];
 
 		/*
 		 * Are there any ripe tokens on this queue? If yes, we'll
@@ -536,17 +542,21 @@ vm_purgeable_object_purge_one(void)
 		 * lock, remove a token and then purge the object.
 		 */
 		for (group = 0; group < NUM_VOLATILE_GROUPS; group++) {
-			if (!queue_empty(&queue->objq[group]) && (object = vm_purgeable_object_find_and_lock(queue, group))) {
+			if (!queue_empty(&queue->objq[group]) && 
+			    (object = vm_purgeable_object_find_and_lock(queue, group))) {
 				mutex_unlock(&vm_purgeable_queue_lock);
 				vm_purgeable_token_choose_and_delete_ripe(queue, 0);
 				goto purge_now;
-			} else {
-				assert(i != PURGEABLE_Q_TYPE_OBSOLETE);	/* obsolete queue must
-									 * have all objects in
-									 * group 0 */
-				purgeable_q_t   queue2 = &purgeable_queues[i != PURGEABLE_Q_TYPE_FIFO ? PURGEABLE_Q_TYPE_FIFO : PURGEABLE_Q_TYPE_LIFO];
+			}
+			if (i != PURGEABLE_Q_TYPE_OBSOLETE) { 
+				/* This is the token migration case, and it works between
+				 * FIFO and LIFO only */
+				queue2 = &purgeable_queues[i != PURGEABLE_Q_TYPE_FIFO ? 
+							   PURGEABLE_Q_TYPE_FIFO : 
+							   PURGEABLE_Q_TYPE_LIFO];
 
-				if (!queue_empty(&queue2->objq[group]) && (object = vm_purgeable_object_find_and_lock(queue2, group))) {
+				if (!queue_empty(&queue2->objq[group]) && 
+				    (object = vm_purgeable_object_find_and_lock(queue2, group))) {
 					mutex_unlock(&vm_purgeable_queue_lock);
 					vm_purgeable_token_choose_and_delete_ripe(queue2, queue);
 					goto purge_now;
@@ -611,7 +621,7 @@ vm_purgeable_object_remove(vm_object_t object)
 	int             group;
 
 	mutex_lock(&vm_purgeable_queue_lock);
-	for (i = PURGEABLE_Q_TYPE_FIFO; i < PURGEABLE_Q_TYPE_MAX; i++) {
+	for (i = PURGEABLE_Q_TYPE_OBSOLETE; i < PURGEABLE_Q_TYPE_MAX; i++) {
 		purgeable_q_t   queue = &purgeable_queues[i];
 		for (group = 0; group < NUM_VOLATILE_GROUPS; group++) {
 			vm_object_t     o;

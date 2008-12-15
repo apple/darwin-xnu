@@ -367,6 +367,21 @@ mac_proc_check_mprotect(proc_t proc,
 }
 
 int
+mac_proc_check_map_prot_copy_allow(proc_t proc)
+{
+	kauth_cred_t cred;
+	int error;
+	
+	if (!mac_vm_enforce) return (0);
+	
+	cred = kauth_cred_proc_ref(proc);
+	MAC_CHECK(proc_check_map_prot_copy_allow, cred, proc);
+	kauth_cred_unref(&cred);
+	
+	return (error);
+}
+				   
+int
 mac_proc_check_sched(proc_t curp, struct proc *proc)
 {
 	kauth_cred_t cred;

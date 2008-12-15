@@ -282,13 +282,15 @@ manager_fn(void *arg)
 	return (void *) iteration;
 }
 
+#define	MAX_CACHE_DEPTH 10
 static void
 auto_config(int npages, int *nbufs, int *nsets)
 {
 	int	len;
 	int	ncpu;
-	int64_t	cacheconfig[10];
-	int64_t	cachesize[10];
+	int	llc;
+	int64_t	cacheconfig[MAX_CACHE_DEPTH];
+	int64_t	cachesize[MAX_CACHE_DEPTH];
 
 	mutter("Autoconfiguring...\n");
 
@@ -306,20 +308,27 @@ auto_config(int npages, int *nbufs, int *nsets)
 	}
 
 	/*
+	 * Find LLC
+	 */
+	for (llc = MAX_CACHE_DEPTH - 1; llc > 0; llc--)
+		if (cacheconfig[llc] != 0)
+			break;
+
+	/*
 	 * Calculate number of buffers of size pages*4096 bytes
 	 * fit into 90% of an L2 cache.
 	 */
-	*nbufs = cachesize[2] * 9 / (npages * 4096 * 10);
-	mutter("  L2 cache %qd bytes: "
+	*nbufs = cachesize[llc] * 9 / (npages * 4096 * 10);
+	mutter("  L%d (LLC) cache %qd bytes: "
 		"using %d buffers of size %d bytes\n",
-		cachesize[2], *nbufs, (npages * 4096));
+		llc, cachesize[llc], *nbufs, (npages * 4096));
 
 	/* 
 	 * Calcalute how many sets:
 	 */
-	*nsets = cacheconfig[0]/cacheconfig[2];
-	mutter("  %qd cpus; %qd cpus per L2 cache: using %d sets\n",
-		cacheconfig[0], cacheconfig[2], *nsets);
+	*nsets = cacheconfig[0]/cacheconfig[llc];
+	mutter("  %qd cpus; %qd cpus per L%d cache: using %d sets\n",
+		cacheconfig[0], cacheconfig[llc], llc, *nsets);
 }
 
 void (*producer_fnp)(int *data, int isize) = &writer_fn;

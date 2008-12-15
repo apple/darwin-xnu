@@ -1102,7 +1102,10 @@ udp_output(inp, m, addr, control, p)
 #if CONFIG_MACF_NET
 	mac_mbuf_label_associate_inpcb(inp, m);
 #endif
-
+	
+#if CONFIG_IP_EDGEHOLE
+	ip_edgehole_mbuf_tag(inp, m);
+#endif
 
 	/*
 	 * Calculate data length and get a mbuf
@@ -1317,6 +1320,7 @@ udp_send(struct socket *so, __unused int flags, struct mbuf *m, struct sockaddr 
 		m_freem(m);
 		return EINVAL;
 	}
+	
 	return udp_output(inp, m, addr, control, p);
 }
 

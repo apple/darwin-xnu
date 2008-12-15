@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -47,14 +47,14 @@ extern void kernel_bootstrap(void) __attribute__((section("__TEXT, initcode")));
 /* Initialize machine dependent stuff */
 extern void	machine_init(void);
 
-extern void	slave_main(void);
+extern void	slave_main(void *machine_param);
 
 /*
  * The following must be implemented in machine dependent code.
  */
 
 /* Slave cpu initialization */
-extern void	slave_machine_init(void);
+extern void	slave_machine_init(void *machine_param);
 
 /* Device subystem initialization */
 extern void	device_service_create(void);

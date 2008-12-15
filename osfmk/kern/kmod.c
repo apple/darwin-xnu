@@ -1209,7 +1209,7 @@ kmod_free_linkedit_data(void)
             round_page_32(dt_symtab_size));
     }
 
-    PE_parse_boot_arg("keepsyms", &keepsyms);
+    PE_parse_boot_argn("keepsyms", &keepsyms, sizeof (keepsyms));
 
     segmentLE = getsegbyname(segment_name);
     if (!segmentLE) {

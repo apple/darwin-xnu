@@ -421,7 +421,7 @@ void
 fbt_init( void )
 {
 
-	PE_parse_boot_arg("DisableFBT", &gDisableFBT);
+	PE_parse_boot_argn("DisableFBT", &gDisableFBT, sizeof (gDisableFBT));
 
 	if (0 == gDisableFBT)
 	{

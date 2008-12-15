@@ -75,6 +75,10 @@ uint64_t	tscFCvtn2t = 0;
 uint64_t	tscGranularity = 0;
 uint64_t	bus2tsc = 0;
 uint64_t	busFreq = 0;
+uint32_t	flex_ratio = 0;
+uint32_t	flex_ratio_min = 0;
+uint32_t	flex_ratio_max = 0;
+
 
 #define bit(n)		(1ULL << (n))
 #define bitmask(h,l)	((bit(h)|(bit(h)-1)) & ~(bit(l)-1))
@@ -91,8 +95,7 @@ uint64_t	busFreq = 0;
 
 static const char	FSB_Frequency_prop[] = "FSBFrequency";
 /*
- * This routine extracts the front-side bus frequency in Hz from
- * the device tree.
+ * This routine extracts the bus frequency in Hz from the device tree.
  */
 static uint64_t
 EFI_FSB_frequency(void)
@@ -136,25 +139,39 @@ tsc_init(void)
 	boolean_t	N_by_2_bus_ratio = FALSE;
 
 	/*
-	 * Get the FSB frequency and conversion factors.
+	 * Get the FSB frequency and conversion factors from EFI.
 	 */
 	busFreq = EFI_FSB_frequency();
+
+	if (cpuid_info()->cpuid_family != CPU_FAMILY_PENTIUM_M) {
+		panic("tsc_init: unknown CPU family: 0x%X\n",
+			cpuid_info()->cpuid_family);
+	}
+
+	{
+		uint64_t	prfsts;
+
+		prfsts = rdmsr64(IA32_PERF_STS);
+		tscGranularity = (uint32_t)bitfield(prfsts, 44, 40);
+		N_by_2_bus_ratio = (prfsts & bit(46)) != 0;
+	}
+
 	if (busFreq != 0) {
 		busFCvtt2n = ((1 * Giga) << 32) / busFreq;
 		busFCvtn2t = 0xFFFFFFFFFFFFFFFFULL / busFCvtt2n;
 		busFCvtInt = tmrCvt(1 * Peta, 0xFFFFFFFFFFFFFFFFULL / busFreq); 
 	} else {
-		panic("rtclock_init: EFI not supported!\n");
+		panic("tsc_init: EFI not supported!\n");
 	}
 
 	kprintf(" BUS: Frequency = %6d.%04dMHz, "
-			"cvtt2n = %08X.%08X, cvtn2t = %08X.%08X, "
-			"cvtInt = %08X.%08X\n",
-			(uint32_t)(busFreq / Mega),
-			(uint32_t)(busFreq % Mega), 
-			(uint32_t)(busFCvtt2n >> 32), (uint32_t)busFCvtt2n,
-			(uint32_t)(busFCvtn2t >> 32), (uint32_t)busFCvtn2t,
-			(uint32_t)(busFCvtInt >> 32), (uint32_t)busFCvtInt);
+		"cvtt2n = %08X.%08X, cvtn2t = %08X.%08X, "
+		"cvtInt = %08X.%08X\n",
+		(uint32_t)(busFreq / Mega),
+		(uint32_t)(busFreq % Mega), 
+		(uint32_t)(busFCvtt2n >> 32), (uint32_t)busFCvtt2n,
+		(uint32_t)(busFCvtn2t >> 32), (uint32_t)busFCvtn2t,
+		(uint32_t)(busFCvtInt >> 32), (uint32_t)busFCvtInt);
 
 	/*
 	 * Get the TSC increment.  The TSC is incremented by this
@@ -164,18 +181,6 @@ tsc_init(void)
 	 * is set this indicates the bus ration is 0.5 more than this - i.e.
 	 * that the true bus ratio is (2*tscGranularity + 1)/2.
 	 */
-	if (cpuid_info()->cpuid_family == CPU_FAMILY_PENTIUM_M) {
-		uint64_t	prfsts;
-
-		prfsts = rdmsr64(IA32_PERF_STS);
-		tscGranularity = (uint32_t)bitfield(prfsts, 44, 40);
-		N_by_2_bus_ratio = (prfsts & bit(46)) != 0;
-
-	} else {
-		panic("rtclock_init: unknown CPU family: 0x%X\n",
-			cpuid_info()->cpuid_family);
-	}
-
 	if (N_by_2_bus_ratio)
 		tscFCvtt2n = busFCvtt2n * 2 / (1 + 2*tscGranularity);
 	else
@@ -185,12 +190,12 @@ tsc_init(void)
 	tscFCvtn2t = 0xFFFFFFFFFFFFFFFFULL / tscFCvtt2n;
 
 	kprintf(" TSC: Frequency = %6d.%04dMHz, "
-			"cvtt2n = %08X.%08X, cvtn2t = %08X.%08X, gran = %lld%s\n",
-			(uint32_t)(tscFreq / Mega),
-			(uint32_t)(tscFreq % Mega), 
-			(uint32_t)(tscFCvtt2n >> 32), (uint32_t)tscFCvtt2n,
-			(uint32_t)(tscFCvtn2t >> 32), (uint32_t)tscFCvtn2t,
-			tscGranularity, N_by_2_bus_ratio ? " (N/2)" : "");
+		"cvtt2n = %08X.%08X, cvtn2t = %08X.%08X, gran = %lld%s\n",
+		(uint32_t)(tscFreq / Mega),
+		(uint32_t)(tscFreq % Mega), 
+		(uint32_t)(tscFCvtt2n >> 32), (uint32_t)tscFCvtt2n,
+		(uint32_t)(tscFCvtn2t >> 32), (uint32_t)tscFCvtn2t,
+		tscGranularity, N_by_2_bus_ratio ? " (N/2)" : "");
 
 	/*
 	 * Calculate conversion from BUS to TSC
@@ -209,4 +214,7 @@ tsc_get_info(tscInfo_t *info)
 	info->tscGranularity = tscGranularity;
 	info->bus2tsc        = bus2tsc;
 	info->busFreq        = busFreq;
+	info->flex_ratio     = flex_ratio;
+	info->flex_ratio_min = flex_ratio_min;
+	info->flex_ratio_max = flex_ratio_max;
 }

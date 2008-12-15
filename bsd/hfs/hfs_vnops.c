@@ -2304,8 +2304,32 @@ hfs_vnop_rename(ap)
 	error = hfs_lockfour(VTOC(fdvp), VTOC(fvp), VTOC(tdvp), tvp ? VTOC(tvp) : NULL,
 	                     HFS_EXCLUSIVE_LOCK);
 	if (error) {
-		if (took_trunc_lock)
+		if (took_trunc_lock) {
 			hfs_unlock_truncate(VTOC(tvp), TRUE);	
+			took_trunc_lock = 0;
+		}
+        /* 
+         * tvp might no longer exist. if we get ENOENT, re-check the
+         * C_NOEXISTS flag  on tvp to find out whether it's still in the
+         * namespace.
+         */
+        if (error == ENOENT && tvp) {
+            /* 
+             * It's okay to just check C_NOEXISTS without having a lock,
+             * because we have an iocount on it from the vfs layer so it can't
+             * have disappeared.
+             */
+            if (VTOC(tvp)->c_flag & C_NOEXISTS) {
+                /*
+                 * tvp is no longer in the namespace. Try again with NULL
+                 * tvp/tcp (NULLing these out is fine because the vfs syscall
+                 * will vnode_put the vnodes).
+                 */
+                tcp = NULL;
+                tvp = NULL;
+                goto retry;
+            }
+        }
 		return (error);
 	}
 
@@ -2815,7 +2839,7 @@ hfs_vnop_symlink(struct vnop_symlink_args *ap)
 	}
 
 	/* Write the link to disk */
-	bp = buf_getblk(vp, (daddr64_t)0, roundup((int)fp->ff_size, VTOHFS(vp)->hfs_phys_block_size),
+	bp = buf_getblk(vp, (daddr64_t)0, roundup((int)fp->ff_size, hfsmp->hfs_physical_block_size),
 			0, 0, BLK_META);
 	if (hfsmp->jnl) {
 		journal_modify_block_start(hfsmp->jnl, bp);
@@ -3185,8 +3209,7 @@ hfs_vnop_readlink(ap)
 
 		MALLOC(fp->ff_symlinkptr, char *, fp->ff_size, M_TEMP, M_WAITOK);
 		error = (int)buf_meta_bread(vp, (daddr64_t)0,
-		                            roundup((int)fp->ff_size,
-		                            VTOHFS(vp)->hfs_phys_block_size),
+		                            roundup((int)fp->ff_size, VTOHFS(vp)->hfs_physical_block_size),
 		                            vfs_context_ucred(ap->a_context), &bp);
 		if (error) {
 			if (bp)

@@ -1015,29 +1015,29 @@ parse_bsd_args(void)
 	char namep[16];
 	int msgbuf;
 
-	if (PE_parse_boot_arg("-s", namep))
+	if (PE_parse_boot_argn("-s", namep, sizeof (namep)))
 		boothowto |= RB_SINGLE;
 
-	if (PE_parse_boot_arg("-b", namep))
+	if (PE_parse_boot_argn("-b", namep, sizeof (namep)))
 		boothowto |= RB_NOBOOTRC;
 
-	if (PE_parse_boot_arg("-x", namep)) /* safe boot */
+	if (PE_parse_boot_argn("-x", namep, sizeof (namep))) /* safe boot */
 		boothowto |= RB_SAFEBOOT;
 
-	if (PE_parse_boot_arg("-l", namep)) /* leaks logging */
+	if (PE_parse_boot_argn("-l", namep, sizeof (namep))) /* leaks logging */
 		turn_on_log_leaks = 1;
 
-	PE_parse_boot_arg("srv", &srv);
-	PE_parse_boot_arg("ncl", &ncl);
-	if (PE_parse_boot_arg("nbuf", &max_nbuf_headers)) {
+	PE_parse_boot_argn("srv", &srv, sizeof (srv));
+	PE_parse_boot_argn("ncl", &ncl, sizeof (ncl));
+	if (PE_parse_boot_argn("nbuf", &max_nbuf_headers, sizeof (max_nbuf_headers))) {
 		customnbuf = 1;
 	}
 #if !defined(SECURE_KERNEL)
-	PE_parse_boot_arg("kmem", &setup_kmem);
+	PE_parse_boot_argn("kmem", &setup_kmem, sizeof (setup_kmem));
 #endif
-	PE_parse_boot_arg("trace", &new_nkdbufs);
+	PE_parse_boot_argn("trace", &new_nkdbufs, sizeof (new_nkdbufs));
 
-	if (PE_parse_boot_arg("msgbuf", &msgbuf)) {
+	if (PE_parse_boot_argn("msgbuf", &msgbuf, sizeof (msgbuf))) {
 		log_setsize(msgbuf);
 	}
 }

@@ -629,7 +629,7 @@ copyJoin1:										// enter from copyinstr with kkNull set
         crmove	kk64bit,pf64Bitb				// remember if this is a 64-bit processor
         stw		r7,kkCountPtr(r1)
         stw		r31,kkR31Save(r1)				// we use r31 globally for mapped user ptr
-        li		r31,0							// no mapped ptr yet
+
         
         
 // Handle buffer length > 256MB.  This is an error (ENAMETOOLONG) on copyin and copyout.
@@ -648,6 +648,7 @@ copyJoin1:										// enter from copyinstr with kkNull set
 // Set up thread_recover in case we hit an illegal address.
 
 copyin0:
+		li		r31,0							// no mapped ptr yet
 		mfsprg  r8,1							// Get the current thread 
 		lis		r2,hi16(copyinout_error)
 		ori		r2,r2,lo16(copyinout_error)

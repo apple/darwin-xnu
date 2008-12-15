@@ -12,12 +12,7 @@ include $(MakeInc_def)
 
 MI_DIR = platform
 NOT_EXPORT_HEADERS = 
-NOT_KF_MI_HEADERS  = AppleARMCPU.h AppleARMFunction.h AppleARMIICController.h \
-			AppleARMIICDevice.h AppleARMIISController.h \
-			AppleARMIISDevice.h AppleARMIO.h AppleARMIODevice.h \
-			AppleARMNORFlashController.h AppleARMNORFlashDevice.h \
-			AppleARMPE.h AppleARMRTC.h AppleARMSPIController.h \
-			AppleARMSPIDevice.h
+NOT_KF_MI_HEADERS  = 
 
 INSTINC_SUBDIRS =
 INSTINC_SUBDIRS_PPC =

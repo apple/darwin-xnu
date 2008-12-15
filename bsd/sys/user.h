@@ -172,7 +172,8 @@ struct uthread {
 	u_int32_t	dlil_incremented_read;
 	lck_mtx_t	*uu_mtx;
 
-        int		uu_lowpri_window;
+	int		uu_lowpri_window;
+	size_t		uu_devbsdunit; 		// to identify which device throttled I/Os are sent to
 
 	struct user_sigaltstack uu_sigstk;
         int		uu_defer_reclaims;
@@ -224,7 +225,6 @@ struct uthread {
 #endif
 #endif /* CONFIG_DTRACE */
 	void *		uu_threadlist;
-	mount_t		v_mount;
 };
 
 typedef struct uthread * uthread_t;

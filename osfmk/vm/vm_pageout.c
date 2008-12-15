@@ -114,11 +114,7 @@
 
 
 #ifndef VM_PAGEOUT_BURST_ACTIVE_THROTTLE   /* maximum iterations of the active queue to move pages to inactive */
-#ifdef	CONFIG_EMBEDDED
-#define VM_PAGEOUT_BURST_ACTIVE_THROTTLE  2048
-#else
 #define VM_PAGEOUT_BURST_ACTIVE_THROTTLE  100
-#endif
 #endif
 
 #ifndef VM_PAGEOUT_BURST_INACTIVE_THROTTLE  /* maximum iterations of the inactive queue w/o stealing/cleaning a page */
@@ -1014,7 +1010,7 @@ Restart:
 		 *	Don't sweep through active queue more than the throttle
 		 *	which should be kept relatively low
 		 */
-		active_burst_count = vm_pageout_burst_active_throttle;
+		active_burst_count = MIN(vm_pageout_burst_active_throttle, vm_page_active_count);
 
 		/*
 		 *	Move pages from active to inactive.
@@ -1171,9 +1167,23 @@ done_moving_active_pages:
 			 * inactive target still not met... keep going
 			 * until we get the queues balanced
 			 */
+
+			/*
+			 *	Recalculate vm_page_inactivate_target.
+			 */
+			vm_page_inactive_target = VM_PAGE_INACTIVE_TARGET(vm_page_active_count +
+									  vm_page_inactive_count +
+									  vm_page_speculative_count);
+
+#ifndef	CONFIG_EMBEDDED
+			/*
+			 * XXX: if no active pages can be reclaimed, pageout scan can be stuck trying 
+			 *      to balance the queues
+			 */
 			if (((vm_page_inactive_count + vm_page_speculative_count) < vm_page_inactive_target) &&
 			    !queue_empty(&vm_page_queue_active))
 			        continue;
+#endif
 
 		        mutex_lock(&vm_page_queue_free_lock);
 
@@ -1257,7 +1267,10 @@ done_moving_active_pages:
 			msecs = vm_pageout_empty_wait;
 			goto vm_pageout_scan_delay;
 
-		} else if (inactive_burst_count >= vm_pageout_burst_inactive_throttle) {
+		} else if (inactive_burst_count >=
+			   MIN(vm_pageout_burst_inactive_throttle,
+			       (vm_page_inactive_count +
+				vm_page_speculative_count))) {
 		        vm_pageout_scan_burst_throttle++;
 			msecs = vm_pageout_burst_wait;
 			goto vm_pageout_scan_delay;
@@ -3307,15 +3320,17 @@ check_busy:
 		        upl->highest_page = dst_page->phys_page;
 		if (user_page_list) {
 			user_page_list[entry].phys_addr = dst_page->phys_page;
-			user_page_list[entry].dirty	= dst_page->dirty;
 			user_page_list[entry].pageout	= dst_page->pageout;
 			user_page_list[entry].absent	= dst_page->absent;
+			user_page_list[entry].dirty	= dst_page->dirty;
 			user_page_list[entry].precious	= dst_page->precious;
-
+			user_page_list[entry].device	= FALSE;
 			if (dst_page->clustered == TRUE)
 			        user_page_list[entry].speculative = dst_page->speculative;
 			else
 			        user_page_list[entry].speculative = FALSE;
+			user_page_list[entry].cs_validated = dst_page->cs_validated;
+			user_page_list[entry].cs_tainted = dst_page->cs_tainted;
 		}
 	        /*
 		 * if UPL_RET_ONLY_ABSENT is set, then
@@ -4003,6 +4018,23 @@ upl_commit_range(
 	}
 	delayed_unlock = 1;
 
+	if (shadow_object->code_signed) {
+		/*
+		 * CODE SIGNING:
+		 * If the object is code-signed, do not let this UPL tell
+		 * us if the pages are valid or not.  Let the pages be
+		 * validated by VM the normal way (when they get mapped or
+		 * copied).
+		 */
+		flags &= ~UPL_COMMIT_CS_VALIDATED;
+	}
+	if (! page_list) {
+		/*
+		 * No page list to get the code-signing info from !?
+		 */
+		flags &= ~UPL_COMMIT_CS_VALIDATED;
+	}
+
 	while (xfer_size) {
 		vm_page_t	t, m;
 
@@ -4030,60 +4062,34 @@ upl_commit_range(
 					m = vm_page_lookup(shadow_object, target_offset + object->shadow_offset);
 			}
 		}
-		if (m != VM_PAGE_NULL) {
+		if (m == VM_PAGE_NULL) {
+			goto commit_next_page;
+		}
 
-		        clear_refmod = 0;
+		clear_refmod = 0;
 
-			if (upl->flags & UPL_IO_WIRE) {
-
-				vm_page_unwire(m);
-
-				if (page_list)
-				        page_list[entry].phys_addr = 0;
-
-				if (flags & UPL_COMMIT_SET_DIRTY)
-				        m->dirty = TRUE;
-				else if (flags & UPL_COMMIT_CLEAR_DIRTY) {
-				        m->dirty = FALSE;
-					if (m->cs_validated && !m->cs_tainted) {
-						/*
-						 * CODE SIGNING:
-						 * This page is no longer dirty
-						 * but could have been modified,
-						 * so it will need to be
-						 * re-validated.
-						 */
-						m->cs_validated = FALSE;
-						vm_cs_validated_resets++;
-					}
-					clear_refmod |= VM_MEM_MODIFIED;
-				}
-				if (flags & UPL_COMMIT_INACTIVATE)
-					vm_page_deactivate(m);
-
-				if (clear_refmod)
-				        pmap_clear_refmod(m->phys_page, clear_refmod);
-
-				if (flags & UPL_COMMIT_ALLOW_ACCESS) {
-				        /*
-					 * We blocked access to the pages in this UPL.
-					 * Clear the "busy" bit and wake up any waiter
-					 * for this page.
-					 */
-				        PAGE_WAKEUP_DONE(m);
-				}
-				goto commit_next_page;
-			}
+		if (flags & UPL_COMMIT_CS_VALIDATED) {
 			/*
-			 * make sure to clear the hardware
-			 * modify or reference bits before
-			 * releasing the BUSY bit on this page
-			 * otherwise we risk losing a legitimate
-			 * change of state
+			 * CODE SIGNING:
+			 * Set the code signing bits according to
+			 * what the UPL says they should be.
 			 */
-			if (flags & UPL_COMMIT_CLEAR_DIRTY) {
-			        m->dirty = FALSE;
-				if (m->cs_validated && !m->cs_tainted) {
+			m->cs_validated = page_list[entry].cs_validated;
+			m->cs_tainted = page_list[entry].cs_tainted;
+		}
+		if (upl->flags & UPL_IO_WIRE) {
+
+			vm_page_unwire(m);
+
+			if (page_list)
+				page_list[entry].phys_addr = 0;
+
+			if (flags & UPL_COMMIT_SET_DIRTY)
+				m->dirty = TRUE;
+			else if (flags & UPL_COMMIT_CLEAR_DIRTY) {
+				m->dirty = FALSE;
+				if (! (flags & UPL_COMMIT_CS_VALIDATED) &&
+				    m->cs_validated && !m->cs_tainted) {
 					/*
 					 * CODE SIGNING:
 					 * This page is no longer dirty
@@ -4096,109 +4102,35 @@ upl_commit_range(
 				}
 				clear_refmod |= VM_MEM_MODIFIED;
 			}
+			
+			if (flags & UPL_COMMIT_INACTIVATE)
+				vm_page_deactivate(m);
+
 			if (clear_refmod)
-			        pmap_clear_refmod(m->phys_page, clear_refmod);
+				pmap_clear_refmod(m->phys_page, clear_refmod);
 
-			if (page_list) {
-			        upl_page_info_t *p;
-
-			        p = &(page_list[entry]);
-
-				if (p->phys_addr && p->pageout && !m->pageout) {
-				        m->busy = TRUE;
-					m->pageout = TRUE;
-					vm_page_wire(m);
-				} else if (p->phys_addr &&
-					   !p->pageout && m->pageout &&
-					   !m->dump_cleaning) {
-				        m->pageout = FALSE;
-					m->absent = FALSE;
-					m->overwriting = FALSE;
-					vm_page_unwire(m);
-
-					PAGE_WAKEUP_DONE(m);
-				}
-				page_list[entry].phys_addr = 0;
+			if (flags & UPL_COMMIT_ALLOW_ACCESS) {
+				/*
+				 * We blocked access to the pages in this UPL.
+				 * Clear the "busy" bit and wake up any waiter
+				 * for this page.
+				 */
+				PAGE_WAKEUP_DONE(m);
 			}
-			m->dump_cleaning = FALSE;
-
-			if (m->laundry)
-			        vm_pageout_throttle_up(m);
-
-			if (m->pageout) {
-			        m->cleaning = FALSE;
-				m->encrypted_cleaning = FALSE;
-				m->pageout = FALSE;
-#if MACH_CLUSTER_STATS
-				if (m->wanted) vm_pageout_target_collisions++;
-#endif
-				m->dirty = FALSE;
-				if (m->cs_validated && !m->cs_tainted) {
-					/*
-					 * CODE SIGNING:
-					 * This page is no longer dirty
-					 * but could have been modified,
-					 * so it will need to be
-					 * re-validated.
-					 */
-					m->cs_validated = FALSE;
-					vm_cs_validated_resets++;
-				}
-
-				if (m->pmapped && (pmap_disconnect(m->phys_page) & VM_MEM_MODIFIED))
-				        m->dirty = TRUE;
-
-				if (m->dirty) {
-				       /*
-					* page was re-dirtied after we started
-					* the pageout... reactivate it since 
-					* we don't know whether the on-disk
-					* copy matches what is now in memory
-					*/
-				        vm_page_unwire(m);
-
-					if (upl->flags & UPL_PAGEOUT) {
-					        CLUSTER_STAT(vm_pageout_target_page_dirtied++;)
-						VM_STAT_INCR(reactivations);
-						DTRACE_VM2(pgrec, int, 1, (uint64_t *), NULL);
-					}
-					PAGE_WAKEUP_DONE(m);
-				} else {
-				        /*
-					 * page has been successfully cleaned
-					 * go ahead and free it for other use
-					 */
-
-					if (m->object->internal) {
-						DTRACE_VM2(anonpgout, int, 1, (uint64_t *), NULL);
-					} else {
-						DTRACE_VM2(fspgout, int, 1, (uint64_t *), NULL);
-					}
-
-				        vm_page_free(m);
- 
-					if (upl->flags & UPL_PAGEOUT) {
-					        CLUSTER_STAT(vm_pageout_target_page_freed++;)
-
-						if (page_list[entry].dirty) {
-						        VM_STAT_INCR(pageouts);
-							DTRACE_VM2(pgout, int, 1, (uint64_t *), NULL);
-							pgpgout_count++;
-						}
-					}
-				}
-				goto commit_next_page;
-			}
-#if MACH_CLUSTER_STATS
-			if (m->wpmapped)
-			        m->dirty = pmap_is_modified(m->phys_page);
-
-			if (m->dirty)   vm_pageout_cluster_dirtied++;
-			else            vm_pageout_cluster_cleaned++;
-			if (m->wanted)  vm_pageout_cluster_collisions++;
-#endif
+			goto commit_next_page;
+		}
+		/*
+		 * make sure to clear the hardware
+		 * modify or reference bits before
+		 * releasing the BUSY bit on this page
+		 * otherwise we risk losing a legitimate
+		 * change of state
+		 */
+		if (flags & UPL_COMMIT_CLEAR_DIRTY) {
 			m->dirty = FALSE;
-			if (m->cs_validated && !m->cs_tainted) {
+
+			if (! (flags & UPL_COMMIT_CS_VALIDATED) &&
+			    m->cs_validated && !m->cs_tainted) {
 				/*
 				 * CODE SIGNING:
 				 * This page is no longer dirty
@@ -4207,67 +4139,192 @@ upl_commit_range(
 				 * re-validated.
 				 */
 				m->cs_validated = FALSE;
+#if DEVELOPMENT || DEBUG
 				vm_cs_validated_resets++;
+#endif
 			}
+			clear_refmod |= VM_MEM_MODIFIED;
+		}
+		if (clear_refmod)
+			pmap_clear_refmod(m->phys_page, clear_refmod);
 
-			if ((m->busy) && (m->cleaning)) {
-			        /*
-				 * the request_page_list case
-				 */
-			        m->absent = FALSE;
+		if (page_list) {
+			upl_page_info_t *p;
+
+			p = &(page_list[entry]);
+			
+			if (p->phys_addr && p->pageout && !m->pageout) {
+				m->busy = TRUE;
+				m->pageout = TRUE;
+				vm_page_wire(m);
+			} else if (p->phys_addr &&
+				   !p->pageout && m->pageout &&
+				   !m->dump_cleaning) {
+				m->pageout = FALSE;
+				m->absent = FALSE;
 				m->overwriting = FALSE;
-				m->busy = FALSE;
-			} else if (m->overwriting) {
-			        /*
-				 * alternate request page list, write to 
-				 * page_list case.  Occurs when the original
-				 * page was wired at the time of the list
-				 * request
-				 */
-			        assert(m->wire_count != 0);
-				vm_page_unwire(m);/* reactivates */
-				m->overwriting = FALSE;
+				vm_page_unwire(m);
+				
+				PAGE_WAKEUP_DONE(m);
 			}
+			page_list[entry].phys_addr = 0;
+		}
+		m->dump_cleaning = FALSE;
+
+		if (m->laundry)
+			vm_pageout_throttle_up(m);
+
+		if (m->pageout) {
 			m->cleaning = FALSE;
 			m->encrypted_cleaning = FALSE;
-
-			/*
-			 * It is a part of the semantic of COPYOUT_FROM
-			 * UPLs that a commit implies cache sync
-			 * between the vm page and the backing store
-			 * this can be used to strip the precious bit
-			 * as well as clean
-			 */
-			if (upl->flags & UPL_PAGE_SYNC_DONE)
-			        m->precious = FALSE;
-
-			if (flags & UPL_COMMIT_SET_DIRTY)
-			        m->dirty = TRUE;
-
-			if ((flags & UPL_COMMIT_INACTIVATE) && !m->clustered && !m->speculative) {
-				vm_page_deactivate(m);
-			} else if (!m->active && !m->inactive && !m->speculative) {
-
-			        if (m->clustered)
-				        vm_page_speculate(m, TRUE);
-				else if (m->reference)
-				        vm_page_activate(m);
-				else
-				        vm_page_deactivate(m);
-			}
-			if (flags & UPL_COMMIT_ALLOW_ACCESS) {
-			        /*
-				 * We blocked access to the pages in this URL.
-				 * Clear the "busy" bit on this page before we
-				 * wake up any waiter.
+			m->pageout = FALSE;
+#if MACH_CLUSTER_STATS
+			if (m->wanted) vm_pageout_target_collisions++;
+#endif
+			m->dirty = FALSE;
+			
+			if (! (flags & UPL_COMMIT_CS_VALIDATED) &&
+			    m->cs_validated && !m->cs_tainted) {
+				/*
+				 * CODE SIGNING:
+				 * This page is no longer dirty
+				 * but could have been modified,
+				 * so it will need to be
+				 * re-validated.
 				 */
-			        m->busy = FALSE;
+				m->cs_validated = FALSE;
+#if DEVELOPMENT || DEBUG
+				vm_cs_validated_resets++;
+#endif
 			}
-			/*
-			 * Wakeup any thread waiting for the page to be un-cleaning.
-			 */
-			PAGE_WAKEUP(m);
+			
+			if (m->pmapped && (pmap_disconnect(m->phys_page) & VM_MEM_MODIFIED))
+				m->dirty = TRUE;
+			
+			if (m->dirty) {
+				/*
+				 * page was re-dirtied after we started
+				 * the pageout... reactivate it since 
+				 * we don't know whether the on-disk
+				 * copy matches what is now in memory
+				 */
+				vm_page_unwire(m);
+				
+				if (upl->flags & UPL_PAGEOUT) {
+					CLUSTER_STAT(vm_pageout_target_page_dirtied++;)
+					VM_STAT_INCR(reactivations);
+					DTRACE_VM2(pgrec, int, 1, (uint64_t *), NULL);
+				}
+				PAGE_WAKEUP_DONE(m);
+			} else {
+				/*
+				 * page has been successfully cleaned
+				 * go ahead and free it for other use
+				 */
+				
+				if (m->object->internal) {
+					DTRACE_VM2(anonpgout, int, 1, (uint64_t *), NULL);
+				} else {
+					DTRACE_VM2(fspgout, int, 1, (uint64_t *), NULL);
+				}
+				
+				vm_page_free(m);
+				
+				if (upl->flags & UPL_PAGEOUT) {
+					CLUSTER_STAT(vm_pageout_target_page_freed++;)
+					
+					if (page_list[entry].dirty) {
+						VM_STAT_INCR(pageouts);
+						DTRACE_VM2(pgout, int, 1, (uint64_t *), NULL);
+						pgpgout_count++;
+					}
+				}
+			}
+			goto commit_next_page;
 		}
+#if MACH_CLUSTER_STATS
+		if (m->wpmapped)
+			m->dirty = pmap_is_modified(m->phys_page);
+
+		if (m->dirty)   vm_pageout_cluster_dirtied++;
+		else            vm_pageout_cluster_cleaned++;
+		if (m->wanted)  vm_pageout_cluster_collisions++;
+#endif
+		m->dirty = FALSE;
+
+		if (! (flags & UPL_COMMIT_CS_VALIDATED) &&
+		    m->cs_validated && !m->cs_tainted) {
+			/*
+			 * CODE SIGNING:
+			 * This page is no longer dirty
+			 * but could have been modified,
+			 * so it will need to be
+			 * re-validated.
+			 */
+			m->cs_validated = FALSE;
+#if DEVELOPMENT || DEBUG
+			vm_cs_validated_resets++;
+#endif
+		}
+
+		if ((m->busy) && (m->cleaning)) {
+			/*
+			 * the request_page_list case
+			 */
+			m->absent = FALSE;
+			m->overwriting = FALSE;
+			m->busy = FALSE;
+		} else if (m->overwriting) {
+			/*
+			 * alternate request page list, write to 
+			 * page_list case.  Occurs when the original
+			 * page was wired at the time of the list
+			 * request
+			 */
+			assert(m->wire_count != 0);
+			vm_page_unwire(m);/* reactivates */
+			m->overwriting = FALSE;
+		}
+		m->cleaning = FALSE;
+		m->encrypted_cleaning = FALSE;
+		
+		/*
+		 * It is a part of the semantic of COPYOUT_FROM
+		 * UPLs that a commit implies cache sync
+		 * between the vm page and the backing store
+		 * this can be used to strip the precious bit
+		 * as well as clean
+		 */
+		if (upl->flags & UPL_PAGE_SYNC_DONE)
+			m->precious = FALSE;
+		
+		if (flags & UPL_COMMIT_SET_DIRTY)
+			m->dirty = TRUE;
+		
+		if ((flags & UPL_COMMIT_INACTIVATE) && !m->clustered && !m->speculative) {
+			vm_page_deactivate(m);
+		} else if (!m->active && !m->inactive && !m->speculative) {
+			
+			if (m->clustered)
+				vm_page_speculate(m, TRUE);
+			else if (m->reference)
+				vm_page_activate(m);
+			else
+				vm_page_deactivate(m);
+		}
+		if (flags & UPL_COMMIT_ALLOW_ACCESS) {
+			/*
+			 * We blocked access to the pages in this URL.
+			 * Clear the "busy" bit on this page before we
+			 * wake up any waiter.
+			 */
+			m->busy = FALSE;
+		}
+		/*
+		 * Wakeup any thread waiting for the page to be un-cleaning.
+		 */
+		PAGE_WAKEUP(m);
+
 commit_next_page:
 		target_offset += PAGE_SIZE_64;
 		xfer_size -= PAGE_SIZE;
@@ -5013,15 +5070,17 @@ vm_object_iopl_request(
 
 		if (user_page_list) {
 			user_page_list[entry].phys_addr	= dst_page->phys_page;
-			user_page_list[entry].dirty 	= dst_page->dirty;
 			user_page_list[entry].pageout	= dst_page->pageout;
 			user_page_list[entry].absent	= dst_page->absent;
+			user_page_list[entry].dirty 	= dst_page->dirty;
 			user_page_list[entry].precious	= dst_page->precious;
-
+			user_page_list[entry].device 	= FALSE;
 			if (dst_page->clustered == TRUE)
 			        user_page_list[entry].speculative = dst_page->speculative;
 			else
 			        user_page_list[entry].speculative = FALSE;
+			user_page_list[entry].cs_validated = dst_page->cs_validated;
+			user_page_list[entry].cs_tainted = dst_page->cs_tainted;
 		}
 		/*
 		 * someone is explicitly grabbing this page...
@@ -5274,6 +5333,7 @@ vm_paging_map_object(
 	vm_object_t		object,
 	vm_object_offset_t	offset,
 	vm_map_size_t		*size,
+	vm_prot_t		protection,
 	boolean_t		can_unlock_object)
 {
 	kern_return_t		kr;
@@ -5282,7 +5342,7 @@ vm_paging_map_object(
 	vm_object_offset_t	object_offset;
 	int			i;
 
-
+	
 	if (page != VM_PAGE_NULL && *size == PAGE_SIZE) {
 		assert(page->busy);
 		/*
@@ -5356,7 +5416,7 @@ vm_paging_map_object(
 			PMAP_ENTER(kernel_pmap,
 				   page_map_offset,
 				   page,
-				   VM_PROT_DEFAULT,
+				   protection,
 				   ((int) page->object->wimg_bits &
 				    VM_WIMG_MASK),
 				   TRUE);
@@ -5400,7 +5460,7 @@ vm_paging_map_object(
 			  object,
 			  object_offset,
 			  FALSE,
-			  VM_PROT_DEFAULT,
+			  protection,
 			  VM_PROT_ALL,
 			  VM_INHERIT_NONE);
 	if (kr != KERN_SUCCESS) {
@@ -5445,14 +5505,13 @@ vm_paging_map_object(
 			pmap_sync_page_data_phys(page->phys_page);
 		}
 		page->pmapped = TRUE;
-		page->wpmapped = TRUE;
 		cache_attr = ((unsigned int) object->wimg_bits) & VM_WIMG_MASK;
 
 		//assert(pmap_verify_free(page->phys_page));
 		PMAP_ENTER(kernel_pmap,
 			   *address + page_map_offset,
 			   page,
-			   VM_PROT_DEFAULT,
+			   protection,
 			   cache_attr,
 			   TRUE);
 	}
@@ -5689,6 +5748,7 @@ vm_page_encrypt(
 					  page->object,
 					  page->offset,
 					  &kernel_mapping_size,
+					  VM_PROT_READ | VM_PROT_WRITE,
 					  FALSE);
 		if (kr != KERN_SUCCESS) {
 			panic("vm_page_encrypt: "
@@ -5813,6 +5873,7 @@ vm_page_decrypt(
 					  page->object,
 					  page->offset,
 					  &kernel_mapping_size,
+					  VM_PROT_READ | VM_PROT_WRITE,
 					  FALSE);
 		if (kr != KERN_SUCCESS) {
 			panic("vm_page_decrypt: "

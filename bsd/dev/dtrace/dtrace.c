@@ -16549,7 +16549,7 @@ dtrace_init( void )
 		 * XXX Warn if state is LAZY_OFF? It won't break anything, but
 		 * makes no sense...
 		 */
-		if (!PE_parse_boot_arg("dtrace_dof_mode", &dtrace_dof_mode)) {
+		if (!PE_parse_boot_argn("dtrace_dof_mode", &dtrace_dof_mode, sizeof (dtrace_dof_mode))) {
 			dtrace_dof_mode = DTRACE_DOF_MODE_LAZY_ON;
 		}
 

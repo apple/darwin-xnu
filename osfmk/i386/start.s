@@ -66,7 +66,7 @@
 
 #define	CX(addr,reg)	addr(,reg,4)
 
-#include <i386/mp.h>
+#include <i386/lapic.h>
 #include <i386/mp_slave_boot.h>
 #include <i386/cpuid.h>
 

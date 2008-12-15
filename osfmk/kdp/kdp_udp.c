@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -41,11 +41,16 @@
 #include <mach/exception_types.h>
 #include <kern/cpu_data.h>
 #include <kern/debug.h>
+#include <kern/clock.h>
 
 #include <kdp/kdp_core.h>
 #include <kdp/kdp_internal.h>
 #include <kdp/kdp_en_debugger.h>
+#include <kdp/kdp_callout.h>
 #include <kdp/kdp_udp.h>
+#if CONFIG_SERIAL_KDP
+#include <kdp/kdp_serial.h>
+#endif
 
 #include <vm/vm_map.h>
 #include <vm/vm_protos.h>
@@ -59,6 +64,10 @@
 
 extern int kdp_getc(void);
 extern int reattach_wait;
+
+extern int serial_getc(void);
+extern void serial_putc(char);
+extern int serial_init(void);
 
 static u_short ip_id;                          /* ip packet ctr, for ids */
 
@@ -219,18 +228,18 @@ kdp_register_send_receive(
 {
 	unsigned int	debug = 0;
 
-	kdp_en_send_pkt = send;
-	kdp_en_recv_pkt = receive;
-
 	debug_log_init();
 
 	kdp_timer_callout_init();
 
-	PE_parse_boot_arg("debug", &debug);
+	PE_parse_boot_argn("debug", &debug, sizeof (debug));
 
 
 	if (!debug)
 		return;
+
+	kdp_en_send_pkt = send;
+	kdp_en_recv_pkt = receive;
 
 	if (debug & DB_KDP_BP_DIS)
 		kdp_flag |= KDP_BP_DIS;   
@@ -250,13 +259,13 @@ kdp_register_send_receive(
 	if (debug & DB_PANICLOG_DUMP)
 		kdp_flag |= PANIC_LOG_DUMP;
 
-	if (PE_parse_boot_arg ("_panicd_ip", panicd_ip_str))
+	if (PE_parse_boot_argn("_panicd_ip", panicd_ip_str, sizeof (panicd_ip_str)))
 		panicd_specified = TRUE;
 
-	if (PE_parse_boot_arg ("_router_ip", router_ip_str))
+	if (PE_parse_boot_argn("_router_ip", router_ip_str, sizeof (router_ip_str)))
 		router_specified = TRUE;
 
-	if (!PE_parse_boot_arg ("panicd_port", &panicd_port))
+	if (!PE_parse_boot_argn("panicd_port", &panicd_port, sizeof (panicd_port)))
 		panicd_port = CORE_REMOTE_PORT;
 
 	kdp_flag |= KDP_READY;
@@ -1438,7 +1447,6 @@ kdp_get_xnu_version(char *versionbuf)
 }
 
 extern char *inet_aton(const char *cp, struct in_addr *pin);
-extern int snprintf(char *str, size_t size, const char *format, ...);
 
 /* Primary dispatch routine for the system dump */
 void 
@@ -1557,4 +1565,112 @@ abort_panic_transfer(void)
 	flag_panic_dump_in_progress = FALSE;
 	not_in_kdp = 1;
 	panic_block = 0;
+}
+
+#if CONFIG_SERIAL_KDP
+
+static boolean_t needs_serial_init = TRUE;
+
+static void
+kdp_serial_send(void *rpkt, unsigned int rpkt_len)
+{
+	if (needs_serial_init)
+	{
+	    serial_init();
+	    needs_serial_init = FALSE;
+	}
+	
+	//	printf("tx\n");
+	kdp_serialize_packet((unsigned char *)rpkt, rpkt_len, serial_putc);
+}
+
+static void 
+kdp_serial_receive(void *rpkt, unsigned int *rpkt_len, unsigned int timeout)
+{
+	int readkar;
+	uint64_t now, deadline;
+	
+	if (needs_serial_init)
+	{
+	    serial_init();
+	    needs_serial_init = FALSE;
+	}
+	
+	clock_interval_to_deadline(timeout, 1000 * 1000 /* milliseconds */, &deadline);
+
+//	printf("rx\n");
+	for(clock_get_uptime(&now); now < deadline; clock_get_uptime(&now))
+	{
+		readkar = serial_getc();
+		if(readkar >= 0)
+		{
+			unsigned char *packet;
+			//			printf("got char %02x\n", readkar);
+			if((packet = kdp_unserialize_packet(readkar,rpkt_len)))
+			{
+				memcpy(rpkt, packet, *rpkt_len);
+				return;
+			}
+		}
+	}
+	*rpkt_len = 0;
+}
+
+static void kdp_serial_callout(__unused void *arg, kdp_event_t event)
+{
+    /* When we stop KDP, set the bit to re-initialize the console serial port
+     * the next time we send/receive a KDP packet.  We don't do it on
+     * KDP_EVENT_ENTER directly because it also gets called when we trap to KDP
+     * for non-external debugging, i.e., stackshot or core dumps.
+     *
+     * Set needs_serial_init on exit (and initialization, see above) and not
+     * enter because enter is sent multiple times and causes excess reinitialization.
+     */
+	
+    switch (event)
+    {
+		case KDP_EVENT_PANICLOG:
+		case KDP_EVENT_ENTER:
+			break;
+		case KDP_EVENT_EXIT:
+			needs_serial_init = TRUE;
+			break;
+    }
+}
+
+#endif /* CONFIG_SERIAL_KDP */
+
+void
+kdp_init(void)
+{
+#if CONFIG_SERIAL_KDP
+	char kdpname[80];
+	struct in_addr ipaddr;
+	struct ether_addr macaddr;
+
+#if CONFIG_EMBEDDED
+	//serial will be the debugger, unless match name is explicitly provided, and it's not "serial"
+	if(PE_parse_boot_argn("kdp_match_name", kdpname, sizeof(kdpname)) && strncmp(kdpname, "serial", sizeof(kdpname)) != 0)
+		return;
+#else
+	// serial must be explicitly requested
+	if(!PE_parse_boot_argn("kdp_match_name", kdpname, sizeof(kdpname)) || strncmp(kdpname, "serial", sizeof(kdpname)) != 0)
+		return;
+#endif
+	
+	kprintf("Intializing serial KDP\n");
+
+	kdp_register_callout(kdp_serial_callout, NULL);
+	kdp_register_send_receive(kdp_serial_send, kdp_serial_receive);
+	
+	/* fake up an ip and mac for early serial debugging */
+	macaddr.ether_addr_octet[0] = 's';
+	macaddr.ether_addr_octet[1] = 'e';
+	macaddr.ether_addr_octet[2] = 'r';
+	macaddr.ether_addr_octet[3] = 'i';
+	macaddr.ether_addr_octet[4] = 'a';
+	macaddr.ether_addr_octet[5] = 'l';
+	ipaddr.s_addr = 0xABADBABE;
+	kdp_set_ip_and_mac_addresses(&ipaddr, &macaddr);
+#endif /* CONFIG_SERIAL_KDP */
 }

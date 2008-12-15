@@ -109,6 +109,8 @@ typedef struct vm_statistics	vm_statistics_data_t;
 #define VM_PAGE_QUERY_PAGE_PAGED_OUT    0x10
 #define VM_PAGE_QUERY_PAGE_COPIED       0x20
 #define VM_PAGE_QUERY_PAGE_SPECULATIVE	0x40
+#define VM_PAGE_QUERY_PAGE_CS_VALIDATED	0x100
+#define VM_PAGE_QUERY_PAGE_CS_TAINTED	0x200
 
 #ifdef	MACH_KERNEL_PRIVATE
 

@@ -197,7 +197,10 @@ routine memory_object_synchronize(
  *	[Response should be a release of the named reference when
  *	the pager deems that appropriate.]
  */
-routine memory_object_unmap(
+routine memory_object_map(
+		memory_object		: memory_object_t;
+		prot			: vm_prot_t);
+routine memory_object_last_unmap(
 		memory_object           : memory_object_t);
 
 /* vim: set ft=c : */

@@ -63,7 +63,7 @@ void PE_init_kprintf(__unused boolean_t vm_initialized)
 	if (PE_state.initialized == FALSE)
 		panic("Platform Expert not initialized");
 
-	if (PE_parse_boot_arg("debug", &boot_arg))
+	if (PE_parse_boot_argn("debug", &boot_arg, sizeof (boot_arg)))
 		if(boot_arg & DB_KPRT) disable_serial_output = FALSE; 
 
 	if (DTLookupEntry(NULL, "/options", &options) == kSuccess) {
@@ -92,7 +92,7 @@ void PE_init_kprintf(__unused boolean_t vm_initialized)
 	}
 
 	/* Check the boot-args for new serial baud. */
-	if (PE_parse_boot_arg("serialbaud", &serial_baud))
+	if (PE_parse_boot_argn("serialbaud", &serial_baud, sizeof (serial_baud)))
 		if (serial_baud != -1) gPESerialBaud = serial_baud; 
 
 	if( (scc = PE_find_scc())) {				/* See if we can find the serial port */

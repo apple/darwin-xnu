@@ -1199,6 +1199,9 @@ send:
 #if CONFIG_MACF_NET
 	mac_mbuf_label_associate_inpcb(tp->t_inpcb, m);
 #endif
+#if CONFIG_IP_EDGEHOLE
+	ip_edgehole_mbuf_tag(tp->t_inpcb, m);
+#endif
 #if INET6
 	if (isipv6) {
 		ip6 = mtod(m, struct ip6_hdr *);
@@ -1652,7 +1655,7 @@ tcp_ip_output(struct socket *so, struct tcpcb *tp, struct mbuf *pkt,
 			unlocked = TRUE;
 			socket_unlock(so, 0);
 	}
-
+	
 	/*
 	 * Don't send down a chain of packets when:
 	 * - TCP chaining is disabled

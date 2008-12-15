@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -45,6 +45,7 @@
 typedef struct x86_cpu_cache
 {
     struct x86_cpu_cache *next;		/* next cache at this level/lcpu */
+    struct x86_die	*die;		/* die containing this cache (only for LLC) */
     uint8_t		maxcpus;	/* maximum # of cpus that can share */
     uint8_t		nlcpus;		/* # of logical cpus sharing this cache */
     uint8_t		type;		/* type of cache */
@@ -68,22 +69,83 @@ typedef struct x86_cpu_cache
 
 struct pmc;
 struct cpu_data;
+struct mca_state;
 
+/*
+ * Define the states that a (logical) CPU can be in.
+ *
+ * LCPU_OFF	This indicates that the CPU is "off".  It requires a full
+ *		restart.  This is the state of a CPU when the system first
+ *		boots or when it comes out of "sleep" (aka S3/S5).
+ *
+ * LCPU_HALT	This indicates that the CPU has been "halted".  It has been
+ *		removed from the system but still retains its internal state
+ *		so that it can be quickly brought back on-line.
+ *
+ * LCPU_NONSCHED	This indicates that the CPU is not schedulable.  It
+ *		will still appear in the system as a viable CPU however no
+ *		work will be sceduled on it.
+ *
+ * LCPU_PAUSE	This indicates that the CPU is "paused".  This is usually
+ *		done only during kernel debug.
+ *
+ * LCPU_IDLE	This indicates that the CPU is idle.  The scheduler has
+ *		determined that there is no work for this CPU to do.
+ *
+ * LCPU_RUN	This indicates that the CPU is running code and performing work.
+ *
+ * In normal system operation, CPUs will usually be transitioning between
+ * LCPU_IDLE and LCPU_RUN.
+ */
+typedef enum lcpu_state
+{
+    LCPU_OFF		= 0,	/* 0 so the right thing happens on boot */
+    LCPU_HALT		= 1,
+    LCPU_NONSCHED	= 2,
+    LCPU_PAUSE		= 3,
+    LCPU_IDLE		= 4,
+    LCPU_RUN		= 5,
+} lcpu_state_t;
+
+/*
+ * In each topology structure there are two numbers: a logical number and a
+ * physical number.
+ *
+ * The logical numbers represent the ID of that structure
+ * relative to the enclosing structure and always starts at 0.  So when using
+ * logical numbers, it is necessary to specify all elements in the topology
+ * (ie to "name" a logical CPU using logical numbers, 4 numbers are required:
+ * package, die, core, logical CPU).
+ *
+ * The physical numbers represent the ID of that structure and is unique (for
+ * that structure) across the entire topology.
+ *
+ * The logical CPU structure contains a third number which is the CPU number.
+ * This number is identical to the CPU number used in other parts of the kernel.
+ */
 typedef struct x86_lcpu
 {
-    struct x86_lcpu	*next;	/* next logical cpu in core */
-    struct x86_lcpu	*lcpu;	/* pointer back to self */
-    struct x86_core	*core;	/* core containing the logical cpu */
-    struct cpu_data	*cpu;	/* cpu_data structure */
-    uint32_t		lnum;	/* logical cpu number */
-    uint32_t		pnum;	/* physical cpu number */
-    boolean_t		master;	/* logical cpu is the master (boot) CPU */
-    boolean_t		primary;/* logical cpu is primary CPU in package */
-    boolean_t		halted;	/* logical cpu is halted */
-    boolean_t		idle;	/* logical cpu is idle */
-    uint64_t		rtcPop;	/* when etimer wants a timer pop */
+    struct x86_lcpu	*next_in_core;	/* next logical cpu in core */
+    struct x86_lcpu	*next_in_die;	/* next logical cpu in die */
+    struct x86_lcpu	*next_in_pkg;	/* next logical cpu in package */
+    struct x86_lcpu	*lcpu;		/* pointer back to self */
+    struct x86_core	*core;		/* core containing the logical cpu */
+    struct x86_die	*die;		/* die containing the logical cpu */
+    struct x86_pkg	*package;	/* package containing the logical cpu */
+    struct cpu_data	*cpu;		/* cpu_data structure */
+    uint32_t		cpu_num;	/* cpu number */
+    uint32_t		lnum;		/* logical cpu number (within core) */
+    uint32_t		pnum;		/* physical cpu number */
+    boolean_t		master;		/* logical cpu is the master (boot) CPU */
+    boolean_t		primary;	/* logical cpu is primary CPU in package */
+    volatile lcpu_state_t	state;	/* state of the logical CPU */
+    volatile boolean_t	stopped;	/* used to indicate that the CPU has "stopped" */
+    uint64_t		rtcPop;		/* when etimer wants a timer pop */
     uint64_t		rtcDeadline;
     x86_cpu_cache_t	*caches[MAX_CACHE_DEPTH];
+    struct pmc		*pmc;		/* Pointer to perfmon data */
+    void		*pmStats;	/* Power management stats for lcpu */
+    void		*pmState;	/* Power management state for lcpu */
 } x86_lcpu_t;
 
 #define X86CORE_FL_PRESENT	0x80000000	/* core is present */
@@ -93,24 +155,37 @@ typedef struct x86_lcpu
 
 typedef struct x86_core
 {
-    struct x86_core	*next;		/* next core in package */
-    struct x86_lcpu	*lcpus;		/* list of logical cpus in core */
+    struct x86_core	*next_in_die;	/* next core in die */
+    struct x86_core	*next_in_pkg;	/* next core in package */
+    struct x86_die	*die;		/* die containing the core */
     struct x86_pkg	*package;	/* package containing core */
+    struct x86_lcpu	*lcpus;		/* list of logical cpus in core */
     uint32_t		flags;
-    uint32_t		lcore_num;	/* logical core # (unique to package) */
+    uint32_t		lcore_num;	/* logical core # (unique within die) */
     uint32_t		pcore_num;	/* physical core # (globally unique) */
     uint32_t		num_lcpus;	/* Number of logical cpus */
-    uint32_t		active_lcpus;	/* Number of non-halted cpus */
-    struct pmc		*pmc;		/* Pointer to perfmon data */
-    struct hpetTimer	*Hpet;		/* Address of the HPET for this core */
-    uint32_t		HpetVec;	/* Interrupt vector for HPET */
-    uint64_t		HpetInt;	/* Number of HPET Interrupts */
-    uint64_t		HpetCmp;	/* HPET Comparitor */
-    uint64_t		HpetCfg;	/* HPET configuration */
-    uint64_t		HpetTime;
+    uint32_t		active_lcpus;	/* Number of {running, idle} cpus */
     void		*pmStats;	/* Power management stats for core */
     void		*pmState;	/* Power management state for core */
 } x86_core_t;
+
+#define X86DIE_FL_PRESENT	0x80000000	/* die is present */
+#define X86DIE_FL_READY		0x40000000	/* die struct is init'd */
+
+typedef struct x86_die
+{
+    struct x86_die	*next_in_pkg;	/* next die in package */
+    struct x86_lcpu	*lcpus;		/* list of lcpus in die */
+    struct x86_core	*cores;		/* list of cores in die */
+    struct x86_pkg	*package;	/* package containing the die */
+    uint32_t		flags;
+    uint32_t		ldie_num;	/* logical die # (unique to package) */
+    uint32_t		pdie_num;	/* physical die # (globally unique) */
+    uint32_t		num_cores;	/* Number of cores in die */
+    x86_cpu_cache_t	*LLC;		/* LLC contained in this die */
+    void		*pmStats;	/* Power Management stats for die */
+    void		*pmState;	/* Power Management state for die */
+} x86_die_t;
 
 #define X86PKG_FL_PRESENT	0x80000000	/* package is present */
 #define X86PKG_FL_READY		0x40000000	/* package struct init'd */
@@ -121,27 +196,43 @@ typedef struct x86_core
 typedef struct x86_pkg
 {
     struct x86_pkg	*next;		/* next package */
+    struct x86_lcpu	*lcpus;		/* list of logical cpus in package */
     struct x86_core	*cores;		/* list of cores in package */
+    struct x86_die	*dies;		/* list of dies in package */
     uint32_t		flags;
     uint32_t		lpkg_num;	/* logical package # */
     uint32_t		ppkg_num;	/* physical package # */
-    uint32_t		num_cores;	/* number of cores in package */
-    struct hpetTimer	*Hpet;		/* address of HPET for this package */
-    uint32_t		HpetVec;	/* Interrupt vector for HPET */
-    uint64_t		HpetInt;	/* Number of HPET interrupts */
-    uint64_t		HpetCmp;	/* HPET comparitor */
-    uint64_t		HpetCfg;	/* HPET configuration */
-    uint64_t		HpetTime;
+    uint32_t		num_dies;	/* number of dies in package */
     void		*pmStats;	/* Power Management stats for package*/
     void		*pmState;	/* Power Management state for package*/
+    struct mca_state	*mca_state;	/* MCA state for memory errors */
 } x86_pkg_t;
 
 extern x86_pkg_t	*x86_pkgs;	/* root of all CPU packages */
+ 
+typedef struct x86_topology_parameters
+{
+    uint32_t		LLCDepth;
+    uint32_t		nCoresSharingLLC;
+    uint32_t		nLCPUsSharingLLC;
+    uint32_t		maxSharingLLC;
+    uint32_t		nLThreadsPerCore;
+    uint32_t		nPThreadsPerCore;
+    uint32_t		nLCoresPerDie;
+    uint32_t		nPCoresPerDie;
+    uint32_t		nLDiesPerPackage;
+    uint32_t		nPDiesPerPackage;
+    uint32_t		nLThreadsPerDie;
+    uint32_t		nPThreadsPerDie;
+    uint32_t		nLThreadsPerPackage;
+    uint32_t		nPThreadsPerPackage;
+    uint32_t		nLCoresPerPackage;
+    uint32_t		nPCoresPerPackage;
+    uint32_t		nPackages;
+} x86_topology_parameters_t;
 
 /* Called after cpu discovery */
 extern void		cpu_topology_start(void);
-
-extern int idlehalt;
 
 #endif /* _I386_CPU_TOPOLOGY_H_ */
 #endif /* KERNEL_PRIVATE */

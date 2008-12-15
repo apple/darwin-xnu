@@ -61,7 +61,6 @@ extern void dtrace_systrace_syscall_return(unsigned short, int, int *);
 extern void unix_syscall(x86_saved_state_t *);
 extern void unix_syscall64(x86_saved_state_t *);
 extern void *find_user_regs(thread_t);
-extern void throttle_lowpri_io(int *lowpri_window, mount_t v_mount);
 
 extern void x86_toggle_sysenter_arg_store(thread_t thread, boolean_t valid);
 extern boolean_t x86_sysenter_arg_store_isvalid(thread_t thread);
@@ -223,7 +222,7 @@ unix_syscall(x86_saved_state_t *state)
 	 */
 	syscall_exit_funnelcheck();
 #endif /* DEBUG */
-	if (uthread->uu_lowpri_window && uthread->v_mount) {
+	if (uthread->uu_lowpri_window) {
 	        /*
 		 * task is marked as a low priority I/O type
 		 * and the I/O we issued while in this system call
@@ -231,7 +230,7 @@ unix_syscall(x86_saved_state_t *state)
 		 * delay in order to mitigate the impact of this
 		 * task on the normal operation of the system
 		 */
-		throttle_lowpri_io(&uthread->uu_lowpri_window,uthread->v_mount);
+		throttle_lowpri_io(TRUE);
 	}
 	if (code != 180)
 	        KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
@@ -398,7 +397,7 @@ unsafe:
 	 */
 	syscall_exit_funnelcheck();
 
-	if (uthread->uu_lowpri_window && uthread->v_mount) {
+	if (uthread->uu_lowpri_window) {
 	        /*
 		 * task is marked as a low priority I/O type
 		 * and the I/O we issued while in this system call
@@ -406,7 +405,7 @@ unsafe:
 		 * delay in order to mitigate the impact of this
 		 * task on the normal operation of the system
 		 */
-		throttle_lowpri_io(&uthread->uu_lowpri_window,uthread->v_mount);
+		throttle_lowpri_io(TRUE);
 	}
 	if (code != 180)
 	        KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
@@ -533,7 +532,7 @@ unix_syscall_return(int error)
 	 */
 	syscall_exit_funnelcheck();
 
-	if (uthread->uu_lowpri_window && uthread->v_mount) {
+	if (uthread->uu_lowpri_window) {
 	        /*
 		 * task is marked as a low priority I/O type
 		 * and the I/O we issued while in this system call
@@ -541,7 +540,7 @@ unix_syscall_return(int error)
 		 * delay in order to mitigate the impact of this
 		 * task on the normal operation of the system
 		 */
-		throttle_lowpri_io(&uthread->uu_lowpri_window,uthread->v_mount);
+		throttle_lowpri_io(TRUE);
 	}
 	if (code != 180)
 	        KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,

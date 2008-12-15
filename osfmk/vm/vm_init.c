@@ -131,7 +131,7 @@ vm_mem_bootstrap(void)
 	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling pmap_init\n"));
 	pmap_init();
 	
-	if (PE_parse_boot_arg("zsize", &zsizearg))
+	if (PE_parse_boot_argn("zsize", &zsizearg, sizeof (zsizearg)))
 		zsize = zsizearg * 1024ULL * 1024ULL;
 	else {
 		zsize = sane_size >> 2;				/* Get target zone size as 1/4 of physical memory */

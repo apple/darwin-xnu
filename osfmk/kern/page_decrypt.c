@@ -64,7 +64,7 @@ dsmos_page_transform_hook(dsmos_page_transform_hook_t hook)
 }
 
 int
-dsmos_page_transform(const void* from, void *to)
+dsmos_page_transform(const void* from, void *to, __unused unsigned long long src_offset, __unused void *ops)
 {
 /*	printf("%s\n", __FUNCTION__); */
 	if (dsmos_hook == NULL)
@@ -72,3 +72,9 @@ dsmos_page_transform(const void* from, void *to)
 	return (*dsmos_hook) (from, to);
 }
 
+
+text_crypter_create_hook_t text_crypter_create=NULL;
+void text_crypter_create_hook_set(text_crypter_create_hook_t hook)
+{
+	text_crypter_create=hook;
+};

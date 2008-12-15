@@ -242,7 +242,8 @@ arp_rtrequest(
 			gate = rt->rt_gateway;
 			SDL(gate)->sdl_type = rt->rt_ifp->if_type;
 			SDL(gate)->sdl_index = rt->rt_ifp->if_index;
-			rt->rt_expire = timenow.tv_sec;
+			/* In case we're called before 1.0 sec. has elapsed */
+			rt->rt_expire = MAX(timenow.tv_sec, 1);
 			break;
 		}
 		/* Announce a new entry if requested. */
@@ -296,7 +297,8 @@ arp_rtrequest(
 			gate_ll->sdl_alen = broadcast_len;
 			gate_ll->sdl_family = AF_LINK;
 			gate_ll->sdl_len = sizeof(struct sockaddr_dl);
-			rt->rt_expire = timenow.tv_sec;
+			/* In case we're called before 1.0 sec. has elapsed */
+			rt->rt_expire = MAX(timenow.tv_sec, 1);
 		}
 #endif
 

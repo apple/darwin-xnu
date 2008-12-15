@@ -68,11 +68,7 @@ int	ubc_pages_resident(vnode_t);
 
 /* code signing */
 struct cs_blob;
-int	ubc_cs_blob_add(vnode_t, cpu_type_t, off_t, vm_address_t, vm_size_t);
 struct cs_blob *ubc_cs_blob_get(vnode_t, cpu_type_t, off_t);
-struct cs_blob *ubc_get_cs_blobs(vnode_t);
-int	ubc_cs_getcdhash(vnode_t, off_t, unsigned char *);
-
 
 /* cluster IO routines */
 int	advisory_read(vnode_t, off_t, off_t, int);

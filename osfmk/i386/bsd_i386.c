@@ -102,6 +102,7 @@ kern_return_t
 thread_compose_cthread_desc(unsigned int addr, pcb_t pcb);
 
 void IOSleep(int);
+extern void throttle_lowpri_io(boolean_t);
 
 void thread_set_cthreadself(thread_t thread, uint64_t pself, int isLP64);
 
@@ -394,6 +395,8 @@ machdep_syscall(x86_saved_state_t *state)
 	if (current_thread()->funnel_lock)
 		(void) thread_funnel_set(current_thread()->funnel_lock, FALSE);
 
+	throttle_lowpri_io(TRUE);
+
 	thread_exception_return();
 	/* NOTREACHED */
 }
@@ -431,6 +434,8 @@ machdep_syscall64(x86_saved_state_t *state)
 	}
 	if (current_thread()->funnel_lock)
 		(void) thread_funnel_set(current_thread()->funnel_lock, FALSE);
+
+	throttle_lowpri_io(TRUE);
 
 	thread_exception_return();
 	/* NOTREACHED */
@@ -712,6 +717,8 @@ mach_call_munger(x86_saved_state_t *state)
 			retval, 0, 0, 0, 0);
 	regs->eax = retval;
 
+	throttle_lowpri_io(TRUE);
+
 	thread_exception_return();
 	/* NOTREACHED */
 }
@@ -766,6 +773,8 @@ mach_call_munger64(x86_saved_state_t *state)
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_SC,
 					   (call_number)) | DBG_FUNC_END,
 			      (int)regs->rax, 0, 0, 0, 0);
+
+	throttle_lowpri_io(TRUE);
 
 	thread_exception_return();
 	/* NOTREACHED */

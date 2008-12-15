@@ -3389,6 +3389,16 @@ retry:
 		log(LOG_EMERG, "%d desired, %d numvnodes, "
 			"%d free, %d dead, %d rage\n",
 		        desiredvnodes, numvnodes, freevnodes, deadvnodes, ragevnodes);
+#if CONFIG_EMBEDDED
+		/*
+		 * Running out of vnodes tends to make a system unusable.  On an
+		 * embedded system, it's unlikely that the user can do anything
+		 * about it (or would know what to do, if they could).  So panic
+		 * the system so it will automatically restart (and hopefully we
+		 * can get a panic log that tells us why we ran out).
+		 */
+		panic("vnode table is full\n");
+#endif
 		*vpp = NULL;
 		return (ENFILE);
 	}
@@ -3558,6 +3568,12 @@ vnode_getwithref(vnode_t vp)
 }
 
 
+__private_extern__ int
+vnode_getalways(vnode_t vp)
+{
+        return(vget_internal(vp, 0, VNODE_ALWAYS));
+}
+
 int
 vnode_put(vnode_t vp)
 {
@@ -3726,6 +3742,7 @@ vnode_getiocount(vnode_t vp, int vid, int vflags)
 {
 	int nodead = vflags & VNODE_NODEAD;
 	int nosusp = vflags & VNODE_NOSUSPEND;
+	int always = vflags & VNODE_ALWAYS;
 
 	for (;;) {
 		/*
@@ -3754,6 +3771,8 @@ vnode_getiocount(vnode_t vp, int vid, int vflags)
 		    (vp->v_owner == current_thread())) {
 		        break;
 		}
+		if (always != 0) 
+			break;
 		vnode_lock_convert(vp);
 
 		if (vp->v_lflag & VL_TERMINATE) {

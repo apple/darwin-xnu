@@ -893,9 +893,6 @@ grade:
 		imgp->ip_csflags |= CS_KILL;
 
 
-	/* load_machfile() maps the vnode */
-	(void)ubc_map(imgp->ip_vp, PROT_READ | PROT_EXEC);
-
 	/*
 	 * Set up the system reserved areas in the new address space.
 	 */
@@ -919,8 +916,6 @@ grade:
 	 */
 	error = exec_handle_sugid(imgp);
 
-	proc_knote(p, NOTE_EXEC);
-
 	if (!vfexec && (p->p_lflag & P_LTRACED))
 		psignal(p, SIGTRAP);
 
@@ -928,6 +923,13 @@ grade:
 		goto badtoolate;
 	}
 	
+#if CONFIG_MACF
+	/* Determine if the map will allow VM_PROT_COPY */
+	error = mac_proc_check_map_prot_copy_allow(p);
+	vm_map_set_prot_copy_allow(get_task_map(task), 
+				   error ? FALSE : TRUE);
+#endif	
+
 	if (load_result.unixproc &&
 		create_unix_stack(get_task_map(task),
 				  load_result.user_stack,
@@ -1127,6 +1129,8 @@ grade:
 	}
 
 badtoolate:
+	proc_knote(p, NOTE_EXEC);
+
 	if (vfexec) {
 		task_deallocate(new_task);
 		thread_deallocate(thread);
@@ -1196,6 +1200,7 @@ exec_activate_image(struct image_params *imgp)
 	int once = 1;	/* save SGUID-ness for interpreted files */
 	int i;
 	int iterlimit = EAI_ITERLIMIT;
+	proc_t p = vfs_context_proc(imgp->ip_vfs_context);
 
 	error = execargs_alloc(imgp);
 	if (error)
@@ -1209,7 +1214,7 @@ exec_activate_image(struct image_params *imgp)
 	 */
 	error = exec_save_path(imgp, imgp->ip_user_fname, imgp->ip_seg);
 	if (error) {
-		goto bad;
+		goto bad_notrans;
 	}
 
 	DTRACE_PROC1(exec, uintptr_t, imgp->ip_strings);
@@ -1220,9 +1225,11 @@ exec_activate_image(struct image_params *imgp)
 again:
 	error = namei(&nd);
 	if (error)
-		goto bad;
+		goto bad_notrans;
 	imgp->ip_ndp = &nd;	/* successful namei(); call nameidone() later */
 	imgp->ip_vp = nd.ni_vp;	/* if set, need to vnode_put() at some point */
+
+	proc_transstart(p, 0);
 
 	error = exec_check_permissions(imgp);
 	if (error)
@@ -1292,6 +1299,7 @@ encapsulated_binary:
 
 			nd.ni_segflg = UIO_SYSSPACE32;
 			nd.ni_dirp = CAST_USER_ADDR_T(imgp->ip_interp_name);
+			proc_transend(p, 0);
 			goto again;
 
 		default:
@@ -1310,6 +1318,9 @@ encapsulated_binary:
 	}
 
 bad:
+	proc_transend(p, 0);
+
+bad_notrans:
 	if (imgp->ip_strings)
 		execargs_free(imgp);
 	if (imgp->ip_ndp)
@@ -1949,7 +1960,7 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, register_t *retval)
 	if (!(uthread->uu_flag & UT_VFORK)) {
 		if (task != kernel_task) { 
 			proc_lock(p);
-			numthreads = get_task_numacts(task);
+			numthreads = get_task_numactivethreads(task);
 			if (numthreads <= 0 ) {
 				proc_unlock(p);
 				kauth_cred_unref(&context.vc_ucred);
@@ -1974,9 +1985,7 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, register_t *retval)
 	}
 #endif
 
-	proc_transstart(p, 0);
 	error = exec_activate_image(imgp);
-	proc_transend(p, 0);
 
 	kauth_cred_unref(&context.vc_ucred);
 	
@@ -2711,7 +2720,8 @@ exec_handle_sugid(struct image_params *imgp)
 	 */
 	p->p_ucred = kauth_cred_setsvuidgid(p->p_ucred, kauth_cred_getuid(p->p_ucred),  p->p_ucred->cr_gid);
 	
-	/* XXX Obsolete; security token should not be separate from cred */
+	/* Update the process' identity version and set the security token */
+	p->p_idversion++;
 	set_security_token(p);
 
 	return(error);

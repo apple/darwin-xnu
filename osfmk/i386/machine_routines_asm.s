@@ -27,6 +27,7 @@
  */
  
 #include <i386/asm.h>
+#include <i386/rtclock.h>
 #include <i386/proc_reg.h>
 #include <i386/eflags.h>
        
@@ -47,6 +48,7 @@ ENTRY(ml_get_timebase)
 			movl    S_ARG0, %ecx
 			
 			rdtsc
+			lfence
 			
 			movl    %edx, 0(%ecx)
 			movl    %eax, 4(%ecx)
@@ -217,30 +219,7 @@ LEXT(_rtc_nanotime_read)
 		jnz		Lslow
 		
 		/* Processor whose TSC frequency is faster than SLOW_TSC_THRESHOLD */
-0:
-		movl		RNT_GENERATION(%edi),%esi		/* get generation (0 if being changed) */
-		testl		%esi,%esi				/* if being changed, loop until stable */
-		jz		0b
-
-		rdtsc							/* get TSC in %edx:%eax */
-		subl		RNT_TSC_BASE(%edi),%eax
-		sbbl		RNT_TSC_BASE+4(%edi),%edx
-
-		movl		RNT_SCALE(%edi),%ecx
-
-		movl		%edx,%ebx
-		mull		%ecx
-		movl		%ebx,%eax
-		movl		%edx,%ebx
-		mull		%ecx
-		addl		%ebx,%eax
-		adcl		$0,%edx
-
-		addl		RNT_NS_BASE(%edi),%eax
-		adcl		RNT_NS_BASE+4(%edi),%edx
-
-		cmpl		RNT_GENERATION(%edi),%esi		/* have the parameters changed? */
-		jne		0b					/* yes, loop until stable */
+		RTC_NANOTIME_READ_FAST()
 
 		popl		%ebx
 		popl		%edi

@@ -66,6 +66,8 @@
 
 #include <libkern/crypto/sha1.h>
 
+#include <security/mac_framework.h>
+
 /* XXX These should be in a BSD accessible Mach header, but aren't. */
 extern kern_return_t memory_object_pages_resident(memory_object_control_t,
 							boolean_t *);
@@ -217,7 +219,6 @@ CS_CodeDirectory *findCodeDirectory(
 		 */
 		cd = (const CS_CodeDirectory *) embedded;
 	}
-
 	if (cd &&
 	    cs_valid_range(cd, cd + 1, lower_bound, upper_bound) &&
 	    cs_valid_range(cd, (const char *) cd + ntohl(cd->length),
@@ -1936,6 +1937,10 @@ ubc_upl_commit_range(
 	if (flags & UPL_COMMIT_FREE_ON_EMPTY)
 		flags |= UPL_COMMIT_NOTIFY_EMPTY;
 
+	if (flags & UPL_COMMIT_KERNEL_ONLY_FLAGS) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
 	pl = UPL_GET_INTERNAL_PAGE_LIST(upl);
 
 	kr = upl_commit_range(upl, offset, size, flags,
@@ -2106,7 +2111,7 @@ UBCINFOEXISTS(struct vnode * vp)
 /*
  * CODE SIGNING
  */
-#define CS_BLOB_KEEP_IN_KERNEL 1
+#define CS_BLOB_PAGEABLE 0
 static volatile SInt32 cs_blob_size = 0;
 static volatile SInt32 cs_blob_count = 0;
 static SInt32 cs_blob_size_peak = 0;
@@ -2123,6 +2128,39 @@ SYSCTL_INT(_vm, OID_AUTO, cs_blob_count_peak, CTLFLAG_RD, &cs_blob_count_peak, 0
 SYSCTL_INT(_vm, OID_AUTO, cs_blob_size_peak, CTLFLAG_RD, &cs_blob_size_peak, 0, "Peak size of code signature blobs");
 SYSCTL_INT(_vm, OID_AUTO, cs_blob_size_max, CTLFLAG_RD, &cs_blob_size_max, 0, "Size of biggest code signature blob");
 
+kern_return_t
+ubc_cs_blob_allocate(
+	vm_offset_t	*blob_addr_p,
+	vm_size_t	*blob_size_p)
+{
+	kern_return_t	kr;
+
+#if CS_BLOB_PAGEABLE
+	*blob_size_p = round_page(*blob_size_p);
+	kr = kmem_alloc(kernel_map, blob_addr_p, *blob_size_p);
+#else	/* CS_BLOB_PAGEABLE */
+	*blob_addr_p = (vm_offset_t) kalloc(*blob_size_p);
+	if (*blob_addr_p == 0) {
+		kr = KERN_NO_SPACE;
+	} else {
+		kr = KERN_SUCCESS;
+	}
+#endif	/* CS_BLOB_PAGEABLE */
+	return kr;
+}
+
+void
+ubc_cs_blob_deallocate(
+	vm_offset_t	blob_addr,
+	vm_size_t	blob_size)
+{
+#if CS_BLOB_PAGEABLE
+	kmem_free(kernel_map, blob_addr, blob_size);
+#else	/* CS_BLOB_PAGEABLE */
+	kfree((void *) blob_addr, blob_size);
+#endif	/* CS_BLOB_PAGEABLE */
+}
+	
 int
 ubc_cs_blob_add(
 	struct vnode	*vp,
@@ -2148,6 +2186,7 @@ ubc_cs_blob_add(
 		return ENOMEM;
 	}
 
+#if CS_BLOB_PAGEABLE
 	/* get a memory entry on the blob */
 	blob_size = (memory_object_size_t) size;
 	kr = mach_make_memory_entry_64(kernel_map,
@@ -2168,7 +2207,10 @@ ubc_cs_blob_add(
 		error = EINVAL;
 		goto out;
 	}
-
+#else
+	blob_size = (memory_object_size_t) size;
+	blob_handle = IPC_PORT_NULL;
+#endif
 
 	/* fill in the new blob */
 	blob->csb_cpu_type = cputype;
@@ -2177,7 +2219,6 @@ ubc_cs_blob_add(
 	blob->csb_mem_offset = 0;
 	blob->csb_mem_handle = blob_handle;
 	blob->csb_mem_kaddr = addr;
-
 	
 	/*
 	 * Validate the blob's contents
@@ -2207,7 +2248,15 @@ ubc_cs_blob_add(
 		SHA1Final(blob->csb_sha1, &sha1ctxt);
 	}
 
-
+	/* 
+	 * Let policy module check whether the blob's signature is accepted.
+	 */
+#if CONFIG_MACF
+	error = mac_vnode_check_signature(vp, blob->csb_sha1, (void*)addr, size);
+	if (error) 
+		goto out;
+#endif	
+	
 	/*
 	 * Validate the blob's coverage
 	 */
@@ -2328,10 +2377,6 @@ ubc_cs_blob_add(
 		       blob->csb_flags);
 	}
 
-#if !CS_BLOB_KEEP_IN_KERNEL
-	blob->csb_mem_kaddr = 0;
-#endif /* CS_BLOB_KEEP_IN_KERNEL */
-
 	vnode_unlock(vp);
 
 	error = 0;	/* success ! */
@@ -2347,10 +2392,6 @@ out:
 			mach_memory_entry_port_release(blob_handle);
 			blob_handle = IPC_PORT_NULL;
 		}
-	} else {
-#if !CS_BLOB_KEEP_IN_KERNEL
-		kmem_free(kernel_map, addr, size);
-#endif /* CS_BLOB_KEEP_IN_KERNEL */
 	}
 
 	if (error == EAGAIN) {
@@ -2363,7 +2404,7 @@ out:
 		/*
 		 * Since we're not failing, consume the data we received.
 		 */
-		kmem_free(kernel_map, addr, size);
+		ubc_cs_blob_deallocate(addr, size);
 	}
 
 	return error;
@@ -2421,12 +2462,13 @@ ubc_cs_free(
 	     blob = next_blob) {
 		next_blob = blob->csb_next;
 		if (blob->csb_mem_kaddr != 0) {
-			kmem_free(kernel_map,
-				  blob->csb_mem_kaddr,
-				  blob->csb_mem_size);
+			ubc_cs_blob_deallocate(blob->csb_mem_kaddr,
+					       blob->csb_mem_size);
 			blob->csb_mem_kaddr = 0;
 		}
-		mach_memory_entry_port_release(blob->csb_mem_handle);
+		if (blob->csb_mem_handle != IPC_PORT_NULL) {
+			mach_memory_entry_port_release(blob->csb_mem_handle);
+		}
 		blob->csb_mem_handle = IPC_PORT_NULL;
 		OSAddAtomic(-1, &cs_blob_count);
 		OSAddAtomic(-blob->csb_mem_size, &cs_blob_size);
@@ -2537,9 +2579,6 @@ cs_validate_page(
 			    cd->hashType != 0x1 ||
 			    cd->hashSize != SHA1_RESULTLEN) {
 				/* bogus blob ? */
-#if !CS_BLOB_KEEP_IN_KERNEL
-				kmem_free(kernel_map, kaddr, ksize);
-#endif /* CS_BLOB_KEEP_IN_KERNEL */
 				continue;
 			}
 			    
@@ -2549,9 +2588,6 @@ cs_validate_page(
 			if (offset < start_offset ||
 			    offset >= end_offset) {
 				/* our page is not covered by this blob */
-#if !CS_BLOB_KEEP_IN_KERNEL
-				kmem_free(kernel_map, kaddr, ksize);
-#endif /* CS_BLOB_KEEP_IN_KERNEL */
 				continue;
 			}
 
@@ -2563,11 +2599,6 @@ cs_validate_page(
 				      sizeof (expected_hash));
 				found_hash = TRUE;
 			}
-
-#if !CS_BLOB_KEEP_IN_KERNEL
-			/* we no longer need that blob in the kernel map */
-			kmem_free(kernel_map, kaddr, ksize);
-#endif /* CS_BLOB_KEEP_IN_KERNEL */
 
 			break;
 		}
@@ -2591,9 +2622,9 @@ cs_validate_page(
 		validated = FALSE;
 		*tainted = FALSE;
 	} else {
-		const uint32_t *asha1, *esha1;
 
 		size = PAGE_SIZE;
+		const uint32_t *asha1, *esha1;
 		if (offset + size > codeLimit) {
 			/* partial page at end of segment */
 			assert(offset < codeLimit);
@@ -2601,7 +2632,7 @@ cs_validate_page(
 		}
 		/* compute the actual page's SHA1 hash */
 		SHA1Init(&sha1ctxt);
-		SHA1Update(&sha1ctxt, data, size);
+		SHA1UpdateUsePhysicalAddress(&sha1ctxt, data, size);
 		SHA1Final(actual_hash, &sha1ctxt);
 
 		asha1 = (const uint32_t *) actual_hash;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -113,14 +113,26 @@ cpu_start(
 	if (cpu == cpu_number()) {
 		cpu_machine_init();
 		return KERN_SUCCESS;
-	} else {
+	}
+
+	/*
+	 * Try to bring the CPU back online without a reset.
+	 * If the fast restart doesn't succeed, fall back to
+	 * the slow way.
+	 */
+	ret = intel_startCPU_fast(cpu);
+	if (ret != KERN_SUCCESS) {
 		/*
 		 * Should call out through PE.
 		 * But take the shortcut here.
 		 */
 		ret = intel_startCPU(cpu);
-		return(ret);
 	}
+
+	if (ret != KERN_SUCCESS)
+		kprintf("cpu: cpu_start(%d) returning failure!\n", cpu);
+
+	return(ret);
 }
 
 void
@@ -130,7 +142,8 @@ cpu_exit_wait(
     	cpu_data_t	*cdp = cpu_datap(cpu);
 
 	simple_lock(&x86_topo_lock);
-	while (!cdp->lcpu.halted) {
+	while ((cdp->lcpu.state != LCPU_HALT)
+	       && (cdp->lcpu.state != LCPU_OFF)) {
 	    simple_unlock(&x86_topo_lock);
 	    cpu_pause();
 	    simple_lock(&x86_topo_lock);

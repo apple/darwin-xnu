@@ -520,15 +520,26 @@ __private_extern__ struct sysent sysent[] = {
 	{0, 0, 0, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T, 0},                           /* 358 = nosys */
 	{0, 0, 0, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T, 0},                           /* 359 = nosys */
 #endif
+#if CONFIG_WORKQUEUE
 	{AC(bsdthread_create_args), 0, 0, (sy_call_t *)bsdthread_create, munge_wwwww, munge_ddddd, _SYSCALL_RET_ADDR_T, 20}, /* 360 = bsdthread_create */
 	{AC(bsdthread_terminate_args), 0, 0, (sy_call_t *)bsdthread_terminate, munge_wwww, munge_dddd, _SYSCALL_RET_INT_T, 16}, /* 361 = bsdthread_terminate */
+#else
+	{0, 0, 0, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T, 0},                           /* 360 = nosys */
+	{0, 0, 0, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T, 0},                           /* 361 = nosys */
+#endif
 	{0, 0, 0, (sy_call_t *)kqueue, NULL, NULL, _SYSCALL_RET_INT_T, 0},                          /* 362 = kqueue */
 	{AC(kevent_args), 0, 0, (sy_call_t *)kevent, munge_wwwwww, munge_dddddd, _SYSCALL_RET_INT_T, 24}, /* 363 = kevent */
 	{AC(lchown_args), 0, 0, (sy_call_t *)lchown, munge_www, munge_ddd, _SYSCALL_RET_INT_T, 12},  /* 364 = lchown */
 	{AC(stack_snapshot_args), 0, 0, (sy_call_t *)stack_snapshot, munge_wwww, munge_dddd, _SYSCALL_RET_INT_T, 16}, /* 365 = stack_snapshot */
+#if CONFIG_WORKQUEUE
 	{AC(bsdthread_register_args), 0, 0, (sy_call_t *)bsdthread_register, munge_www, munge_ddd, _SYSCALL_RET_INT_T, 12}, /* 366 = bsdthread_register */
 	{0, 0, 0, (sy_call_t *)workq_open, NULL, NULL, _SYSCALL_RET_INT_T, 0},                      /* 367 = workq_open */
 	{AC(workq_ops_args), 0, 0, (sy_call_t *)workq_ops, munge_www, munge_ddd, _SYSCALL_RET_INT_T, 12}, /* 368 = workq_ops */
+#else
+	{0, 0, 0, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T, 0},                           /* 366 = nosys */
+	{0, 0, 0, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T, 0},                           /* 367 = nosys */
+	{0, 0, 0, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T, 0},                           /* 368 = nosys */
+#endif
 	{0, 0, 0, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T, 0},                           /* 369 = nosys */
 	{0, 0, 0, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T, 0},                           /* 370 = nosys */
 	{0, 0, 0, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T, 0},                           /* 371 = nosys */

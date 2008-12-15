@@ -45,7 +45,7 @@
 #  Standard Apple Research Configurations:
 #  -------- ----- -------- ---------------
 #
-#  BASE =        [ ppc mach medium config_dtrace vol pst gdb noprofiling simple_clock kernstack compat_43_tty sysv_sem sysv_msg sysv_shm audit panic_info config_imageboot ]
+#  BASE =        [ ppc mach medium config_dtrace vol pst gdb noprofiling simple_clock kernstack compat_43_tty sysv_sem sysv_msg sysv_shm audit panic_info config_imageboot config_workqueue ]
 #  FILESYS =	 [ devfs revfs hfs journaling fdesc config_fse quota namedstreams fifo ffs union cd9660 config_volfs ]
 #  NETWORKING =  [ inet inet6 compat_oldsock mrouting tcpdrop_synfin bpfilter ipdivert netat ipfirewall ipv6firewall ipfw2 dummynet traffic_mgt sendfile netmibs bond vlan gif stf zlib randomipid ifnet_input_chk ]
 #  NFS =         [ nfsclient nfsserver ]

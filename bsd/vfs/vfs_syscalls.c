@@ -95,6 +95,7 @@
 #include <sys/sysproto.h>
 #include <sys/xattr.h>
 #include <sys/ubc_internal.h>
+#include <sys/disk.h>
 #include <machine/cons.h>
 #include <machine/limits.h>
 #include <miscfs/specfs/specdev.h>
@@ -418,6 +419,7 @@ __mac_mount(struct proc *p, register struct __mac_mount_args *uap, __unused regi
 	strncpy(mp->mnt_vfsstat.f_mntonname, nd.ni_cnd.cn_pnbuf, MAXPATHLEN);
 	mp->mnt_vnodecovered = vp;
 	mp->mnt_vfsstat.f_owner = kauth_cred_getuid(vfs_context_ucred(ctx));
+	mp->mnt_devbsdunit = LOWPRI_MAX_NUM_DEV - 1;
 
 	/* XXX 3762912 hack to support HFS filesystem 'owner' - filesystem may update later */
 	vfs_setowner(mp, KAUTH_UID_NONE, KAUTH_GID_NONE);
@@ -590,6 +592,11 @@ update:
 			goto out3;
 	}
 #endif
+	if (device_vnode != NULL) {
+		VNOP_IOCTL(device_vnode, DKIOCGETBSDUNIT, (caddr_t)&mp->mnt_devbsdunit, 0, NULL);
+		mp->mnt_devbsdunit %= LOWPRI_MAX_NUM_DEV;
+	}
+
 	/*
 	 * Mount the filesystem.
 	 */
@@ -1020,6 +1027,7 @@ dounmount(struct mount *mp, int flags, int withref, vfs_context_t ctx)
 	int needwakeup = 0;
 	int forcedunmount = 0;
 	int lflags = 0;
+	struct vnode *devvp = NULLVP;
 
 	if (flags & MNT_FORCE)
 		forcedunmount = 1;
@@ -1115,10 +1123,14 @@ dounmount(struct mount *mp, int flags, int withref, vfs_context_t ctx)
 		OSAddAtomic(1, (SInt32 *)&vfs_nummntops);
 
 	if ( mp->mnt_devvp && mp->mnt_vtable->vfc_vfsflags & VFC_VFSLOCALARGS) {
-		mp->mnt_devvp->v_specflags &= ~SI_MOUNTEDON;
-		VNOP_CLOSE(mp->mnt_devvp, mp->mnt_flag & MNT_RDONLY ? FREAD : FREAD|FWRITE,
+		/* hold an io reference and drop the usecount before close */
+		devvp = mp->mnt_devvp;
+		vnode_clearmountedon(devvp);
+		vnode_getalways(devvp);
+		vnode_rele(devvp);
+		VNOP_CLOSE(devvp, mp->mnt_flag & MNT_RDONLY ? FREAD : FREAD|FWRITE,
                        ctx);
-		vnode_rele(mp->mnt_devvp);
+		vnode_put(devvp);
 	}
 	lck_rw_done(&mp->mnt_rwlock);
 	mount_list_remove(mp);
@@ -4691,6 +4703,7 @@ rename(__unused proc_t p, struct rename_args *uap, __unused register_t *retval)
 	struct nameidata fromnd, tond;
 	vfs_context_t ctx = vfs_context_current();
 	int error;
+	int do_retry;
 	int mntrename;
 	int need_event;
 	const char *oname;
@@ -4702,6 +4715,7 @@ rename(__unused proc_t p, struct rename_args *uap, __unused register_t *retval)
 	fse_info from_finfo, to_finfo;
 	
 	holding_mntlock = 0;
+    do_retry = 0;
 retry:
 	fvp = tvp = NULL;
 	fdvp = tdvp = NULL;
@@ -4816,8 +4830,17 @@ retry:
 			if ((error = vnode_authorize(((tvp != NULL) && vnode_isdir(tvp)) ? tvp : tdvp,
 				 NULL, 
 				 vnode_isdir(fvp) ? KAUTH_VNODE_ADD_SUBDIRECTORY : KAUTH_VNODE_ADD_FILE,
-				 ctx)) != 0)
+				 ctx)) != 0) {
+                /*
+                 * We could encounter a race where after doing the namei, tvp stops
+                 * being valid. If so, simply re-drive the rename call from the
+                 * top.
+                 */
+                 if (error == ENOENT) {
+                     do_retry = 1;
+                 }
 				goto auth_exit;
+			}
 		} else {
 			/* node staying in same directory, must be allowed to add new name */
 			if ((error = vnode_authorize(fdvp, NULL,
@@ -4826,8 +4849,17 @@ retry:
 		}
 		/* overwriting tvp */
 		if ((tvp != NULL) && !vnode_isdir(tvp) &&
-		    ((error = vnode_authorize(tvp, tdvp, KAUTH_VNODE_DELETE, ctx)) != 0))
+		    ((error = vnode_authorize(tvp, tdvp, KAUTH_VNODE_DELETE, ctx)) != 0)) {
+            /*
+             * We could encounter a race where after doing the namei, tvp stops
+             * being valid. If so, simply re-drive the rename call from the
+             * top.
+             */
+            if (error == ENOENT) {
+                do_retry = 1;
+            }
 			goto auth_exit;
+		}
  		    
 		/* XXX more checks? */
 
@@ -5071,6 +5103,15 @@ auth_exit:
 		holding_mntlock = 0;
 	}
 	if (error) {
+        /*
+         * We may encounter a race in the VNOP where the destination didn't 
+         * exist when we did the namei, but it does by the time we go and 
+         * try to create the entry. In this case, we should re-drive this rename
+         * call from the top again.
+         */
+        if (error == EEXIST) {
+            do_retry = 1;
+        }
 
 		goto out1;
 	} 
@@ -5158,14 +5199,18 @@ auth_exit:
 	        vnode_update_identity(fvp, tdvp, tond.ni_cnd.cn_nameptr, tond.ni_cnd.cn_namelen, tond.ni_cnd.cn_hash, update_flags);
 	}
 out1:
-	if (to_name != NULL)
-	        RELEASE_PATH(to_name);
-	if (from_name != NULL)
-	        RELEASE_PATH(from_name);
-
+	if (to_name != NULL) {
+		RELEASE_PATH(to_name);
+		to_name = NULL;
+	}
+	if (from_name != NULL) {
+		RELEASE_PATH(from_name);
+		from_name = NULL;
+	}
 	if (holding_mntlock) {
 	        mount_unlock_renames(locked_mp);
 		mount_drop(locked_mp, 0);
+		holding_mntlock = 0;
 	}
 	if (tdvp) {
 		/*
@@ -5189,6 +5234,16 @@ out1:
 		        vnode_put(fvp);
 	        vnode_put(fdvp);
 	}
+
+    /*
+     * If things changed after we did the namei, then we will re-drive
+     * this rename call from the top.
+     */
+	if(do_retry) {
+        do_retry = 0;
+		goto retry;
+	}
+
 	return (error);
 }
 

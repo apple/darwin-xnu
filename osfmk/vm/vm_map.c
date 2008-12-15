@@ -399,28 +399,6 @@ static zone_t	vm_map_copy_zone;	/* zone for vm_map_copy structures */
 
 vm_object_t	vm_submap_object;
 
-/*
- *	vm_map_init:
- *
- *	Initialize the vm_map module.  Must be called before
- *	any other vm_map routines.
- *
- *	Map and entry structures are allocated from zones -- we must
- *	initialize those zones.
- *
- *	There are three zones of interest:
- *
- *	vm_map_zone:		used to allocate maps.
- *	vm_map_entry_zone:	used to allocate map entries.
- *	vm_map_kentry_zone:	used to allocate map entries for the kernel.
- *
- *	The kernel allocates map entries from a special zone that is initially
- *	"crammed" with memory.  It would be difficult (perhaps impossible) for
- *	the kernel to allocate more memory to a entry zone when it became
- *	empty since the very act of allocating memory implies the creation
- *	of a new entry.
- */
-
 static void		*map_data;
 static vm_map_size_t	map_data_size;
 static void		*kentry_data;
@@ -433,12 +411,21 @@ static int		kentry_count = 2048;		/* to init kentry_data_size */
 /* Skip acquiring locks if we're in the midst of a kernel core dump */
 extern unsigned int not_in_kdp;
 
-#ifdef	__i386__
+#if CONFIG_CODE_DECRYPTION
+/*
+ * vm_map_apple_protected:
+ * This remaps the requested part of the object with an object backed by 
+ * the decrypting pager.
+ * crypt_info contains entry points and session data for the crypt module.
+ * The crypt_info block will be copied by vm_map_apple_protected. The data structures
+ * referenced in crypt_info must remain valid until crypt_info->crypt_end() is called.
+ */
 kern_return_t
 vm_map_apple_protected(
 	vm_map_t	map,
 	vm_map_offset_t	start,
-	vm_map_offset_t	end)
+	vm_map_offset_t	end,
+	struct pager_crypt_info *crypt_info)
 {
 	boolean_t	map_locked;
 	kern_return_t	kr;
@@ -454,7 +441,7 @@ vm_map_apple_protected(
 	if (!vm_map_lookup_entry(map,
 				 start,
 				 &map_entry) ||
-	    map_entry->vme_end != end ||
+	    map_entry->vme_end < end ||
 	    map_entry->is_sub_map) {
 		/* that memory is not properly mapped */
 		kr = KERN_INVALID_ARGUMENT;
@@ -475,7 +462,7 @@ vm_map_apple_protected(
 	 * it.
 	 */
 	 
-	protected_mem_obj = apple_protect_pager_setup(protected_object);
+	protected_mem_obj = apple_protect_pager_setup(protected_object, crypt_info);
 	if (protected_mem_obj == NULL) {
 		kr = KERN_FAILURE;
 		goto done;
@@ -499,10 +486,6 @@ vm_map_apple_protected(
 				     map_entry->max_protection,
 				     map_entry->inheritance);
 	assert(map_addr == start);
-	if (kr == KERN_SUCCESS) {
-		/* let the pager know that this mem_obj is mapped */
-		apple_protect_pager_map(protected_mem_obj);
-	}
 	/*
 	 * Release the reference obtained by apple_protect_pager_setup().
 	 * The mapping (if it succeeded) is now holding a reference on the
@@ -516,9 +499,30 @@ done:
 	}
 	return kr;
 }
-#endif	/* __i386__ */
+#endif	/* CONFIG_CODE_DECRYPTION */
 
 
+/*
+ *	vm_map_init:
+ *
+ *	Initialize the vm_map module.  Must be called before
+ *	any other vm_map routines.
+ *
+ *	Map and entry structures are allocated from zones -- we must
+ *	initialize those zones.
+ *
+ *	There are three zones of interest:
+ *
+ *	vm_map_zone:		used to allocate maps.
+ *	vm_map_entry_zone:	used to allocate map entries.
+ *	vm_map_kentry_zone:	used to allocate map entries for the kernel.
+ *
+ *	The kernel allocates map entries from a special zone that is initially
+ *	"crammed" with memory.  It would be difficult (perhaps impossible) for
+ *	the kernel to allocate more memory to a entry zone when it became
+ *	empty since the very act of allocating memory implies the creation
+ *	of a new entry.
+ */
 void
 vm_map_init(
 	void)
@@ -612,6 +616,11 @@ vm_map_create(
 	result->wiring_required = FALSE;
 	result->no_zero_fill = FALSE;
 	result->mapped = FALSE;
+#if CONFIG_EMBEDDED
+	result->prot_copy_allow = FALSE;
+#else
+	result->prot_copy_allow = TRUE;
+#endif
 	result->wait_for_space = FALSE;
 	result->first_free = vm_map_to_entry(result);
 	result->hint = vm_map_to_entry(result);
@@ -1494,9 +1503,9 @@ static unsigned int vm_map_enter_restore_failures = 0;
 kern_return_t
 vm_map_enter(
 	vm_map_t		map,
-	vm_map_offset_t	*address,	/* IN/OUT */
+	vm_map_offset_t		*address,	/* IN/OUT */
 	vm_map_size_t		size,
-	vm_map_offset_t	mask,
+	vm_map_offset_t		mask,
 	int			flags,
 	vm_object_t		object,
 	vm_object_offset_t	offset,
@@ -1521,6 +1530,32 @@ vm_map_enter(
 	boolean_t		is_submap = ((flags & VM_FLAGS_SUBMAP) != 0);
 	char			alias;
 	vm_map_offset_t		effective_min_offset, effective_max_offset;
+	kern_return_t		kr;
+
+#if CONFIG_EMBEDDED
+	if (cur_protection & VM_PROT_WRITE) {
+		if (cur_protection & VM_PROT_EXECUTE) {
+			printf("EMBEDDED: %s curprot cannot be write+execute. turning off execute\n", __PRETTY_FUNCTION__);
+			cur_protection &= ~VM_PROT_EXECUTE;
+		}
+	}
+	if (max_protection & VM_PROT_WRITE) {
+		if (max_protection & VM_PROT_EXECUTE) {
+			/* Right now all kinds of data segments are RWX. No point in logging that. */
+			/* printf("EMBEDDED: %s maxprot cannot be write+execute. turning off execute\n", __PRETTY_FUNCTION__); */
+			
+			/* Try to take a hint from curprot. If curprot is not writable,
+			 * make maxprot not writable. Otherwise make it not executable. 
+			 */
+			if((cur_protection & VM_PROT_WRITE) == 0) {
+				max_protection &= ~VM_PROT_WRITE;
+			} else {
+				max_protection &= ~VM_PROT_EXECUTE;
+			}
+		}
+	}
+	assert ((cur_protection | max_protection) == max_protection);
+#endif /* CONFIG_EMBEDDED */
 
 	if (is_submap) {
 		if (purgable) {
@@ -1925,8 +1960,6 @@ StartAgain: ;
 				}
 			}
 			if (use_pmap && submap->pmap != NULL) {
-				kern_return_t kr;
-
 				kr = pmap_nest(map->pmap,
 					       submap->pmap,
 					       tmp_start,
@@ -1983,13 +2016,56 @@ StartAgain: ;
 	}
 
 BailOut: ;
-	if (result == KERN_SUCCESS &&
-	    pmap_empty &&
-	    !(flags & VM_FLAGS_NO_PMAP_CHECK)) {
-		assert(vm_map_pmap_is_empty(map, *address, *address+size));
-	}
+	if (result == KERN_SUCCESS) {
+		vm_prot_t pager_prot;
+		memory_object_t pager;
 
-	if (result != KERN_SUCCESS) {
+		if (pmap_empty &&
+		    !(flags & VM_FLAGS_NO_PMAP_CHECK)) {
+			assert(vm_map_pmap_is_empty(map,
+						    *address,
+						    *address+size));
+		}
+
+		/*
+		 * For "named" VM objects, let the pager know that the
+		 * memory object is being mapped.  Some pagers need to keep
+		 * track of this, to know when they can reclaim the memory
+		 * object, for example.
+		 * VM calls memory_object_map() for each mapping (specifying
+		 * the protection of each mapping) and calls
+		 * memory_object_last_unmap() when all the mappings are gone.
+		 */
+		pager_prot = max_protection;
+		if (needs_copy) {
+			/*
+			 * Copy-On-Write mapping: won't modify
+			 * the memory object.
+			 */
+			pager_prot &= ~VM_PROT_WRITE;
+		}
+		if (!is_submap &&
+		    object != VM_OBJECT_NULL &&
+		    object->named &&
+		    object->pager != MEMORY_OBJECT_NULL) {
+			vm_object_lock(object);
+			pager = object->pager;
+			if (object->named &&
+			    pager != MEMORY_OBJECT_NULL) {
+				assert(object->pager_ready);
+				vm_object_mapping_wait(object, THREAD_UNINT);
+				vm_object_mapping_begin(object);
+				vm_object_unlock(object);
+
+				kr = memory_object_map(pager, pager_prot);
+				assert(kr == KERN_SUCCESS);
+
+				vm_object_lock(object);
+				vm_object_mapping_end(object);
+			}
+			vm_object_unlock(object);
+		}
+	} else {
 		if (new_mapping_established) {
 			/*
 			 * We have to get rid of the new mappings since we
@@ -2120,7 +2196,7 @@ vm_map_enter_mem_object(
 	map_addr = vm_map_trunc_page(*address);
 	map_size = vm_map_round_page(initial_size);
 	size = vm_object_round_page(initial_size);	
-	
+
 	/*
 	 * Find the vm object (if any) corresponding to this port.
 	 */
@@ -2316,6 +2392,50 @@ vm_map_enter_mem_object(
 		}
 	} else {
 		return KERN_INVALID_OBJECT;
+	}
+
+	if (object != VM_OBJECT_NULL &&
+	    object->named &&
+	    object->pager != MEMORY_OBJECT_NULL &&
+	    object->copy_strategy != MEMORY_OBJECT_COPY_NONE) {
+		memory_object_t pager;
+		vm_prot_t	pager_prot;
+		kern_return_t	kr;
+
+		/*
+		 * For "named" VM objects, let the pager know that the
+		 * memory object is being mapped.  Some pagers need to keep
+		 * track of this, to know when they can reclaim the memory
+		 * object, for example.
+		 * VM calls memory_object_map() for each mapping (specifying
+		 * the protection of each mapping) and calls
+		 * memory_object_last_unmap() when all the mappings are gone.
+		 */
+		pager_prot = max_protection;
+		if (copy) {
+			/*
+			 * Copy-On-Write mapping: won't modify the
+			 * memory object.
+			 */
+			pager_prot &= ~VM_PROT_WRITE;
+		}
+		vm_object_lock(object);
+		pager = object->pager;
+		if (object->named &&
+		    pager != MEMORY_OBJECT_NULL &&
+		    object->copy_strategy != MEMORY_OBJECT_COPY_NONE) {
+			assert(object->pager_ready);
+			vm_object_mapping_wait(object, THREAD_UNINT);
+			vm_object_mapping_begin(object);
+			vm_object_unlock(object);
+
+			kr = memory_object_map(pager, pager_prot);
+			assert(kr == KERN_SUCCESS);
+
+			vm_object_lock(object);
+			vm_object_mapping_end(object);
+		}
+		vm_object_unlock(object);
 	}
 
 	/*
@@ -3035,6 +3155,11 @@ vm_map_protect(
 
 	vm_map_lock(map);
 
+	if ((new_prot & VM_PROT_COPY) && !map->prot_copy_allow) {
+		vm_map_unlock(map);
+		return(KERN_PROTECTION_FAILURE);
+	}
+	
 	/* LP64todo - remove this check when vm_map_commpage64()
 	 * no longer has to stuff in a map_entry for the commpage
 	 * above the map's max_offset.
@@ -3084,6 +3209,15 @@ vm_map_protect(
 				return(KERN_PROTECTION_FAILURE);
 			}
 		}
+
+#if CONFIG_EMBEDDED
+		if (new_prot & VM_PROT_WRITE) {
+			if (new_prot & VM_PROT_EXECUTE) {
+				printf("EMBEDDED: %s can't have both write and exec at the same time\n", __FUNCTION__);
+				new_prot &= ~VM_PROT_EXECUTE;
+			}
+		}
+#endif
 
 		prev = current->vme_end;
 		current = current->vme_next;
@@ -6101,15 +6235,6 @@ vm_map_copy_overwrite_aligned(
 			entry->wired_count = 0;
 			entry->user_wired_count = 0;
 			offset = entry->offset = copy_entry->offset;
-			/*
-			 * XXX FBDP
-			 * We should propagate the submap entry's protections
-			 * here instead of forcing VM_PROT_ALL.
-			 * Or better yet, we should inherit the protection
-			 * of the copy_entry.
-			 */
-			entry->protection = VM_PROT_ALL;
-			entry->max_protection = VM_PROT_ALL;
 
 			vm_map_copy_entry_unlink(copy, copy_entry);
 			vm_map_copy_entry_dispose(copy, copy_entry);
@@ -10853,6 +10978,11 @@ restart_page_query:
 	if (m->speculative)
 		*disposition |= VM_PAGE_QUERY_PAGE_SPECULATIVE;
 
+	if (m->cs_validated)
+		*disposition |= VM_PAGE_QUERY_PAGE_CS_VALIDATED;
+	if (m->cs_tainted)
+		*disposition |= VM_PAGE_QUERY_PAGE_CS_TAINTED;
+
 page_query_done:
 	vm_object_unlock(object);
 
@@ -11499,3 +11629,11 @@ vm_map_set_user_wire_limit(vm_map_t 	map,
 {
 	map->user_wire_limit = limit;
 }
+
+void		vm_map_set_prot_copy_allow(vm_map_t		map,
+					   boolean_t		allow)
+{
+	vm_map_lock(map);
+	map->prot_copy_allow = allow;
+	vm_map_unlock(map);
+};

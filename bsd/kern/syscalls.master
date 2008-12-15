@@ -528,15 +528,29 @@
 359	ALL	{ int nosys(void); } 
 #endif
 
+#if CONFIG_WORKQUEUE
 360	ALL	{ user_addr_t bsdthread_create(user_addr_t func, user_addr_t func_arg, user_addr_t stack, user_addr_t pthread, uint32_t flags) NO_SYSCALL_STUB; } 
 361	ALL	{ int bsdthread_terminate(user_addr_t stackaddr, size_t freesize, uint32_t port, uint32_t sem) NO_SYSCALL_STUB; } 
+#else
+360	ALL	{ int nosys(void); } 
+361	ALL	{ int nosys(void); } 
+#endif
+
 362	ALL	{ int kqueue(void); } 
 363	ALL	{ int kevent(int fd, const struct kevent *changelist, int nchanges, struct kevent *eventlist, int nevents, const struct timespec *timeout); } 
 364	ALL	{ int lchown(user_addr_t path, uid_t owner, gid_t group); }
 365	ALL	{ int stack_snapshot(pid_t pid, user_addr_t tracebuf, uint32_t tracebuf_size, uint32_t options) NO_SYSCALL_STUB; }
+
+#if CONFIG_WORKQUEUE
 366	ALL	{ int bsdthread_register(user_addr_t threadstart, user_addr_t wqthread, int pthsize) NO_SYSCALL_STUB; } 
 367	ALL	{ int workq_open(void) NO_SYSCALL_STUB; }
 368	ALL	{ int workq_ops(int options, user_addr_t item, int prio) NO_SYSCALL_STUB; }
+#else
+366	ALL	{ int nosys(void); } 
+367	ALL	{ int nosys(void); } 
+368	ALL	{ int nosys(void); } 
+#endif
+
 369	ALL	{ int nosys(void); } 
 370	ALL	{ int nosys(void); } 
 371	ALL	{ int nosys(void); } 

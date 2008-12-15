@@ -9,12 +9,12 @@
 #  Standard Apple MacOS X Configurations:
 #  -------- ---- -------- ---------------
 #
-#  RELEASE = [ medium intel pc iokit mach_pe mach mach_kdp event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 hibernation crypto config_dtrace]
+#  RELEASE = [ medium intel pc iokit mach_pe mach mach_kdp config_serial_kdp event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 hibernation crypto config_dtrace]
 #  DEBUG_KDP = [ RELEASE osf_debug debug ]
 #  DEBUG= [ RELEASE osf_debug debug mach_kdb mach_assert ]
 #  PROFILE = [ RELEASE profile ]
 #
-#  EMBEDDED_BASE = [ bsmall intel pc iokit mach_pe mach mach_kdp event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 hibernation crypto ]
+#  EMBEDDED_BASE = [ bsmall intel pc iokit mach_pe mach mach_kdp serial_kdp event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 hibernation crypto ]
 #  EMBEDDED = [ EMBEDDED_BASE no_printf_str no_kprintf_str no_kdebug ]
 #  DEVELOPMENT = [ EMBEDDED_BASE mach_assert config_dtrace ]
 #
@@ -54,6 +54,7 @@ options         MACH_PE		#				# <mach_pe>
 options		DDB		# Inline debugger		# <debug>
 options		MACH_KDB	#				# <mach_kdb>
 options		MACH_KDP	# KDP				# <mach_kdp>
+options		CONFIG_SERIAL_KDP	# KDP over serial				# <config_serial_kdp>
 options		PAE
 options		X86_64
 options		DISPATCH_COUNTS
@@ -64,3 +65,9 @@ options		DISPATCH_COUNTS
 #
 options		CONFIG_MACF		# Mandatory Access Control Framework
 #options	CONFIG_MACF_MACH	# MACF applied to Mach services
+
+#
+# code decryption... used on i386 for DSMOS
+# must be set in all the bsd/conf and osfmk/conf MASTER files
+#
+options		CONFIG_CODE_DECRYPTION

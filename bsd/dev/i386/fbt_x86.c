@@ -142,7 +142,6 @@ static const char * critical_blacklist[] =
 	"pmap_cpu_high_map_vaddr", 
 	"pmap_cpu_high_shared_remap", 
 	"pmap_cpu_init",
-	"rdHPET",
 	"register_cpu_setup_func",
 	"unregister_cpu_setup_func"
 };
@@ -405,7 +404,7 @@ __fbt_provide_module(void *arg, struct modctl *ctl)
 	unsigned int i, j;
 
 	int gIgnoreFBTBlacklist = 0;
-    PE_parse_boot_arg("IgnoreFBTBlacklist", &gIgnoreFBTBlacklist);
+	PE_parse_boot_argn("IgnoreFBTBlacklist", &gIgnoreFBTBlacklist, sizeof (gIgnoreFBTBlacklist));
 
 	mh = (struct mach_header *)(ctl->address);
 	modname = ctl->mod_modname;
@@ -527,17 +526,12 @@ __fbt_provide_module(void *arg, struct modctl *ctl)
 		 */
 		if (strstr(name, "machine_stack_") == name ||
 			strstr(name, "mapping_") == name ||
-			strstr(name, "hpet_") == name ||
-
-			0 == strcmp(name, "rdHPET") ||
-			0 == strcmp(name, "HPETInterrupt") ||
 			0 == strcmp(name, "tmrCvt") ||
 
 			strstr(name, "tsc_") == name ||
 
 			strstr(name, "pmCPU") == name ||
 			0 == strcmp(name, "Cstate_table_set") ||
-			0 == strcmp(name, "pmHPETInterrupt") ||
 			0 == strcmp(name, "pmKextRegister") ||
 			0 == strcmp(name, "pmSafeMode") ||
 			0 == strcmp(name, "pmUnregister") ||

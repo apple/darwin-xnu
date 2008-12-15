@@ -145,6 +145,11 @@ bsd_startupearly(void)
 
 #if SOCKETS
 	{
+#if CONFIG_USESOCKTHRESHOLD
+		static const unsigned int	maxspace = 64 * 1024;
+#else
+		static const unsigned int	maxspace = 128 * 1024;
+#endif
 		int             scale;
 
 		nmbclusters = bsd_mbuf_cluster_reserve() / MCLBYTES;
@@ -154,10 +159,10 @@ bsd_startupearly(void)
 			tcp_sendspace *= scale;
 			tcp_recvspace *= scale;
 
-			if (tcp_sendspace > (64 * 1024))
-				tcp_sendspace = 64 * 1024;
-			if (tcp_recvspace > (64 * 1024))
-				tcp_recvspace = 64 * 1024;
+			if (tcp_sendspace > maxspace)
+				tcp_sendspace = maxspace;
+			if (tcp_recvspace > maxspace)
+				tcp_recvspace = maxspace;
 		}
 #endif /* INET || INET6 */
 	}

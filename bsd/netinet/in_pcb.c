@@ -231,6 +231,9 @@ in_pcballoc(struct socket *so, struct inpcbinfo *pcbinfo, __unused struct proc *
 	}
 	mac_inpcb_label_associate(so, inp);
 #endif
+#if CONFIG_IP_EDGEHOLE
+	ip_edgehole_attach(inp);
+#endif
 	so->so_pcb = (caddr_t)inp;
 
 	if (so->so_proto->pr_flags & PR_PCBLOCK) {

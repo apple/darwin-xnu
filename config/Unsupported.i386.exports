@@ -1,9 +1,6 @@
 _cpu_number
 _dsmos_page_transform_hook
 _gPEEFISystemTable
-_hpet_get_info
-_hpet_register_callback
-_hpet_request
 _in6addr_local
 _io_map_spec
 _kdp_register_callout
@@ -13,7 +10,6 @@ _m_mtod
 _ml_get_apicid
 _ml_get_maxbusdelay
 _ml_get_maxsnoop
-_ml_hpet_cfg
 _ml_cpu_int_event_time
 _mp_rendezvous
 _mp_rendezvous_no_intrs
@@ -21,7 +17,6 @@ _nd6_storelladdr
 _pmCPUControl
 _pmKextRegister
 _pm_init_lock
-_rdHPET
 _real_ncpus
 _rtc_clock_napped
 _serial_getc

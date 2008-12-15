@@ -196,6 +196,7 @@ cat_convertattr(
 	} else {
 		/* Convert the data fork. */
 		datafp->cf_size = recp->hfsPlusFile.dataFork.logicalSize;
+		datafp->cf_new_size = 0;
 		datafp->cf_blocks = recp->hfsPlusFile.dataFork.totalBlocks;
 		if ((hfsmp->hfc_stage == HFC_RECORDING) &&
 		    (attrp->ca_atime >= hfsmp->hfc_timebase)) {
@@ -211,6 +212,7 @@ cat_convertattr(
 
 		/* Convert the resource fork. */
 		rsrcfp->cf_size = recp->hfsPlusFile.resourceFork.logicalSize;
+		rsrcfp->cf_new_size = 0;
 		rsrcfp->cf_blocks = recp->hfsPlusFile.resourceFork.totalBlocks;
 		if ((hfsmp->hfc_stage == HFC_RECORDING) &&
 		    (attrp->ca_atime >= hfsmp->hfc_timebase)) {
@@ -686,6 +688,7 @@ cat_lookupbykey(struct hfsmount *hfsmp, CatalogKey *keyp, int allow_system_files
 		} else if (wantrsrc) {
 			/* Convert the resource fork. */
 			forkp->cf_size = recp->hfsPlusFile.resourceFork.logicalSize;
+			forkp->cf_new_size = 0;
 			forkp->cf_blocks = recp->hfsPlusFile.resourceFork.totalBlocks;
 			if ((hfsmp->hfc_stage == HFC_RECORDING) &&
 			    (to_bsd_time(recp->hfsPlusFile.accessDate) >= hfsmp->hfc_timebase)) {
@@ -704,6 +707,7 @@ cat_lookupbykey(struct hfsmount *hfsmp, CatalogKey *keyp, int allow_system_files
 
 			/* Convert the data fork. */
 			forkp->cf_size = recp->hfsPlusFile.dataFork.logicalSize;
+			forkp->cf_new_size = 0;
 			forkp->cf_blocks = recp->hfsPlusFile.dataFork.totalBlocks;
 			if ((hfsmp->hfc_stage == HFC_RECORDING) &&
 			    (to_bsd_time(recp->hfsPlusFile.accessDate) >= hfsmp->hfc_timebase)) {
@@ -2177,7 +2181,7 @@ cat_makealias(struct hfsmount *hfsmp, u_int32_t inode_num, struct HFSPlusCatalog
 
 	blksize = hfsmp->blockSize;
 	blkcount = howmany(kHFSAliasSize, blksize);
-	sectorsize = hfsmp->hfs_phys_block_size;
+	sectorsize = hfsmp->hfs_logical_block_size;
 	bzero(rsrcforkp, sizeof(HFSPlusForkData));
 
 	/* Allocate some disk space for the alias content. */
@@ -2193,7 +2197,7 @@ cat_makealias(struct hfsmount *hfsmp, u_int32_t inode_num, struct HFSPlusCatalog
 	blkno = ((u_int64_t)rsrcforkp->extents[0].startBlock * (u_int64_t)blksize) / sectorsize;
 	blkno += hfsmp->hfsPlusIOPosOffset / sectorsize;
 
-	bp = buf_getblk(hfsmp->hfs_devvp, blkno, roundup(kHFSAliasSize, hfsmp->hfs_phys_block_size), 0, 0, BLK_META);
+	bp = buf_getblk(hfsmp->hfs_devvp, blkno, roundup(kHFSAliasSize, hfsmp->hfs_logical_block_size), 0, 0, BLK_META);
 	if (hfsmp->jnl) {
 		journal_modify_block_start(hfsmp->jnl, bp);
 	}

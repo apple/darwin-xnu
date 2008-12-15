@@ -484,6 +484,13 @@ log_dmesg(user_addr_t buffer, uint32_t buffersize, register_t * retval) {
 			continue;
 		newl = ch == '\n';
 		localbuff[i++] = ch;
+		/* The original version of this routine contained a buffer
+		 * overflow. At the time, a "small" targeted fix was desired
+		 * so the change below to check the buffer bounds was made.
+		 * TODO: rewrite this needlessly convoluted routine.
+		 */
+		if (i == (localbuff_size - 2))
+			break;
 	}
 	if (!newl)
 		localbuff[i++] = '\n';

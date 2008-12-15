@@ -413,6 +413,9 @@ int	vnode_ref_ext(vnode_t, int);
 void	vnode_rele_ext(vnode_t, int, int);
 void	vnode_rele_internal(vnode_t, int, int, int);
 int	vnode_getwithref(vnode_t);
+#ifdef BSD_KERNEL_PRIVATE
+int	vnode_getalways(vnode_t);
+#endif /* BSD_KERNEL_PRIVATE */
 int	vnode_get_locked(vnode_t);
 int	vnode_put_locked(vnode_t);
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -74,6 +74,8 @@
 #include <sys/cdefs.h>
 #ifdef KERNEL
 #include <machine/types.h>
+#else /* !KERNEL */
+#include <Availability.h>
 #endif /* KERNEL */
 
 /* [XSI] The timespec structure may be defined as described in <time.h> */
@@ -264,7 +266,11 @@ struct stat {
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 
+#if !__DARWIN_ONLY_64_BIT_INO_T
+
 struct stat64 __DARWIN_STRUCT_STAT64;
+
+#endif /* !__DARWIN_ONLY_64_BIT_INO_T */
 
 #endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
@@ -537,15 +543,18 @@ int	mkdirx_np(const char *, filesec_t);
 int	mkfifox_np(const char *, filesec_t);
 int	statx_np(const char *, struct stat *, filesec_t) __DARWIN_INODE64(statx_np);
 int	umaskx_np(filesec_t);
-/* The following are simillar  to stat and friends except provide struct stat64 instead of struct stat  */
-int	fstatx64_np(int, struct stat64 *, filesec_t);
-int	lstatx64_np(const char *, struct stat64 *, filesec_t);
-int	statx64_np(const char *, struct stat64 *, filesec_t);
-int	fstat64(int, struct stat64 *);
-int	lstat64(const char *, struct stat64 *);
-int	stat64(const char *, struct stat64 *);
+
+#if !__DARWIN_ONLY_64_BIT_INO_T
+/* The following deprecated routines are simillar to stat and friends except provide struct stat64 instead of struct stat  */
+int	fstatx64_np(int, struct stat64 *, filesec_t) __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5,__MAC_10_6,__IPHONE_NA,__IPHONE_NA);
+int	lstatx64_np(const char *, struct stat64 *, filesec_t) __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5,__MAC_10_6,__IPHONE_NA,__IPHONE_NA);
+int	statx64_np(const char *, struct stat64 *, filesec_t) __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5,__MAC_10_6,__IPHONE_NA,__IPHONE_NA);
+int	fstat64(int, struct stat64 *) __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5,__MAC_10_6,__IPHONE_NA,__IPHONE_NA);
+int	lstat64(const char *, struct stat64 *) __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5,__MAC_10_6,__IPHONE_NA,__IPHONE_NA);
+int	stat64(const char *, struct stat64 *) __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5,__MAC_10_6,__IPHONE_NA,__IPHONE_NA);
+#endif /* !__DARWIN_ONLY_64_BIT_INO_T */
 #endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 __END_DECLS
-#endif
+#endif /* !KERNEL */
 #endif /* !_SYS_STAT_H_ */

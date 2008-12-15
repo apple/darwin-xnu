@@ -81,7 +81,9 @@ __BEGIN_DECLS
 #include <kern/locks.h>
 __END_DECLS
 
+#if DEBUG
 #define	__PROC_INTERNAL_DEBUG 1
+#endif
 
 /* 
  * The short form for various locks that protect fields in the data structures.
@@ -327,6 +329,7 @@ struct	proc {
 	struct  timeval p_start;        	/* starting time */
 	void *	p_rcall;
 	int		p_ractive;
+	int	p_idversion;		/* version of process identity */
 #if DIAGNOSTIC
 	unsigned int p_fdlock_pc[4];
 	unsigned int p_fdunlock_pc[4];

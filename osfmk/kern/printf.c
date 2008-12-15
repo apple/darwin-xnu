@@ -745,7 +745,8 @@ conslog_putc(
 		cnputc(c);
 
 #ifdef	MACH_BSD
-	log_putc(c);
+	if (debug_mode == 0)
+		log_putc(c);
 #endif
 }
 

@@ -50,6 +50,8 @@
  * DKIOCISFORMATTED                      is media formatted?
  * DKIOCISWRITABLE                       is media writable?
  *
+ * DKIOCDISCARD                          delete unused data
+ *
  * DKIOCGETMAXBLOCKCOUNTREAD             get maximum block count for reads
  * DKIOCGETMAXBLOCKCOUNTWRITE            get maximum block count for writes
  * DKIOCGETMAXBYTECOUNTREAD              get maximum byte count for reads
@@ -62,11 +64,21 @@
  *
  * DKIOCGETMINSEGMENTALIGNMENTBYTECOUNT  get minimum segment alignment in bytes
  * DKIOCGETMAXSEGMENTADDRESSABLEBITCOUNT get maximum segment width in bits
+ *
+ * DKIOCGETPHYSICALBLOCKSIZE             get device's block size
  */
 
 typedef struct
 {
-    char path[128];
+    uint64_t               offset;
+    uint64_t               length;
+
+    uint8_t                reserved0128[16];       /* reserved, clear to zero */
+} dk_discard_t;
+
+typedef struct
+{
+    char                   path[128];
 } dk_firmware_path_t;
 
 typedef struct
@@ -102,6 +114,8 @@ typedef struct
 #define DKIOCISFORMATTED                      _IOR('d', 23, uint32_t)
 #define DKIOCISWRITABLE                       _IOR('d', 29, uint32_t)
 
+#define DKIOCDISCARD                          _IOW('d', 31, dk_discard_t)
+
 #define DKIOCGETMAXBLOCKCOUNTREAD             _IOR('d', 64, uint64_t)
 #define DKIOCGETMAXBLOCKCOUNTWRITE            _IOR('d', 65, uint64_t)
 #define DKIOCGETMAXBYTECOUNTREAD              _IOR('d', 70, uint64_t)
@@ -115,7 +129,10 @@ typedef struct
 #define DKIOCGETMINSEGMENTALIGNMENTBYTECOUNT  _IOR('d', 74, uint64_t)
 #define DKIOCGETMAXSEGMENTADDRESSABLEBITCOUNT _IOR('d', 75, uint64_t)
 
+#define DKIOCGETPHYSICALBLOCKSIZE             _IOR('d', 77, uint32_t)
+
 #ifdef KERNEL
+#define DK_FEATURE_DISCARD                    0x00000010
 #define DK_FEATURE_FORCE_UNIT_ACCESS          0x00000001
 #define DKIOCGETBLOCKCOUNT32                  _IOR('d', 25, uint32_t)
 #define DKIOCSETBLOCKSIZE                     _IOW('d', 24, uint32_t)

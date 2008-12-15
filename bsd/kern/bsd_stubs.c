@@ -311,7 +311,7 @@ issingleuser(void)
 {
 	char namep[16];
 
-	if (PE_parse_boot_arg("-s", namep)) {
+	if (PE_parse_boot_argn("-s", namep, sizeof(namep))) {
 		return(1);
 	} else {
 		return(0);

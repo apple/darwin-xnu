@@ -70,4 +70,11 @@ enum { kIOPrepareToPhys32 = 0x04 };
 #define kIOPlatformQuiesceActionKey	"IOPlatformQuiesceAction"	/* value is OSNumber (priority) */
 #define kIOPlatformActiveActionKey	"IOPlatformActiveAction"	/* value is OSNumber (priority) */
 
+#define kIOPlatformFunctionHandlerSet			"IOPlatformFunctionHandlerSet"
+#if defined(__i386__)
+#define kIOPlatformFunctionHandlerMaxBusDelay		"IOPlatformFunctionHandlerMaxBusDelay"
+#define kIOPlatformFunctionHandlerMaxInterruptDelay	"IOPlatformFunctionHandlerMaxInterruptDelay"
+#endif /* defined(__i386__) */
+
+
 #endif /* ! _IOKIT_IOKITKEYSPRIVATE_H */

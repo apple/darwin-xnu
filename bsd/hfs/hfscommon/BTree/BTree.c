@@ -230,8 +230,8 @@ OSStatus BTOpenPath(FCB *filePtr, KeyCompareProcPtr keyCompareProc)
 	btreePtr->fileRefNum		= GetFileRefNumFromFCB(filePtr);
 	filePtr->fcbBTCBPtr			= (Ptr) btreePtr;	// attach btree cb to file
 
-	/* The minimum node size is the physical block size */
-	nodeRec.blockSize = VTOHFS(btreePtr->fileRefNum)->hfs_phys_block_size;
+	/* Prefer doing I/O a physical block at a time */
+	nodeRec.blockSize = VTOHFS(btreePtr->fileRefNum)->hfs_physical_block_size;
 
 	/* Start with the allocation block size for regular files. */
 	if (FTOC(filePtr)->c_fileid >= kHFSFirstUserCatalogNodeID)
@@ -301,8 +301,8 @@ OSStatus BTOpenPath(FCB *filePtr, KeyCompareProcPtr keyCompareProc)
 
 	// set kBadClose attribute bit, and UpdateNode
 
-	/* b-tree node size must be at least as big as the physical block size */
-	if (btreePtr->nodeSize < nodeRec.blockSize)
+	/* b-tree node size must be at least as big as the logical block size */
+	if (btreePtr->nodeSize < VTOHFS(btreePtr->fileRefNum)->hfs_logical_block_size)
 	{
 		/*
 		 * If this tree has any records or the media is writeable then

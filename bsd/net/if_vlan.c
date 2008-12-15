@@ -1108,6 +1108,7 @@ vlan_input(ifnet_t p, __unused protocol_family_t protocol,
 	/* We found a vlan interface, inject on that interface. */
 	dlil_input_packet_list(ifp, m);
     } else {
+	m->m_pkthdr.header = frame_header;
 	/* Send priority-tagged packet up through the parent */
 	dlil_input_packet_list(p, m);
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -82,7 +82,6 @@
 #include <i386/cpuid.h>
 #include <i386/Diagnostics.h>
 #include <i386/pmCPU.h>
-#include <i386/hpet.h>
 #include <mach/i386/vm_param.h>
 #include <mach/i386/thread_status.h>
 #include <machine/commpage.h>
@@ -441,6 +440,9 @@ main(
 	DECLARE("CPU_UBER_ARG_STORE_VALID",
 		offsetof(cpu_data_t *, cpu_uber_arg_store_valid));
 
+	DECLARE("CPU_NANOTIME",
+		offsetof(cpu_data_t *, cpu_nanotime));
+
 	DECLARE("CPU_DR7",
 		offsetof(cpu_data_t *, cpu_dr7));
 
@@ -547,21 +549,6 @@ main(
 			offsetof(struct processor *, processor_data.current_state));
 
 	DECLARE("OnProc", OnProc);
-
-
-	DECLARE("GCAP_ID",		offsetof(hpetReg_t *, GCAP_ID));
-	DECLARE("GEN_CONF",		offsetof(hpetReg_t *, GEN_CONF));
-	DECLARE("GINTR_STA",	offsetof(hpetReg_t *, GINTR_STA));
-	DECLARE("MAIN_CNT",		offsetof(hpetReg_t *, MAIN_CNT));
-	DECLARE("TIM0_CONF",	offsetof(hpetReg_t *, TIM0_CONF));
-	DECLARE("TIM_CONF",		TIM_CONF);
-	DECLARE("Tn_INT_ENB_CNF",	Tn_INT_ENB_CNF);
-	DECLARE("TIM0_COMP",	offsetof(hpetReg_t *, TIM0_COMP));
-	DECLARE("TIM_COMP",		TIM_COMP);
-	DECLARE("TIM1_CONF",	offsetof(hpetReg_t *, TIM1_CONF));
-	DECLARE("TIM1_COMP",	offsetof(hpetReg_t *, TIM1_COMP));
-	DECLARE("TIM2_CONF",	offsetof(hpetReg_t *, TIM2_CONF));
-	DECLARE("TIM2_COMP",	offsetof(hpetReg_t *, TIM2_COMP));
 
 #if	CONFIG_DTRACE
 	DECLARE("LS_LCK_MTX_LOCK_ACQUIRE", LS_LCK_MTX_LOCK_ACQUIRE);

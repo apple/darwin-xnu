@@ -245,7 +245,7 @@ socketinit(void)
 		return;
 	}
 
-	PE_parse_boot_arg("socket_debug", &socket_debug);
+	PE_parse_boot_argn("socket_debug", &socket_debug, sizeof (socket_debug));
 
 	/*
 	 * allocate lock group attribute and group for socket cache mutex

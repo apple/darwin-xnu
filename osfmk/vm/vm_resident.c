@@ -340,7 +340,7 @@ vm_page_set_colors( void )
 {
 	unsigned int	n, override;
 	
-	if ( PE_parse_boot_arg("colors", &override) )		/* colors specified as a boot-arg? */
+	if ( PE_parse_boot_argn("colors", &override, sizeof (override)) )		/* colors specified as a boot-arg? */
 		n = override;	
 	else if ( vm_cache_geometry_colors )			/* do we know what the cache geometry is? */
 		n = vm_cache_geometry_colors;
@@ -684,7 +684,7 @@ pmap_startup(
 	 * Check if we want to initialize pages to a known value
 	 */
 	fill = 0;								/* Assume no fill */
-	if (PE_parse_boot_arg("fill", &fillval)) fill = 1;			/* Set fill */
+	if (PE_parse_boot_argn("fill", &fillval, sizeof (fillval))) fill = 1;			/* Set fill */
 	
 
 	/*
@@ -957,13 +957,19 @@ vm_page_insert_internal(
 
 	object->resident_page_count++;
 
-	if (object->purgable == VM_PURGABLE_VOLATILE ||
-	    object->purgable == VM_PURGABLE_EMPTY) {
+	if (object->purgable == VM_PURGABLE_VOLATILE) {
 		if (queues_lock_held == FALSE)
 			vm_page_lockspin_queues();
 
 		vm_page_purgeable_count++;
 
+		if (queues_lock_held == FALSE)
+			vm_page_unlock_queues();
+	} else if (object->purgable == VM_PURGABLE_EMPTY &&
+		   mem->throttled) {
+		if (queues_lock_held == FALSE)
+			vm_page_lock_queues();
+		vm_page_deactivate(mem);
 		if (queues_lock_held == FALSE)
 			vm_page_unlock_queues();
 	}
@@ -1053,8 +1059,7 @@ vm_page_replace(
 		found_m->offset = (vm_object_offset_t) -1;
 		object->resident_page_count--;
 
-		if (object->purgable == VM_PURGABLE_VOLATILE ||
-		    object->purgable == VM_PURGABLE_EMPTY) {
+		if (object->purgable == VM_PURGABLE_VOLATILE) {
 		        assert(vm_page_purgeable_count > 0);
 			vm_page_purgeable_count--;
 		}
@@ -1079,9 +1084,12 @@ vm_page_replace(
 
 	object->resident_page_count++;
 
-	if (object->purgable == VM_PURGABLE_VOLATILE ||
-	    object->purgable == VM_PURGABLE_EMPTY) {
+	if (object->purgable == VM_PURGABLE_VOLATILE) {
 		vm_page_purgeable_count++;
+	} else if (object->purgable == VM_PURGABLE_EMPTY) {
+		if (mem->throttled) {
+			vm_page_deactivate(mem);
+		}
 	}
 }
 
@@ -1151,8 +1159,7 @@ vm_page_remove(
 
 	mem->object->resident_page_count--;
 
-	if (mem->object->purgable == VM_PURGABLE_VOLATILE ||
-	    mem->object->purgable == VM_PURGABLE_EMPTY) {
+	if (mem->object->purgable == VM_PURGABLE_VOLATILE) {
 		assert(vm_page_purgeable_count > 0);
 		vm_page_purgeable_count--;
 	}
@@ -2306,6 +2313,24 @@ vm_page_wire(
 			mem->zero_fill = FALSE;
 		        OSAddAtomic(-1, (SInt32 *)&vm_zf_count);
 		}
+#if CONFIG_EMBEDDED
+		{
+		int 	percent_avail;
+
+		/*
+		 * Decide if we need to poke the memorystatus notification thread.
+		 */
+		percent_avail = 
+			(vm_page_active_count + vm_page_inactive_count + 
+			 vm_page_speculative_count + vm_page_free_count +
+			 (IP_VALID(memory_manager_default)?0:vm_page_purgeable_count) ) * 100 /
+			atop_64(max_mem);
+		if (percent_avail <= (kern_memorystatus_level - 5)) {
+			kern_memorystatus_level = percent_avail;
+			thread_wakeup((event_t)&kern_memorystatus_wakeup);
+		}
+		}
+#endif
 		/* 
 		 * ENCRYPTED SWAP:
 		 * The page could be encrypted, but
@@ -2374,20 +2399,29 @@ vm_page_unwire(
 		assert(!mem->laundry);
 		assert(mem->object != kernel_object);
 		assert(mem->pageq.next == NULL && mem->pageq.prev == NULL);
-		if (!IP_VALID(memory_manager_default) && 
-			mem->dirty && mem->object->internal && 
-			(mem->object->purgable == VM_PURGABLE_DENY ||
-			 mem->object->purgable == VM_PURGABLE_NONVOLATILE ||
-			 mem->object->purgable == VM_PURGABLE_VOLATILE)) {
-			queue_enter(&vm_page_queue_throttled, mem, vm_page_t, pageq);
-			vm_page_throttled_count++;
-			mem->throttled = TRUE;
+		if (mem->object->purgable == VM_PURGABLE_EMPTY) {
+			vm_page_deactivate(mem);
 		} else {
-			queue_enter(&vm_page_queue_active, mem, vm_page_t, pageq);
-			vm_page_active_count++;
-			mem->active = TRUE;
+			vm_page_activate(mem);
 		}
-		mem->reference = TRUE;
+#if CONFIG_EMBEDDED
+		{
+		int 	percent_avail;
+
+		/*
+		 * Decide if we need to poke the memorystatus notification thread.
+		 */
+		percent_avail = 
+			(vm_page_active_count + vm_page_inactive_count + 
+			 vm_page_speculative_count + vm_page_free_count +
+			 (IP_VALID(memory_manager_default)?0:vm_page_purgeable_count) ) * 100 /
+			atop_64(max_mem);
+		if (percent_avail >= (kern_memorystatus_level + 5)) {
+			kern_memorystatus_level = percent_avail;
+			thread_wakeup((event_t)&kern_memorystatus_wakeup);
+		}
+		}
+#endif
 	}
 }
 
@@ -2992,8 +3026,10 @@ vm_page_find_contiguous(
 	unsigned int	page_idx, start_idx;
 	int		free_considered, free_available;
 	int		substitute_needed;
-#if MACH_ASSERT
+#if DEBUG
 	uint32_t	tv_start_sec, tv_start_usec, tv_end_sec, tv_end_usec;
+#endif
+#if MACH_ASSERT
 	int		yielded = 0;
 	int		dumped_run = 0;
 	int		stolen_pages = 0;
@@ -3004,7 +3040,8 @@ vm_page_find_contiguous(
 
 #if MACH_ASSERT
 	vm_page_verify_free_lists();
-
+#endif
+#if DEBUG
 	clock_get_system_microtime(&tv_start_sec, &tv_start_usec);
 #endif
 	vm_page_lock_queues();
@@ -3373,7 +3410,7 @@ retry:
 done_scanning:
 	vm_page_unlock_queues();
 
-#if MACH_ASSERT
+#if DEBUG
 	clock_get_system_microtime(&tv_end_sec, &tv_end_usec);
 
 	tv_end_sec -= tv_start_sec;
@@ -3389,6 +3426,8 @@ done_scanning:
 	printf("vm_find_page_contiguous(num=%d,low=%d): found %d pages in %d.%06ds...  scanned %d pages...  yielded %d times...  dumped run %d times... stole %d pages\n",
 	       contig_pages, max_pnum, npages, tv_end_sec, tv_end_usec, page_idx, yielded, dumped_run, stolen_pages);
 
+#endif
+#if MACH_ASSERT
 	vm_page_verify_free_lists();
 #endif
 	return m;

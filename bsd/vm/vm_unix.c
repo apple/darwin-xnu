@@ -1036,12 +1036,6 @@ shared_region_map_np(
 		goto done;
 	}
 
-	/*
-	 * The mapping was successful.  Let the buffer cache know
-	 * that we've mapped that file with these protections.  This
-	 * prevents the vnode from getting recycled while it's mapped.
-	 */
-	(void) ubc_map(vp, VM_PROT_READ);
 	error = 0;
 
 	/* update the vnode's access time */

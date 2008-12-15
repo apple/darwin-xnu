@@ -584,11 +584,22 @@ static OSErr	InsertNode	(BTreeControlBlockPtr	 btreePtr,
 
 	/////////////////////// Try Simple Insert ///////////////////////////////
 
-	if ( node == leftNodeNum )
-		targetNode = leftNode;
-	else
-		targetNode = rightNode;
-
+	/* sanity check our left and right nodes here. */
+	if (node == leftNodeNum) {
+		if (leftNode->buffer == NULL) {
+			err = fsBTInvalidNodeErr;
+			M_ExitOnError(err);	
+		}
+		else{
+			targetNode = leftNode;
+		}
+	}
+	else {
+		// we can assume right node is initialized.
+		targetNode = rightNode;	
+	}
+	
+	
 	recordFit = InsertKeyRecord (btreePtr, targetNode->buffer, index, key->keyPtr, key->keyLength, key->recPtr, key->recSize);
 
 	if ( recordFit )
@@ -605,7 +616,7 @@ static OSErr	InsertNode	(BTreeControlBlockPtr	 btreePtr,
 	
 	if ( !recordFit && leftNodeNum > 0 )
 	{
-		PanicIf ( leftNode->buffer != nil, "\p InsertNode: leftNode already aquired!");
+		PanicIf ( leftNode->buffer != nil, "\p InsertNode: leftNode already acquired!");
 
 		if ( leftNode->buffer == nil )
 		{

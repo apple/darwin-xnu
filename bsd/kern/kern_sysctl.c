@@ -607,7 +607,9 @@ kern_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 		&& !(name[0] == KERN_PROC
 			|| name[0] == KERN_PROF 
 			|| name[0] == KERN_KDEBUG
+#if !CONFIG_EMBEDDED
 			|| name[0] == KERN_PROCARGS
+#endif
 			|| name[0] == KERN_PROCARGS2
 			|| name[0] == KERN_IPC
 			|| name[0] == KERN_SYSV
@@ -635,9 +637,11 @@ kern_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 #endif
 	case KERN_KDEBUG:
 		return (kdebug_ops(name + 1, namelen - 1, oldp, oldlenp, p));
+#if !CONFIG_EMBEDDED
 	case KERN_PROCARGS:
 		/* new one as it does not use kinfo_proc */
 		return (sysctl_procargs(name + 1, namelen - 1, oldp, oldlenp, p));
+#endif
 	case KERN_PROCARGS2:
 		/* new one as it does not use kinfo_proc */
 		return (sysctl_procargs2(name + 1, namelen - 1, oldp, oldlenp, p));
@@ -2224,6 +2228,9 @@ static int
 sysctl_coredump
 (__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
 {
+#ifdef SECURE_KERNEL
+	return (ENOTSUP);
+#endif
 	int new_value, changed;
 	int error = sysctl_io_number(req, do_coredump, sizeof(int), &new_value, &changed);
 	if (changed) {
@@ -2243,6 +2250,9 @@ static int
 sysctl_suid_coredump
 (__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
 {
+#ifdef SECURE_KERNEL
+	return (ENOTSUP);
+#endif
 	int new_value, changed;
 	int error = sysctl_io_number(req, sugid_coredump, sizeof(int), &new_value, &changed);
 	if (changed) {

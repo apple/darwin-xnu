@@ -408,7 +408,7 @@ badcreate:
 		goto bad;
 	}
 	if ( (error = vnode_ref_ext(vp, fmode)) ) {
-		goto bad;
+		goto bad2;
 	}
 
 	/* call out to allow 3rd party notification of open. 
@@ -419,6 +419,8 @@ badcreate:
 
 	*fmodep = fmode;
 	return (0);
+bad2:
+	VNOP_CLOSE(vp, fmode, ctx);
 bad:
 	ndp->ni_vp = NULL;
 	if (vp) {
@@ -493,9 +495,16 @@ vn_close(struct vnode *vp, int flags, vfs_context_t ctx)
 		}
 	}
 #endif
-	error = VNOP_CLOSE(vp, flags, ctx);
-	(void)vnode_rele_ext(vp, flags, 0);
+	
+	/* work around for foxhound */
+	if (vp->v_type == VBLK)
+		(void)vnode_rele_ext(vp, flags, 0);
 
+	error = VNOP_CLOSE(vp, flags, ctx);
+
+	if (vp->v_type != VBLK)
+		(void)vnode_rele_ext(vp, flags, 0);
+	
 	return (error);
 }
 

@@ -73,7 +73,8 @@ const struct memory_object_pager_ops device_pager_ops = {
 	device_pager_data_initialize,
 	device_pager_data_unlock,
 	device_pager_synchronize,
-	device_pager_unmap,
+	device_pager_map,
+	device_pager_last_unmap,
 	"device pager"
 };
 
@@ -424,7 +425,15 @@ device_pager_synchronize(
  *
  */
 kern_return_t
-device_pager_unmap(
+device_pager_map(
+	__unused memory_object_t	mem_obj,
+	__unused vm_prot_t		prot)
+{
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+device_pager_last_unmap(
 	__unused memory_object_t	mem_obj)
 {
 	return KERN_SUCCESS;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -229,7 +229,7 @@ machine_startup(void)
 	int	boot_arg;
 	unsigned int wncpu;
 
-	if (PE_parse_boot_arg("cpus", &wncpu)) {
+	if (PE_parse_boot_argn("cpus", &wncpu, sizeof (wncpu))) {
 		if ((wncpu > 0) && (wncpu < MAX_CPUS))
                         max_ncpus = wncpu;
 	}
@@ -237,7 +237,7 @@ machine_startup(void)
 	if( PE_get_hotkey( kPEControlKey ))
             halt_in_debugger = halt_in_debugger ? 0 : 1;
 
-	if (PE_parse_boot_arg("debug", &boot_arg)) {
+	if (PE_parse_boot_argn("debug", &boot_arg, sizeof (boot_arg))) {
 		if (boot_arg & DB_HALT) halt_in_debugger=1;
 		if (boot_arg & DB_PRT) disable_debug_output=FALSE; 
 		if (boot_arg & DB_SLOG) systemLogDiags=TRUE; 
@@ -245,10 +245,10 @@ machine_startup(void)
 		if (boot_arg & DB_LOG_PI_SCRN) logPanicDataToScreen=TRUE; 
 	}
 	
-	if (!PE_parse_boot_arg("nvram_paniclog", &commit_paniclog_to_nvram))
+	if (!PE_parse_boot_argn("nvram_paniclog", &commit_paniclog_to_nvram, sizeof (commit_paniclog_to_nvram)))
 		commit_paniclog_to_nvram = 1;
 
-	PE_parse_boot_arg("vmmforce", &lowGlo.lgVMMforcedFeats);
+	PE_parse_boot_argn("vmmforce", &lowGlo.lgVMMforcedFeats, sizeof (lowGlo.lgVMMforcedFeats));
 
 	hw_lock_init(&debugger_lock);				/* initialize debugger lock */
 	hw_lock_init(&pbtlock);						/* initialize print backtrace lock */
@@ -276,16 +276,16 @@ machine_startup(void)
 		active_debugger =1;
 	}
 #endif /* MACH_KDB */
-	if (PE_parse_boot_arg("preempt", &boot_arg)) {
+	if (PE_parse_boot_argn("preempt", &boot_arg, sizeof (boot_arg))) {
 		default_preemption_rate = boot_arg;
 	}
-	if (PE_parse_boot_arg("unsafe", &boot_arg)) {
+	if (PE_parse_boot_argn("unsafe", &boot_arg, sizeof (boot_arg))) {
 		max_unsafe_quanta = boot_arg;
 	}
-	if (PE_parse_boot_arg("poll", &boot_arg)) {
+	if (PE_parse_boot_argn("poll", &boot_arg, sizeof (boot_arg))) {
 		max_poll_quanta = boot_arg;
 	}
-	if (PE_parse_boot_arg("yield", &boot_arg)) {
+	if (PE_parse_boot_argn("yield", &boot_arg, sizeof (boot_arg))) {
 		sched_poll_yield_shift = boot_arg;
 	}
 
@@ -322,7 +322,8 @@ machine_init(void)
 
 }
 
-void slave_machine_init(void)
+void
+slave_machine_init(__unused void *param)
 {
 	cpu_machine_init();			/* Initialize the processor */
 	clock_init();				/* Init the clock */

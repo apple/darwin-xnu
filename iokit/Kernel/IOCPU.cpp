@@ -270,6 +270,7 @@ void PE_cpu_machine_quiesce(cpu_id_t target)
   if (targetCPU) targetCPU->quiesceCPU();
 }
 
+
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 #define super IOService

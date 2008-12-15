@@ -245,6 +245,22 @@ ipc_space_t  get_task_ipcspace(task_t t)
 	return(t->itk_space);
 }
 
+int get_task_numactivethreads(task_t task)
+{
+	thread_t	inc;
+	int num_active_thr=0;
+	task_lock(task);
+
+	for (inc  = (thread_t)queue_first(&task->threads);
+			!queue_end(&task->threads, (queue_entry_t)inc); inc = (thread_t)queue_next(&inc->task_threads)) 
+	{
+		if(inc->active)
+			num_active_thr++;
+	}
+	task_unlock(task);
+	return num_active_thr;
+}
+
 int  get_task_numacts(task_t t)
 {
 	return(t->thread_count);

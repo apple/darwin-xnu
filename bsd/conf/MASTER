@@ -165,6 +165,9 @@ options		CONFIG_SOWUPCALL	# SB_UPCALL on sowwakeup	# <config_sowupcall>
 options		CONFIG_FORCE_OUT_IFP	# Force IP output to use an interface # <config_force_out_ifp>
 options		CONFIG_MBUF_NOEXPAND	# limit mbuf expansion	# <config_mbuf_noexpand>
 options		CONFIG_MBUF_JUMBO	# jumbo cluster pool	# <config_mbuf_jumbo>
+options		CONFIG_IP_EDGEHOLE	# Drop tagged packets at EDGE interface # <config_ip_edgehole>
+
+options		CONFIG_WORKQUEUE	# <config_workqueue>
 
 #
 #	4.4 filesystems 
@@ -278,7 +281,7 @@ options   CONFIG_VNODES=263168		# <large,xlarge>
 options   CONFIG_VNODES=263168		# <medium>
 options   CONFIG_VNODES=10240		# <small>
 options   CONFIG_VNODES=1024		# <xsmall>
-options   CONFIG_VNODES=512			# <bsmall>
+options   CONFIG_VNODES=640			# <bsmall>
 
 options   CONFIG_VNODE_FREE_MIN=500		# <large,xlarge>
 options   CONFIG_VNODE_FREE_MIN=300		# <medium>
@@ -323,6 +326,11 @@ options   CONFIG_MIN_NIOBUF=32		# <bsmall>
 options        CONFIG_NMBCLUSTERS="((1024 * 1024) / MCLBYTES)"		# <large,xlarge>
 options        CONFIG_NMBCLUSTERS="((1024 * 512) / MCLBYTES)"		# <medium>
 options        CONFIG_NMBCLUSTERS="((1024 * 256) / MCLBYTES)"		# <bsmall,xsmall,small>
+
+# set maximum space used for packet buffers
+#
+options        CONFIG_USESOCKTHRESHOLD=1		# <large,xlarge,medium>
+options        CONFIG_USESOCKTHRESHOLD=0		# <bsmall,xsmall,small>
 
 #
 # Configure size of TCP hash table
@@ -387,6 +395,13 @@ options   CONFIG_NO_KPRINTF_STRINGS		# <no_kprintf_str>
 # embedded device
 #
 options   CONFIG_EMBEDDED			# <config_embedded>
+
+#
+# code decryption... used on embedded for app protection
+# must be set in all the bsd/conf and osfmk/conf MASTER files
+#
+options		CONFIG_CODE_DECRYPTION	# <config_embedded>
+
 
 #
 #  Ethernet (ARP)

@@ -361,6 +361,7 @@ enum {
 #define kIOPMPSHealthConfidenceKey                  "HealthConfidence"
 #define kIOPMPSCapacityEstimatedKey	                "CapacityEstimated"
 #define kIOPMPSBatteryChargeStatusKey               "ChargeStatus"
+#define kIOPMPSBatteryTemperatureKey                "Temperature"
 
 // kIOPMBatteryChargeStatusKey may have one of the following values, or may have
 // no value. If kIOPMBatteryChargeStatusKey has a NULL value (or no value) associated with it
@@ -484,6 +485,7 @@ enum {
 #define kIOPMSettingDisplaySleepUsesDimKey          "Display Sleep Uses Dim"
 #define kIOPMSettingTimeZoneOffsetKey               "TimeZoneOffsetSeconds"
 #define kIOPMSettingMobileMotionModuleKey           "MobileMotionModule"
+#define kIOPMSettingGraphicsSwitchKey               "GPUSwitch"
 
 // Setting controlling drivers can register to receive scheduled wake data
 // Either in "CF seconds" type, or structured calendar data in a formatted

@@ -341,14 +341,13 @@ lck_attr_setdefault(
 	lck_attr_t	*attr)
 {
 #if     !DEBUG
-	if (LcksOpts & enaLkDeb)
-		attr->lck_attr_val =  LCK_ATTR_DEBUG;
-	else
-		attr->lck_attr_val =  LCK_ATTR_NONE;
+ 	if (LcksOpts & enaLkDeb)
+ 		attr->lck_attr_val =  LCK_ATTR_DEBUG;
+ 	else
+ 		attr->lck_attr_val =  LCK_ATTR_NONE;
 #else
-	attr->lck_attr_val =  LCK_ATTR_DEBUG;
-#endif
-
+ 	attr->lck_attr_val =  LCK_ATTR_DEBUG;
+#endif	/* !DEBUG */
 }
 
 

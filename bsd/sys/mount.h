@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -79,6 +79,7 @@
 #include <stdint.h>
 #include <sys/ucred.h>
 #include <sys/queue.h>		/* XXX needed for user builds */
+#include <Availability.h>
 #else
 #include <sys/kernel_types.h>
 #endif
@@ -112,7 +113,11 @@ typedef struct fsid { int32_t val[2]; } fsid_t;	/* file system id type */
 	uint32_t	f_reserved[8];	/* For future use */ \
 }
 
+#if !__DARWIN_ONLY_64_BIT_INO_T
+
 struct statfs64 __DARWIN_STRUCT_STATFS64;
+
+#endif /* !__DARWIN_ONLY_64_BIT_INO_T */
 
 #if __DARWIN_64_BIT_INO_T
 
@@ -636,15 +641,23 @@ typedef struct fhandle	fhandle_t;
 __BEGIN_DECLS
 int	fhopen(const struct fhandle *, int);
 int	fstatfs(int, struct statfs *) __DARWIN_INODE64(fstatfs);
-int	fstatfs64(int, struct statfs64 *);
+#if !__DARWIN_ONLY_64_BIT_INO_T
+int	fstatfs64(int, struct statfs64 *) __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5,__MAC_10_6,__IPHONE_NA,__IPHONE_NA);
+#endif /* !__DARWIN_ONLY_64_BIT_INO_T */
 int	getfh(const char *, fhandle_t *);
 int	getfsstat(struct statfs *, int, int) __DARWIN_INODE64(getfsstat);
-int	getfsstat64(struct statfs64 *, int, int);
+#if !__DARWIN_ONLY_64_BIT_INO_T
+int	getfsstat64(struct statfs64 *, int, int) __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5,__MAC_10_6,__IPHONE_NA,__IPHONE_NA);
+#endif /* !__DARWIN_ONLY_64_BIT_INO_T */
 int	getmntinfo(struct statfs **, int) __DARWIN_INODE64(getmntinfo);
-int	getmntinfo64(struct statfs64 **, int);
+#if !__DARWIN_ONLY_64_BIT_INO_T
+int	getmntinfo64(struct statfs64 **, int) __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5,__MAC_10_6,__IPHONE_NA,__IPHONE_NA);
+#endif /* !__DARWIN_ONLY_64_BIT_INO_T */
 int	mount(const char *, const char *, int, void *);
 int	statfs(const char *, struct statfs *) __DARWIN_INODE64(statfs);
-int	statfs64(const char *, struct statfs64 *);
+#if !__DARWIN_ONLY_64_BIT_INO_T
+int	statfs64(const char *, struct statfs64 *) __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5,__MAC_10_6,__IPHONE_NA,__IPHONE_NA);
+#endif /* !__DARWIN_ONLY_64_BIT_INO_T */
 int	unmount(const char *, int);
 int	getvfsbyname(const char *, struct vfsconf *);
 __END_DECLS

@@ -72,7 +72,7 @@ $(INSTALL_MI_GEN_FILES): $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/% : %
 		./incmidir/$${filename_strip};			\
 	if [ -s ./incmidir/$${filename_strip} ];			\
 	then (							\
-		install $(INSTALL_FLAGS) ./incmidir/$${filename} $(dir $@);\
+		$(INSTALL) $(INSTALL_FLAGS) ./incmidir/$${filename} $(dir $@);\
 	);							\
 	else							\
 		echo Header file $< not exported;		\
@@ -94,7 +94,7 @@ $(INSTALL_KF_MI_GEN_FILES): $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR)/% : %
 		./kincmidir/$${filename_strip};			\
 	if [ -s ./kincmidir/$${filename_strip} ];			\
 	then (							\
-		install $(INSTALL_FLAGS) ./kincmidir/$${filename} $(dir $@);\
+		$(INSTALL) $(INSTALL_FLAGS) ./kincmidir/$${filename} $(dir $@);\
 	);							\
 	else							\
 		echo Header file $< not exported;		\
@@ -116,7 +116,7 @@ $(INSTALL_MI_GEN_LCL_FILES): $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/% : %
 		./pincmidir/$${filename_strip};			\
 	if [ -s ./pincmidir/$${filename_strip} ];			\
 	then (							\
-		install $(INSTALL_FLAGS) ./pincmidir/$${filename} $(dir $@);\
+		$(INSTALL) $(INSTALL_FLAGS) ./pincmidir/$${filename} $(dir $@);\
 	);							\
 	else							\
 		echo Header file $< not exported;		\
@@ -138,7 +138,7 @@ $(INSTALL_KF_MI_LCL_GEN_FILES): $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR)/% : %
 		./kpincmidir/$${filename_strip};			\
 	if [ -s ./kpincmidir/$${filename_strip} ];			\
 	then (							\
-		install $(INSTALL_FLAGS) ./kpincmidir/$${filename} $(dir $@);\
+		$(INSTALL) $(INSTALL_FLAGS) ./kpincmidir/$${filename} $(dir $@);\
 	);							\
 	else							\
 		echo Header file $< not exported;		\
@@ -160,7 +160,7 @@ $(INSTALL_MD_GEN_INC_FILES): $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/% : %
 		./incdir/$${filename_strip};			\
 	if [ -s ./incdir/$${filename_strip} ];			\
 	then (							\
-		install $(INSTALL_FLAGS) ./incdir/$${filename} $(dir $@);\
+		$(INSTALL) $(INSTALL_FLAGS) ./incdir/$${filename} $(dir $@);\
 	);							\
 	else							\
 		echo Header file $< not exported;		\
@@ -182,7 +182,7 @@ $(INSTALL_KF_MD_GEN_FILES): $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR)/% : %
 		./kincdir/$${filename_strip};			\
 	if [ -s ./kincdir/$${filename_strip} ];			\
 	then (							\
-		install $(INSTALL_FLAGS) ./kincdir/$${filename} $(dir $@);\
+		$(INSTALL) $(INSTALL_FLAGS) ./kincdir/$${filename} $(dir $@);\
 	);							\
 	else							\
 		echo Header file $< not exported;		\
@@ -205,7 +205,7 @@ $(INSTALL_MD_GEN_LCL_FILES): $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/% : %
 		./pincdir/$${filename_strip};			\
 	if [ -s ./pincdir/$${filename_strip} ];			\
 	then (							\
-		install $(INSTALL_FLAGS) ./pincdir/$${filename} $(dir $@);\
+		$(INSTALL) $(INSTALL_FLAGS) ./pincdir/$${filename} $(dir $@);\
 	);							\
 	else							\
 		echo Header file $< not exported;		\
@@ -228,7 +228,7 @@ $(INSTALL_KF_MD_LCL_GEN_FILES): $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR)/% : %
 		./kpincdir/$${filename_strip};			\
 	if [ -s ./kpincdir/$${filename_strip} ];			\
 	then (							\
-		install $(INSTALL_FLAGS) ./kpincdir/$${filename} $(dir $@);\
+		$(INSTALL) $(INSTALL_FLAGS) ./kpincdir/$${filename} $(dir $@);\
 	);							\
 	else							\
 		echo Header file $< not exported;		\
@@ -254,7 +254,7 @@ do_installhdrs_mi: $(INSTALL_MI_GEN_FILES) $(INSTALL_MI_GEN_LCL_FILES) $(INSTALL
 		    ./incmidir/$$j.strip;				\
 		if [ -s ./incmidir/$$j.strip ];				\
 		then (							\
-		    install $(INSTALL_FLAGS) ./incmidir/$$j $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR);	\
+		    $(INSTALL) $(INSTALL_FLAGS) ./incmidir/$$j $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR);	\
 		);							\
 		else							\
 		    echo Header file $$j not exported;		\
@@ -276,7 +276,7 @@ do_installhdrs_mi: $(INSTALL_MI_GEN_FILES) $(INSTALL_MI_GEN_LCL_FILES) $(INSTALL
 		    ./pincmidir/$$j.strip;				\
 		if [ -s ./pincmidir/$$j.strip ];				\
 		then (							\
-		    install $(INSTALL_FLAGS) ./pincmidir/$$j $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR);	\
+		    $(INSTALL) $(INSTALL_FLAGS) ./pincmidir/$$j $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR);	\
 		);							\
 		else							\
 		    echo Header file $$j not exported;		\
@@ -298,7 +298,7 @@ do_installhdrs_mi: $(INSTALL_MI_GEN_FILES) $(INSTALL_MI_GEN_LCL_FILES) $(INSTALL
 		    ./kincmidir/$$j.strip;				\
 		if [ -s ./kincmidir/$$j.strip ];				\
 		then (							\
-		    install $(INSTALL_FLAGS) ./kincmidir/$$j $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR);	\
+		    $(INSTALL) $(INSTALL_FLAGS) ./kincmidir/$$j $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR);	\
 		);							\
 		else							\
 		    echo Header file $$j not exported;		\
@@ -320,7 +320,7 @@ do_installhdrs_mi: $(INSTALL_MI_GEN_FILES) $(INSTALL_MI_GEN_LCL_FILES) $(INSTALL
 		    ./kpincmidir/$$j.strip;				\
 		if [ -s ./kpincmidir/$$j.strip ];				\
 		then (							\
-		    install $(INSTALL_FLAGS) ./kpincmidir/$$j $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR);	\
+		    $(INSTALL) $(INSTALL_FLAGS) ./kpincmidir/$$j $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR);	\
 		);							\
 		else							\
 		    echo Header file $$j not exported;		\
@@ -349,7 +349,7 @@ do_installhdrs_md: $(INSTALL_MD_GEN_INC_FILES) $(INSTALL_MD_GEN_LCL_FILES) $(INS
 		    ./incdir/$$j.strip;				\
 		if [ -s ./incdir/$$j.strip ];				\
 		then (							\
-		    install $(INSTALL_FLAGS) ./incdir/$$j $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR);	\
+		    $(INSTALL) $(INSTALL_FLAGS) ./incdir/$$j $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR);	\
 		);							\
 		else							\
 		    echo Header file $$j not exported;		\
@@ -371,7 +371,7 @@ do_installhdrs_md: $(INSTALL_MD_GEN_INC_FILES) $(INSTALL_MD_GEN_LCL_FILES) $(INS
 		    ./pincdir/$$j.strip;				\
 		if [ -s ./pincdir/$$j.strip ];				\
 		then (							\
-		    install $(INSTALL_FLAGS) ./pincdir/$$j $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR);	\
+		    $(INSTALL) $(INSTALL_FLAGS) ./pincdir/$$j $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR);	\
 		);							\
 		else							\
 		    echo Header file $$j not exported;		\
@@ -393,7 +393,7 @@ do_installhdrs_md: $(INSTALL_MD_GEN_INC_FILES) $(INSTALL_MD_GEN_LCL_FILES) $(INS
 		    ./kincdir/$$j.strip;				\
 		if [ -s ./kincdir/$$j.strip ];				\
 		then (							\
-		    install $(INSTALL_FLAGS) ./kincdir/$$j $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR);	\
+		    $(INSTALL) $(INSTALL_FLAGS) ./kincdir/$$j $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR);	\
 		);							\
 		else							\
 		    echo Header file $$j not exported;		\
@@ -415,7 +415,7 @@ do_installhdrs_md: $(INSTALL_MD_GEN_INC_FILES) $(INSTALL_MD_GEN_LCL_FILES) $(INS
 		    ./kpincdir/$$j.strip;				\
 		if [ -s ./kpincdir/$$j.strip ];				\
 		then (							\
-		    install $(INSTALL_FLAGS) ./kpincdir/$$j $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR);	\
+		    $(INSTALL) $(INSTALL_FLAGS) ./kpincdir/$$j $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR);	\
 		);							\
 		else							\
 		    echo Header file $$j not exported;		\
@@ -605,7 +605,7 @@ endif
 # mach_kernel building rules
 #
 do_build_mach_kernel: $(OBJPATH)/kgmacros
-	$(_v)install $(DATA_INSTALL_FLAGS) $(SRCROOT)/config/version.c $(OBJPATH)/version.c;
+	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $(SRCROOT)/config/version.c $(OBJPATH)/version.c;
 	$(_v)$(SRCROOT)/config/newvers.pl $(OBJPATH)/version.c > /dev/null;
 	@echo CC version.o
 	$(_v)${KCC} -c ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS}} ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} $(OBJPATH)/version.c -o $(OBJPATH)/version.o
@@ -619,7 +619,7 @@ do_build_mach_kernel: $(OBJPATH)/kgmacros
 	$(_v)$(STRIP) $(STRIP_FLAGS) $(TARGET)/mach_kernel.sys -o $(TARGET)/mach_kernel
 
 $(OBJPATH)/kgmacros: $(SRCROOT)/kgmacros
-	$(_v)$(CP) $? $@
+	$(_v)$(INSTALL) $(INSTALL_FLAGS) $? $@
 
 # Special rules to install machine configuration variants
 
@@ -630,7 +630,7 @@ $(DSTROOT)$(INSTALL_FILE_DIR)mach.$(KERNEL_CONFIG_LC).$(MACHINE_CONFIG_LC): $(TA
 	fi;							\
 	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then	\
 		$(RM) $(RMFLAGS) $@;				\
-		install $(FILE_INSTALL_FLAGS) $< $@;		\
+		$(INSTALL) $(FILE_INSTALL_FLAGS) $< $@;		\
 	else							\
 		if [ ! -e $@ ]; then				\
 			echo >empty_file_$(notdir $@);			\
@@ -648,7 +648,14 @@ $(SYMROOT)$(INSTALL_FILE_DIR)mach.$(KERNEL_CONFIG_LC).$(MACHINE_CONFIG_LC): $(TA
 	fi;							\
 	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then	\
 		$(RM) $(RMFLAGS) $@;				\
-		install $(FILE_INSTALL_FLAGS) $< $@;		\
+		$(INSTALL) $(FILE_INSTALL_FLAGS) $< $@;		\
+		if [ $(BUILD_DWARF) -eq 1 ]; then			\
+			$(RM) -rf $@.dSYM;				\
+			$(MKDIR) -p -m 0755 $@.dSYM/$(DSYMBUILDDIR);	\
+			$(INSTALL) $(INSTALL_FLAGS)			\
+				$<.dSYM/$(DSYMBUILDDIR)/$(notdir $<)	\
+				$@.dSYM/$(DSYMBUILDDIR)/$(notdir $@);	\
+		fi;							\
 	else							\
 		if [ ! -e $@ ]; then				\
 			echo >empty_file_$(notdir $@);			\
@@ -675,7 +682,7 @@ $(INSTALL_FILE_FILES_GENERIC): $(DSTROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/% forc
 	fi;								\
 	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then		\
 		$(RM) $(RMFLAGS) $@;					\
-		install $(FILE_INSTALL_FLAGS) $< $@;		\
+		$(INSTALL) $(FILE_INSTALL_FLAGS) $< $@;		\
 	else								\
 		if [ ! -e $@ ]; then					\
 			echo >empty_file_$(notdir $@);			\
@@ -692,7 +699,7 @@ $(INSTALL_FILE_FILES_GENERIC): $(DSTROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/% forc
 				-exec $(RM) -rf {} \;	;		\
 			$(CTFMERGE) -l xnu -o $<.ctfsys 		\
 				$(OBJPATH)/*/$(KERNEL_CONFIG)/*.*o.ctf || true;	\
-			install $(FILE_INSTALL_FLAGS) $<.ctfsys $(dir $@); \
+			$(INSTALL) $(FILE_INSTALL_FLAGS) $<.ctfsys $(dir $@); \
 		else							\
 			if [ ! -e $@.ctfsys ]; then			\
 				echo >empty_file_$(notdir $@);		\
@@ -722,14 +729,14 @@ $(INSTALL_FILESYS_FILES_GENERIC): $(SYMROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/%.s
 	fi;							\
 	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then	\
 		$(RM) $(RMFLAGS) $@;				\
-		install $(INSTALL_FLAGS) $< $@;			\
+		$(INSTALL) $(INSTALL_FLAGS) $< $@;			\
 		if [ $(BUILD_DWARF) -eq 1 ]; then			\
 			$(DSYMUTIL) $(DSYMUTIL_FLAGS)			\
 				$(TARGET)/mach_kernel.sys		\
 				-o $(TARGET)/mach_kernel.sys.dSYM;	\
 			$(RM) -rf $@.dSYM;				\
 			$(MKDIR) -p -m 0755 $@.dSYM/$(DSYMBUILDDIR);	\
-			install $(INSTALL_FLAGS)			\
+			$(INSTALL) $(INSTALL_FLAGS)			\
 				$<.dSYM/$(DSYMBUILDDIR)/$(notdir $<)	\
 				$@.dSYM/$(DSYMBUILDDIR)/$(notdir $@);	\
 		fi;							\
@@ -761,7 +768,7 @@ $(INSTALL_FILESYS_FILES_GENERIC): $(SYMROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/%.s
 				-o $@.dSYM/$(DSYMBUILDDIR)/$(notdir $@);       \
 		fi;							       \
 	fi
-	$(CP) $(SOURCE)kgmacros $(SYMROOT)$(INSTALL_FILE_DIR)
+	$(INSTALL) $(INSTALL_FLAGS) $(SOURCE)kgmacros $(SYMROOT)$(INSTALL_FILE_DIR)
 
 INSTALL_DATA_FILES = $(addprefix $(DSTROOT)$(INSTALL_DATA_DIR), $(INSTALL_DATA_LIST))
 
@@ -769,7 +776,7 @@ $(INSTALL_DATA_FILES): $(DSTROOT)$(INSTALL_DATA_DIR)% : $(SOURCE)/%
 	@echo Installing $< in $@;
 	$(_v)[ -d $(dir $@) ] ||$(MKDIR) $(dir $@);		\
 	$(RM) $(RMFLAGS) $@;		\
-	install $(DATA_INSTALL_FLAGS) $< $(dir $@);
+	$(INSTALL) $(DATA_INSTALL_FLAGS) $< $(dir $@);
 
 setup_build_install:
 	@echo "[ $(SOURCE) ] make setup_build_install $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
@@ -790,7 +797,7 @@ do_installman: $(INSTALL_MAN_FILES)
 			$(MKDIR) $$man_dir;     \
 		fi;                             \
 		echo Installing $(INSTALL_MAN_LIST) in $$man_dir;	\
-		install $(INSTALL_FLAGS) $(INSTALL_MAN_LIST) $$man_dir;	\
+		$(INSTALL) $(INSTALL_FLAGS) $(INSTALL_MAN_LIST) $$man_dir;	\
 		if [ -n "$(strip $(INSTALL_MAN_LINKS))" ]; then \
 			set `echo ${INSTALL_MAN_LINKS}`; \
 			while : ; do \
@@ -809,7 +816,7 @@ $(INSTALL_MAN_FILES): $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR)/% : %
 	@true echo Installing $< in $(dir $@)
 	$(_v)$(MKDIR) $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR);       \
 	$(RM) $(RMFLAGS) $@;                                    \
-	install $(INSTALL_FLAGS) $< $(dir $@);
+	$(INSTALL) $(INSTALL_FLAGS) $< $(dir $@);
 
 ifeq    ($(INCL_MAKEDEP), TRUE)
 -include Makedep

@@ -153,6 +153,8 @@ const OSSymbol *		gIOPlatformWakeActionKey;
 const OSSymbol *		gIOPlatformQuiesceActionKey;
 const OSSymbol *		gIOPlatformActiveActionKey;
 
+const OSSymbol *		gIOPlatformFunctionHandlerSet;
+
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 #define LOCKREADNOTIFY()	\
@@ -206,19 +208,34 @@ bool IOService::isInactive( void ) const
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-#if __i386__
+#if defined(__i386__)
 
 // Only used by the intel implementation of
-//     IOService::requireMaxBusStall(UInt32 __unused ns)
-struct BusStallEntry
+//     IOService::requireMaxBusStall(UInt32 ns)
+//     IOService::requireMaxInterruptDelay(uint32_t ns)
+struct CpuDelayEntry
 {
-    const IOService *fService;
-    UInt32 fMaxDelay;
+    IOService * fService;
+    UInt32      fMaxDelay;
+    UInt32      fDelayType;
 };
 
-static OSData *sBusStall     = OSData::withCapacity(8 * sizeof(BusStallEntry));
-static IOLock *sBusStallLock = IOLockAlloc();
-#endif /* __i386__ */
+enum {
+    kCpuDelayBusStall, kCpuDelayInterrupt,
+    kCpuNumDelayTypes
+};
+
+static OSData          *sCpuDelayData = OSData::withCapacity(8 * sizeof(CpuDelayEntry));
+static IORecursiveLock *sCpuDelayLock = IORecursiveLockAlloc();
+static OSArray         *sCpuLatencyHandlers[kCpuNumDelayTypes];
+const OSSymbol         *sCPULatencyFunctionName[kCpuNumDelayTypes];
+
+static void
+requireMaxCpuDelay(IOService * service, UInt32 ns, UInt32 delayType);
+static IOReturn
+setLatencyHandler(UInt32 delayType, IOService * target, bool enable);
+
+#endif /* defined(__i386__) */
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -288,6 +305,11 @@ void IOService::initialize( void )
     gIOPlatformQuiesceActionKey	= OSSymbol::withCStringNoCopy(kIOPlatformQuiesceActionKey);
     gIOPlatformActiveActionKey	= OSSymbol::withCStringNoCopy(kIOPlatformActiveActionKey);
 
+    gIOPlatformFunctionHandlerSet		= OSSymbol::withCStringNoCopy(kIOPlatformFunctionHandlerSet);
+#if defined(__i386__)
+    sCPULatencyFunctionName[kCpuDelayBusStall]	= OSSymbol::withCStringNoCopy(kIOPlatformFunctionHandlerMaxBusDelay);
+    sCPULatencyFunctionName[kCpuDelayInterrupt]	= OSSymbol::withCStringNoCopy(kIOPlatformFunctionHandlerMaxInterruptDelay);
+#endif
     gNotificationLock	 	= IORecursiveLockAlloc();
 
     assert( gIOServicePlane && gIODeviceMemoryKey
@@ -822,9 +844,23 @@ IOReturn IOService::callPlatformFunction( const OSSymbol * functionName,
 					  void *param3, void *param4 )
 {
   IOReturn  result = kIOReturnUnsupported;
-  IOService *provider = getProvider();
-  
-  if (provider != 0) {
+  IOService *provider;
+
+  if (gIOPlatformFunctionHandlerSet == functionName)
+  {
+#if defined(__i386__)
+    const OSSymbol * functionHandlerName = (const OSSymbol *) param1;
+    IOService *	     target		 = (IOService *) param2;
+    bool	     enable		 = (param3 != 0);
+
+    if (sCPULatencyFunctionName[kCpuDelayBusStall] == functionHandlerName)
+	result = setLatencyHandler(kCpuDelayBusStall, target, enable);
+    else if (sCPULatencyFunctionName[kCpuDelayInterrupt] == param1)
+	result = setLatencyHandler(kCpuDelayInterrupt, target, enable);
+#endif /* defined(__i386__) */
+  }
+
+  if ((kIOReturnUnsupported == result) && (provider = getProvider())) {
     result = provider->callPlatformFunction(functionName, waitForFunction,
 					    param1, param2, param3, param4);
   }
@@ -4421,82 +4457,182 @@ void IOService::setDeviceMemory( OSArray * array )
 void IOService::
 setCPUSnoopDelay(UInt32 __unused ns)
 {
-#if __i386__
+#if defined(__i386__)
     ml_set_maxsnoop(ns); 
-#endif /* __i386__ */
+#endif /* defined(__i386__) */
 }
 
 UInt32 IOService::
 getCPUSnoopDelay()
 {
-#if __i386__
+#if defined(__i386__)
     return ml_get_maxsnoop(); 
 #else
     return 0;
-#endif /* __i386__ */
+#endif /* defined(__i386__) */
 }
+
+#if defined(__i386__)
+static void
+requireMaxCpuDelay(IOService * service, UInt32 ns, UInt32 delayType)
+{
+    static const UInt kNoReplace = -1U;	// Must be an illegal index
+    UInt replace = kNoReplace;
+    bool setCpuDelay = false;
+
+    IORecursiveLockLock(sCpuDelayLock);
+
+    UInt count = sCpuDelayData->getLength() / sizeof(CpuDelayEntry);
+    CpuDelayEntry *entries = (CpuDelayEntry *) sCpuDelayData->getBytesNoCopy();
+    IOService * holder = NULL;
+
+    if (ns) {
+        const CpuDelayEntry ne = {service, ns, delayType};
+	holder = service;
+        // Set maximum delay.
+        for (UInt i = 0; i < count; i++) {
+            IOService *thisService = entries[i].fService;
+            bool sameType = (delayType == entries[i].fDelayType);            
+            if ((service == thisService) && sameType)
+                replace = i;
+            else if (!thisService) {
+                if (kNoReplace == replace)
+                    replace = i;
+            }
+            else if (sameType) {
+                const UInt32 thisMax = entries[i].fMaxDelay;
+                if (thisMax < ns)
+		{
+                    ns = thisMax;
+		    holder = thisService;
+		}
+            }
+        }
+        
+        setCpuDelay = true;
+        if (kNoReplace == replace)
+            sCpuDelayData->appendBytes(&ne, sizeof(ne));
+        else
+            entries[replace] = ne;
+    }
+    else {
+        ns = -1U;	// Set to max unsigned, i.e. no restriction
+
+        for (UInt i = 0; i < count; i++) {
+            // Clear a maximum delay.
+            IOService *thisService = entries[i].fService;
+            if (thisService && (delayType == entries[i].fDelayType)) {
+                UInt32 thisMax = entries[i].fMaxDelay;
+                if (service == thisService)
+                    replace = i;
+                else if (thisMax < ns) {
+                    ns = thisMax;
+		    holder = thisService;
+		}
+            }
+        }
+
+        // Check if entry found
+        if (kNoReplace != replace) {
+            entries[replace].fService = 0;	// Null the entry
+            setCpuDelay = true;
+        }
+    }
+
+    if (setCpuDelay)
+    {
+        // Must be safe to call from locked context
+        if (delayType == kCpuDelayBusStall)
+        {
+            ml_set_maxbusdelay(ns);
+        }
+        else if (delayType == kCpuDelayInterrupt)
+        {
+            ml_set_maxintdelay(ns);
+        }
+
+	OSArray * handlers = sCpuLatencyHandlers[delayType];
+	IOService * target;
+	if (handlers) for (unsigned int idx = 0; 
+			    (target = (IOService *) handlers->getObject(idx));
+			    idx++)
+	{
+	    target->callPlatformFunction(sCPULatencyFunctionName[delayType], false,
+					    (void *) (uintptr_t) ns, holder,
+					    NULL, NULL);
+	}
+    }
+
+    IORecursiveLockUnlock(sCpuDelayLock);
+}
+
+static IOReturn
+setLatencyHandler(UInt32 delayType, IOService * target, bool enable)
+{
+    IOReturn result = kIOReturnNotFound;
+    OSArray * array;
+    unsigned int idx;
+
+    IORecursiveLockLock(sCpuDelayLock);
+
+    do
+    {
+	if (enable && !sCpuLatencyHandlers[delayType])
+	    sCpuLatencyHandlers[delayType] = OSArray::withCapacity(4);
+	array = sCpuLatencyHandlers[delayType];
+	if (!array)
+	    break;
+	idx = array->getNextIndexOfObject(target, 0);
+	if (!enable)
+	{
+	    if (-1U != idx)
+	    {
+		array->removeObject(idx);
+		result = kIOReturnSuccess;
+	    }
+	}
+	else
+	{
+	    if (-1U != idx) {
+		result = kIOReturnExclusiveAccess;
+		break;
+	    }
+	    array->setObject(target);
+	    
+	    UInt count = sCpuDelayData->getLength() / sizeof(CpuDelayEntry);
+	    CpuDelayEntry *entries = (CpuDelayEntry *) sCpuDelayData->getBytesNoCopy();
+	    UInt32 ns = -1U;	// Set to max unsigned, i.e. no restriction
+	    IOService * holder = NULL;
+
+	    for (UInt i = 0; i < count; i++) {
+		if (entries[i].fService 
+		  && (delayType == entries[i].fDelayType) 
+		  && (entries[i].fMaxDelay < ns)) {
+		    ns = entries[i].fMaxDelay;
+		    holder = entries[i].fService;
+		}
+	    }
+	    target->callPlatformFunction(sCPULatencyFunctionName[delayType], false,
+					    (void *) (uintptr_t) ns, holder,
+					    NULL, NULL);
+	    result = kIOReturnSuccess;
+	}
+    }
+    while (false);
+
+    IORecursiveLockUnlock(sCpuDelayLock);
+
+    return (result);
+}
+
+#endif /* defined(__i386__) */
 
 void IOService::
 requireMaxBusStall(UInt32 __unused ns)
 {
-#if __i386__
-    static const UInt kNoReplace = -1U;	// Must be an illegal index
-    UInt replace = kNoReplace;
-
-    IOLockLock(sBusStallLock);
-
-    UInt count = sBusStall->getLength() / sizeof(BusStallEntry);
-    BusStallEntry *entries = (BusStallEntry *) sBusStall->getBytesNoCopy();
-
-    if (ns) {
-	const BusStallEntry ne = {this, ns};
-
-	// Set Maximum bus delay.
-	for (UInt i = 0; i < count; i++) {
-	    const IOService *thisService = entries[i].fService;
-	    if (this == thisService)
-		replace = i;
-	    else if (!thisService) {
-		if (kNoReplace == replace)
-		    replace = i;
-	    }
-	    else {
-		const UInt32 thisMax = entries[i].fMaxDelay;
-		if (thisMax < ns)
-		    ns = thisMax;
-	    }
-	}
-
-	// Must be safe to call from locked context
-	ml_set_maxbusdelay(ns);
-
-	if (kNoReplace == replace)
-	    sBusStall->appendBytes(&ne, sizeof(ne));
-	else
-	    entries[replace] = ne;
-    }
-    else {
-	ns = -1U;	// Set to max unsigned, i.e. no restriction
-
-	for (UInt i = 0; i < count; i++) {
-	    // Clear a maximum bus delay.
-	    const IOService *thisService = entries[i].fService;
-	    UInt32 thisMax = entries[i].fMaxDelay;
-	    if (this == thisService)
-		replace = i;
-	    else if (thisService && thisMax < ns)
-		ns = thisMax;
-	}
-
-	// Check if entry found
-	if (kNoReplace != replace) {
-	    entries[replace].fService = 0;	// Null the entry
-	    ml_set_maxbusdelay(ns);
-	}
-    }
-
-    IOLockUnlock(sBusStallLock);
-#endif /* __i386__ */
+#if defined(__i386__)
+    requireMaxCpuDelay(this, ns, kCpuDelayBusStall);
+#endif
 }
 
 /*

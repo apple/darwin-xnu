@@ -608,6 +608,12 @@ tcp_respond(
 		mac_netinet_tcp_reply(m);
 	}
 #endif
+	
+#if CONFIG_IP_EDGEHOLE
+	if (tp && tp->t_inpcb)
+		ip_edgehole_mbuf_tag(tp->t_inpcb, m);
+#endif
+	
 	nth->th_seq = htonl(seq);
 	nth->th_ack = htonl(ack);
 	nth->th_x2 = 0;
@@ -1433,11 +1439,6 @@ tcp6_ctlinput(cmd, sa, d)
 
 #define ISN_BYTES_PER_SECOND 1048576
 
-//PWC - md5 routines cause alignment exceptions.  Need to figure out why.  For now use lame incremental
-// isn.  how's that for not easily guessable!?
-
-int pwc_bogus;
-
 tcp_seq
 tcp_new_isn(tp)
 	struct tcpcb *tp;
@@ -1625,7 +1626,7 @@ tcp_mtudisc(
 
 /*
  * Look-up the routing entry to the peer of this inpcb.  If no route
- * is found and it cannot be allocated the return NULL.  This routine
+ * is found and it cannot be allocated then return NULL.  This routine
  * is called by TCP routines that access the rmx structure and by tcp_mss
  * to get the interface MTU.
  */
@@ -1674,6 +1675,15 @@ tcp_rtlookup(inp)
 		tp->t_flags &= ~TF_PMTUD;
 	else
 		tp->t_flags |= TF_PMTUD;
+
+#ifdef IFEF_NOWINDOWSCALE
+	if (tp->t_state == TCPS_SYN_SENT && rt != NULL && rt->rt_ifp != NULL &&
+		(rt->rt_ifp->if_eflags & IFEF_NOWINDOWSCALE) != 0)
+	{
+		// Timestamps are not enabled on this interface
+		tp->t_flags &= ~(TF_REQ_SCALE);
+	}
+#endif
 
 	return rt;
 }

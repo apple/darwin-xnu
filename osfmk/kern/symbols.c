@@ -193,7 +193,6 @@ syms_nameforaddr(vm_offset_t addr, vm_offset_t *ofs, kmod_info_t **km)
 	return (NULL);
 }
 
-int     snprintf(char *, size_t, const char *, ...);
 
 /* Format the results of calling syms_nameforaddr into a single string.
  * The buffer must be at least 13 bytes long; 80 is recommended.

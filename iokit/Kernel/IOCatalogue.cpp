@@ -1609,7 +1609,7 @@ kern_return_t IOCatalogue::removeKernelLinker(void) {
         goto finish;
     }
 
-    PE_parse_boot_arg("keepsyms", &keepsyms);
+    PE_parse_boot_argn("keepsyms", &keepsyms, sizeof (keepsyms));
  
     IOLog("Jettisoning kernel linker.\n");
 

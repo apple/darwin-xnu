@@ -38,11 +38,8 @@
 .Os BSD 4
 .Sh NAME
 .Nm fstat ,
-.Nm fstat64 ,
 .Nm lstat ,
-.Nm lstat64 ,
-.Nm stat ,
-.Nm stat64
+.Nm stat
 .Nd get file status
 .Sh SYNOPSIS
 .Fd #include <sys/stat.h>
@@ -52,34 +49,19 @@
 .Fa "struct stat *buf"
 .Fc
 .Ft int
-.Fo fstat64
-.Fa "int fildes"
-.Fa "struct stat64 *buf"
-.Fc
-.Ft int
 .Fo lstat
 .Fa "const char *restrict path"
 .Fa "struct stat *restrict buf"
-.Fc
-.Ft int
-.Fo lstat64
-.Fa "const char *restrict path"
-.Fa "struct stat64 *restrict buf"
 .Fc
 .Ft int
 .Fo stat
 .Fa "const char *restrict path"
 .Fa "struct stat *restrict buf"
 .Fc
-.Ft int
-.Fo stat64
-.Fa "const char *restrict path"
-.Fa "struct stat64 *restrict buf"
-.Fc
 .Sh DESCRIPTION
 The
 .Fn stat
-family of functions and their 64 bit variants obtain information about a file. The 
+family of functions obtain information about a file. The 
 .Fn stat 
 function obtains information about the file pointed to by
 .Fa path .
@@ -116,38 +98,16 @@ The
 .Fa buf
 argument is a pointer to a
 .Fa stat
-or
-.Fa stat64
 structure 
 as defined by
 .Aq Pa sys/stat.h
-(both shown below)
 and into which information is placed concerning the file.
 .Bd -literal
 struct stat {
-    dev_t    st_dev;    /* device inode resides on */
-    ino_t    st_ino;    /* inode's number */
-    mode_t   st_mode;   /* inode protection mode */
-    nlink_t  st_nlink;  /* number or hard links to the file */
-    uid_t    st_uid;    /* user-id of owner */
-    gid_t    st_gid;    /* group-id of owner */
-    dev_t    st_rdev;   /* device type, for special file inode */
-    struct timespec st_atimespec;  /* time of last access */
-    struct timespec st_mtimespec;  /* time of last data modification */
-    struct timespec st_ctimespec;  /* time of last file status change */
-    off_t    st_size;   /* file size, in bytes */
-    quad_t   st_blocks; /* blocks allocated for file */
-    u_long   st_blksize;/* optimal file sys I/O ops blocksize */
-    u_long   st_flags;  /* user defined flags for file */
-    u_long   st_gen;    /* file generation number */
-};
-
-
-struct stat64 {
     dev_t           st_dev;           /* ID of device containing file */
     mode_t          st_mode;          /* Mode of file (see below) */
     nlink_t         st_nlink;         /* Number of hard links */
-    ino64_t 	    st_ino;          /* File serial number */
+    ino_t 	    st_ino;           /* File serial number */
     uid_t           st_uid;           /* User ID of the file */
     gid_t           st_gid;           /* Group ID of the file */
     dev_t           st_rdev;          /* Device ID */
@@ -169,8 +129,6 @@ struct stat64 {
 .Pp
 The time-related fields of
 .Fa struct stat
-and
-.Fa struct stat64
 are as follows:
 .Bl -tag -width XXXst_birthtime
 .It st_atime
@@ -203,9 +161,8 @@ and
 .Xr write 2
 system calls.
 .It st_birthtime
-Time of file creation. Only set once when the file is created. This field is 
-only available in the 64 bit variants. On filesystems where birthtime is 
-not available, this field holds the
+Time of file creation. Only set once when the file is created.
+On filesystems where birthtime is not available, this field holds the
 .Fa ctime
 instead.
 .El
@@ -343,23 +300,6 @@ in the structure pointed to by
 The file generation number,
 .Fa st_gen ,
 is only available to the super-user.
-.br
-The fields in the stat structure currently marked
-.Fa st_spare1 ,
-.Fa st_spare2 ,
-and
-.Fa st_spare3
-are present in preparation for inode time stamps expanding
-to 64 bits.  This, however, can break certain programs that
-depend on the time stamps being contiguous (in calls to
-.Xr utimes 2 ) .
-.Sh LEGACY SYNOPSIS
-.Fd #include <sys/types.h>
-.Fd #include <sys/stat.h>
-.Pp
-The include file
-.In sys/types.h
-is necessary.
 .Sh SEE ALSO
 .Xr chflags 2 ,
 .Xr chmod 2 ,
@@ -386,9 +326,3 @@ An
 .Fn lstat
 function call appeared in
 .Bx 4.2 .
-The 
-.Fn stat64 ,
-.Fn fstat64 ,
-and
-.Fn lstat64
-system calls first appeared in Mac OS X 10.5 (Leopard).

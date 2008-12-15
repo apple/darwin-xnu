@@ -139,7 +139,6 @@ __private_extern__ void ubc_init(void);
 __private_extern__ int	ubc_umount(mount_t mp);
 __private_extern__ void	ubc_unmountall(void);
 __private_extern__ memory_object_t ubc_getpager(vnode_t);
-__private_extern__ int  ubc_map(vnode_t, int);
 __private_extern__ void	ubc_destroy_named(vnode_t);
 
 /* internal only */
@@ -168,6 +167,14 @@ int	ubc_range_op(vnode_t, off_t, off_t, int, int *);
 int	ubc_getcdhash(vnode_t, off_t, unsigned char *);
 
 int UBCINFOEXISTS(vnode_t);
+
+/* code signing */
+struct cs_blob;
+int	ubc_cs_blob_add(vnode_t, cpu_type_t, off_t, vm_address_t, vm_size_t);
+struct cs_blob *ubc_get_cs_blobs(vnode_t);
+int	ubc_cs_getcdhash(vnode_t, off_t, unsigned char *);
+kern_return_t ubc_cs_blob_allocate(vm_offset_t *, vm_size_t *);
+void ubc_cs_blob_deallocate(vm_offset_t, vm_size_t);
 
 __END_DECLS
 

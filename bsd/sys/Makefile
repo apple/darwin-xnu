@@ -7,6 +7,14 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
+ALLPRODUCTS = AppleTV iPhone MacOSX
+PRODUCT = $(shell tconf --product)
+EXTRAUNIFDEF = $(foreach x,$(ALLPRODUCTS),$(if $(findstring $(PRODUCT),$(x)),-DPRODUCT_$(x),-UPRODUCT_$(x)))
+SINCFRAME_UNIFDEF += $(EXTRAUNIFDEF)
+SPINCFRAME_UNIFDEF += $(EXTRAUNIFDEF)
+KINCFRAME_UNIFDEF += $(EXTRAUNIFDEF)
+KPINCFRAME_UNIFDEF += $(EXTRAUNIFDEF)
+
 INSTINC_SUBDIRS = \
 
 INSTINC_SUBDIRS_PPC = \

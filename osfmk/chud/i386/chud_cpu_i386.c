@@ -35,6 +35,7 @@
 #include <i386/cpu_data.h>
 #include <i386/machine_routines.h>
 #include <i386/perfmon.h>
+#include <i386/lapic.h>
 #include <i386/mp.h>
 #include <i386/trap.h>
 #include <mach/i386/syscall_sw.h>

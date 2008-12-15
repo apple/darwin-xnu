@@ -16,8 +16,8 @@ EXPORT_ONLY_FILES = 	\
 		    cpu_topology.h \
 		    cpuid.h \
 		    eflags.h \
-		    hpet.h \
 		    io_map_entries.h \
+		    lapic.h \
 		    lock.h \
 		    locks.h \
 		    machine_routines.h \

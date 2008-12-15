@@ -40,7 +40,7 @@
 #ifndef _I386_TSC_H_
 #define _I386_TSC_H_
 
-#define IA32_PERF_STS 0x198
+#define IA32_PERF_STS		0x198
 
 extern uint64_t	busFCvtt2n;
 extern uint64_t	busFCvtn2t;
@@ -50,17 +50,23 @@ extern uint64_t tscFCvtn2t;
 extern uint64_t tscGranularity;
 extern uint64_t bus2tsc;
 extern uint64_t busFreq;
+extern uint32_t	flex_ratio;
+extern uint32_t	flex_ratio_min;
+extern uint32_t	flex_ratio_max;
 
 struct tscInfo
 {
-uint64_t	busFCvtt2n;
-uint64_t	busFCvtn2t;
-uint64_t	tscFreq;
-uint64_t	tscFCvtt2n;
-uint64_t	tscFCvtn2t;
-uint64_t	tscGranularity;
-uint64_t	bus2tsc;
-uint64_t	busFreq;
+	uint64_t	busFCvtt2n;
+	uint64_t	busFCvtn2t;
+	uint64_t	tscFreq;
+	uint64_t	tscFCvtt2n;
+	uint64_t	tscFCvtn2t;
+	uint64_t	tscGranularity;
+	uint64_t	bus2tsc;
+	uint64_t	busFreq;
+	uint32_t	flex_ratio;
+	uint32_t	flex_ratio_min;
+	uint32_t	flex_ratio_max;
 };
 typedef struct tscInfo tscInfo_t;
 

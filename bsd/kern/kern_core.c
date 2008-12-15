@@ -114,7 +114,11 @@ kern_return_t thread_getstatus(register thread_t act, int flavor,
 void task_act_iterate_wth_args(task_t, void(*)(thread_t, void *), void *);
 
 
+#ifdef SECURE_KERNEL
+__private_extern__ int do_coredump = 0;	/* default: don't dump cores */
+#else
 __private_extern__ int do_coredump = 1;	/* default: dump cores */
+#endif
 __private_extern__ int sugid_coredump = 0; /* default: but not SGUID binaries */
 
 void

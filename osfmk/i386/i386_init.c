@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -91,7 +91,6 @@
 #include <i386/Diagnostics.h>
 #include <i386/pmCPU.h>
 #include <i386/tsc.h>
-#include <i386/hpet.h>
 #include <i386/locks.h> /* LcksOpts */
 #if	MACH_KDB
 #include <ddb/db_aout.h>
@@ -153,11 +152,11 @@ i386_init(vm_offset_t boot_args_start)
 	/* setup debugging output if one has been chosen */
 	PE_init_kprintf(FALSE);
 
-	if (!PE_parse_boot_arg("diag", &dgWork.dgFlags))
+	if (!PE_parse_boot_argn("diag", &dgWork.dgFlags, sizeof (dgWork.dgFlags)))
 		dgWork.dgFlags = 0;
 
 	serialmode = 0;
-	if(PE_parse_boot_arg("serial", &serialmode)) {
+	if(PE_parse_boot_argn("serial", &serialmode, sizeof (serialmode))) {
 		/* We want a serial keyboard and/or console */
 		kprintf("Serial mode specified: %08X\n", serialmode);
 	}
@@ -172,12 +171,12 @@ i386_init(vm_offset_t boot_args_start)
 	kprintf("version_variant = %s\n", version_variant);
 	kprintf("version         = %s\n", version);
 	
-	if (!PE_parse_boot_arg("maxmem", &maxmem))
-		maxmemtouse=0;
+	if (!PE_parse_boot_argn("maxmem", &maxmem, sizeof (maxmem)))
+		maxmemtouse = 0;
 	else
 	        maxmemtouse = ((uint64_t)maxmem) * (uint64_t)(1024 * 1024);
 
-	if (PE_parse_boot_arg("cpus", &cpus)) {
+	if (PE_parse_boot_argn("cpus", &cpus, sizeof (cpus))) {
 		if ((0 < cpus) && (cpus < max_ncpus))
                         max_ncpus = cpus;
 	}
@@ -185,7 +184,7 @@ i386_init(vm_offset_t boot_args_start)
 	/*
 	 * debug support for > 4G systems
 	 */
-	if (!PE_parse_boot_arg("himemory_mode", &vm_himemory_mode))
+	if (!PE_parse_boot_argn("himemory_mode", &vm_himemory_mode, sizeof (vm_himemory_mode)))
 	        vm_himemory_mode = 0;
 
 	if (!PE_parse_boot_argn("immediate_NMI", &fidn, sizeof (fidn)))
@@ -200,7 +199,7 @@ i386_init(vm_offset_t boot_args_start)
 	boolean_t IA32e = FALSE;
 	if (cpuid_extfeatures() & CPUID_EXTFEATURE_EM64T) {
 		kprintf("EM64T supported");
-		if (PE_parse_boot_arg("-legacy", &legacy_mode)) {
+		if (PE_parse_boot_argn("-legacy", &legacy_mode, sizeof (legacy_mode))) {
 			kprintf(" but legacy mode forced\n");
 		} else {
 			IA32e = TRUE;
@@ -212,7 +211,7 @@ i386_init(vm_offset_t boot_args_start)
 		nx_enabled = 0;
 
 	/* Obtain "lcks" options:this currently controls lock statistics */
-	if (!PE_parse_boot_arg("lcks", &LcksOpts))
+	if (!PE_parse_boot_argn("lcks", &LcksOpts, sizeof (LcksOpts)))
 		LcksOpts = 0;
 
 	/*   
@@ -221,11 +220,10 @@ i386_init(vm_offset_t boot_args_start)
 	 */
 	i386_vm_init(maxmemtouse, IA32e, kernelBootArgs);
 
-	if ( ! PE_parse_boot_arg("novmx", &noVMX))
+	if ( ! PE_parse_boot_argn("novmx", &noVMX, sizeof (noVMX)))
 		noVMX = 0;	/* OK to support Altivec in rosetta? */
 
 	tsc_init();
-	hpet_init();
 	power_management_init();
 
 	PE_init_platform(TRUE, kernelBootArgs);

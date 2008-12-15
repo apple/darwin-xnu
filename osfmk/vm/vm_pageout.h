@@ -236,6 +236,7 @@ extern kern_return_t vm_paging_map_object(
 	vm_object_t		object,
 	vm_object_offset_t	offset,
 	vm_map_size_t		*size,
+	vm_prot_t		protection,
 	boolean_t		can_unlock_object);
 extern void vm_paging_unmap_object(
 	vm_object_t		object,

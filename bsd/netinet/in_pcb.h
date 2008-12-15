@@ -203,6 +203,10 @@ struct inpcb {
 	void	*pdp_ifp;
 #endif /* _KERN_SYS_KERNELTYPES_H_ */
 #endif /* CONFIG_EMBEDDED */
+#if CONFIG_IP_EDGEHOLE
+	u_int32_t	inpcb_edgehole_flags;
+	u_int32_t	inpcb_edgehole_mask;
+#endif
 };
 
 #endif /* KERNEL_PRIVATE */

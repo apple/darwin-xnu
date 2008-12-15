@@ -333,8 +333,8 @@ __fbt_provide_module(void *arg, struct modctl *ctl)
 	char						*modname;
 	unsigned int i;
 
-    int gIgnoreFBTBlacklist = 0;
-	PE_parse_boot_arg("IgnoreFBTBlacklist", &gIgnoreFBTBlacklist);
+	int gIgnoreFBTBlacklist = 0;
+	PE_parse_boot_argn("IgnoreFBTBlacklist", &gIgnoreFBTBlacklist, sizeof (gIgnoreFBTBlacklist));
 
 	mh = (struct mach_header *)(ctl->address);
 	modname = ctl->mod_modname;

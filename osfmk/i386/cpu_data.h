@@ -66,20 +66,6 @@ typedef struct rtclock_timer {
 	boolean_t	has_expired;
 } rtclock_timer_t;
 
-typedef struct rtc_nanotime {
-	uint64_t	tsc_base;		/* timestamp */
-	uint64_t	ns_base;		/* nanoseconds */
-	uint32_t	scale;			/* tsc -> nanosec multiplier */
-	uint32_t	shift;			/* tsc -> nanosec shift/div */
-						/* shift is overloaded with
-						 * lower 32bits of tsc_freq
-						 * on slower machines (SLOW_TSC_THRESHOLD) */
-	uint32_t	generation;		/* 0 == being updated */
-	uint32_t	spare1;
-} rtc_nanotime_t;
-
-#define	SLOW_TSC_THRESHOLD	1000067800	/* TSC is too slow for regular nanotime() algorithm */
-
 
 typedef struct {
 	struct i386_tss         *cdi_ktss;
@@ -181,7 +167,7 @@ typedef struct cpu_data
 	uint64_t		*cpu_physwindow_ptep;
 	void 			*cpu_hi_iss;
 	boolean_t		cpu_tlb_invalid;
-	uint32_t		cpu_hwIntCnt[256];		/* Interrupt counts */
+	uint32_t		cpu_hwIntCnt[256];	/* Interrupt counts */
 	uint64_t		cpu_dr7; /* debug control register */
 	uint64_t		cpu_int_event_time;	/* intr entry/exit time */
 	vmx_cpu_t		cpu_vmx;		/* wonderful world of virtualization */
@@ -195,7 +181,7 @@ typedef struct cpu_data
 							   * arg store
 							   * validity flag.
 							   */
-
+	rtc_nanotime_t		*cpu_nanotime;		/* Nanotime info */
 							  
 } cpu_data_t;
 

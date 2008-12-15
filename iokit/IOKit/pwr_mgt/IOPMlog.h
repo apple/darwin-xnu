@@ -78,6 +78,7 @@ enum PMLogEnum {
     kPMLogSetClockGating,		// 50	0x051000c8 - platform device specific clock control
     kPMLogSetPowerGating,		// 51	0x051000cc - platform device specific power control
     kPMLogSetPinGroup,			// 52	0x051000d0 - platform device specific gpio control
+    kPMLogIdleCancel,			// 53	0x051000d4 - device unidle during change
     kIOPMlogLastEvent
 };
 

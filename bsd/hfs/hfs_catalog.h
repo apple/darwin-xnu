@@ -113,9 +113,15 @@ struct cat_attr {
  * Catalog Node Fork (runtime)
  *
  * NOTE: this is not the same as a struct HFSPlusForkData
+ *
+ * NOTE: if cf_new_size > cf_size, then a write is in progress and is extending
+ * the EOF; the new EOF will be cf_new_size.  Writes and pageouts may validly
+ * write up to cf_new_size, but reads should only read up to cf_size.  When
+ * an extending write is not in progress, cf_new_size is zero.
  */
 struct cat_fork {
 	off_t          cf_size;        /* fork's logical size in bytes */
+	off_t          cf_new_size;    /* fork's logical size after write completes */
 	union {
 	    u_int32_t  cfu_clump;      /* fork's clump size in bytes (sys files only) */
 	    u_int64_t  cfu_bytesread;  /* bytes read from this fork */

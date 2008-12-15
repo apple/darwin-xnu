@@ -231,8 +231,11 @@ hfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_context_t conte
 				
 			if ((retval = hfs_flushfiles(mp, flags, p)))
 				goto out;
-			hfsmp->hfs_flags |= HFS_READ_ONLY;
+
+			/* mark the volume cleanly unmounted */
+			hfsmp->vcbAtrb |= kHFSVolumeUnmountedMask;
 			retval = hfs_flushvolumeheader(hfsmp, MNT_WAIT, 0);
+			hfsmp->hfs_flags |= HFS_READ_ONLY;
 
 			/* also get the volume bitmap blocks */
 			if (!retval) {
@@ -275,11 +278,6 @@ hfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_context_t conte
 				goto out;
 			}
 
-
-			retval = hfs_flushvolumeheader(hfsmp, MNT_WAIT, 0);
-			if (retval != E_NONE)
-				goto out;
-
 			// If the journal was shut-down previously because we were
 			// asked to be read-only, let's start it back up again now
 			
@@ -300,7 +298,7 @@ hfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_context_t conte
 						      (hfsmp->jnl_start * HFSTOVCB(hfsmp)->blockSize) + (off_t)HFSTOVCB(hfsmp)->hfsPlusIOPosOffset,
 						      hfsmp->jnl_size,
 						      hfsmp->hfs_devvp,
-						      hfsmp->hfs_phys_block_size,
+						      hfsmp->hfs_logical_block_size,
 						      jflags,
 						      0,
 						      hfs_sync_metadata, hfsmp->hfs_mp);
@@ -319,7 +317,14 @@ hfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_context_t conte
 			/* Only clear HFS_READ_ONLY after a successfull write */
 			hfsmp->hfs_flags &= ~HFS_READ_ONLY;
 
-			if (!(hfsmp->hfs_flags & (HFS_READ_ONLY & HFS_STANDARD))) {
+			/* mark the volume dirty (clear clean unmount bit) */
+			hfsmp->vcbAtrb &= ~kHFSVolumeUnmountedMask;
+
+			retval = hfs_flushvolumeheader(hfsmp, MNT_WAIT, 0);
+			if (retval != E_NONE)
+				goto out;
+
+			if (!(hfsmp->hfs_flags & (HFS_READ_ONLY | HFS_STANDARD))) {
 				/* Setup private/hidden directories for hardlinks. */
 				hfs_privatedir_init(hfsmp, FILE_HARDLINKS);
 				hfs_privatedir_init(hfsmp, DIR_HARDLINKS);
@@ -439,6 +444,8 @@ hfs_changefs(struct mount *mp, struct hfs_mount_args *args)
 	vcb = HFSTOVCB(hfsmp);
 	mount_flags = (unsigned int)vfs_flags(mp);
 
+	hfsmp->hfs_flags |= HFS_IN_CHANGEFS;
+	
 	permswitch = (((hfsmp->hfs_flags & HFS_UNKNOWN_PERMS) &&
 	               ((mount_flags & MNT_UNKNOWNPERMISSIONS) == 0)) ||
 	              (((hfsmp->hfs_flags & HFS_UNKNOWN_PERMS) == 0) &&
@@ -447,7 +454,8 @@ hfs_changefs(struct mount *mp, struct hfs_mount_args *args)
 	/* The root filesystem must operate with actual permissions: */
 	if (permswitch && (mount_flags & MNT_ROOTFS) && (mount_flags & MNT_UNKNOWNPERMISSIONS)) {
 		vfs_clearflags(mp, (u_int64_t)((unsigned int)MNT_UNKNOWNPERMISSIONS));	/* Just say "No". */
-		return EINVAL;
+		retval = EINVAL;
+		goto exit;
 	}
 	if (mount_flags & MNT_UNKNOWNPERMISSIONS)
 		hfsmp->hfs_flags |= HFS_UNKNOWN_PERMS;
@@ -555,6 +563,7 @@ hfs_changefs(struct mount *mp, struct hfs_mount_args *args)
 		(void) hfs_relconverter(old_encoding);
 	}
 exit:
+	hfsmp->hfs_flags &= ~HFS_IN_CHANGEFS;
 	return (retval);
 }
 
@@ -626,7 +635,6 @@ hfs_reload(struct mount *mountp)
 {
 	register struct vnode *devvp;
 	struct buf *bp;
-	int sectorsize;
 	int error, i;
 	struct hfsmount *hfsmp;
 	struct HFSPlusVolumeHeader *vhp;
@@ -634,6 +642,7 @@ hfs_reload(struct mount *mountp)
 	struct filefork *forkp;
     	struct cat_desc cndesc;
 	struct hfs_reload_cargs args;
+	daddr64_t priIDSector;
 
     	hfsmp = VFSTOHFS(mountp);
 	vcb = HFSTOVCB(hfsmp);
@@ -665,18 +674,19 @@ hfs_reload(struct mount *mountp)
 	/*
 	 * Re-read VolumeHeader from disk.
 	 */
-	sectorsize = hfsmp->hfs_phys_block_size;
+	priIDSector = (daddr64_t)((vcb->hfsPlusIOPosOffset / hfsmp->hfs_logical_block_size) + 
+			HFS_PRI_SECTOR(hfsmp->hfs_logical_block_size));
 
 	error = (int)buf_meta_bread(hfsmp->hfs_devvp,
-			(daddr64_t)((vcb->hfsPlusIOPosOffset / sectorsize) + HFS_PRI_SECTOR(sectorsize)),
-			sectorsize, NOCRED, &bp);
+			HFS_PHYSBLK_ROUNDDOWN(priIDSector, hfsmp->hfs_log_per_phys),
+			hfsmp->hfs_physical_block_size, NOCRED, &bp);
 	if (error) {
         	if (bp != NULL)
         		buf_brelse(bp);
 		return (error);
 	}
 
-	vhp = (HFSPlusVolumeHeader *) (buf_dataptr(bp) + HFS_PRI_OFFSET(sectorsize));
+	vhp = (HFSPlusVolumeHeader *) (buf_dataptr(bp) + HFS_PRI_OFFSET(hfsmp->hfs_physical_block_size));
 
 	/* Do a quick sanity check */
 	if ((SWAP_BE16(vhp->signature) != kHFSPlusSigWord &&
@@ -812,8 +822,9 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 	int mntwrapper;
 	kauth_cred_t cred;
 	u_int64_t disksize;
-	daddr64_t blkcnt;
-	u_int32_t blksize;
+	daddr64_t log_blkcnt;
+	u_int32_t log_blksize;
+	u_int32_t phys_blksize;
 	u_int32_t minblksize;
 	u_int32_t iswritable;
 	daddr64_t mdb_offset;
@@ -832,13 +843,25 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 	/* Advisory locking should be handled at the VFS layer */
 	vfs_setlocklocal(mp);
 
-	/* Get the real physical block size. */
-	if (VNOP_IOCTL(devvp, DKIOCGETBLOCKSIZE, (caddr_t)&blksize, 0, context)) {
+	/* Get the logical block size (treated as physical block size everywhere) */
+	if (VNOP_IOCTL(devvp, DKIOCGETBLOCKSIZE, (caddr_t)&log_blksize, 0, context)) {
 		retval = ENXIO;
 		goto error_exit;
 	}
+	/* Get the physical block size. */
+	retval = VNOP_IOCTL(devvp, DKIOCGETPHYSICALBLOCKSIZE, (caddr_t)&phys_blksize, 0, context);
+	if (retval) {
+		if ((retval != ENOTSUP) && (retval != ENOTTY)) {
+			retval = ENXIO;
+			goto error_exit;
+		}
+		/* If device does not support this ioctl, assume that physical 
+		 * block size is same as logical block size 
+		 */
+		phys_blksize = log_blksize;
+	}
 	/* Switch to 512 byte sectors (temporarily) */
-	if (blksize > 512) {
+	if (log_blksize > 512) {
 		u_int32_t size512 = 512;
 
 		if (VNOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, (caddr_t)&size512, FWRITE, context)) {
@@ -847,15 +870,15 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 		}
 	}
 	/* Get the number of 512 byte physical blocks. */
-	if (VNOP_IOCTL(devvp, DKIOCGETBLOCKCOUNT, (caddr_t)&blkcnt, 0, context)) {
+	if (VNOP_IOCTL(devvp, DKIOCGETBLOCKCOUNT, (caddr_t)&log_blkcnt, 0, context)) {
 		/* resetting block size may fail if getting block count did */
-		(void)VNOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, (caddr_t)&blksize, FWRITE, context);
+		(void)VNOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, (caddr_t)&log_blksize, FWRITE, context);
 
 		retval = ENXIO;
 		goto error_exit;
 	}
 	/* Compute an accurate disk size (i.e. within 512 bytes) */
-	disksize = (u_int64_t)blkcnt * (u_int64_t)512;
+	disksize = (u_int64_t)log_blkcnt * (u_int64_t)512;
 
 	/*
 	 * On Tiger it is not necessary to switch the device 
@@ -863,18 +886,20 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 	 * worth of blocks but to insure compatibility with
 	 * pre-Tiger systems we have to do it.
 	 */
-	if (blkcnt > 0x000000007fffffff) {
-		minblksize = blksize = 4096;
+	if (log_blkcnt > 0x000000007fffffff) {
+		minblksize = log_blksize = 4096;
+		if (phys_blksize < log_blksize)
+			phys_blksize = log_blksize;
 	}
 	
 	/* Now switch to our preferred physical block size. */
-	if (blksize > 512) {
-		if (VNOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, (caddr_t)&blksize, FWRITE, context)) {
+	if (log_blksize > 512) {
+		if (VNOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, (caddr_t)&log_blksize, FWRITE, context)) {
 			retval = ENXIO;
 			goto error_exit;
 		}
 		/* Get the count of physical blocks. */
-		if (VNOP_IOCTL(devvp, DKIOCGETBLOCKCOUNT, (caddr_t)&blkcnt, 0, context)) {
+		if (VNOP_IOCTL(devvp, DKIOCGETBLOCKCOUNT, (caddr_t)&log_blkcnt, 0, context)) {
 			retval = ENXIO;
 			goto error_exit;
 		}
@@ -882,16 +907,18 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 	/*
 	 * At this point:
 	 *   minblksize is the minimum physical block size
-	 *   blksize has our preferred physical block size
-	 *   blkcnt has the total number of physical blocks
+	 *   log_blksize has our preferred physical block size
+	 *   log_blkcnt has the total number of physical blocks
 	 */
 
-	mdb_offset = (daddr64_t)HFS_PRI_SECTOR(blksize);
-	if ((retval = (int)buf_meta_bread(devvp, mdb_offset, blksize, cred, &bp))) {
+	mdb_offset = (daddr64_t)HFS_PRI_SECTOR(log_blksize);
+	if ((retval = (int)buf_meta_bread(devvp, 
+				HFS_PHYSBLK_ROUNDDOWN(mdb_offset, (phys_blksize/log_blksize)), 
+				phys_blksize, cred, &bp))) {
 		goto error_exit;
 	}
 	MALLOC(mdbp, HFSMasterDirectoryBlock *, kMDBSize, M_TEMP, M_WAITOK);
-	bcopy((char *)buf_dataptr(bp) + HFS_PRI_OFFSET(blksize), mdbp, kMDBSize);
+	bcopy((char *)buf_dataptr(bp) + HFS_PRI_OFFSET(phys_blksize), mdbp, kMDBSize);
 	buf_brelse(bp);
 	bp = NULL;
 
@@ -912,8 +939,10 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 	hfsmp->hfs_raw_dev = vnode_specrdev(devvp);
 	hfsmp->hfs_devvp = devvp;
 	vnode_ref(devvp);  /* Hold a ref on the device, dropped when hfsmp is freed. */
-	hfsmp->hfs_phys_block_size = blksize;
-	hfsmp->hfs_phys_block_count = blkcnt;
+	hfsmp->hfs_logical_block_size = log_blksize;
+	hfsmp->hfs_logical_block_count = log_blkcnt;
+	hfsmp->hfs_physical_block_size = phys_blksize;
+	hfsmp->hfs_log_per_phys = (phys_blksize / log_blksize);
 	hfsmp->hfs_flags |= HFS_WRITEABLE_MEDIA;
 	if (ronly)
 		hfsmp->hfs_flags |= HFS_READ_ONLY;
@@ -983,18 +1012,18 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 			goto error_exit;
 		}
 		/* HFS disks can only use 512 byte physical blocks */
-		if (blksize > kHFSBlockSize) {
-			blksize = kHFSBlockSize;
-			if (VNOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, (caddr_t)&blksize, FWRITE, context)) {
+		if (log_blksize > kHFSBlockSize) {
+			log_blksize = kHFSBlockSize;
+			if (VNOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, (caddr_t)&log_blksize, FWRITE, context)) {
 				retval = ENXIO;
 				goto error_exit;
 			}
-			if (VNOP_IOCTL(devvp, DKIOCGETBLOCKCOUNT, (caddr_t)&blkcnt, 0, context)) {
+			if (VNOP_IOCTL(devvp, DKIOCGETBLOCKCOUNT, (caddr_t)&log_blkcnt, 0, context)) {
 				retval = ENXIO;
 				goto error_exit;
 			}
-			hfsmp->hfs_phys_block_size = blksize;
-			hfsmp->hfs_phys_block_count = blkcnt;
+			hfsmp->hfs_logical_block_size = log_blksize;
+			hfsmp->hfs_logical_block_count = log_blkcnt;
 		}
 		if (args) {
 			hfsmp->hfs_encoding = args->hfs_encoding;
@@ -1030,37 +1059,38 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 			 * block size so everything will line up on a block
 			 * boundary.
 			 */
-			if ((embeddedOffset % blksize) != 0) {
+			if ((embeddedOffset % log_blksize) != 0) {
 				printf("HFS Mount: embedded volume offset not"
 				    " a multiple of physical block size (%d);"
-				    " switching to 512\n", blksize);
-				blksize = 512;
+				    " switching to 512\n", log_blksize);
+				log_blksize = 512;
 				if (VNOP_IOCTL(devvp, DKIOCSETBLOCKSIZE,
-				    (caddr_t)&blksize, FWRITE, context)) {
+				    (caddr_t)&log_blksize, FWRITE, context)) {
 					retval = ENXIO;
 					goto error_exit;
 				}
 				if (VNOP_IOCTL(devvp, DKIOCGETBLOCKCOUNT,
-				    (caddr_t)&blkcnt, 0, context)) {
+				    (caddr_t)&log_blkcnt, 0, context)) {
 					retval = ENXIO;
 					goto error_exit;
 				}
 				/* Note: relative block count adjustment */
-				hfsmp->hfs_phys_block_count *=
-				    hfsmp->hfs_phys_block_size / blksize;
-				hfsmp->hfs_phys_block_size = blksize;
+				hfsmp->hfs_logical_block_count *=
+				    hfsmp->hfs_logical_block_size / log_blksize;
+				hfsmp->hfs_logical_block_size = log_blksize;
 			}
 
 			disksize = (u_int64_t)SWAP_BE16(mdbp->drEmbedExtent.blockCount) *
 			           (u_int64_t)SWAP_BE32(mdbp->drAlBlkSiz);
 
-			hfsmp->hfs_phys_block_count = disksize / blksize;
+			hfsmp->hfs_logical_block_count = disksize / log_blksize;
 	
-			mdb_offset = (daddr64_t)((embeddedOffset / blksize) + HFS_PRI_SECTOR(blksize));
-			retval = (int)buf_meta_bread(devvp, mdb_offset, blksize, cred, &bp);
+			mdb_offset = (daddr64_t)((embeddedOffset / log_blksize) + HFS_PRI_SECTOR(log_blksize));
+			retval = (int)buf_meta_bread(devvp, HFS_PHYSBLK_ROUNDDOWN(mdb_offset, hfsmp->hfs_log_per_phys),
+					phys_blksize, cred, &bp);
 			if (retval)
 				goto error_exit;
-			bcopy((char *)buf_dataptr(bp) + HFS_PRI_OFFSET(blksize), mdbp, 512);
+			bcopy((char *)buf_dataptr(bp) + HFS_PRI_OFFSET(phys_blksize), mdbp, 512);
 			buf_brelse(bp);
 			bp = NULL;
 			vhp = (HFSPlusVolumeHeader*) mdbp;
@@ -1119,13 +1149,15 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 				    hfsmp->hfs_flags |= HFS_NEED_JNL_RESET;
 				    
 				    if (mdb_offset == 0) {
-					mdb_offset = (daddr64_t)((embeddedOffset / blksize) + HFS_PRI_SECTOR(blksize));
+					mdb_offset = (daddr64_t)((embeddedOffset / log_blksize) + HFS_PRI_SECTOR(log_blksize));
 				    }
 
 				    bp = NULL;
-				    retval = (int)buf_meta_bread(devvp, mdb_offset, blksize, cred, &bp);
+				    retval = (int)buf_meta_bread(devvp, 
+						    HFS_PHYSBLK_ROUNDDOWN(mdb_offset, hfsmp->hfs_log_per_phys), 
+						    phys_blksize, cred, &bp);
 				    if (retval == 0) {
-					jvhp = (HFSPlusVolumeHeader *)(buf_dataptr(bp) + HFS_PRI_OFFSET(blksize));
+					jvhp = (HFSPlusVolumeHeader *)(buf_dataptr(bp) + HFS_PRI_OFFSET(phys_blksize));
 					    
 					if (SWAP_BE16(jvhp->signature) == kHFSPlusSigWord || SWAP_BE16(jvhp->signature) == kHFSXSigWord) {
 						printf ("hfs(1): Journal replay fail.  Writing lastMountVersion as FSK!\n");
@@ -1170,22 +1202,22 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 		 * If the backend didn't like our physical blocksize
 		 * then retry with physical blocksize of 512.
 		 */
-		if ((retval == ENXIO) && (blksize > 512) && (blksize != minblksize)) {
+		if ((retval == ENXIO) && (log_blksize > 512) && (log_blksize != minblksize)) {
 			printf("HFS Mount: could not use physical block size "
-				"(%d) switching to 512\n", blksize);
-			blksize = 512;
-			if (VNOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, (caddr_t)&blksize, FWRITE, context)) {
+				"(%d) switching to 512\n", log_blksize);
+			log_blksize = 512;
+			if (VNOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, (caddr_t)&log_blksize, FWRITE, context)) {
 				retval = ENXIO;
 				goto error_exit;
 			}
-			if (VNOP_IOCTL(devvp, DKIOCGETBLOCKCOUNT, (caddr_t)&blkcnt, 0, context)) {
+			if (VNOP_IOCTL(devvp, DKIOCGETBLOCKCOUNT, (caddr_t)&log_blkcnt, 0, context)) {
 				retval = ENXIO;
 				goto error_exit;
 			}
-			devvp->v_specsize = blksize;
+			devvp->v_specsize = log_blksize;
 			/* Note: relative block count adjustment (in case this is an embedded volume). */
-    			hfsmp->hfs_phys_block_count *= hfsmp->hfs_phys_block_size / blksize;
-     			hfsmp->hfs_phys_block_size = blksize;
+    			hfsmp->hfs_logical_block_count *= hfsmp->hfs_logical_block_size / log_blksize;
+     			hfsmp->hfs_logical_block_size = log_blksize;
  
 			if (hfsmp->jnl) {
 			    // close and re-open this with the new block size
@@ -1203,13 +1235,14 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 				    	hfsmp->hfs_flags |= HFS_NEED_JNL_RESET;
 				    
 				    	if (mdb_offset == 0) {
-							mdb_offset = (daddr64_t)((embeddedOffset / blksize) + HFS_PRI_SECTOR(blksize));
+							mdb_offset = (daddr64_t)((embeddedOffset / log_blksize) + HFS_PRI_SECTOR(log_blksize));
 				    	}
 
 				   	 	bp = NULL;
-				    	retval = (int)buf_meta_bread(devvp, mdb_offset, blksize, cred, &bp);
+				    	retval = (int)buf_meta_bread(devvp, HFS_PHYSBLK_ROUNDDOWN(mdb_offset, hfsmp->hfs_log_per_phys), 
+							phys_blksize, cred, &bp);
 				    	if (retval == 0) {
-							jvhp = (HFSPlusVolumeHeader *)(buf_dataptr(bp) + HFS_PRI_OFFSET(blksize));
+							jvhp = (HFSPlusVolumeHeader *)(buf_dataptr(bp) + HFS_PRI_OFFSET(phys_blksize));
 					    
 							if (SWAP_BE16(jvhp->signature) == kHFSPlusSigWord || SWAP_BE16(jvhp->signature) == kHFSXSigWord) {
 								printf ("hfs(2): Journal replay fail.  Writing lastMountVersion as FSK!\n");
@@ -1669,16 +1702,18 @@ hfs_sync_metadata(void *arg)
 	struct hfsmount *hfsmp;
 	ExtendedVCB *vcb;
 	buf_t	bp;
-	int  sectorsize, retval;
+	int  retval;
 	daddr64_t priIDSector;
 	hfsmp = VFSTOHFS(mp);
 	vcb = HFSTOVCB(hfsmp);
 
 	// now make sure the super block is flushed
-	sectorsize = hfsmp->hfs_phys_block_size;
-	priIDSector = (daddr64_t)((vcb->hfsPlusIOPosOffset / sectorsize) +
-				  HFS_PRI_SECTOR(sectorsize));
-	retval = (int)buf_meta_bread(hfsmp->hfs_devvp, priIDSector, sectorsize, NOCRED, &bp);
+	priIDSector = (daddr64_t)((vcb->hfsPlusIOPosOffset / hfsmp->hfs_logical_block_size) +
+				  HFS_PRI_SECTOR(hfsmp->hfs_logical_block_size));
+
+	retval = (int)buf_meta_bread(hfsmp->hfs_devvp, 
+			HFS_PHYSBLK_ROUNDDOWN(priIDSector, hfsmp->hfs_log_per_phys),
+			hfsmp->hfs_physical_block_size, NOCRED, &bp);
 	if ((retval != 0 ) && (retval != ENXIO)) {
 		printf("hfs_sync_metadata: can't read volume header at %d! (retval 0x%x)\n",
 		       (int)priIDSector, retval);
@@ -1695,7 +1730,9 @@ hfs_sync_metadata(void *arg)
 	//          hfs_btreeio.c:FlushAlternate() should flag when it was
 	//          written...
 	if (hfsmp->hfs_alt_id_sector) {
-		retval = (int)buf_meta_bread(hfsmp->hfs_devvp, hfsmp->hfs_alt_id_sector, sectorsize, NOCRED, &bp);
+		retval = (int)buf_meta_bread(hfsmp->hfs_devvp, 
+				HFS_PHYSBLK_ROUNDDOWN(hfsmp->hfs_alt_id_sector, hfsmp->hfs_log_per_phys),
+				hfsmp->hfs_physical_block_size, NOCRED, &bp);
 		if (retval == 0 && ((buf_flags(bp) & (B_DELWRI | B_LOCKED)) == B_DELWRI)) {
 		    buf_bwrite(bp);
 		} else if (bp) {
@@ -1760,14 +1797,14 @@ hfs_sync(struct mount *mp, int waitfor, vfs_context_t context)
 	int error, allerror = 0;
 	struct hfs_sync_cargs args;
 
+	hfsmp = VFSTOHFS(mp);
+
 	/*
-	 * During MNT_UPDATE hfs_changefs might be manipulating
-	 * vnodes so back off
+	 * hfs_changefs might be manipulating vnodes so back off
 	 */
-	if (((u_int32_t)vfs_flags(mp)) & MNT_UPDATE)	/* XXX MNT_UPDATE may not be visible here */
+	if (hfsmp->hfs_flags & HFS_IN_CHANGEFS)
 		return (0);
 
-	hfsmp = VFSTOHFS(mp);
 	if (hfsmp->hfs_flags & HFS_READ_ONLY)
 		return (EROFS);
 
@@ -2118,7 +2155,7 @@ hfs_sysctl(int *name, __unused u_int namelen, user_addr_t oldp, size_t *oldlenp,
 							 + HFSTOVCB(hfsmp)->hfsPlusIOPosOffset,
 							 (off_t)((unsigned)name[3]),
 							 hfsmp->hfs_devvp,
-							 hfsmp->hfs_phys_block_size,
+							 hfsmp->hfs_logical_block_size,
 							 0,
 							 0,
 							 hfs_sync_metadata, hfsmp->hfs_mp);
@@ -2675,7 +2712,7 @@ hfs_flushMDB(struct hfsmount *hfsmp, int waitfor, int altflush)
 	int sectorsize;
 	ByteCount namelen;
 
-	sectorsize = hfsmp->hfs_phys_block_size;
+	sectorsize = hfsmp->hfs_logical_block_size;
 	retval = (int)buf_bread(hfsmp->hfs_devvp, (daddr64_t)HFS_PRI_SECTOR(sectorsize), sectorsize, NOCRED, &bp);
 	if (retval) {
 		if (bp)
@@ -2774,7 +2811,6 @@ hfs_flushvolumeheader(struct hfsmount *hfsmp, int waitfor, int altflush)
 	int retval;
 	struct buf *bp;
 	int i;
-	int sectorsize;
 	daddr64_t priIDSector;
 	int critical;
 	u_int16_t  signature;
@@ -2787,15 +2823,16 @@ hfs_flushvolumeheader(struct hfsmount *hfsmp, int waitfor, int altflush)
 		return hfs_flushMDB(hfsmp, waitfor, altflush);
 	}
 	critical = altflush;
-	sectorsize = hfsmp->hfs_phys_block_size;
-	priIDSector = (daddr64_t)((vcb->hfsPlusIOPosOffset / sectorsize) +
-				  HFS_PRI_SECTOR(sectorsize));
+	priIDSector = (daddr64_t)((vcb->hfsPlusIOPosOffset / hfsmp->hfs_logical_block_size) +
+				  HFS_PRI_SECTOR(hfsmp->hfs_logical_block_size));
 
 	if (hfs_start_transaction(hfsmp) != 0) {
 	    return EINVAL;
 	}
 
-	retval = (int)buf_meta_bread(hfsmp->hfs_devvp, priIDSector, sectorsize, NOCRED, &bp);
+	retval = (int)buf_meta_bread(hfsmp->hfs_devvp, 
+			HFS_PHYSBLK_ROUNDDOWN(priIDSector, hfsmp->hfs_log_per_phys),
+			hfsmp->hfs_physical_block_size, NOCRED, &bp);
 	if (retval) {
 		if (bp)
 			buf_brelse(bp);
@@ -2810,7 +2847,8 @@ hfs_flushvolumeheader(struct hfsmount *hfsmp, int waitfor, int altflush)
 		journal_modify_block_start(hfsmp->jnl, bp);
 	}
 
-	volumeHeader = (HFSPlusVolumeHeader *)((char *)buf_dataptr(bp) + HFS_PRI_OFFSET(sectorsize));
+	volumeHeader = (HFSPlusVolumeHeader *)((char *)buf_dataptr(bp) + 
+			HFS_PRI_OFFSET(hfsmp->hfs_physical_block_size));
 
 	/*
 	 * Sanity check what we just read.
@@ -2839,15 +2877,16 @@ hfs_flushvolumeheader(struct hfsmount *hfsmp, int waitfor, int altflush)
 		struct buf *bp2;
 		HFSMasterDirectoryBlock	*mdb;
 
-		retval = (int)buf_meta_bread(hfsmp->hfs_devvp, (daddr64_t)HFS_PRI_SECTOR(sectorsize),
-				sectorsize, NOCRED, &bp2);
+		retval = (int)buf_meta_bread(hfsmp->hfs_devvp, 
+				HFS_PHYSBLK_ROUNDDOWN(HFS_PRI_SECTOR(hfsmp->hfs_logical_block_size), hfsmp->hfs_log_per_phys),
+				hfsmp->hfs_physical_block_size, NOCRED, &bp2);
 		if (retval) {
 			if (bp2)
 				buf_brelse(bp2);
 			retval = 0;
 		} else {
 			mdb = (HFSMasterDirectoryBlock *)(buf_dataptr(bp2) +
-				HFS_PRI_OFFSET(sectorsize));
+				HFS_PRI_OFFSET(hfsmp->hfs_physical_block_size));
 
 			if ( SWAP_BE32 (mdb->drCrDate) != vcb->localCreateDate )
 			  {
@@ -2991,12 +3030,16 @@ done:
 	if (altflush && hfsmp->hfs_alt_id_sector) {
 		struct buf *alt_bp = NULL;
 
-		if (buf_meta_bread(hfsmp->hfs_devvp, hfsmp->hfs_alt_id_sector, sectorsize, NOCRED, &alt_bp) == 0) {
+		if (buf_meta_bread(hfsmp->hfs_devvp, 
+				HFS_PHYSBLK_ROUNDDOWN(hfsmp->hfs_alt_id_sector, hfsmp->hfs_log_per_phys),
+				hfsmp->hfs_physical_block_size, NOCRED, &alt_bp) == 0) {
 			if (hfsmp->jnl) {
 				journal_modify_block_start(hfsmp->jnl, alt_bp);
 			}
 
-			bcopy(volumeHeader, (char *)buf_dataptr(alt_bp) + HFS_ALT_OFFSET(sectorsize), kMDBSize);
+			bcopy(volumeHeader, (char *)buf_dataptr(alt_bp) + 
+					HFS_ALT_OFFSET(hfsmp->hfs_physical_block_size), 
+					kMDBSize);
 
 			if (hfsmp->jnl) {
 				journal_modify_block_end(hfsmp->jnl, alt_bp, NULL, NULL);
@@ -3048,6 +3091,7 @@ hfs_extendfs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 	u_int32_t  addblks;
 	u_int64_t  sectorcnt;
 	u_int32_t  sectorsize;
+	u_int32_t  phys_sectorsize;
 	daddr64_t  prev_alt_sector;
 	daddr_t	   bitmapblks;
 	int  lockflags;
@@ -3093,7 +3137,7 @@ hfs_extendfs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 	if (VNOP_IOCTL(devvp, DKIOCGETBLOCKSIZE, (caddr_t)&sectorsize, 0, context)) {
 		return (ENXIO);
 	}
-	if (sectorsize != hfsmp->hfs_phys_block_size) {
+	if (sectorsize != hfsmp->hfs_logical_block_size) {
 		return (ENXIO);
 	}
 	if (VNOP_IOCTL(devvp, DKIOCGETBLOCKCOUNT, (caddr_t)&sectorcnt, 0, context)) {
@@ -3103,12 +3147,23 @@ hfs_extendfs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 		printf("hfs_extendfs: not enough space on device\n");
 		return (ENOSPC);
 	}
+	error = VNOP_IOCTL(devvp, DKIOCGETPHYSICALBLOCKSIZE, (caddr_t)&phys_sectorsize, 0, context);
+	if (error) {
+		if ((error != ENOTSUP) && (error != ENOTTY)) {
+			return (ENXIO);
+		}
+		/* If ioctl is not supported, force physical and logical sector size to be same */
+		phys_sectorsize = sectorsize;
+	}
+	if (phys_sectorsize != hfsmp->hfs_physical_block_size) {
+		return (ENXIO);
+	}
 	oldsize = (u_int64_t)hfsmp->totalBlocks * (u_int64_t)hfsmp->blockSize;
 
 	/*
 	 * Validate new size.
 	 */
-	if ((newsize <= oldsize) || (newsize % sectorsize)) {
+	if ((newsize <= oldsize) || (newsize % sectorsize) || (newsize % phys_sectorsize)) {
 		printf("hfs_extendfs: invalid size\n");
 		return (EINVAL);
 	}
@@ -3261,14 +3316,14 @@ hfs_extendfs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 	/*
 	 * Adjust file system variables for new space.
 	 */
-	prev_phys_block_count = hfsmp->hfs_phys_block_count;
+	prev_phys_block_count = hfsmp->hfs_logical_block_count;
 	prev_alt_sector = hfsmp->hfs_alt_id_sector;
 
 	vcb->totalBlocks += addblks;
 	vcb->freeBlocks += addblks;
-	hfsmp->hfs_phys_block_count = newsize / sectorsize;
+	hfsmp->hfs_logical_block_count = newsize / sectorsize;
 	hfsmp->hfs_alt_id_sector = (hfsmp->hfsPlusIOPosOffset / sectorsize) +
-	                          HFS_ALT_SECTOR(sectorsize, hfsmp->hfs_phys_block_count);
+	                          HFS_ALT_SECTOR(sectorsize, hfsmp->hfs_logical_block_count);
 	MarkVCBDirty(vcb);
 	error = hfs_flushvolumeheader(hfsmp, MNT_WAIT, HFS_ALTFLUSH);
 	if (error) {
@@ -3290,7 +3345,7 @@ hfs_extendfs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 		}
 		vcb->totalBlocks -= addblks;
 		vcb->freeBlocks -= addblks;
-		hfsmp->hfs_phys_block_count = prev_phys_block_count;
+		hfsmp->hfs_logical_block_count = prev_phys_block_count;
 		hfsmp->hfs_alt_id_sector = prev_alt_sector;
 		MarkVCBDirty(vcb);
 		if (vcb->blockSize == 512)
@@ -3304,11 +3359,12 @@ hfs_extendfs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 	 */
 	bp = NULL;
 	if (prev_alt_sector) {
-		if (buf_meta_bread(hfsmp->hfs_devvp, prev_alt_sector, sectorsize,
-				   NOCRED, &bp) == 0) {
+		if (buf_meta_bread(hfsmp->hfs_devvp, 
+				HFS_PHYSBLK_ROUNDDOWN(prev_alt_sector, hfsmp->hfs_log_per_phys),
+				hfsmp->hfs_physical_block_size, NOCRED, &bp) == 0) {
 			journal_modify_block_start(hfsmp->jnl, bp);
 	
-			bzero((char *)buf_dataptr(bp) + HFS_ALT_OFFSET(sectorsize), kMDBSize);
+			bzero((char *)buf_dataptr(bp) + HFS_ALT_OFFSET(hfsmp->hfs_physical_block_size), kMDBSize);
 	
 			journal_modify_block_end(hfsmp->jnl, bp, NULL, NULL);
 		} else if (bp) {
@@ -3402,7 +3458,9 @@ hfs_truncatefs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 	/* Make sure new size is valid. */
 	if ((newsize < HFS_MIN_SIZE) ||
 	    (newsize >= oldsize) ||
-	    (newsize % hfsmp->hfs_phys_block_size)) {
+	    (newsize % hfsmp->hfs_logical_block_size) ||
+	    (newsize % hfsmp->hfs_physical_block_size)) {
+		printf ("hfs_truncatefs: invalid size\n");
 		error = EINVAL;
 		goto out;
 	}
@@ -3502,10 +3560,11 @@ hfs_truncatefs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 	 * since this block will be outside of the truncated file system!
 	 */
 	if (hfsmp->hfs_alt_id_sector) {
-		if (buf_meta_bread(hfsmp->hfs_devvp, hfsmp->hfs_alt_id_sector,
-		                   hfsmp->hfs_phys_block_size, NOCRED, &bp) == 0) {
+		if (buf_meta_bread(hfsmp->hfs_devvp, 
+				HFS_PHYSBLK_ROUNDDOWN(hfsmp->hfs_alt_id_sector, hfsmp->hfs_log_per_phys),
+				hfsmp->hfs_physical_block_size, NOCRED, &bp) == 0) {
 	
-			bzero((void*)((char *)buf_dataptr(bp) + HFS_ALT_OFFSET(hfsmp->hfs_phys_block_size)), kMDBSize);
+			bzero((void*)((char *)buf_dataptr(bp) + HFS_ALT_OFFSET(hfsmp->hfs_physical_block_size)), kMDBSize);
 			(void) VNOP_BWRITE(bp);
 		} else if (bp) {
 			buf_brelse(bp);
@@ -3521,8 +3580,8 @@ hfs_truncatefs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 	 * Adjust file system variables and flush them to disk.
 	 */
 	hfsmp->totalBlocks = newblkcnt;
-	hfsmp->hfs_phys_block_count = newsize / hfsmp->hfs_phys_block_size;
-	hfsmp->hfs_alt_id_sector = HFS_ALT_SECTOR(hfsmp->hfs_phys_block_size, hfsmp->hfs_phys_block_count);
+	hfsmp->hfs_logical_block_count = newsize / hfsmp->hfs_logical_block_size;
+	hfsmp->hfs_alt_id_sector = HFS_ALT_SECTOR(hfsmp->hfs_logical_block_size, hfsmp->hfs_logical_block_count);
 	MarkVCBDirty(hfsmp);
 	error = hfs_flushvolumeheader(hfsmp, MNT_WAIT, HFS_ALTFLUSH);
 	if (error)
@@ -3632,7 +3691,7 @@ hfs_copy_extent(
 	size_t ioSize;
 	u_int32_t ioSizeSectors;	/* Device sectors in this I/O */
 	daddr64_t srcSector, destSector;
-	u_int32_t sectorsPerBlock = hfsmp->blockSize / hfsmp->hfs_phys_block_size;
+	u_int32_t sectorsPerBlock = hfsmp->blockSize / hfsmp->hfs_logical_block_size;
 
 	/*
 	 * Sanity check that we have locked the vnode of the file we're copying.
@@ -3674,11 +3733,11 @@ hfs_copy_extent(
 	buf_setdataptr(bp, (uintptr_t)buffer);
 	
 	resid = (off_t) blockCount * (off_t) hfsmp->blockSize;
-	srcSector = (daddr64_t) oldStart * hfsmp->blockSize / hfsmp->hfs_phys_block_size;
-	destSector = (daddr64_t) newStart * hfsmp->blockSize / hfsmp->hfs_phys_block_size;
+	srcSector = (daddr64_t) oldStart * hfsmp->blockSize / hfsmp->hfs_logical_block_size;
+	destSector = (daddr64_t) newStart * hfsmp->blockSize / hfsmp->hfs_logical_block_size;
 	while (resid > 0) {
 		ioSize = MIN(bufferSize, resid);
-		ioSizeSectors = ioSize / hfsmp->hfs_phys_block_size;
+		ioSizeSectors = ioSize / hfsmp->hfs_logical_block_size;
 		
 		/* Prepare the buffer for reading */
 		buf_reset(bp, B_READ);
@@ -3988,7 +4047,7 @@ hfs_journal_relocate_callback(void *_args)
 	JournalInfoBlock *jibp;
 
 	error = buf_meta_bread(hfsmp->hfs_devvp,
-		hfsmp->vcbJinfoBlock * (hfsmp->blockSize/hfsmp->hfs_phys_block_size),
+		hfsmp->vcbJinfoBlock * (hfsmp->blockSize/hfsmp->hfs_logical_block_size),
 		hfsmp->blockSize, vfs_context_ucred(args->context), &bp);
 	if (error) {
 		printf("hfs_reclaim_journal_file: failed to read JIB (%d)\n", error);
@@ -4144,14 +4203,14 @@ hfs_reclaim_journal_info_block(struct hfsmount *hfsmp, vfs_context_t context)
 	
 	/* Copy the old journal info block content to the new location */
 	error = buf_meta_bread(hfsmp->hfs_devvp,
-		hfsmp->vcbJinfoBlock * (hfsmp->blockSize/hfsmp->hfs_phys_block_size),
+		hfsmp->vcbJinfoBlock * (hfsmp->blockSize/hfsmp->hfs_logical_block_size),
 		hfsmp->blockSize, vfs_context_ucred(context), &old_bp);
 	if (error) {
 		printf("hfs_reclaim_journal_info_block: failed to read JIB (%d)\n", error);
 		goto free_fail;
 	}
 	new_bp = buf_getblk(hfsmp->hfs_devvp,
-		newBlock * (hfsmp->blockSize/hfsmp->hfs_phys_block_size),
+		newBlock * (hfsmp->blockSize/hfsmp->hfs_logical_block_size),
 		hfsmp->blockSize, 0, 0, BLK_META);
 	bcopy((char*)buf_dataptr(old_bp), (char*)buf_dataptr(new_bp), hfsmp->blockSize);
 	buf_brelse(old_bp);

@@ -2317,7 +2317,7 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 		    new_vinfo.v_baseaddr = newVideoVirt + boot_vinfo->v_offset;				/* Set the new framebuffer address */
 		else
 		    new_vinfo.v_baseaddr = lastVideoVirt + boot_vinfo->v_offset;				/* Set the new framebuffer address */
-	
+
 		/* Update the vinfo structure atomically with respect to the vc_progress task if running */
 		if (vc_progress)
 		{

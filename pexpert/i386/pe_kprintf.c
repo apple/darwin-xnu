@@ -53,7 +53,7 @@ void PE_init_kprintf(boolean_t vm_initialized)
 	if (!vm_initialized) {
 		simple_lock_init(&kprintf_lock, 0);
 
-		if (PE_parse_boot_arg("debug", &boot_arg))
+		if (PE_parse_boot_argn("debug", &boot_arg, sizeof (boot_arg)))
 			if (boot_arg & DB_KPRT)
 				disable_serial_output = FALSE;
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2005-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -69,7 +69,6 @@
 #include <i386/mp.h>
 #include <i386/pmCPU.h>
 #include <i386/tsc.h>
-#include <i386/hpet.h>
 #include <mach/i386/syscall_sw.h>
 
 extern uint64_t lastNapClear;

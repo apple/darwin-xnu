@@ -686,10 +686,14 @@ nfs3_vnop_advlock(
 
 	/*
 	 * Fill in the information structure.
+	 * We set all values to zero with bzero to clear
+	 * out any information in the sockaddr_storage 
+	 * and nfs_filehandle contained in msgreq so that
+	 * we will not leak extraneous information out of 
+	 * the kernel when calling up to lockd via our mig
+	 * generated routine.
 	 */
-	msgreq.lmr_answered = 0;
-	msgreq.lmr_errno = 0;
-	msgreq.lmr_saved_errno = 0;
+	bzero(&msgreq, sizeof(msgreq));
 	msg = &msgreq.lmr_msg;
 	msg->lm_version = LOCKD_MSG_VERSION;
 	msg->lm_flags = 0;

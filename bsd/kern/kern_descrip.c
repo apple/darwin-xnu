@@ -104,7 +104,7 @@
 #include <kern/kalloc.h>
 #include <libkern/OSAtomic.h>
 
-#include <sys/ubc.h>
+#include <sys/ubc_internal.h>
 
 struct psemnode;
 struct pshmnode;
@@ -141,6 +141,8 @@ extern int soo_stat(struct socket *so, void *ub, int isstat64);
 #endif /* SOCKETS */
 
 extern kauth_scope_t	kauth_scope_fileop;
+
+extern int cs_debug;
 
 #define f_flag f_fglob->fg_flag
 #define f_type f_fglob->fg_type
@@ -1370,6 +1372,14 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, register_t *retval)
 			goto outdrop;
 		}
 
+		if(ubc_cs_blob_get(vp, CPU_TYPE_ANY, fs.fs_file_start))
+		{
+			if(cs_debug)
+				printf("CODE SIGNING: resident blob offered for: %s\n", vp->v_name);
+			vnode_put(vp);
+			goto outdrop;
+		}
+				   
 #define CS_MAX_BLOB_SIZE (1ULL * 1024 * 1024) /* XXX ? */
 		if (fs.fs_blob_size > CS_MAX_BLOB_SIZE) {
 			error = E2BIG;
@@ -1378,9 +1388,7 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, register_t *retval)
 		}
 
 		kernel_blob_size = CAST_DOWN(vm_size_t, fs.fs_blob_size);
-		kr = kmem_alloc(kernel_map,
-				&kernel_blob_addr,
-				kernel_blob_size);
+		kr = ubc_cs_blob_allocate(&kernel_blob_addr, &kernel_blob_size);
 		if (kr != KERN_SUCCESS) {
 			error = ENOMEM;
 			vnode_put(vp);
@@ -1391,9 +1399,8 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, register_t *retval)
 			       (void *) kernel_blob_addr,
 			       kernel_blob_size);
 		if (error) {
-			kmem_free(kernel_map,
-				  kernel_blob_addr,
-				  kernel_blob_size);
+			ubc_cs_blob_deallocate(kernel_blob_addr,
+					       kernel_blob_size);
 			vnode_put(vp);
 			goto outdrop;
 		}
@@ -1405,11 +1412,10 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, register_t *retval)
 			kernel_blob_addr,
 			kernel_blob_size);
 		if (error) {
-			kmem_free(kernel_map,
-				  kernel_blob_addr,
-				  kernel_blob_size);
+			ubc_cs_blob_deallocate(kernel_blob_addr,
+					       kernel_blob_size);
 		} else {
-			/* ubc_blob_add() was consumed "kernel_blob_addr" */
+			/* ubc_blob_add() has consumed "kernel_blob_addr" */
 		}
 
 		(void) vnode_put(vp);

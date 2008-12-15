@@ -418,6 +418,17 @@ proc_exit(proc_t p)
 	 */
 	fdfree(p);
 
+	if (uth->uu_lowpri_window) {
+	        /*
+		 * task is marked as a low priority I/O type
+		 * and the I/O we issued while flushing files on close
+		 * collided with normal I/O operations...
+		 * no need to throttle this thread since its going away
+		 * but we do need to update our bookeeping w/r to throttled threads
+		 */
+		throttle_lowpri_io(FALSE);
+	}
+
 #if SYSV_SHM
 	/* Close ref SYSV Shared memory*/
 	if (p->vm_shm)
@@ -776,6 +787,15 @@ proc_exit(proc_t p)
 		 */
 		(void)reap_child_locked(pp, p, 1, 1, 1);
 		/* list lock dropped by reap_child_locked */
+	}
+	if (uth->uu_lowpri_window) {
+	        /*
+		 * task is marked as a low priority I/O type and we've
+		 * somehow picked up another throttle during exit processing...
+		 * no need to throttle this thread since its going away
+		 * but we do need to update our bookeeping w/r to throttled threads
+		 */
+		throttle_lowpri_io(FALSE);
 	}
 
 	proc_rele(pp);

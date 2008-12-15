@@ -285,9 +285,9 @@ extern void ml_set_maxsnoop(uint32_t maxdelay);
 extern unsigned ml_get_maxsnoop(void);
 extern void ml_set_maxbusdelay(uint32_t mdelay);
 extern uint32_t ml_get_maxbusdelay(void);
+extern void ml_set_maxintdelay(uint64_t mdelay);
+extern uint64_t ml_get_maxintdelay(void);
 
-
-extern void ml_hpet_cfg(uint32_t cpu, uint32_t hpetVect);
 
 extern uint64_t tmrCvt(uint64_t time, uint64_t conversion);
 

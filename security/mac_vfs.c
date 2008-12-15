@@ -633,6 +633,19 @@ mac_vnode_check_exec(vfs_context_t ctx, struct vnode *vp,
 	return (error);
 }
 
+int
+mac_vnode_check_signature(struct vnode *vp, unsigned char *sha1,
+			  void * signature, size_t size)
+{
+	int error;
+	
+	if (!mac_vnode_enforce || !mac_proc_enforce)
+		return (0);
+	
+	MAC_CHECK(vnode_check_signature, vp, vp->v_label, sha1, signature, size);
+	return (error);
+}
+
 #if 0
 int
 mac_vnode_check_getacl(vfs_context_t ctx, struct vnode *vp, acl_type_t type)

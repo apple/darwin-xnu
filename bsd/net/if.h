@@ -148,6 +148,8 @@ struct if_clonereq64 {
 #define IFEF_VLAN		0x200	/* interface has one or more vlans */
 #define IFEF_BOND		0x400	/* interface is part of bond */
 #define	IFEF_ARPLL		0x800	/* ARP for IPv4LL addresses on this port */
+#define	IFEF_NOWINDOWSCALE	0x1000	/* TCP window scale disabled on this interface, see 5933937 & 5959897*/
+#define	IFEF_NOTIMESTAMPS	IFEF_NOWINDOWSCALE	/* We don't actualy disable timestamps, just window scale see 5959897 */
 #define	IFEF_SENDLIST	0x10000000 /* Interface supports sending a list of packets */
 #define IFEF_REUSE	0x20000000 /* DLIL ifnet recycler, ifnet is not new */
 #define IFEF_INUSE	0x40000000 /* DLIL ifnet recycler, ifnet in use */

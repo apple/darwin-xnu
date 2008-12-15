@@ -402,7 +402,7 @@ kdbg_lock_init(void)
 	/* get the number of cpus and cache it */
 #define BSD_HOST 1
 	host_info((host_t)BSD_HOST, HOST_BASIC_INFO, (host_info_t)&hinfo, &count);
-	kd_cpus = hinfo.physical_cpu_max;
+	kd_cpus = hinfo.logical_cpu_max;
 
 	if (kmem_alloc(kernel_map, (unsigned int *)&kdbip,
 		       sizeof(struct kd_bufinfo) * kd_cpus) != KERN_SUCCESS)

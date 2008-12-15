@@ -186,7 +186,7 @@ route_init(void)
 {
 	int size;
 
-	PE_parse_boot_arg("rte_debug", &rte_debug);
+	PE_parse_boot_argn("rte_debug", &rte_debug, sizeof (rte_debug));
 	if (rte_debug != 0)
 		rte_debug |= RTD_DEBUG;
 

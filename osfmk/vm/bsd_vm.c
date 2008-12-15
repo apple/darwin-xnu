@@ -126,7 +126,8 @@ const struct memory_object_pager_ops vnode_pager_ops = {
 	vnode_pager_data_initialize,
 	vnode_pager_data_unlock,
 	vnode_pager_synchronize,
-	vnode_pager_unmap,
+	vnode_pager_map,
+	vnode_pager_last_unmap,
 	"vnode pager"
 };
 
@@ -494,9 +495,9 @@ vnode_pager_bootstrap(void)
 	size = (vm_size_t) sizeof(struct vnode_pager);
 	vnode_pager_zone = zinit(size, (vm_size_t) MAX_VNODE*size,
 				PAGE_SIZE, "vnode pager structures");
-#ifdef __i386__
+#if CONFIG_CODE_DECRYPTION
 	apple_protect_pager_bootstrap();
-#endif	/* __i386__ */
+#endif	/* CONFIG_CODE_DECRYPTION */
 	return;
 }
 
@@ -782,12 +783,36 @@ vnode_pager_synchronize(
  *
  */
 kern_return_t
-vnode_pager_unmap(
+vnode_pager_map(
+	memory_object_t		mem_obj,
+	vm_prot_t		prot)
+{
+	vnode_pager_t		vnode_object;
+	int			ret;
+	kern_return_t		kr;
+
+	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_map: %p %x\n", mem_obj, prot));
+
+	vnode_object = vnode_pager_lookup(mem_obj);
+
+	ret = ubc_map(vnode_object->vnode_handle, prot);
+
+	if (ret != 0) {
+		kr = KERN_FAILURE;
+	} else {
+		kr = KERN_SUCCESS;
+	}
+
+	return kr;
+}
+
+kern_return_t
+vnode_pager_last_unmap(
 	memory_object_t		mem_obj)
 {
 	register vnode_pager_t	vnode_object;
 
-	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_unmap: %p\n", mem_obj));
+	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_last_unmap: %p\n", mem_obj));
 
 	vnode_object = vnode_pager_lookup(mem_obj);
 

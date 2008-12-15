@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -31,6 +31,7 @@
  *
  * Implements the "wrappers" to the KEXT.
  */
+#include <kern/machine.h>
 #include <i386/machine_routines.h>
 #include <i386/machine_cpu.h>
 #include <i386/misc_protos.h>
@@ -44,6 +45,14 @@
 #include <i386/pmCPU.h>
 #include <i386/cpuid.h>
 #include <i386/rtclock.h>
+#include <kern/sched_prim.h>
+
+/*
+ * Kernel parameter determining whether threads are halted unconditionally
+ * in the idle state.  This is the default behavior.
+ * See machine_idle() for use.
+ */
+int idlehalt					= 1;
 
 extern int disableConsoleOutput;
 
@@ -54,185 +63,8 @@ decl_simple_lock_data(,pm_init_lock);
  */
 pmDispatch_t	*pmDispatch	= NULL;
 
-/*
- * Current power management states (for use until KEXT is loaded).
- */
-static pmInitState_t	pmInitState;
-
 static uint32_t		pmInitDone	= 0;
 
-/*
- * Nap control variables:
- */
-uint32_t forcenap = 0;			/* Force nap (fn) boot-arg controls */
-
-/*
- * Do any initialization needed
- */
-void
-pmsInit(void)
-{
-    static int		initialized	= 0;
-
-    /*
-     * Initialize some of the initial state to "uninitialized" until
-     * it gets set with something more useful.  This allows the KEXT
-     * to determine if the initial value was actually set to something.
-     */
-    if (!initialized) {
-	pmInitState.PState = -1;
-	pmInitState.PLimit = -1;
-	pmInitState.maxBusDelay = -1;
-	initialized = 1;
-    }
-
-    if (pmDispatch != NULL && pmDispatch->pmsInit != NULL)
-	(*pmDispatch->pmsInit)();
-}
-
-/*
- * Start the power management stepper on all processors
- *
- * All processors must be parked.  This should be called when the hardware
- * is ready to step.  Probably only at boot and after wake from sleep.
- *
- */
-void
-pmsStart(void)
-{
-    if (pmDispatch != NULL && pmDispatch->pmsStart != NULL)
-	(*pmDispatch->pmsStart)();
-}
-
-/*
- * Park the stepper execution.  This will force the stepper on this
- * processor to abandon its current step and stop.  No changes to the
- * hardware state is made and any previous step is lost.
- *	
- * This is used as the initial state at startup and when the step table
- * is being changed.
- *
- */
-void
-pmsPark(void)
-{
-    if (pmDispatch != NULL && pmDispatch->pmsPark != NULL)
-	(*pmDispatch->pmsPark)();
-}
-
-/*
- * Control the Power Management Stepper.
- * Called from user state by the superuser.
- * Interrupts disabled.
- *
- * This interface is deprecated and is now a no-op.
- */
-kern_return_t
-pmsControl(__unused uint32_t request, __unused user_addr_t reqaddr,
-	   __unused uint32_t reqsize)
-{
-    return(KERN_SUCCESS);
-}
-
-/*
- * Broadcast a change to all processors including ourselves.
- *
- * Interrupts disabled.
- */
-void
-pmsRun(uint32_t nstep)
-{
-    if (pmDispatch != NULL && pmDispatch->pmsRun != NULL)
-	(*pmDispatch->pmsRun)(nstep);
-}
-
-/*
- * Build the tables needed for the stepper.  This includes both the step
- * definitions and the step control table.
- *
- * We most absolutely need to be parked before this happens because we're
- * going to change the table.  We also have to be complte about checking
- * for errors.  A copy is always made because we don't want to be crippled
- * by not being able to change the table or description formats.
- *
- * We pass in a table of external functions and the new stepper def uses
- * the corresponding indexes rather than actual function addresses.  This
- * is done so that a proper table can be built with the control syscall.
- * It can't supply addresses, so the index has to do.  We internalize the
- * table so our caller does not need to keep it.  Note that passing in a 0
- * will use the current function table.  Also note that entry 0 is reserved
- * and must be 0, we will check and fail the build.
- *
- * The platformData parameter is a 32-bit word of data that is passed unaltered
- * to the set function.
- *
- * The queryFunc parameter is the address of a function that will return the
- * current state of the platform. The format of the data returned is the same
- * as the platform specific portions of pmsSetCmd, i.e., pmsXClk, pmsVoltage,
- * and any part of pmsPowerID that is maintained by the platform hardware
- * (an example would be the values of the gpios that correspond to pmsPowerID).
- * The value should be constructed by querying hardware rather than returning
- * a value cached by software. One of the intents of this function is to help
- * recover lost or determine initial power states.
- *
- */
-kern_return_t
-pmsBuild(pmsDef *pd, uint32_t pdsize, pmsSetFunc_t *functab,
-	 uint32_t platformData, pmsQueryFunc_t queryFunc)
-{
-    kern_return_t	rc	= 0;
-
-    if (pmDispatch != NULL && pmDispatch->pmsBuild != NULL)
-	rc = (*pmDispatch->pmsBuild)(pd, pdsize, functab,
-				     platformData, queryFunc);
-
-    return(rc);
-}
-
-
-/*
- * Load a new ratio/VID table.
- *
- * Note that this interface is specific to the Intel SpeedStep implementation.
- * It is expected that this will only be called once to override the default
- * ratio/VID table when the platform starts.
- *
- * Normally, the table will need to be replaced at the same time that the
- * stepper program proper is replaced, as the PState indices from an old
- * program may no longer be valid.  When replacing the default program this
- * should not be a problem as any new table will have at least two PState
- * entries and the default program only references P0 and P1.
- */
-kern_return_t
-pmsCPULoadVIDTable(uint16_t *tablep, int nstates)
-{
-    if (pmDispatch != NULL && pmDispatch->pmsCPULoadVIDTable != NULL)
-	return((*pmDispatch->pmsCPULoadVIDTable)(tablep, nstates));
-    else {
-	int	i;
-
-	if (nstates > MAX_PSTATES)
-	    return(KERN_FAILURE);
-
-	for (i = 0; i < nstates; i += 1)
-	    pmInitState.VIDTable[i] = tablep[i];
-    }
-    return(KERN_SUCCESS);
-}
-
-/*
- * Set the (global) PState limit.  CPUs will not be permitted to run at
- * a lower (more performant) PState than this.
- */
-kern_return_t
-pmsCPUSetPStateLimit(uint32_t limit)
-{
-    if (pmDispatch != NULL && pmDispatch->pmsCPUSetPStateLimit != NULL)
-	return((*pmDispatch->pmsCPUSetPStateLimit)(limit));
-
-    pmInitState.PLimit = limit;
-    return(KERN_SUCCESS);
-}
 
 /*
  * Initialize the Cstate change code.
@@ -255,62 +87,55 @@ power_management_init(void)
 }
 
 /*
- * ACPI calls the following routine to set/update mwait hints.  A table
- * (possibly null) specifies the available Cstates and their hints, all
- * other states are assumed to be invalid.  ACPI may update available
- * states to change the nap policy (for example, while AC power is
- * available).
- */
-kern_return_t
-Cstate_table_set(Cstate_hint_t *tablep, unsigned int nstates)
-{
-    if (forcenap)
-	return(KERN_SUCCESS);
-
-    if (pmDispatch != NULL && pmDispatch->cstateTableSet != NULL)
-	return((*pmDispatch->cstateTableSet)(tablep, nstates));
-    else {
-	unsigned int	i;
-
-	for (i = 0; i < nstates; i += 1) {
-	    pmInitState.CStates[i].number = tablep[i].number;
-	    pmInitState.CStates[i].hint   = tablep[i].hint;
-	}
-
-	pmInitState.CStatesCount = nstates;
-    }
-    return(KERN_SUCCESS);
-}
-
-/*
- * Called when the CPU is idle.  It will choose the best C state to
- * be in.
+ * Called when the CPU is idle.  It calls into the power management kext
+ * to determine the best way to idle the CPU.
  */
 void
-machine_idle_cstate(boolean_t halted)
+machine_idle(void)
 {
-	if (pmInitDone
-	    && pmDispatch != NULL
-	    && pmDispatch->cstateMachineIdle != NULL)
-		(*pmDispatch->cstateMachineIdle)(!halted ?
-						 0x7FFFFFFFFFFFFFFFULL : 0ULL);
-	else if (halted) {
-	    /*
-	     * If no power managment and a processor is taken off-line,
-	     * then invalidate the cache and halt it (it will not be able
-	     * to be brought back on-line without resetting the CPU).
-	     */
-	    __asm__ volatile ( "wbinvd; hlt" );
-	} else {
-	    /*
-	     * If no power management, re-enable interrupts and halt.
-	     * This will keep the CPU from spinning through the scheduler
-	     * and will allow at least some minimal power savings (but it
-	     * may cause problems in some MP configurations w.r.t to the
-	     * APIC stopping during a P-State transition).
-	     */
-	    __asm__ volatile ( "sti; hlt" );
-	}
+    cpu_data_t		*my_cpu		= current_cpu_datap();
+
+    if (my_cpu == NULL)
+	goto out;
+
+    /*
+     * If idlehalt isn't set, then don't do any power management related
+     * idle handling.
+     */
+    if (!idlehalt)
+	goto out;
+
+    my_cpu->lcpu.state = LCPU_IDLE;
+    DBGLOG(cpu_handle, cpu_number(), MP_IDLE);
+    MARK_CPU_IDLE(cpu_number());
+
+    if (pmInitDone
+	&& pmDispatch != NULL
+	&& pmDispatch->cstateMachineIdle != NULL)
+	(*pmDispatch->cstateMachineIdle)(0x7FFFFFFFFFFFFFFFULL);
+    else {
+	/*
+	 * If no power management, re-enable interrupts and halt.
+	 * This will keep the CPU from spinning through the scheduler
+	 * and will allow at least some minimal power savings (but it
+	 * cause problems in some MP configurations w.r.t. the APIC
+	 * stopping during a GV3 transition).
+	 */
+	__asm__ volatile ("sti; hlt");
+    }
+
+    /*
+     * Mark the CPU as running again.
+     */
+    MARK_CPU_ACTIVE(cpu_number());
+    DBGLOG(cpu_handle, cpu_number(), MP_UNIDLE);
+    my_cpu->lcpu.state = LCPU_RUN;
+
+    /*
+     * Re-enable interrupts.
+     */
+  out:
+    __asm__ volatile("sti");
 }
 
 /*
@@ -320,13 +145,16 @@ machine_idle_cstate(boolean_t halted)
 void
 pmCPUHalt(uint32_t reason)
 {
+    cpu_data_t	*cpup	= current_cpu_datap();
 
     switch (reason) {
     case PM_HALT_DEBUG:
+	cpup->lcpu.state = LCPU_PAUSE;
 	__asm__ volatile ("wbinvd; hlt");
 	break;
 
     case PM_HALT_PANIC:
+	cpup->lcpu.state = LCPU_PAUSE;
 	__asm__ volatile ("cli; wbinvd; hlt");
 	break;
 
@@ -337,31 +165,40 @@ pmCPUHalt(uint32_t reason)
 	if (pmInitDone
 	    && pmDispatch != NULL
 	    && pmDispatch->pmCPUHalt != NULL) {
+	    /*
+	     * Halt the CPU (and put it in a low power state.
+	     */
 	    (*pmDispatch->pmCPUHalt)();
-	} else {
-	    cpu_data_t	*cpup	= current_cpu_datap();
 
+	    /*
+	     * We've exited halt, so get the the CPU schedulable again.
+	     */
+	    i386_init_slave_fast();
+
+	    panic("init_slave_fast returned");
+	} else {
 	    /*
 	     * If no power managment and a processor is taken off-line,
 	     * then invalidate the cache and halt it (it will not be able
 	     * to be brought back on-line without resetting the CPU).
 	     */
 	    __asm__ volatile ("wbinvd");
-	    cpup->lcpu.halted = TRUE;
+	    cpup->lcpu.state = LCPU_HALT;
 	    __asm__ volatile ( "wbinvd; hlt" );
+
+	    panic("back from Halt");
 	}
 	break;
     }
 }
 
-/*
- * Called to initialize the power management structures for the CPUs.
- */
 void
-pmCPUStateInit(void)
+pmMarkAllCPUsOff(void)
 {
-    if (pmDispatch != NULL && pmDispatch->pmCPUStateInit != NULL)
-	(*pmDispatch->pmCPUStateInit)();
+    if (pmInitDone
+	&& pmDispatch != NULL
+	&& pmDispatch->markAllCPUsOff != NULL)
+	(*pmDispatch->markAllCPUsOff)();
 }
 
 static void
@@ -398,6 +235,20 @@ pmGetMyCore(void)
     return(cpup->lcpu.core);
 }
 
+static x86_die_t *
+pmGetDie(int cpu)
+{
+    return(cpu_to_die(cpu));
+}
+
+static x86_die_t *
+pmGetMyDie(void)
+{
+    cpu_data_t	*cpup	= current_cpu_datap();
+
+    return(cpup->lcpu.die);
+}
+
 static x86_pkg_t *
 pmGetPackage(int cpu)
 {
@@ -409,7 +260,7 @@ pmGetMyPackage(void)
 {
     cpu_data_t	*cpup	= current_cpu_datap();
 
-    return(cpup->lcpu.core->package);
+    return(cpup->lcpu.package);
 }
 
 static void
@@ -484,29 +335,43 @@ pmCPUExitIdle(cpu_data_t *cpu)
     return(do_ipi);
 }
 
+kern_return_t
+pmCPUExitHalt(int cpu)
+{
+    kern_return_t	rc	= KERN_INVALID_ARGUMENT;
+
+    if (pmInitDone
+	&& pmDispatch != NULL
+	&& pmDispatch->exitHalt != NULL)
+	rc = pmDispatch->exitHalt(cpu_to_lcpu(cpu));
+
+    return(rc);
+}
+
+/*
+ * Called to initialize the power management structures for the CPUs.
+ */
+void
+pmCPUStateInit(void)
+{
+    if (pmDispatch != NULL && pmDispatch->pmCPUStateInit != NULL)
+	(*pmDispatch->pmCPUStateInit)();
+}
+
 /*
  * Called when a CPU is being restarted after being powered off (as in S3).
  */
 void
 pmCPUMarkRunning(cpu_data_t *cpu)
 {
+    cpu_data_t	*cpup	= current_cpu_datap();
+
     if (pmInitDone
 	&& pmDispatch != NULL
 	&& pmDispatch->markCPURunning != NULL)
 	(*pmDispatch->markCPURunning)(&cpu->lcpu);
-}
-
-/*
- * Called from the HPET interrupt handler to perform the
- * necessary power management work.
- */
-void
-pmHPETInterrupt(void)
-{
-    if (pmInitDone
-	&& pmDispatch != NULL
-	&& pmDispatch->HPETInterrupt != NULL)
-	(*pmDispatch->HPETInterrupt)();
+    else
+	cpup->lcpu.state = LCPU_RUN;
 }
 
 /*
@@ -522,6 +387,30 @@ pmCPUControl(uint32_t cmd, void *datap)
 	rc = (*pmDispatch->pmCPUControl)(cmd, datap);
 
     return(rc);
+}
+
+/*
+ * Called to save the timer state used by power management prior
+ * to "sleeping".
+ */
+void
+pmTimerSave(void)
+{
+    if (pmDispatch != NULL
+	&& pmDispatch->pmTimerStateSave != NULL)
+	(*pmDispatch->pmTimerStateSave)();
+}
+
+/*
+ * Called to restore the timer state used by power management after
+ * waking from "sleep".
+ */
+void
+pmTimerRestore(void)
+{
+    if (pmDispatch != NULL
+	&& pmDispatch->pmTimerStateRestore != NULL)
+	(*pmDispatch->pmTimerStateRestore)();
 }
 
 /*
@@ -578,8 +467,29 @@ ml_set_maxbusdelay(uint32_t mdelay)
     if (pmDispatch != NULL
 	&& pmDispatch->setMaxBusDelay != NULL)
 	pmDispatch->setMaxBusDelay(maxdelay);
-    else
-	pmInitState.maxBusDelay = maxdelay;
+}
+
+uint64_t
+ml_get_maxintdelay(void)
+{
+    uint64_t	max_delay	= 0;
+
+    if (pmDispatch != NULL
+	&& pmDispatch->getMaxIntDelay != NULL)
+	max_delay = pmDispatch->getMaxIntDelay();
+
+    return(max_delay);
+}
+
+/*
+ * Set the maximum delay allowed for an interrupt.
+ */
+void
+ml_set_maxintdelay(uint64_t mdelay)
+{
+    if (pmDispatch != NULL
+	&& pmDispatch->setMaxIntDelay != NULL)
+	pmDispatch->setMaxIntDelay(mdelay);
 }
 
 /*
@@ -602,15 +512,14 @@ pmSafeMode(x86_lcpu_t *lcpu, uint32_t flags)
 	 * We only look at the PAUSE and RESUME flags.  The other flag(s)
 	 * will not make any sense without the KEXT, so just ignore them.
 	 *
-	 * We set the halted flag in the LCPU structure to indicate
-	 * that this CPU isn't to do anything.  If it's the CPU we're
-	 * currently running on, then spin until the halted flag is
-	 * reset.
+	 * We set the CPU's state to indicate that it's halted.  If this
+	 * is the CPU we're currently running on, then spin until the
+	 * state becomes non-halted.
 	 */
 	if (flags & PM_SAFE_FL_PAUSE) {
-	    lcpu->halted = TRUE;
+	    lcpu->state = LCPU_PAUSE;
 	    if (lcpu == x86_lcpu()) {
-		while (lcpu->halted)
+		while (lcpu->state == LCPU_PAUSE)
 		    cpu_pause();
 	    }
 	}
@@ -620,7 +529,7 @@ pmSafeMode(x86_lcpu_t *lcpu, uint32_t flags)
 	 * get it out of it's spin loop.
 	 */
 	if (flags & PM_SAFE_FL_RESUME) {
-	    lcpu->halted = FALSE;
+	    lcpu->state = LCPU_RUN;
 	}
     }
 }
@@ -657,21 +566,23 @@ pmKextRegister(uint32_t version, pmDispatch_t *cpuFuncs,
 	       pmCallBacks_t *callbacks)
 {
     if (callbacks != NULL && version == PM_DISPATCH_VERSION) {
-	callbacks->InitState   = &pmInitState;
 	callbacks->setRTCPop   = setPop;
 	callbacks->resyncDeadlines = etimer_resync_deadlines;
 	callbacks->initComplete= pmInitComplete;
 	callbacks->GetLCPU     = pmGetLogicalCPU;
 	callbacks->GetCore     = pmGetCore;
+	callbacks->GetDie      = pmGetDie;
 	callbacks->GetPackage  = pmGetPackage;
 	callbacks->GetMyLCPU   = pmGetMyLogicalCPU;
 	callbacks->GetMyCore   = pmGetMyCore;
+	callbacks->GetMyDie    = pmGetMyDie;
 	callbacks->GetMyPackage= pmGetMyPackage;
-	callbacks->CoresPerPkg = cpuid_info()->cpuid_cores_per_package;
 	callbacks->GetPkgRoot  = pmGetPkgRoot;
 	callbacks->LockCPUTopology = pmLockCPUTopology;
 	callbacks->GetHibernate    = pmCPUGetHibernate;
 	callbacks->LCPUtoProcessor = pmLCPUtoProcessor;
+	callbacks->ThreadBind      = thread_bind;
+	callbacks->topoParms       = &topoParms;
     }
 
     if (cpuFuncs != NULL) {
@@ -690,3 +601,42 @@ pmUnRegister(pmDispatch_t *cpuFuncs)
     }
 }
 
+/******************************************************************************
+ *
+ * All of the following are deprecated interfaces and no longer used.
+ *
+ ******************************************************************************/
+kern_return_t
+pmsControl(__unused uint32_t request, __unused user_addr_t reqaddr,
+	   __unused uint32_t reqsize)
+{
+    return(KERN_SUCCESS);
+}
+
+void
+pmsInit(void)
+{
+}
+
+void
+pmsStart(void)
+{
+}
+
+void
+pmsPark(void)
+{
+}
+
+void
+pmsRun(__unused uint32_t nstep)
+{
+}
+
+kern_return_t
+pmsBuild(__unused pmsDef *pd, __unused uint32_t pdsize,
+	 __unused pmsSetFunc_t *functab,
+	 __unused uint32_t platformData, __unused pmsQueryFunc_t queryFunc)
+{
+    return(KERN_SUCCESS);
+}

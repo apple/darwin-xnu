@@ -54,9 +54,7 @@ DATAFILES = \
 	fremovexattr.2		\
 	fsetxattr.2		\
 	fstat.2			\
-	fstat64.2		\
 	fstatfs.2		\
-	fstatfs64.2		\
 	fsync.2			\
 	ftruncate.2		\
 	futimes.2		\
@@ -102,7 +100,6 @@ DATAFILES = \
 	listxattr.2		\
 	lseek.2			\
 	lstat.2			\
-	lstat64.2		\
 	madvise.2		\
 	mincore.2		\
 	minherit.2		\
@@ -181,9 +178,7 @@ DATAFILES = \
 	socket.2		\
 	socketpair.2		\
 	stat.2			\
-	stat64.2		\
 	statfs.2		\
-	statfs64.2		\
 	symlink.2		\
 	sync.2			\
 	syscall.2		\

@@ -86,6 +86,7 @@ Internal routines:
 #include <sys/types.h>
 #include <sys/buf.h>
 #include <sys/systm.h>
+#include <sys/disk.h>
 
 #include "../../hfs.h"
 #include "../../hfs_dbg.h"
@@ -1177,6 +1178,7 @@ OSErr BlockMarkFree(
 	u_int32_t  wordsPerBlock;
     // XXXdbg
 	struct hfsmount *hfsmp = VCBTOHFS(vcb);
+	dk_discard_t discard;
 
 	/*
 	 * NOTE: We use vcb->totalBlocks instead of vcb->allocLimit because we
@@ -1188,6 +1190,10 @@ OSErr BlockMarkFree(
 		err = EIO;
 		goto Exit;
 	}
+
+	memset(&discard, 0, sizeof(dk_discard_t));
+	discard.offset = (uint64_t)startingBlock * (uint64_t)vcb->blockSize;
+	discard.length = (uint64_t)numBlocks * (uint64_t)vcb->blockSize;
 
 
 	//
@@ -1312,6 +1318,12 @@ Exit:
 
 	if (buffer)
 		(void)ReleaseBitmapBlock(vcb, blockRef, true);
+
+	if (err == noErr) {
+		// it doesn't matter if this fails, it's just informational anyway
+		VNOP_IOCTL(vcb->hfs_devvp, DKIOCDISCARD, (caddr_t)&discard, 0, vfs_context_kernel());
+	}
+
 
 	return err;
 

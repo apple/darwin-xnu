@@ -66,6 +66,8 @@
 #include <i386/asm.h>
 #include <i386/cpuid.h>
 #include <i386/eflags.h>
+#include <i386/lapic.h>
+#include <i386/rtclock.h>
 #include <i386/proc_reg.h>
 #include <i386/trap.h>
 #include <assym.s>
@@ -232,34 +234,12 @@ Entry(timer_grab)
  * Nanotime returned in %edx:%eax.
  * Computed from tsc based on the scale factor
  * and an implicit 32 bit shift.
- * This code must match what _rtc_nanotime_read does in
- * i386/machine_routines_asm.s.  Failure to do so can
- * result in "weird" timing results.
  *
  * Uses %eax, %ebx, %ecx, %edx, %esi, %edi.
  */
-#define RNT_INFO		_rtc_nanotime_info
 #define NANOTIME							\
-	lea	RNT_INFO,%edi						; \
-0:									; \
-	movl	RNT_GENERATION(%edi),%esi	/* being updated? */	; \
-	testl	%esi,%esi						; \
-	jz	0b				/* wait until done */	; \
-	rdtsc								; \
-	subl	RNT_TSC_BASE(%edi),%eax					; \
-	sbbl	RNT_TSC_BASE+4(%edi),%edx	/* tsc - tsc_base */	; \
-	movl	RNT_SCALE(%edi),%ecx		/* * scale factor */	; \
-	movl	%edx,%ebx						; \
-	mull	%ecx							; \
-	movl	%ebx,%eax						; \
-	movl	%edx,%ebx						; \
-	mull	%ecx							; \
-	addl	%ebx,%eax						; \
-	adcl	$0,%edx							; \
-	addl	RNT_NS_BASE(%edi),%eax		/* + ns_base */		; \
-	adcl	RNT_NS_BASE+4(%edi),%edx				; \
-	cmpl	RNT_GENERATION(%edi),%esi	/* check for update */	; \
-	jne	0b				/* do it all again */
+	mov	%gs:CPU_NANOTIME,%edi					; \
+	RTC_NANOTIME_READ_FAST()
 
 
 /*

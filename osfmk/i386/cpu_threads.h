@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -48,14 +48,17 @@
 
 #define cpu_to_lcpu(cpu)		((cpu_datap(cpu) != NULL) ? _cpu_to_lcpu(cpu) : NULL)
 #define cpu_to_core(cpu)		((cpu_to_lcpu(cpu) != NULL) ? _cpu_to_lcpu(cpu)->core : NULL)
-#define cpu_to_package(cpu)		((cpu_to_core(cpu) != NULL) ? _cpu_to_core(cpu)->package : NULL)
+#define cpu_to_die(cpu)			((cpu_to_lcpu(cpu) != NULL) ? _cpu_to_lcpu(cpu)->die : NULL)
+#define cpu_to_package(cpu)		((cpu_to_lcpu(cpu) != NULL) ? _cpu_to_lcpu(cpu)->package : NULL)
 
 /* Fast access: */
 #define x86_lcpu()			(&current_cpu_datap()->lcpu)
 #define x86_core()			(x86_lcpu()->core)
-#define x86_package()			(x86_core()->package)
+#define x86_die()			(x86_lcpu()->die)
+#define x86_package()			(x86_lcpu()->package)
 
 #define cpu_is_same_core(cpu1,cpu2)	(cpu_to_core(cpu1) == cpu_to_core(cpu2))
+#define cpu_is_same_die(cpu1,cpu2)	(cpu_to_die(cpu1) == cpu_to_die(cpu2))
 #define cpu_is_same_package(cpu1,cpu2)	(cpu_to_package(cpu1) == cpu_to_package(cpu2))
 #define cpus_share_cache(cpu1,cpu2,_cl) (cpu_to_lcpu(cpu1)->caches[_cl] == cpu_to_lcpu(cpu2)->caches[_cl])
 
@@ -64,5 +67,12 @@ extern decl_simple_lock_data(, x86_topo_lock);
 extern void *cpu_thread_alloc(int);
 extern void cpu_thread_init(void);
 extern void cpu_thread_halt(void);
+
+extern void x86_set_lcpu_numbers(x86_lcpu_t *lcpu);
+extern void x86_set_core_numbers(x86_core_t *core, x86_lcpu_t *lcpu);
+extern void x86_set_die_numbers(x86_die_t *die, x86_lcpu_t *lcpu);
+extern void x86_set_pkg_numbers(x86_pkg_t *pkg, x86_lcpu_t *lcpu);
+
+extern x86_topology_parameters_t	topoParms;
 
 #endif /* _I386_CPU_THREADS_H_ */

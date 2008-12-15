@@ -462,7 +462,8 @@ enum {
     kIOPMRequestTypeAckSetPowerState       = 0x82,
     kIOPMRequestTypeAllowPowerChange       = 0x83,
     kIOPMRequestTypeCancelPowerChange      = 0x84,
-    kIOPMRequestTypeInterestChanged        = 0x85
+    kIOPMRequestTypeInterestChanged        = 0x85,
+    kIOPMRequestTypeIdleCancel             = 0x86
 };
 
 //*********************************************************************************

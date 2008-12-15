@@ -1986,7 +1986,7 @@ set_security_token(proc_t p)
 	audit_token.val[4] = my_cred->cr_rgid;
 	audit_token.val[5] = p->p_pid;
 	audit_token.val[6] = my_cred->cr_au.ai_asid;
-	audit_token.val[7] = my_cred->cr_au.ai_termid.port;
+	audit_token.val[7] = p->p_idversion;
 
 #if CONFIG_MACF_MACH
 	mac_task_label_update_cred(my_cred, p->task);

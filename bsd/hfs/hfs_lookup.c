@@ -352,9 +352,11 @@ found:
 			 * process removed the object before we had a chance
 			 * to create the vnode, then just treat it as the not
 			 * found case above and return EJUSTRETURN.
+			 * We should do the same for the RENAME operation since we are
+			 * going to write it in regardless.
 			 */
 			if ((retval == ENOENT) &&
-			    (cnp->cn_nameiop == CREATE) &&
+			    ((cnp->cn_nameiop == CREATE) || (cnp->cn_nameiop == RENAME)) &&
 			    (flags & ISLASTCN)) {
 				retval = EJUSTRETURN;
 			}

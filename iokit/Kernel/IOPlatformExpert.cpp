@@ -107,7 +107,7 @@ bool IOPlatformExpert::start( IOService * provider )
       return false;
     
     // Override the mapper present flag is requested by boot arguments.
-    if (PE_parse_boot_arg("dart", &debugFlags) && (debugFlags == 0))
+    if (PE_parse_boot_argn("dart", &debugFlags, sizeof (debugFlags)) && (debugFlags == 0))
       removeProperty(kIOPlatformMapperPresentKey);
     
     // Register the presence or lack thereof a system 

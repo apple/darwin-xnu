@@ -288,7 +288,8 @@ struct vm_object {
 		code_signed:1,		/* pages are signed and should be
 					   validated; the signatures are stored
 					   with the pager */
-		not_in_use:23;		/* for expansion */
+		mapping_in_progress:1,	/* pager being mapped/unmapped */
+		not_in_use:22;		/* for expansion */
 
 #ifdef	UPL_DEBUG
 	queue_head_t		uplq;		/* List of outstanding upls */
@@ -637,6 +638,7 @@ extern kern_return_t vm_object_range_op(
 #define	VM_OBJECT_EVENT_INITIALIZED		0
 #define	VM_OBJECT_EVENT_PAGER_READY		1
 #define	VM_OBJECT_EVENT_PAGING_IN_PROGRESS	2
+#define	VM_OBJECT_EVENT_MAPPING_IN_PROGRESS	3
 #define	VM_OBJECT_EVENT_LOCK_IN_PROGRESS	4
 #define	VM_OBJECT_EVENT_UNCACHING		5
 #define	VM_OBJECT_EVENT_COPY_CALL		6
@@ -722,6 +724,38 @@ extern kern_return_t vm_object_range_op(
 		/*XXX if ((interruptible) && (_wr != THREAD_AWAKENED))*/\
 			/*XXX break; */					\
 	}								\
+	MACRO_END
+
+
+#define vm_object_mapping_begin(object) 				\
+	MACRO_BEGIN							\
+	vm_object_lock_assert_exclusive((object));			\
+	assert(! (object)->mapping_in_progress);			\
+	(object)->mapping_in_progress = TRUE;				\
+	MACRO_END
+
+#define vm_object_mapping_end(object)					\
+	MACRO_BEGIN							\
+	vm_object_lock_assert_exclusive((object));			\
+	assert((object)->mapping_in_progress);				\
+	(object)->mapping_in_progress = FALSE;				\
+	vm_object_wakeup((object),					\
+			 VM_OBJECT_EVENT_MAPPING_IN_PROGRESS);		\
+	MACRO_END
+
+#define vm_object_mapping_wait(object, interruptible)			\
+	MACRO_BEGIN							\
+	vm_object_lock_assert_exclusive((object));			\
+	while ((object)->mapping_in_progress) {				\
+		wait_result_t	_wr;					\
+									\
+		_wr = vm_object_sleep((object),				\
+				      VM_OBJECT_EVENT_MAPPING_IN_PROGRESS, \
+				      (interruptible));			\
+		/*XXX if ((interruptible) && (_wr != THREAD_AWAKENED))*/\
+			/*XXX break; */					\
+	}								\
+	assert(!(object)->mapping_in_progress);				\
 	MACRO_END
 
 

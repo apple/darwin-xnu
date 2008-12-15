@@ -152,7 +152,7 @@ machine_startup(void)
             halt_in_debugger = halt_in_debugger ? 0 : 1;
 #endif
 
-	if (PE_parse_boot_arg("debug", &boot_arg)) {
+	if (PE_parse_boot_argn("debug", &boot_arg, sizeof (boot_arg))) {
 		if (boot_arg & DB_HALT) halt_in_debugger=1;
 		if (boot_arg & DB_PRT) disable_debug_output=FALSE; 
 		if (boot_arg & DB_SLOG) systemLogDiags=TRUE; 
@@ -160,14 +160,14 @@ machine_startup(void)
 		if (boot_arg & DB_LOG_PI_SCRN) logPanicDataToScreen=TRUE; 
 	}
 
-	if (!PE_parse_boot_arg("nvram_paniclog", &commit_paniclog_to_nvram))
+	if (!PE_parse_boot_argn("nvram_paniclog", &commit_paniclog_to_nvram, sizeof (commit_paniclog_to_nvram)))
 		commit_paniclog_to_nvram = 1;
 
 	/*
 	 * Entering the debugger will put the CPUs into a "safe"
 	 * power mode.
 	 */
-	if (PE_parse_boot_arg("pmsafe_debug", &boot_arg))
+	if (PE_parse_boot_argn("pmsafe_debug", &boot_arg, sizeof (boot_arg)))
 	    pmsafe_debug = boot_arg;
 
 #if NOTYET
@@ -199,25 +199,25 @@ machine_startup(void)
 	}
 #endif /* MACH_KDB */
 
-	if (PE_parse_boot_arg("preempt", &boot_arg)) {
+	if (PE_parse_boot_argn("preempt", &boot_arg, sizeof (boot_arg))) {
 		default_preemption_rate = boot_arg;
 	}
-	if (PE_parse_boot_arg("unsafe", &boot_arg)) {
+	if (PE_parse_boot_argn("unsafe", &boot_arg, sizeof (boot_arg))) {
 		max_unsafe_quanta = boot_arg;
 	}
-	if (PE_parse_boot_arg("poll", &boot_arg)) {
+	if (PE_parse_boot_argn("poll", &boot_arg, sizeof (boot_arg))) {
 		max_poll_quanta = boot_arg;
 	}
-	if (PE_parse_boot_arg("yield", &boot_arg)) {
+	if (PE_parse_boot_argn("yield", &boot_arg, sizeof (boot_arg))) {
 		sched_poll_yield_shift = boot_arg;
 	}
-	if (PE_parse_boot_arg("idlehalt", &boot_arg)) {
+	if (PE_parse_boot_argn("idlehalt", &boot_arg, sizeof (boot_arg))) {
 		idlehalt = boot_arg;
 	}
 /* The I/O port to issue a read from, in the event of a panic. Useful for
  * triggering logic analyzers.
  */
-	if (PE_parse_boot_arg("panic_io_port", &boot_arg)) {
+	if (PE_parse_boot_argn("panic_io_port", &boot_arg, sizeof (boot_arg))) {
 		/*I/O ports range from 0 through 0xFFFF */
 		panic_io_port = boot_arg & 0xffff;
 	}
@@ -968,7 +968,7 @@ panic_i386_backtrace(void *_frame, int nframes, const char *msg, boolean_t regdu
 		pbtcpu = cpu_number();
 	}
 
-	PE_parse_boot_arg("keepsyms", &keepsyms);
+	PE_parse_boot_argn("keepsyms", &keepsyms, sizeof (keepsyms));
 
 	if (msg != NULL) {
 		kdb_printf(msg);

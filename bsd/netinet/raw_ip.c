@@ -381,6 +381,10 @@ rip_output(m, so, dst)
 	mac_mbuf_label_associate_inpcb(inp, m);
 #endif
 
+#if CONFIG_IP_EDGEHOLE
+	ip_edgehole_mbuf_tag(inp, m);
+#endif
+
 #if CONFIG_FORCE_OUT_IFP
 	return (ip_output_list(m, 0, inp->inp_options, &inp->inp_route, flags,
 			  inp->inp_moptions, inp->pdp_ifp));

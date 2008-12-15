@@ -354,7 +354,7 @@ void ppc_vm_init(uint64_t mem_limit, boot_args *args)
 	kprintf("kprintf initialized\n");
 
 	serialmode = 0;						/* Assume normal keyboard and console */
-	if(PE_parse_boot_arg("serial", &serialmode)) {		/* Do we want a serial keyboard and/or console? */
+	if(PE_parse_boot_argn("serial", &serialmode, sizeof (serialmode))) {		/* Do we want a serial keyboard and/or console? */
 		kprintf("Serial mode specified: %08X\n", serialmode);
 	}
 	if(serialmode & 1) {				/* Start serial if requested */

@@ -71,7 +71,6 @@ osfmk/i386/trap.c		standard
 osfmk/i386/user_ldt.c		standard
 osfmk/i386/Diagnostics.c	standard
 osfmk/i386/pmCPU.c		standard
-osfmk/i386/hpet.c		standard
 osfmk/i386/tsc.c		standard
 
 osfmk/i386/commpage/commpage.c	standard
@@ -98,6 +97,7 @@ osfmk/i386/commpage/commpage_sigs.c	standard
 osfmk/i386/AT386/conf.c		standard
 osfmk/i386/AT386/model_dep.c	standard
 
+osfmk/i386/lapic.c		standard
 osfmk/i386/mp.c			standard
 osfmk/i386/mp_slave_boot.s	standard
 

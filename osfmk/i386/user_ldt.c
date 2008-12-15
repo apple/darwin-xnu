@@ -152,7 +152,7 @@ i386_set_ldt(
 		start_sel = LDTSZ_MIN;
 	    }
 		
-	    if (start_sel + num_sels > LDTSZ) {
+	    if ((uint64_t)start_sel + (uint64_t)num_sels > LDTSZ) {
 		task_unlock(task);
 		return ENOMEM;
 	    }
@@ -294,7 +294,7 @@ i386_get_ldt(
 
 	if (start_sel >= 8192)
 	    return EINVAL;
-	if (start_sel + num_sels > 8192)
+	if ((uint64_t)start_sel + (uint64_t)num_sels > 8192)
 	    return EINVAL;
 	if (descs == 0)
 	    return EINVAL;

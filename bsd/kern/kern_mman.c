@@ -191,7 +191,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	struct fileproc *fp;
 	register struct		vnode *vp;
 	int			flags;
-	int			prot, file_prot;
+	int			prot;
 	int			err=0;
 	vm_map_t		user_map;
 	kern_return_t		result;
@@ -565,13 +565,6 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 				(void)vnode_put(vp);
 				goto out;
 		}
-
-		file_prot = prot & (PROT_READ | PROT_WRITE | PROT_EXEC);
-		if (docow) {
-			/* private mapping: won't write to the file */
-			file_prot &= ~PROT_WRITE;
-		}
-		(void) ubc_map(vp, file_prot);
 	}
 
 	if (!mapanon)
@@ -1231,7 +1224,6 @@ map_fd_funneled(
 	}
 
 	ubc_setthreadcred(vp, current_proc(), current_thread());
-	(void)ubc_map(vp, (PROT_READ | PROT_EXEC));
 	(void)vnode_put(vp);
 	err = 0;
 bad:

@@ -2147,13 +2147,44 @@ kern_return_t memory_object_synchronize
 		sync_flags);
 }
 
-/* Routine memory_object_unmap */
-kern_return_t memory_object_unmap
+
+/*
+ * memory_object_map() is called by VM (in vm_map_enter() and its variants)
+ * each time a "named" VM object gets mapped directly or indirectly
+ * (copy-on-write mapping).  A "named" VM object has an extra reference held
+ * by the pager to keep it alive until the pager decides that the 
+ * memory object (and its VM object) can be reclaimed.
+ * VM calls memory_object_last_unmap() (in vm_object_deallocate()) when all
+ * the mappings of that memory object have been removed.
+ *
+ * For a given VM object, calls to memory_object_map() and memory_object_unmap()
+ * are serialized (through object->mapping_in_progress), to ensure that the
+ * pager gets a consistent view of the mapping status of the memory object.
+ *
+ * This allows the pager to keep track of how many times a memory object
+ * has been mapped and with which protections, to decide when it can be
+ * reclaimed.
+ */
+
+/* Routine memory_object_map */
+kern_return_t memory_object_map
+(
+	memory_object_t memory_object,
+	vm_prot_t prot
+)
+{
+	return (memory_object->mo_pager_ops->memory_object_map)(
+		memory_object,
+		prot);
+}
+
+/* Routine memory_object_last_unmap */
+kern_return_t memory_object_last_unmap
 (
 	memory_object_t memory_object
 )
 {
-	return (memory_object->mo_pager_ops->memory_object_unmap)(
+	return (memory_object->mo_pager_ops->memory_object_last_unmap)(
 		memory_object);
 }
 

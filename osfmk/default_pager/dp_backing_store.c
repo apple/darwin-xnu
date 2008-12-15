@@ -3565,6 +3565,7 @@ vs_cluster_transfer(
 
 		if (size == 0) {
 			ASSERT(unavail_size);
+			ps_clunmap(vs, offset, unavail_size);
 			cnt -= unavail_size;
 			offset += unavail_size;
 			if((offset & ((vm_page_size << vs->vs_clshift) - 1)) 
@@ -3643,6 +3644,7 @@ vs_cluster_transfer(
 					*/
 					write_vsmap = *vsmap_ptr;
 					*vsmap_ptr = read_vsmap;
+					ps_clunmap(vs, offset, size);
 				} else {
 					/* discard the old backing object */
 					write_vsmap = *vsmap_ptr;

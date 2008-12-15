@@ -1026,7 +1026,7 @@ mbinit(void)
 	VERIFY(slabstbl != NULL);
 
 	/* Allocate audit structures if needed */
-	PE_parse_boot_arg("mbuf_debug", &mbuf_debug);
+	PE_parse_boot_argn("mbuf_debug", &mbuf_debug, sizeof (mbuf_debug));
 	mbuf_debug |= mcache_getflags();
 	if (mbuf_debug & MCF_AUDIT) {
 		MALLOC(mclaudit, mcl_audit_t *,
@@ -1051,7 +1051,7 @@ mbinit(void)
 	embutl = (union mcluster *)
 	    ((unsigned char *)mbutl + (nmbclusters * MCLBYTES));
 
-	PE_parse_boot_arg("initmcl", &initmcl);
+	PE_parse_boot_argn("initmcl", &initmcl, sizeof (initmcl));
 
 	lck_mtx_lock(mbuf_mlock);
 

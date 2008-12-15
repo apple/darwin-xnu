@@ -416,6 +416,17 @@ cluster_hard_throttle_on(vnode_t vp)
 		if (timevalcmp(&elapsed, &hard_throttle_maxelapsed, <))
 		        return(1);
 	}
+	struct uthread	*ut;
+	if (throttle_get_io_policy(&ut) == IOPOL_THROTTLE) {
+		size_t devbsdunit;
+		if (vp->v_mount != NULL)
+			devbsdunit = vp->v_mount->mnt_devbsdunit;
+		else
+			devbsdunit = LOWPRI_MAX_NUM_DEV - 1;
+		if (throttle_io_will_be_throttled(-1, devbsdunit)) {
+			return(1);
+		}
+	}
 	return(0);
 }
 

@@ -57,6 +57,8 @@ Lnanotime:
 	jz	0b
 
 	rdtsc					/* get TSC in %edx:%eax */
+	lfence
+
 	subl	_COMM_PAGE_NT_TSC_BASE,%eax
 	sbbl	_COMM_PAGE_NT_TSC_BASE+4,%edx
 
@@ -160,6 +162,7 @@ Lnanotime_64:					// NB: must preserve r9, r10, and r11
 	testl	%r8d,%r8d			// if 0, data is being changed...
 	jz	1b				// ...so loop until stable
 	rdtsc					// edx:eax := tsc
+	lfence
 	shlq	$32,%rdx			// rax := ((edx << 32) | eax), ie 64-bit tsc
 	orq	%rdx,%rax
 	subq	_NT_TSC_BASE(%rsi), %rax	// rax := (tsc - base_tsc)

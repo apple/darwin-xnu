@@ -564,7 +564,7 @@ dlil_affinity_set(struct thread *tp, u_int32_t tag)
 void
 dlil_init(void)
 {
-	PE_parse_boot_arg("net_affinity", &net_affinity);
+	PE_parse_boot_argn("net_affinity", &net_affinity, sizeof (net_affinity));
 	
 	TAILQ_INIT(&dlil_ifnet_head);
 	TAILQ_INIT(&ifnet_head);

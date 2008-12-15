@@ -35,27 +35,41 @@
 #include <i386/perfmon.h>
 #include <i386/pmCPU.h>
 
+//#define TOPO_DEBUG		1
+#if TOPO_DEBUG
+void debug_topology_print(void);
+#define DBG(x...)	kprintf("DBG: " x)
+#else
+#define DBG(x...)
+#endif /* TOPO_DEBUG */
+
 #define bitmask(h,l)	((bit(h)|(bit(h)-1)) & ~(bit(l)-1))
 #define bitfield(x,h,l)	(((x) & bitmask(h,l)) >> l)
 
-/*
- * Kernel parameter determining whether threads are halted unconditionally
- * in the idle state.  This is the default behavior.
- * See machine_idle() for use.
- */
-int idlehalt = 1;
-
-x86_pkg_t	*x86_pkgs	= NULL;
-uint32_t	num_packages	= 0;
+x86_pkg_t	*x86_pkgs		= NULL;
 uint32_t	num_Lx_caches[MAX_CACHE_DEPTH]	= { 0 };
 
 static x86_pkg_t	*free_pkgs	= NULL;
+static x86_die_t	*free_dies	= NULL;
 static x86_core_t	*free_cores	= NULL;
+static uint32_t		num_dies	= 0;
 
 static x86_cpu_cache_t	*x86_caches	= NULL;
 static uint32_t		num_caches	= 0;
 
+static boolean_t	topoParmsInited	= FALSE;
+x86_topology_parameters_t	topoParms;
+
 decl_simple_lock_data(, x86_topo_lock);
+ 
+static boolean_t
+cpu_is_hyperthreaded(void)
+{
+    i386_cpu_info_t	*cpuinfo;
+
+    cpuinfo = cpuid_info();
+    return(cpuinfo->thread_count > cpuinfo->core_count);
+}
 
 static x86_cpu_cache_t *
 x86_cache_alloc(void)
@@ -83,6 +97,167 @@ x86_cache_alloc(void)
     num_caches += 1;
 
     return(cache);
+}
+ 
+static void
+x86_LLC_info(void)
+{
+    uint32_t		index;
+    uint32_t		cache_info[4];
+    uint32_t		cache_level	= 0;
+    uint32_t		nCPUsSharing	= 1;
+    i386_cpu_info_t	*cpuinfo;
+
+    cpuinfo = cpuid_info();
+
+    do_cpuid(0, cache_info);
+
+    if (cache_info[eax] < 4) {
+	/*
+	 * Processor does not support deterministic
+	 * cache information. Set LLC sharing to 1, since
+	 * we have no better information.
+	 */
+	if (cpu_is_hyperthreaded()) {
+	    topoParms.nCoresSharingLLC = 1;
+	    topoParms.nLCPUsSharingLLC = 2;
+	    topoParms.maxSharingLLC = 2;
+	} else {
+	    topoParms.nCoresSharingLLC = 1;
+	    topoParms.nLCPUsSharingLLC = 1;
+	    topoParms.maxSharingLLC = 1;
+	}
+	return;
+    }
+
+    for (index = 0; ; index += 1) {
+	uint32_t		this_level;
+
+	cache_info[eax] = 4;
+	cache_info[ecx] = index;
+	cache_info[ebx] = 0;
+	cache_info[edx] = 0;
+
+	cpuid(cache_info);
+
+	/*
+	 * See if all levels have been queried.
+	 */
+	if (bitfield(cache_info[eax], 4, 0) == 0)
+	    break;
+
+	/*
+	 * Get the current level.
+	 */
+	this_level = bitfield(cache_info[eax], 7, 5);
+
+	/*
+	 * Only worry about it if it's a deeper level than
+	 * what we've seen before.
+	 */
+	if (this_level > cache_level) {
+	    cache_level = this_level;
+
+	    /*
+	     * Save the number of CPUs sharing this cache.
+	     */
+	    nCPUsSharing = bitfield(cache_info[eax], 25, 14) + 1;
+	}
+    }
+
+    /*
+     * Make the level of the LLC be 0 based.
+     */
+    topoParms.LLCDepth = cache_level - 1;
+
+    /*
+     * nCPUsSharing represents the *maximum* number of cores or
+     * logical CPUs sharing the cache.
+     */
+    topoParms.maxSharingLLC = nCPUsSharing;
+
+    topoParms.nCoresSharingLLC = nCPUsSharing;
+    topoParms.nLCPUsSharingLLC = nCPUsSharing;
+
+    /*
+     * nCPUsSharing may not be the number of *active* cores or
+     * threads that are sharing the cache.
+     */
+    if (nCPUsSharing > cpuinfo->core_count)
+	topoParms.nCoresSharingLLC = cpuinfo->core_count;
+    if (nCPUsSharing > cpuinfo->thread_count)
+	topoParms.nLCPUsSharingLLC = cpuinfo->thread_count;
+
+
+    if (nCPUsSharing > cpuinfo->thread_count)
+	topoParms.maxSharingLLC = cpuinfo->thread_count;
+}
+
+static void
+initTopoParms(void)
+{
+    i386_cpu_info_t	*cpuinfo;
+
+    cpuinfo = cpuid_info();
+
+    /*
+     * We need to start with getting the LLC information correct.
+     */
+    x86_LLC_info();
+
+    /*
+     * Compute the number of threads (logical CPUs) per core.
+     */
+    topoParms.nLThreadsPerCore = cpuinfo->thread_count / cpuinfo->core_count;
+    topoParms.nPThreadsPerCore = cpuinfo->cpuid_logical_per_package / cpuinfo->cpuid_cores_per_package;
+
+    /*
+     * Compute the number of dies per package.
+     */
+    topoParms.nLDiesPerPackage = cpuinfo->core_count / topoParms.nCoresSharingLLC;
+    topoParms.nPDiesPerPackage = cpuinfo->cpuid_cores_per_package / (topoParms.maxSharingLLC / topoParms.nPThreadsPerCore);
+
+    /*
+     * Compute the number of cores per die.
+     */
+    topoParms.nLCoresPerDie = topoParms.nCoresSharingLLC;
+    topoParms.nPCoresPerDie = (topoParms.maxSharingLLC / topoParms.nPThreadsPerCore);
+
+    /*
+     * Compute the number of threads per die.
+     */
+    topoParms.nLThreadsPerDie = topoParms.nLThreadsPerCore * topoParms.nLCoresPerDie;
+    topoParms.nPThreadsPerDie = topoParms.nPThreadsPerCore * topoParms.nPCoresPerDie;
+
+    /*
+     * Compute the number of cores per package.
+     */
+    topoParms.nLCoresPerPackage = topoParms.nLCoresPerDie * topoParms.nLDiesPerPackage;
+    topoParms.nPCoresPerPackage = topoParms.nPCoresPerDie * topoParms.nPDiesPerPackage;
+
+    /*
+     * Compute the number of threads per package.
+     */
+    topoParms.nLThreadsPerPackage = topoParms.nLThreadsPerCore * topoParms.nLCoresPerPackage;
+    topoParms.nPThreadsPerPackage = topoParms.nPThreadsPerCore * topoParms.nPCoresPerPackage;
+
+    DBG("\nLogical Topology Parameters:\n");
+    DBG("\tThreads per Core:  %d\n", topoParms.nLThreadsPerCore);
+    DBG("\tCores per Die:     %d\n", topoParms.nLCoresPerDie);
+    DBG("\tThreads per Die:   %d\n", topoParms.nLThreadsPerDie);
+    DBG("\tDies per Package:  %d\n", topoParms.nLDiesPerPackage);
+    DBG("\tCores per Package: %d\n", topoParms.nLCoresPerPackage);
+    DBG("\tThreads per Package: %d\n", topoParms.nLThreadsPerPackage);
+
+    DBG("\nPhysical Topology Parameters:\n");
+    DBG("\tThreads per Core: %d\n", topoParms.nPThreadsPerCore);
+    DBG("\tCores per Die:     %d\n", topoParms.nPCoresPerDie);
+    DBG("\tThreads per Die:   %d\n", topoParms.nPThreadsPerDie);
+    DBG("\tDies per Package:  %d\n", topoParms.nPDiesPerPackage);
+    DBG("\tCores per Package: %d\n", topoParms.nPCoresPerPackage);
+    DBG("\tThreads per Package: %d\n", topoParms.nPThreadsPerPackage);
+
+    topoParmsInited = TRUE;
 }
 
 static void
@@ -141,7 +316,7 @@ x86_cache_list(void)
 
 	cur->type = bitfield(cache_info[eax], 4, 0);
 	cur->level = bitfield(cache_info[eax], 7, 5);
-	cur->nlcpus = bitfield(cache_info[eax], 25, 14) + 1;
+	cur->maxcpus = (bitfield(cache_info[eax], 25, 14) + 1);
 	cur->line_size = bitfield(cache_info[ebx], 11, 0) + 1;
 	cur->partitions = bitfield(cache_info[ebx], 21, 12) + 1;
 	cur->ways = bitfield(cache_info[ebx], 31, 22) + 1;
@@ -156,20 +331,33 @@ x86_cache_list(void)
 	    last = cur;
 	}
 
+	cur->nlcpus = 0;
 	num_Lx_caches[cur->level - 1] += 1;
     }
 
     return(root);
 }
 
-static boolean_t
-cpu_is_hyperthreaded(void)
+static x86_cpu_cache_t *
+x86_match_cache(x86_cpu_cache_t *list, x86_cpu_cache_t *matcher)
 {
-    if  (cpuid_features() & CPUID_FEATURE_HTT)
-	return (cpuid_info()->cpuid_logical_per_package /
-		cpuid_info()->cpuid_cores_per_package) > 1;
-    else
-	return FALSE;
+    x86_cpu_cache_t	*cur_cache;
+
+    cur_cache = list;
+    while (cur_cache != NULL) {
+	if (cur_cache->maxcpus  == matcher->maxcpus
+	    && cur_cache->type  == matcher->type
+	    && cur_cache->level == matcher->level
+	    && cur_cache->ways  == matcher->ways
+	    && cur_cache->partitions == matcher->partitions
+	    && cur_cache->line_size  == matcher->line_size
+	    && cur_cache->cache_size == matcher->cache_size)
+	    break;
+
+	cur_cache = cur_cache->next;
+    }
+
+    return(cur_cache);
 }
 
 static void
@@ -184,17 +372,21 @@ x86_lcpu_init(int cpu)
     lcpu = &cpup->lcpu;
     lcpu->lcpu = lcpu;
     lcpu->cpu  = cpup;
-    lcpu->next = NULL;
-    lcpu->core = NULL;
+    lcpu->next_in_core = NULL;
+    lcpu->next_in_die  = NULL;
+    lcpu->next_in_pkg  = NULL;
+    lcpu->core         = NULL;
+    lcpu->die          = NULL;
+    lcpu->package      = NULL;
+    lcpu->cpu_num = cpu;
     lcpu->lnum = cpu;
     lcpu->pnum = cpup->cpu_phys_number;
-    lcpu->halted = FALSE;	/* XXX is this correct? */
-    lcpu->idle   = FALSE;	/* XXX is this correct? */
+    lcpu->state = LCPU_OFF;
     for (i = 0; i < MAX_CACHE_DEPTH; i += 1)
 	lcpu->caches[i] = NULL;
 
-    lcpu->master = (lcpu->pnum == (unsigned int) master_cpu);
-    lcpu->primary = (lcpu->pnum % cpuid_info()->cpuid_logical_per_package) == 0;
+    lcpu->master = (lcpu->cpu_num == (unsigned int) master_cpu);
+    lcpu->primary = (lcpu->pnum % topoParms.nPThreadsPerPackage) == 0;
 }
 
 static x86_core_t *
@@ -202,16 +394,14 @@ x86_core_alloc(int cpu)
 {
     x86_core_t	*core;
     cpu_data_t	*cpup;
-    uint32_t	cpu_in_pkg;
-    uint32_t	lcpus_per_core;
 
     cpup = cpu_datap(cpu);
 
     simple_lock(&x86_topo_lock);
     if (free_cores != NULL) {
 	core = free_cores;
-	free_cores = core->next;
-	core->next = NULL;
+	free_cores = core->next_in_die;
+	core->next_in_die = NULL;
 	simple_unlock(&x86_topo_lock);
     } else {
 	simple_unlock(&x86_topo_lock);
@@ -222,12 +412,8 @@ x86_core_alloc(int cpu)
 
     bzero((void *) core, sizeof(x86_core_t));
 
-    cpu_in_pkg = cpu % cpuid_info()->cpuid_logical_per_package;
-    lcpus_per_core = cpuid_info()->cpuid_logical_per_package /
-		     cpuid_info()->cpuid_cores_per_package;
-
-    core->pcore_num = cpup->cpu_phys_number / lcpus_per_core;
-    core->lcore_num = core->pcore_num % cpuid_info()->cpuid_cores_per_package;
+    core->pcore_num = cpup->cpu_phys_number / topoParms.nPThreadsPerCore;
+    core->lcore_num = core->pcore_num % topoParms.nPCoresPerPackage;
 
     core->flags = X86CORE_FL_PRESENT | X86CORE_FL_READY
 	        | X86CORE_FL_HALTED | X86CORE_FL_IDLE;
@@ -239,7 +425,7 @@ static void
 x86_core_free(x86_core_t *core)
 {
     simple_lock(&x86_topo_lock);
-    core->next = free_cores;
+    core->next_in_die = free_cores;
     free_cores = core;
     simple_unlock(&x86_topo_lock);
 }
@@ -253,7 +439,7 @@ x86_package_find(int cpu)
 
     cpup = cpu_datap(cpu);
 
-    pkg_num = cpup->cpu_phys_number / cpuid_info()->cpuid_logical_per_package;
+    pkg_num = cpup->cpu_phys_number / topoParms.nPThreadsPerPackage;
 
     pkg = x86_pkgs;
     while (pkg != NULL) {
@@ -264,138 +450,125 @@ x86_package_find(int cpu)
 
     return(pkg);
 }
-
-static x86_core_t *
-x86_core_find(int cpu)
+ 
+static x86_die_t *
+x86_die_find(int cpu)
 {
-    x86_core_t	*core;
+    x86_die_t	*die;
     x86_pkg_t	*pkg;
     cpu_data_t	*cpup;
-    uint32_t	core_num;
+    uint32_t	die_num;
 
     cpup = cpu_datap(cpu);
 
-    core_num = cpup->cpu_phys_number
-	       / (cpuid_info()->cpuid_logical_per_package
-		  / cpuid_info()->cpuid_cores_per_package);
+    die_num = cpup->cpu_phys_number / topoParms.nPThreadsPerDie;
 
     pkg = x86_package_find(cpu);
     if (pkg == NULL)
 	return(NULL);
 
-    core = pkg->cores;
+    die = pkg->dies;
+    while (die != NULL) {
+	if (die->pdie_num == die_num)
+	    break;
+	die = die->next_in_pkg;
+    }
+
+    return(die);
+}
+
+static x86_core_t *
+x86_core_find(int cpu)
+{
+    x86_core_t	*core;
+    x86_die_t	*die;
+    cpu_data_t	*cpup;
+    uint32_t	core_num;
+
+    cpup = cpu_datap(cpu);
+
+    core_num = cpup->cpu_phys_number / topoParms.nPThreadsPerCore;
+
+    die = x86_die_find(cpu);
+    if (die == NULL)
+	return(NULL);
+
+    core = die->cores;
     while (core != NULL) {
 	if (core->pcore_num == core_num)
 	    break;
-	core = core->next;
+	core = core->next_in_die;
     }
 
     return(core);
 }
-
-static void
-x86_core_add_lcpu(x86_core_t *core, x86_lcpu_t *lcpu)
+ 
+void
+x86_set_lcpu_numbers(x86_lcpu_t *lcpu)
 {
-    x86_cpu_cache_t	*list;
-    x86_cpu_cache_t	*cur;
-    x86_core_t		*cur_core;
-    x86_lcpu_t		*cur_lcpu;
-    boolean_t		found;
-    int			level;
-    int			i;
-    uint32_t		cpu_mask;
+    lcpu->lnum = lcpu->cpu_num % topoParms.nLThreadsPerCore;
+}
 
-    assert(core != NULL);
-    assert(lcpu != NULL);
+void
+x86_set_core_numbers(x86_core_t *core, x86_lcpu_t *lcpu)
+{
+    core->pcore_num = lcpu->cpu_num / topoParms.nLThreadsPerCore;
+    core->lcore_num = core->pcore_num % topoParms.nLCoresPerDie;
+}
 
-    /*
-     * Add the cache data to the topology.
-     */
-    list = x86_cache_list();
+void
+x86_set_die_numbers(x86_die_t *die, x86_lcpu_t *lcpu)
+{
+    die->pdie_num = lcpu->cpu_num / (topoParms.nLThreadsPerCore * topoParms.nLCoresPerDie);
+    die->ldie_num = die->pdie_num % topoParms.nLDiesPerPackage;
+}
+
+void
+x86_set_pkg_numbers(x86_pkg_t *pkg, x86_lcpu_t *lcpu)
+{
+    pkg->ppkg_num = lcpu->cpu_num / topoParms.nLThreadsPerPackage;
+    pkg->lpkg_num = pkg->ppkg_num;
+}
+
+static x86_die_t *
+x86_die_alloc(int cpu)
+{
+    x86_die_t	*die;
+    cpu_data_t	*cpup;
+
+    cpup = cpu_datap(cpu);
 
     simple_lock(&x86_topo_lock);
-
-    while (list != NULL) {
-	/*
-	 * Remove the cache from the front of the list.
-	 */
-	cur = list;
-	list = cur->next;
-	cur->next = NULL;
-	level = cur->level - 1;
-
-	/*
-	 * If the cache isn't shared then just put it where it
-	 * belongs.
-	 */
-	if (cur->nlcpus == 1) {
-	    goto found_first;
-	}
-
-	/*
-	 * We'll assume that all of the caches at a particular level
-	 * have the same sharing.  So if we have a cache already at
-	 * this level, we'll just skip looking for the match.
-	 */
-	if (lcpu->caches[level] != NULL) {
-	    x86_cache_free(cur);
-	    continue;
-	}
-
-	/*
-	 * This is a shared cache, so we have to figure out if
-	 * this is the first time we've seen this cache.  We do
-	 * this by searching through the package and seeing if
-	 * a related core is already describing this cache.
-	 *
-	 * NOTE: This assumes that CPUs whose ID mod <# sharing cache>
-	 * are indeed sharing the cache.
-	 */
-	cpu_mask = lcpu->pnum & ~(cur->nlcpus - 1);
-	cur_core = core->package->cores;
-	found = FALSE;
-
-	while (cur_core != NULL && !found) {
-	    cur_lcpu = cur_core->lcpus;
-	    while (cur_lcpu != NULL && !found) {
-		if ((cur_lcpu->pnum & ~(cur->nlcpus - 1)) == cpu_mask) {
-		    lcpu->caches[level] = cur_lcpu->caches[level];
-		    found = TRUE;
-		    x86_cache_free(cur);
-
-		    /*
-		     * Put the new CPU into the list of the cache.
-		     */
-		    cur = lcpu->caches[level];
-		    for (i = 0; i < cur->nlcpus; i += 1) {
-			if (cur->cpus[i] == NULL) {
-			    cur->cpus[i] = lcpu;
-			    break;
-			}
-		    }
-		}
-		cur_lcpu = cur_lcpu->next;
-	    }
-
-	    cur_core = cur_core->next;
-	}
-
-	if (!found) {
-found_first:
-	    cur->next = lcpu->caches[level];
-	    lcpu->caches[level] = cur;
-	    cur->cpus[0] = lcpu;
-	}
+    if (free_dies != NULL) {
+	die = free_dies;
+	free_dies = die->next_in_pkg;
+	die->next_in_pkg = NULL;
+	simple_unlock(&x86_topo_lock);
+    } else {
+	simple_unlock(&x86_topo_lock);
+	die = kalloc(sizeof(x86_die_t));
+	if (die == NULL)
+	    panic("x86_die_alloc() kalloc of x86_die_t failed!\n");
     }
 
-    /*
-     * Add the Logical CPU to the core.
-     */
-    lcpu->next = core->lcpus;
-    lcpu->core = core;
-    core->lcpus = lcpu;
-    core->num_lcpus += 1;
+    bzero((void *) die, sizeof(x86_die_t));
 
+    die->pdie_num = cpup->cpu_phys_number / topoParms.nPThreadsPerDie;
+
+    die->ldie_num = num_dies;
+    atomic_incl((long *) &num_dies, 1);
+
+    die->flags = X86DIE_FL_PRESENT;
+    return(die);
+}
+
+static void
+x86_die_free(x86_die_t *die)
+{
+    simple_lock(&x86_topo_lock);
+    die->next_in_pkg = free_dies;
+    free_dies = die;
+    atomic_decl((long *) &num_dies, 1);
     simple_unlock(&x86_topo_lock);
 }
 
@@ -422,11 +595,10 @@ x86_package_alloc(int cpu)
 
     bzero((void *) pkg, sizeof(x86_pkg_t));
 
-    pkg->ppkg_num = cpup->cpu_phys_number
-		    / cpuid_info()->cpuid_logical_per_package;
+    pkg->ppkg_num = cpup->cpu_phys_number / topoParms.nPThreadsPerPackage;
 
-    pkg->lpkg_num = num_packages;
-    atomic_incl((long *) &num_packages, 1);
+    pkg->lpkg_num = topoParms.nPackages;
+    atomic_incl((long *) &topoParms.nPackages, 1);
 
     pkg->flags = X86PKG_FL_PRESENT | X86PKG_FL_READY;
     return(pkg);
@@ -438,8 +610,208 @@ x86_package_free(x86_pkg_t *pkg)
     simple_lock(&x86_topo_lock);
     pkg->next = free_pkgs;
     free_pkgs = pkg;
-    atomic_decl((long *) &num_packages, 1);
+    atomic_decl((long *) &topoParms.nPackages, 1);
     simple_unlock(&x86_topo_lock);
+}
+
+static void
+x86_cache_add_lcpu(x86_cpu_cache_t *cache, x86_lcpu_t *lcpu)
+{
+    x86_cpu_cache_t	*cur_cache;
+    int			i;
+
+    /*
+     * Put the new CPU into the list of the cache.
+     */
+    cur_cache = lcpu->caches[cache->level - 1];
+    lcpu->caches[cache->level - 1] = cache;
+    cache->next = cur_cache;
+    cache->nlcpus += 1;
+    for (i = 0; i < cache->nlcpus; i += 1) {
+	if (cache->cpus[i] == NULL) {
+	    cache->cpus[i] = lcpu;
+	    break;
+	}
+    }
+}
+
+static void
+x86_lcpu_add_caches(x86_lcpu_t *lcpu)
+{
+    x86_cpu_cache_t	*list;
+    x86_cpu_cache_t	*cur;
+    x86_cpu_cache_t	*match;
+    x86_die_t		*die;
+    x86_core_t		*core;
+    x86_lcpu_t		*cur_lcpu;
+    uint32_t		level;
+    boolean_t		found		= FALSE;
+
+    assert(lcpu != NULL);
+
+    /*
+     * Add the cache data to the topology.
+     */
+    list = x86_cache_list();
+
+    simple_lock(&x86_topo_lock);
+
+    while (list != NULL) {
+	/*
+	 * Remove the cache from the front of the list.
+	 */
+	cur = list;
+	list = cur->next;
+	cur->next = NULL;
+	level = cur->level - 1;
+
+	/*
+	 * If the cache isn't shared then just put it where it
+	 * belongs.
+	 */
+	if (cur->maxcpus == 1) {
+	    x86_cache_add_lcpu(cur, lcpu);
+	    continue;
+	}
+
+	/*
+	 * We'll assume that all of the caches at a particular level
+	 * have the same sharing.  So if we have a cache already at
+	 * this level, we'll just skip looking for the match.
+	 */
+	if (lcpu->caches[level] != NULL) {
+	    x86_cache_free(cur);
+	    continue;
+	}
+
+	/*
+	 * This is a shared cache, so we have to figure out if
+	 * this is the first time we've seen this cache.  We do
+	 * this by searching through the topology and seeing if
+	 * this cache is already described.
+	 *
+	 * Assume that L{LLC-1} are all at the core level and that
+	 * LLC is shared at the die level.
+	 */
+	if (level < topoParms.LLCDepth) {
+	    /*
+	     * Shared at the core.
+	     */
+	    core = lcpu->core;
+	    cur_lcpu = core->lcpus;
+	    while (cur_lcpu != NULL) {
+		/*
+		 * Skip ourselves.
+		 */
+		if (cur_lcpu == lcpu) {
+		    cur_lcpu = cur_lcpu->next_in_core;
+		    continue;
+		}
+
+		/*
+		 * If there's a cache on this logical CPU,
+		 * then use that one.
+		 */
+		match = x86_match_cache(cur_lcpu->caches[level], cur);
+		if (match != NULL) {
+		    x86_cache_free(cur);
+		    x86_cache_add_lcpu(match, lcpu);
+		    found = TRUE;
+		    break;
+		}
+
+		cur_lcpu = cur_lcpu->next_in_core;
+	    }
+	} else {
+	    /*
+	     * Shared at the die.
+	     */
+	    die = lcpu->die;
+	    cur_lcpu = die->lcpus;
+	    while (cur_lcpu != NULL) {
+		/*
+		 * Skip ourselves.
+		 */
+		if (cur_lcpu == lcpu) {
+		    cur_lcpu = cur_lcpu->next_in_die;
+		    continue;
+		}
+
+		/*
+		 * If there's a cache on this logical CPU,
+		 * then use that one.
+		 */
+		match = x86_match_cache(cur_lcpu->caches[level], cur);
+		if (match != NULL) {
+		    x86_cache_free(cur);
+		    x86_cache_add_lcpu(match, lcpu);
+		    found = TRUE;
+		    break;
+		}
+
+		cur_lcpu = cur_lcpu->next_in_die;
+	    }
+	}
+
+	/*
+	 * If a shared cache wasn't found, then this logical CPU must
+	 * be the first one encountered.
+	 */
+	if (!found) {
+	    x86_cache_add_lcpu(cur, lcpu);
+	}
+    }
+
+    simple_unlock(&x86_topo_lock);
+}
+
+static void
+x86_core_add_lcpu(x86_core_t *core, x86_lcpu_t *lcpu)
+{
+    assert(core != NULL);
+    assert(lcpu != NULL);
+
+    simple_lock(&x86_topo_lock);
+
+    lcpu->next_in_core = core->lcpus;
+    lcpu->core = core;
+    core->lcpus = lcpu;
+    core->num_lcpus += 1;
+    simple_unlock(&x86_topo_lock);
+}
+
+static void
+x86_die_add_lcpu(x86_die_t *die, x86_lcpu_t *lcpu)
+{
+    assert(die != NULL);
+    assert(lcpu != NULL);
+ 
+    lcpu->next_in_die = die->lcpus;
+    lcpu->die = die;
+    die->lcpus = lcpu;
+}
+
+static void
+x86_die_add_core(x86_die_t *die, x86_core_t *core)
+{
+    assert(die != NULL);
+    assert(core != NULL);
+
+    core->next_in_die = die->cores;
+    core->die = die;
+    die->cores = core;
+    die->num_cores += 1;
+}
+
+ static void
+x86_package_add_lcpu(x86_pkg_t *pkg, x86_lcpu_t *lcpu)
+{
+    assert(pkg != NULL);
+    assert(lcpu != NULL);
+
+    lcpu->next_in_pkg = pkg->lcpus;
+    lcpu->package = pkg;
+    pkg->lcpus = lcpu;
 }
 
 static void
@@ -448,25 +820,55 @@ x86_package_add_core(x86_pkg_t *pkg, x86_core_t *core)
     assert(pkg != NULL);
     assert(core != NULL);
 
-    core->next = pkg->cores;
+    core->next_in_pkg = pkg->cores;
     core->package = pkg;
     pkg->cores = core;
-    pkg->num_cores += 1;
+}
+
+static void
+x86_package_add_die(x86_pkg_t *pkg, x86_die_t *die)
+{
+    assert(pkg != NULL);
+    assert(die != NULL);
+
+    die->next_in_pkg = pkg->dies;
+    die->package = pkg;
+    pkg->dies = die;
+    pkg->num_dies += 1;
 }
 
 void *
 cpu_thread_alloc(int cpu)
 {
-    x86_core_t	*core;
-    x86_pkg_t	*pkg;
+    x86_core_t	*core		= NULL;
+    x86_die_t	*die		= NULL;
+    x86_pkg_t	*pkg		= NULL;
     cpu_data_t	*cpup;
     uint32_t	phys_cpu;
+
+    /*
+     * Only allow one to manipulate the topology at a time.
+     */
+    simple_lock(&x86_topo_lock);
+
+    /*
+     * Make sure all of the topology parameters have been initialized.
+     */
+    if (!topoParmsInited)
+	initTopoParms();
 
     cpup = cpu_datap(cpu);
 
     phys_cpu = cpup->cpu_phys_number;
 
     x86_lcpu_init(cpu);
+
+     /*
+     * Allocate performance counter structure.
+     */
+    simple_unlock(&x86_topo_lock);
+    cpup->lcpu.pmc = pmc_alloc();
+    simple_lock(&x86_topo_lock);
 
     /*
      * Assume that all cpus have the same features.
@@ -478,22 +880,9 @@ cpu_thread_alloc(int cpu)
     }
 
     /*
-     * Only allow one to manipulate the topology at a time.
+     * Get the package that the logical CPU is in.
      */
-    simple_lock(&x86_topo_lock);
-
-    /*
-     * Get the core for this logical CPU.
-     */
-  core_again:
-    core = x86_core_find(cpu);
-    if (core == NULL) {
-	/*
-	 * Core structure hasn't been created yet, do it now.
-	 *
-	 * Get the package that the core is part of.
-	 */
-      package_again:
+    do {
 	pkg = x86_package_find(cpu);
 	if (pkg == NULL) {
 	    /*
@@ -504,7 +893,7 @@ cpu_thread_alloc(int cpu)
 	    simple_lock(&x86_topo_lock);
 	    if (x86_package_find(cpu) != NULL) {
 		x86_package_free(pkg);
-		goto package_again;
+		continue;
 	    }
 	    
 	    /*
@@ -513,31 +902,58 @@ cpu_thread_alloc(int cpu)
 	    pkg->next = x86_pkgs;
 	    x86_pkgs = pkg;
 	}
+    } while (pkg == NULL);
 
-	/*
-	 * Allocate the core structure now.
-	 */
-	simple_unlock(&x86_topo_lock);
-	core = x86_core_alloc(cpu);
-	simple_lock(&x86_topo_lock);
-	if (x86_core_find(cpu) != NULL) {
-	    x86_core_free(core);
-	    goto core_again;
+    /*
+     * Get the die that the logical CPU is in.
+     */
+    do {
+	die = x86_die_find(cpu);
+	if (die == NULL) {
+	    /*
+	     * Die structure hasn't been created yet, do it now.
+	     */
+	    simple_unlock(&x86_topo_lock);
+	    die = x86_die_alloc(cpu);
+	    simple_lock(&x86_topo_lock);
+	    if (x86_die_find(cpu) != NULL) {
+		x86_die_free(die);
+		continue;
+	    }
+
+	    /*
+	     * Add the die to the package.
+	     */
+	    x86_package_add_die(pkg, die);
 	}
+    } while (die == NULL);
 
-	/*
-	 * Add it to the package.
-	 */
-	x86_package_add_core(pkg, core);
-	machine_info.physical_cpu_max += 1;
+    /*
+     * Get the core for this logical CPU.
+     */
+    do {
+	core = x86_core_find(cpu);
+	if (core == NULL) {
+	    /*
+	     * Allocate the core structure now.
+	     */
+	    simple_unlock(&x86_topo_lock);
+	    core = x86_core_alloc(cpu);
+	    simple_lock(&x86_topo_lock);
+	    if (x86_core_find(cpu) != NULL) {
+		x86_core_free(core);
+		continue;
+	    }
 
-	/*
-	 * Allocate performance counter structure.
-	 */
-	simple_unlock(&x86_topo_lock);
-	core->pmc = pmc_alloc();
-	simple_lock(&x86_topo_lock);
-    }
+	    /*
+	     * Add the core to the die & package.
+	     */
+	    x86_die_add_core(die, core);
+	    x86_package_add_core(pkg, core);
+	    machine_info.physical_cpu_max += 1;
+	}
+    } while (core == NULL);
+
     
     /*
      * Done manipulating the topology, so others can get in.
@@ -545,7 +961,13 @@ cpu_thread_alloc(int cpu)
     machine_info.logical_cpu_max += 1;
     simple_unlock(&x86_topo_lock);
 
+    /*
+     * Add the logical CPU to the other topology structures.
+     */
     x86_core_add_lcpu(core, &cpup->lcpu);
+    x86_die_add_lcpu(core->die, &cpup->lcpu);
+    x86_package_add_lcpu(core->package, &cpup->lcpu);
+    x86_lcpu_add_caches(&cpup->lcpu);
 
     return (void *) core;
 }
@@ -553,10 +975,10 @@ cpu_thread_alloc(int cpu)
 void
 cpu_thread_init(void)
 {
-    int		my_cpu	= get_cpu_number();
-    cpu_data_t	*cpup	= current_cpu_datap();
+    int		my_cpu		= get_cpu_number();
+    cpu_data_t	*cpup		= current_cpu_datap();
     x86_core_t	*core;
-    static int	initialized = 0;
+    static int	initialized	= 0;
 
     /*
      * If we're the boot processor, we do all of the initialization of
@@ -582,8 +1004,6 @@ cpu_thread_init(void)
     if (core->active_lcpus == 0)
 	machine_info.physical_cpu += 1;
     core->active_lcpus += 1;
-    cpup->lcpu.halted = FALSE;
-    cpup->lcpu.idle   = FALSE;
     simple_unlock(&x86_topo_lock);
 
     pmCPUMarkRunning(cpup);
@@ -602,7 +1022,6 @@ cpu_thread_halt(void)
 
     simple_lock(&x86_topo_lock);
     machine_info.logical_cpu -= 1;
-    cpup->lcpu.idle   = TRUE;
     core = cpup->lcpu.core;
     core->active_lcpus -= 1;
     if (core->active_lcpus == 0)
@@ -619,3 +1038,62 @@ cpu_thread_halt(void)
     }
     /* NOT REACHED */
 }
+
+#if TOPO_DEBUG
+/*
+ * Prints out the topology
+ */
+void
+debug_topology_print(void)
+{
+    x86_pkg_t		*pkg;
+    x86_die_t		*die;
+    x86_core_t		*core;
+    x86_lcpu_t		*cpu;
+
+    pkg = x86_pkgs;
+    while (pkg != NULL) {
+	kprintf("Package:\n");
+	kprintf("    Physical: %d\n", pkg->ppkg_num);
+	kprintf("    Logical:  %d\n", pkg->lpkg_num);
+
+	die = pkg->dies;
+	while (die != NULL) {
+	    kprintf("    Die:\n");
+	    kprintf("        Physical: %d\n", die->pdie_num);
+	    kprintf("        Logical:  %d\n", die->ldie_num);
+
+	    core = die->cores;
+	    while (core != NULL) {
+		kprintf("        Core:\n");
+		kprintf("            Physical: %d\n", core->pcore_num);
+		kprintf("            Logical:  %d\n", core->lcore_num);
+
+		cpu = core->lcpus;
+		while (cpu != NULL) {
+		    kprintf("            LCPU:\n");
+		    kprintf("                CPU #:    %d\n", cpu->cpu_num);
+		    kprintf("                Physical: %d\n", cpu->pnum);
+		    kprintf("                Logical:  %d\n", cpu->lnum);
+		    kprintf("                Flags:    ");
+		    if (cpu->master)
+			kprintf("MASTER ");
+		    if (cpu->primary)
+			kprintf("PRIMARY");
+		    if (!cpu->master && !cpu->primary)
+			kprintf("(NONE)");
+		    kprintf("\n");
+
+		    cpu = cpu->next_in_core;
+		}
+
+		core = core->next_in_die;
+	    }
+
+	    die = die->next_in_pkg;
+	}
+
+	pkg = pkg->next;
+    }
+}
+#endif /* TOPO_DEBUG */

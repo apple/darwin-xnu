@@ -49,11 +49,10 @@ typedef union {
 	uint64_t	count			:BITS(7,0);
 	uint64_t	mcg_ctl_p		:BIT1(8);
 	uint64_t	mcg_ext_p		:BIT1(9);
-	uint64_t	reserved1		:BIT1(10);
+	uint64_t	mcg_reserved1		:BIT1(10);
 	uint64_t	mcg_tes_p		:BIT1(11);
-	uint64_t	reserved2		:BITS(15,12);
+	uint64_t	mcg_reserved2		:BITS(15,12);
 	uint64_t	mcg_ext_cnt		:BITS(23,16);
-	uint64_t	reserved3		:BITS(63,24);
      }		bits;
      uint64_t	u64;
 } ia32_mcg_cap_t;
@@ -64,7 +63,6 @@ typedef union {
 	uint64_t	ripv			:BIT1(0);
 	uint64_t	eipv			:BIT1(1);
 	uint64_t	mcip			:BIT1(2);
-	uint64_t	reserved		:BITS(61,3);
      }		bits;
      uint64_t	u64;
 } ia32_mcg_status_t;
@@ -113,7 +111,7 @@ typedef uint64_t	ia32_mci_ctl_t;
 #define IA32_MCi_CTL_ENABLE_ALL	(0xFFFFFFFFFFFFFFFFULL)
 
 typedef union {
-     struct {
+    struct {
 	uint64_t	mca_error		:BITS(15,0);
 	uint64_t	model_specific_error	:BITS(31,16);
 	uint64_t	other_information	:BITS(56,32);
@@ -124,13 +122,12 @@ typedef union {
 	uint64_t	uc			:BIT1(61);
 	uint64_t	over			:BIT1(62);
 	uint64_t	val			:BIT1(63);
-     }		bits;
-     struct {		/* Variant if threshold-based error status present: */
+    }		bits;
+    struct {		/* Variant if threshold-based error status present: */
 	uint64_t	mca_error		:BITS(15,0);
 	uint64_t	model_specific_error	:BITS(31,16);
 	uint64_t	other_information	:BITS(52,32);
 	uint64_t	threshold		:BITS(54,53);
-	uint64_t	reserved		:BITS(56,55);
 	uint64_t	pcc			:BIT1(57);
 	uint64_t	addrv			:BIT1(58);
 	uint64_t	miscv			:BIT1(59);
@@ -138,8 +135,8 @@ typedef union {
 	uint64_t	uc			:BIT1(61);
 	uint64_t	over			:BIT1(62);
 	uint64_t	val			:BIT1(63);
-     }		bits_tes_p;
-     uint64_t	u64;
+    }		bits_tes_p;
+    uint64_t	u64;
 } ia32_mci_status_t;
 
 /* Values for threshold_status if mcg_tes_p == 1 and uc == 0 */
@@ -150,7 +147,6 @@ typedef union {
 
 typedef uint64_t	ia32_mci_addr_t;
 typedef uint64_t	ia32_mci_misc_t;
-
 
 #define IA32_MCG_EAX		(0x180)
 #define IA32_MCG_EBX		(0x181)
@@ -189,10 +185,10 @@ typedef uint64_t	ia32_mci_misc_t;
 #define IA32_MCG_R14		(0x196)
 #define IA32_MCG_R15		(0x197)
 
-extern void	mca_cpu_alloc(cpu_data_t *cdp);
-extern void	mca_cpu_init(void);
-extern void	mca_dump(void);
-extern void	mca_check_save(void);
+extern void		mca_cpu_alloc(cpu_data_t *cdp);
+extern void		mca_cpu_init(void);
+extern void		mca_dump(void);
+extern void		mca_check_save(void);
 
 #endif	/* _I386_MACHINE_CHECK_H_ */
 #endif	/* KERNEL_PRIVATE */

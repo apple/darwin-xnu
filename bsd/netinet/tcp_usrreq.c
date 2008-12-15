@@ -155,7 +155,11 @@ SYSCTL_QUAD(_net_inet_tcp, OID_AUTO, out_sw_cksum_bytes, CTLFLAG_RD,
 #define	TCPDEBUG2(req)
 #endif
 
+#if CONFIG_USESOCKTHRESHOLD
 __private_extern__ unsigned int	tcp_sockthreshold = 64;
+#else
+__private_extern__ unsigned int	tcp_sockthreshold = 0;
+#endif
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, sockthreshold, CTLFLAG_RW, 
     &tcp_sockthreshold , 0, "TCP Socket size increased if less than threshold");
 

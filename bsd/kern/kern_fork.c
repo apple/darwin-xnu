@@ -850,7 +850,7 @@ proc_t
 forkproc(proc_t parent, int lock)
 {
 	struct proc *  child;	/* Our new process */
-	static int nextpid = 0, pidwrap = 0;
+	static int nextpid = 0, pidwrap = 0, nextpidversion = 0;
 	int error = 0;
 	struct session *sessp;
 	uthread_t uth_parent = (uthread_t)get_bsdthread_info(current_thread());
@@ -926,6 +926,7 @@ retry:
 	}
 	nprocs++;
 	child->p_pid = nextpid;
+	child->p_idversion = nextpidversion++;
 #if 1
 	if (child->p_pid != 0) {
 		if (pfind_locked(child->p_pid) != PROC_NULL)
@@ -1183,6 +1184,17 @@ uthread_cleanup(task_t task, void *uthread, void * bsd_info)
 	uthread_t uth = (uthread_t)uthread;
 	proc_t p = (proc_t)bsd_info;
 
+
+	if (uth->uu_lowpri_window) {
+	        /*
+		 * task is marked as a low priority I/O type
+		 * and we've somehow managed to not dismiss the throttle
+		 * through the normal exit paths back to user space...
+		 * no need to throttle this thread since its going away
+		 * but we do need to update our bookeeping w/r to throttled threads
+		 */
+		throttle_lowpri_io(FALSE);
+	}
 	/*
 	 * Per-thread audit state should never last beyond system
 	 * call return.  Since we don't audit the thread creation/

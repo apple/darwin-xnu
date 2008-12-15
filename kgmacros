@@ -1960,6 +1960,7 @@ define showuserstack
 		     _kgm_update_loop
 		   end
 		else
+		if ($kgm_mtype == 7)
 			set $newact = (struct thread *) $arg0
 #This needs to identify 64-bit processes as well
 			set $newiss = (x86_saved_state32_t) ($newact->machine.pcb->iss.uss.ss_32)
@@ -1975,6 +1976,9 @@ define showuserstack
 			_kgm_flush_loop
 			_kgm_update_loop
 			end			
+		else
+			echo showuserstack not supported on this architecture\n
+		end
 		end
 end
 document showuserstack
@@ -2053,11 +2057,15 @@ define switchtocorethread
 	   flushstack
 	   set $pc = $newact->machine->pcb.save_srr0
 	else
+	if ($kgm_mtype == 7)
 		set $kgm_cstatep = (struct x86_kernel_state32 *) \
 					($newact->kernel_stack + 0x4000 \
 					 - sizeof(struct x86_kernel_state32))
 		loadcontext $kgm_cstatep
 		flushstack
+	else
+		echo switchtocorethread not supported on this architecture\n
+	end
  	end
 	showcontext_int
 	end
@@ -2116,6 +2124,7 @@ define loadcontext
 	set $cr = $kgm_contextp.save_cr
 	set $ctr = $kgm_contextp.save_ctr
        else
+	if ($kgm_mtype == 7)
 		set $kgm_contextp = (struct x86_kernel_state32 *) $arg0
 		set $ebx = $kgm_contextp->k_ebx 
 		set $ebp = $kgm_contextp->k_ebp 
@@ -2123,6 +2132,9 @@ define loadcontext
 		set $esi = $kgm_contextp->k_esi 
 		set $eip = $kgm_contextp->k_eip 
 		set $pc =  $kgm_contextp->k_eip
+	else
+		echo loadcontext not supported on this architecture\n
+	end
 	end
 end
 
@@ -2146,6 +2158,8 @@ define resetcorectx
 		flushstack
 		set $pc = $kdpstatep->eip
 		update
+	else
+		echo resetcorectx not supported on this architecture\n
 	end
 	end
 	showcontext_int
@@ -5350,7 +5364,7 @@ define showMCAstate
         _if_present mca_threshold_status_present
         printf "\n%d error banks, ", mca_error_bank_count
         printf "family code 0x%x, ", mca_family
-        printf "machine-check exception taken: %d\n", mca_exception_taken
+        printf "machine-check dump state: %d\n", mca_dump_state
         set $kgm_cpu = 0
         while cpu_data_ptr[$kgm_cpu] != 0
             set $kgm_mcp = cpu_data_ptr[$kgm_cpu]->cpu_mca_state

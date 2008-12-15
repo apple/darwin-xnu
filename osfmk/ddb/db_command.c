@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -766,11 +766,6 @@ struct db_command db_command_table[] = {
 	{
 		.name = "da",
 		.fcn = db_apic,
-		.flag = CS_MORE,
-	},
-	{
-		.name = "hp",
-		.fcn = db_hpet,
 		.flag = CS_MORE,
 	},
 #endif /* !__ppc__ */

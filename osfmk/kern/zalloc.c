@@ -265,7 +265,6 @@ MACRO_END
 #define zone_sleep(zone)				\
 	(void) lck_mtx_sleep(&(zone)->lock, 0, (event_t)(zone), THREAD_UNINT);
 
-extern int snprintf(char *, size_t, const char *, ...) __printflike(3,4);
 
 #define lock_zone_init(zone)				\
 MACRO_BEGIN						\
@@ -615,7 +614,7 @@ zone_bootstrap(void)
 	char temp_buf[16];
 
 	/* see if we want freed zone element checking */
-	if (PE_parse_boot_arg("-zc", temp_buf)) {
+	if (PE_parse_boot_argn("-zc", temp_buf, sizeof (temp_buf))) {
 		check_freed_element = 1;
 	}
 

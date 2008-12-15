@@ -487,7 +487,7 @@ OSErr MapFileBlockC (
 	off_t				tmpOff;
 
 	allocBlockSize = vcb->blockSize;
-	sectorSize = VCBTOHFS(vcb)->hfs_phys_block_size;
+	sectorSize = VCBTOHFS(vcb)->hfs_logical_block_size;
 
 	err = SearchExtentFile(vcb, fcb, offset, &foundKey, foundData, &foundIndex, &hint, &nextFABN);
 	if (err == noErr) {

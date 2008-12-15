@@ -146,11 +146,11 @@ OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 	if (error || (utf8chars == 0))
 		(void) mac_roman_to_utf8(mdb->drVN, NAME_MAX, &utf8chars, vcb->vcbVN);
 
-	hfsmp->hfs_logBlockSize = BestBlockSizeFit(vcb->blockSize, MAXBSIZE, hfsmp->hfs_phys_block_size);
+	hfsmp->hfs_logBlockSize = BestBlockSizeFit(vcb->blockSize, MAXBSIZE, hfsmp->hfs_logical_block_size);
 	vcb->vcbVBMIOSize = kHFSBlockSize;
 
-	hfsmp->hfs_alt_id_sector = HFS_ALT_SECTOR(hfsmp->hfs_phys_block_size,
-	                                          hfsmp->hfs_phys_block_count);
+	hfsmp->hfs_alt_id_sector = HFS_ALT_SECTOR(hfsmp->hfs_logical_block_size,
+	                                          hfsmp->hfs_logical_block_count);
 
 	bzero(&cndesc, sizeof(cndesc));
 	cndesc.cd_parentcnid = kHFSRootParentID;
@@ -330,11 +330,24 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 		return (EINVAL);
 
 	/* Make sure we can live with the physical block size. */
-	if ((disksize & (hfsmp->hfs_phys_block_size - 1)) ||
-	    (embeddedOffset & (hfsmp->hfs_phys_block_size - 1)) ||
-	    (blockSize < hfsmp->hfs_phys_block_size)) {
+	if ((disksize & (hfsmp->hfs_logical_block_size - 1)) ||
+	    (embeddedOffset & (hfsmp->hfs_logical_block_size - 1)) ||
+	    (blockSize < hfsmp->hfs_logical_block_size)) {
 		return (ENXIO);
 	}
+
+	/* If allocation block size is less than the physical 
+	 * block size, we assume that the physical block size 
+	 * is same as logical block size.  The physical block 
+	 * size value is used to round down the offsets for 
+	 * reading and writing the primary and alternate volume 
+	 * headers at physical block boundary and will cause 
+	 * problems if it is less than the block size.
+	 */
+	if (blockSize < hfsmp->hfs_physical_block_size) {
+		hfsmp->hfs_physical_block_size = hfsmp->hfs_logical_block_size;
+	}
+
 	/*
 	 * The VolumeHeader seems OK: transfer info from it into VCB
 	 * Note - the VCB starts out clear (all zeros)
@@ -378,22 +391,22 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	 * (currently set up from the wrapper MDB) using the
 	 * new blocksize value:
 	 */
-	hfsmp->hfs_logBlockSize = BestBlockSizeFit(vcb->blockSize, MAXBSIZE, hfsmp->hfs_phys_block_size);
+	hfsmp->hfs_logBlockSize = BestBlockSizeFit(vcb->blockSize, MAXBSIZE, hfsmp->hfs_logical_block_size);
 	vcb->vcbVBMIOSize = min(vcb->blockSize, MAXPHYSIO);
 
 	/*
 	 * Validate and initialize the location of the alternate volume header.
 	 */
-	spare_sectors = hfsmp->hfs_phys_block_count -
+	spare_sectors = hfsmp->hfs_logical_block_count -
 	                (((daddr64_t)vcb->totalBlocks * blockSize) /
-	                   hfsmp->hfs_phys_block_size);
+	                   hfsmp->hfs_logical_block_size);
 
-	if (spare_sectors > (blockSize / hfsmp->hfs_phys_block_size)) {
+	if (spare_sectors > (daddr64_t)(blockSize / hfsmp->hfs_logical_block_size)) {
 		hfsmp->hfs_alt_id_sector = 0;  /* partition has grown! */
 	} else {
-		hfsmp->hfs_alt_id_sector = (hfsmp->hfsPlusIOPosOffset / hfsmp->hfs_phys_block_size) +
-					   HFS_ALT_SECTOR(hfsmp->hfs_phys_block_size,
-							  hfsmp->hfs_phys_block_count);
+		hfsmp->hfs_alt_id_sector = (hfsmp->hfsPlusIOPosOffset / hfsmp->hfs_logical_block_size) +
+					   HFS_ALT_SECTOR(hfsmp->hfs_logical_block_size,
+							  hfsmp->hfs_logical_block_count);
 	}
 
 	bzero(&cndesc, sizeof(cndesc));
@@ -411,6 +424,7 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	cndesc.cd_cnid = cnattr.ca_fileid = kHFSExtentsFileID;
 
 	cfork.cf_size    = SWAP_BE64 (vhp->extentsFile.logicalSize);
+	cfork.cf_new_size= 0;
 	cfork.cf_clump   = SWAP_BE32 (vhp->extentsFile.clumpSize);
 	cfork.cf_blocks  = SWAP_BE32 (vhp->extentsFile.totalBlocks);
 	cfork.cf_vblocks = 0;
@@ -607,9 +621,11 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 				    
 				mdb_offset = (daddr64_t)((embeddedOffset / blockSize) + HFS_PRI_SECTOR(blockSize));
 
-				retval = (int)buf_meta_bread(hfsmp->hfs_devvp, mdb_offset, blockSize, cred, &bp);
+				retval = (int)buf_meta_bread(hfsmp->hfs_devvp, 
+						HFS_PHYSBLK_ROUNDDOWN(mdb_offset, hfsmp->hfs_log_per_phys),
+						hfsmp->hfs_physical_block_size, cred, &bp);
 				if (retval == 0) {
-					jvhp = (HFSPlusVolumeHeader *)(buf_dataptr(bp) + HFS_PRI_OFFSET(blockSize));
+					jvhp = (HFSPlusVolumeHeader *)(buf_dataptr(bp) + HFS_PRI_OFFSET(hfsmp->hfs_physical_block_size));
 					    
 					if (SWAP_BE16(jvhp->signature) == kHFSPlusSigWord || SWAP_BE16(jvhp->signature) == kHFSXSigWord) {
 						printf ("hfs(3): Journal replay fail.  Writing lastMountVersion as FSK!\n");
@@ -1760,7 +1776,8 @@ hfs_early_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	JournalInfoBlock *jibp;
 	struct buf       *jinfo_bp, *bp;
 	int               sectors_per_fsblock, arg_flags=0, arg_tbufsz=0;
-	int               retval, blksize = hfsmp->hfs_phys_block_size;
+	int               retval;
+	uint32_t		  blksize = hfsmp->hfs_logical_block_size;
 	struct vnode     *devvp;
 	struct hfs_mount_args *args = _args;
 	u_int32_t	  jib_flags;
@@ -1808,7 +1825,7 @@ hfs_early_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 		                      jib_offset + embeddedOffset,
 				      jib_size,
 				      devvp,
-		                      hfsmp->hfs_phys_block_size);
+		                      hfsmp->hfs_logical_block_size);
 
 	    hfsmp->jnl = NULL;
 
@@ -1865,14 +1882,16 @@ hfs_early_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 			if (mdb_offset == 0) {
 				mdb_offset = (daddr64_t)((embeddedOffset / blksize) + HFS_PRI_SECTOR(blksize));
 			}
-			retval = (int)buf_meta_bread(devvp, mdb_offset, blksize, cred, &bp);
+			retval = (int)buf_meta_bread(devvp, 
+					HFS_PHYSBLK_ROUNDDOWN(mdb_offset, hfsmp->hfs_log_per_phys),
+					hfsmp->hfs_physical_block_size, cred, &bp);
 			if (retval) {
 				buf_brelse(bp);
 				printf("hfs: failed to reload the mdb after opening the journal (retval %d)!\n",
 					   retval);
 				return retval;
 			}
-			bcopy((char *)buf_dataptr(bp) + HFS_PRI_OFFSET(blksize), mdbp, 512);
+			bcopy((char *)buf_dataptr(bp) + HFS_PRI_OFFSET(hfsmp->hfs_physical_block_size), mdbp, 512);
 			buf_brelse(bp);
 			bp = NULL;
 		}
@@ -1955,9 +1974,9 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 	}
 
 
-	sectors_per_fsblock = SWAP_BE32(vhp->blockSize) / hfsmp->hfs_phys_block_size;
+	sectors_per_fsblock = SWAP_BE32(vhp->blockSize) / hfsmp->hfs_logical_block_size;
 	retval = (int)buf_meta_bread(devvp,
-						(daddr64_t)(vcb->hfsPlusIOPosOffset / hfsmp->hfs_phys_block_size + 
+						(daddr64_t)(vcb->hfsPlusIOPosOffset / hfsmp->hfs_logical_block_size + 
 						(SWAP_BE32(vhp->journalInfoBlock)*sectors_per_fsblock)),
 						SWAP_BE32(vhp->blockSize), NOCRED, &jinfo_bp);
 	if (retval) {
@@ -2021,7 +2040,7 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 		                      jib_offset + (off_t)vcb->hfsPlusIOPosOffset,
 				      jib_size,
 				      devvp,
-		                      hfsmp->hfs_phys_block_size);
+		                      hfsmp->hfs_logical_block_size);
 
 	    hfsmp->jnl = NULL;
 
@@ -2042,7 +2061,7 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 									jib_offset + (off_t)vcb->hfsPlusIOPosOffset,
 									jib_size,
 									devvp,
-									hfsmp->hfs_phys_block_size,
+									hfsmp->hfs_logical_block_size,
 									arg_flags,
 									arg_tbufsz,
 									hfs_sync_metadata, hfsmp->hfs_mp);
@@ -2071,7 +2090,7 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 								  jib_offset + (off_t)vcb->hfsPlusIOPosOffset,
 								  jib_size,
 								  devvp,
-								  hfsmp->hfs_phys_block_size,
+								  hfsmp->hfs_logical_block_size,
 								  arg_flags,
 								  arg_tbufsz,
 								  hfs_sync_metadata, hfsmp->hfs_mp);

@@ -531,6 +531,9 @@ extern void		vm_page_gobble(
 				        vm_page_t      page);
 
 extern void		vm_page_validate_cs(vm_page_t	page);
+extern void		vm_page_validate_cs_mapped(
+	vm_page_t	page,
+	const void	*kaddr);
 
 /*
  *	Functions implemented as macros. m->wanted and m->busy are

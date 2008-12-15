@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -25,21 +25,27 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-#ifndef _I386_HW_DEFS_H_
-#define _I386_HW_DEFS_H_
+#ifndef _KDP_SERIAL_H_
+#define _KDP_SERIAL_H_
 
+/*
+ * APIs for escaping a KDP UDP packet into a byte stream suitable
+ * for a standard serial console
+ */
 
-#define pmMwaitC1 	0x00
-#define pmMwaitC2	0x10
-#define pmMwaitC3 	0x20
-#define pmMwaitC4 	0x30
-#define pmMwaitBrInt 0x1
+enum {SERIALIZE_WAIT_START, SERIALIZE_READING};
 
-#define pmBase 		0x400
-#define pmCtl1 		0x04
-#define pmCtl2 		0x20
-#define pmC3Res 	0x54
-#define pmStatus 	0x00
-#define msrTSC 		0x10
+/*
+ * Take a buffer of specified length and output it with the given
+ * function. Escapes special characters as needed
+ */
+void kdp_serialize_packet(unsigned char *, unsigned int, void (*func)(char));
 
-#endif /* _I386_HW_DEFS_H_ */
+/*
+ * Add a new character to an internal buffer, and return that
+ * buffer when a fully constructed packet has been identified.
+ * Will track intermediate state using magic enums above
+ */
+unsigned char *kdp_unserialize_packet(unsigned char, unsigned int *);
+
+#endif

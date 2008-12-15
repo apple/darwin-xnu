@@ -1734,6 +1734,14 @@ findpcb:
 			/* ECN-setup SYN */
 			tp->ecn_flags |= (TE_SETUPRECEIVED | TE_SENDIPECT);
 		}
+#ifdef IFEF_NOWINDOWSCALE
+		if (m->m_pkthdr.rcvif != NULL &&
+			(m->m_pkthdr.rcvif->if_eflags & IFEF_NOWINDOWSCALE) != 0)
+		{
+			// Timestamps are not enabled on this interface
+			tp->t_flags &= ~(TF_REQ_SCALE);
+		}
+#endif
 		goto trimthenstep6;
 		}
 
@@ -2393,44 +2401,72 @@ trimthenstep6:
 				tp->t_dupacks = 0;
 			break;
 		}
+
+		if (!IN_FASTRECOVERY(tp)) {
+			/*
+			 * We were not in fast recovery.  Reset the duplicate ack
+			 * counter.
+			 */
+			tp->t_dupacks = 0;
+		}
 		/*
 		 * If the congestion window was inflated to account
 		 * for the other side's cached packets, retract it.
 		 */
-		if (tcp_do_newreno || tp->sack_enable) {
-			if (IN_FASTRECOVERY(tp)) {
+		else {
+			if (tcp_do_newreno || tp->sack_enable) {
 				if (SEQ_LT(th->th_ack, tp->snd_recover)) {
 					if (tp->sack_enable)
 						tcp_sack_partialack(tp, th);
 					else
-						tcp_newreno_partial_ack(tp, th);
-				} else {
-					/*
-					 * Out of fast recovery.
-					 * Window inflation should have left us
-					 * with approximately snd_ssthresh
-					 * outstanding data.
-					 * But in case we would be inclined to
-					 * send a burst, better to do it via
-					 * the slow start mechanism.
-					 */
-					if (SEQ_GT(th->th_ack +
-							tp->snd_ssthresh,
-						   tp->snd_max))
-						tp->snd_cwnd = tp->snd_max -
-								th->th_ack +
-								tp->t_maxseg;
-					else
-						tp->snd_cwnd = tp->snd_ssthresh;
+						tcp_newreno_partial_ack(tp, th);			
+				}
+				else {
+					if (tcp_do_newreno) {
+						long ss = tp->snd_max - th->th_ack;
+	
+						/*
+						 * Complete ack.  Inflate the congestion window to
+						 * ssthresh and exit fast recovery.
+						 *
+						 * Window inflation should have left us with approx.
+						 * snd_ssthresh outstanding data.  But in case we
+						 * would be inclined to send a burst, better to do
+						 * it via the slow start mechanism.
+						 */
+						if (ss < tp->snd_ssthresh)
+							tp->snd_cwnd = ss + tp->t_maxseg;
+						else
+							tp->snd_cwnd = tp->snd_ssthresh;
+					}
+					else {
+						/*
+						 * Clamp the congestion window to the crossover point
+						 * and exit fast recovery.
+						 */
+						if (tp->snd_cwnd > tp->snd_ssthresh)
+							tp->snd_cwnd = tp->snd_ssthresh;					
+					}
+	
+					EXIT_FASTRECOVERY(tp);
+					tp->t_dupacks = 0;
+					tp->t_bytes_acked = 0;
 				}
 			}
-		} else {
-			if (tp->t_dupacks >= tcprexmtthresh &&
-			    tp->snd_cwnd > tp->snd_ssthresh)
-				tp->snd_cwnd = tp->snd_ssthresh;
+			else {
+				/*
+				 * Clamp the congestion window to the crossover point
+				 * and exit fast recovery in non-newreno and non-SACK case.
+				 */
+				if (tp->snd_cwnd > tp->snd_ssthresh)
+					tp->snd_cwnd = tp->snd_ssthresh;					
+				EXIT_FASTRECOVERY(tp);
+				tp->t_dupacks = 0;
+				tp->t_bytes_acked = 0;
+			}
 		}
-		tp->t_dupacks = 0;
-		tp->t_bytes_acked = 0;
+
+
 		/*
 		 * If we reach this point, ACK is not a duplicate,
 		 *     i.e., it ACKs something we sent.

@@ -41,5 +41,42 @@ enum {
     kIOPMSetACAdaptorConnected	= (1<<18)
 };
 
+/*
+ * PM notification types
+ */
+
+/* @constant kIOPMStateConsoleUserShutdown
+ * @abstract Notification of GUI shutdown state available to kexts.
+ * @discussion This type can be passed as arguments to registerPMSettingController()
+ * to receive callbacks.
+ */
+#define kIOPMStateConsoleShutdown   "ConsoleShutdown"
+
+/* @enum ShutdownValues
+ * @abstract Potential values shared with key kIOPMStateConsoleUserShutdown
+ */
+enum {
+/* @constant kIOPMStateConsoleShutdownNone
+ * @abstract System shutdown (or restart) hasn't started; system is ON.
+ * @discussion Next state: 2
+ */
+    kIOPMStateConsoleShutdownNone   = 1,
+/* @constant kIOPMStateConsoleShutdownPossible
+ * @abstract User has been presented with the option to shutdown or restart. Shutdown may be cancelled.
+ * @discussion Next state may be: 1, 4
+ */
+    kIOPMStateConsoleShutdownPossible = 2,
+/* @constant kIOPMStateConsoleShutdownUnderway
+ * @abstract Shutdown or restart is proceeding. It may still be cancelled.
+ * @discussion Next state may be: 1, 4. This state is currently unused.
+ */
+    kIOPMStateConsoleShutdownUnderway = 3,
+/* @constant kIOPMStateConsoleShutdownCertain
+ * @abstract Shutdown is in progress and irrevocable.
+ * @discussion State remains 4 until power is removed from CPU.
+ */
+    kIOPMStateConsoleShutdownCertain = 4
+};
+
 #endif /* ! _IOKIT_IOPMPRIVATE_H */
 

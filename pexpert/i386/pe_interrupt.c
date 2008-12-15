@@ -28,7 +28,7 @@
 #include <pexpert/pexpert.h>
 #include <pexpert/protos.h>
 #include <machine/machine_routines.h>
-#include <i386/mp.h>
+#include <i386/lapic.h>
 #include <sys/kdebug.h>
 
 

@@ -11,6 +11,7 @@ LN = /bin/ln -fs
 CAT = /bin/cat
 MKDIR = /bin/mkdir -p
 FIND = /usr/bin/find
+INSTALL = /usr/bin/install
 
 TAR = /usr/bin/gnutar
 STRIP = /usr/bin/strip

@@ -1706,14 +1706,6 @@ journal_open(struct vnode *jvp,
     if (phys_blksz != (size_t)jnl->jhdr->jhdr_size && jnl->jhdr->jhdr_size != 0) {
 		printf("jnl: %s: open: phys_blksz %lu does not match journal header size %d\n",
 		    jdev_name, phys_blksz, jnl->jhdr->jhdr_size);
-
-		orig_blksz = phys_blksz;
-		phys_blksz = jnl->jhdr->jhdr_size;
-		if (VNOP_IOCTL(jvp, DKIOCSETBLOCKSIZE, (caddr_t)&phys_blksz, FWRITE, &context)) {
-		    printf("jnl: %s: could not set block size to %lu bytes.\n", jdev_name, phys_blksz);
-		    goto bad_journal;
-		}
-//		goto bad_journal;
     }
 
     if (   jnl->jhdr->start <= 0

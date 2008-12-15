@@ -321,6 +321,8 @@ extern void		task_set_64bit(
 extern void		task_backing_store_privileged(
 					task_t		task);
 
+extern int		get_task_numactivethreads(
+					task_t		task);
 /* Get number of activations in a task */
 extern int		get_task_numacts(
 					task_t		task);

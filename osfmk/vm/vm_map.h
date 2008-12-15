@@ -284,6 +284,7 @@ struct _vm_map {
 	boolean_t		wiring_required;/* All memory wired? */
 	boolean_t		no_zero_fill;	/* No zero fill absent pages */
 	boolean_t		mapped;		/* has this map been mapped */
+	boolean_t		prot_copy_allow;/* is VM_PROT_COPY allowed on this map */
 	unsigned int		timestamp;	/* Version number */
 	unsigned int		color_rr;	/* next color (not protected by a lock) */
 } ;
@@ -922,6 +923,10 @@ extern vm_map_offset_t	vm_compute_max_offset(
 extern void		vm_map_set_user_wire_limit(
 				vm_map_t		map,
 				vm_size_t		limit);
+
+extern void		vm_map_set_prot_copy_allow(
+				vm_map_t		map,
+				boolean_t		allow);
 
 #ifdef	MACH_KERNEL_PRIVATE
 

@@ -886,6 +886,15 @@ processor_set_threads(
 {
     return KERN_FAILURE;
 }
+#elif defined(CONFIG_EMBEDDED)
+kern_return_t
+processor_set_threads(
+	__unused processor_set_t		pset,
+	__unused thread_array_t		*thread_list,
+	__unused mach_msg_type_number_t	*count)
+{
+    return KERN_NOT_SUPPORTED;
+}
 #else
 kern_return_t
 processor_set_threads(

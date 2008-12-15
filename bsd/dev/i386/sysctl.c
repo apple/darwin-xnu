@@ -31,6 +31,7 @@
 #include <sys/kernel.h>
 #include <sys/sysctl.h>
 #include <i386/cpuid.h>
+#include <i386/tsc.h>
 
 static int
 hw_cpu_sysctl SYSCTL_HANDLER_ARGS
@@ -166,6 +167,12 @@ SYSCTL_PROC(_machdep_cpu, OID_AUTO, cores_per_package,
 	    sizeof(uint32_t),
 	    hw_cpu_sysctl, "I", "CPU cores per package");
 
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, microcode_version,
+	    CTLTYPE_INT | CTLFLAG_RD, 
+	    (void *)offsetof(i386_cpu_info_t, cpuid_microcode_version),
+	    sizeof(uint32_t),
+	    hw_cpu_sysctl, "I", "Microcode version number");
+
 
 SYSCTL_NODE(_machdep_cpu, OID_AUTO, mwait, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 	"mwait");
@@ -291,6 +298,34 @@ SYSCTL_PROC(_machdep_cpu_cache, OID_AUTO, size,
 	    hw_cpu_sysctl, "I", "Cache size (in Kbytes)");
 
 
+SYSCTL_NODE(_machdep_cpu, OID_AUTO, tlb, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
+	"tlb");
+
+SYSCTL_PROC(_machdep_cpu_tlb, OID_AUTO, inst_small,
+	    CTLTYPE_INT | CTLFLAG_RD, 
+	    (void *)offsetof(i386_cpu_info_t, cpuid_itlb_small),
+	    sizeof(uint32_t),
+	    hw_cpu_sysctl, "I", "Number of small page instruction TLBs");
+
+SYSCTL_PROC(_machdep_cpu_tlb, OID_AUTO, data_small,
+	    CTLTYPE_INT | CTLFLAG_RD, 
+	    (void *)offsetof(i386_cpu_info_t, cpuid_dtlb_small),
+	    sizeof(uint32_t),
+	    hw_cpu_sysctl, "I", "Number of small page data TLBs");
+
+SYSCTL_PROC(_machdep_cpu_tlb, OID_AUTO, inst_large,
+	    CTLTYPE_INT | CTLFLAG_RD, 
+	    (void *)offsetof(i386_cpu_info_t, cpuid_itlb_large),
+	    sizeof(uint32_t),
+	    hw_cpu_sysctl, "I", "Number of large page instruction TLBs");
+
+SYSCTL_PROC(_machdep_cpu_tlb, OID_AUTO, data_large,
+	    CTLTYPE_INT | CTLFLAG_RD, 
+	    (void *)offsetof(i386_cpu_info_t, cpuid_dtlb_large),
+	    sizeof(uint32_t),
+	    hw_cpu_sysctl, "I", "Number of large page data TLBs");
+
+
 SYSCTL_NODE(_machdep_cpu, OID_AUTO, address_bits, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 	"address_bits");
 
@@ -305,6 +340,19 @@ SYSCTL_PROC(_machdep_cpu_address_bits, OID_AUTO, virtual,
 	    (void *)offsetof(i386_cpu_info_t, cpuid_address_bits_virtual),
 	    sizeof(uint32_t),
 	    hw_cpu_sysctl, "I", "Number of virtual address bits");
+
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, core_count,
+	    CTLTYPE_INT | CTLFLAG_RD, 
+	    (void *)offsetof(i386_cpu_info_t, core_count),
+	    sizeof(uint32_t),
+	    hw_cpu_sysctl, "I", "Number of enabled cores per package");
+
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, thread_count,
+	    CTLTYPE_INT | CTLFLAG_RD, 
+	    (void *)offsetof(i386_cpu_info_t, thread_count),
+	    sizeof(uint32_t),
+	    hw_cpu_sysctl, "I", "Number of enabled threads per package");
+
 
 uint64_t pmap_pv_hashlist_walks;
 uint64_t pmap_pv_hashlist_cnts;

@@ -106,7 +106,7 @@ unsigned int		panic_is_inited = 0;
 unsigned int		return_on_panic = 0;
 unsigned long		panic_caller;
 
-char *debug_buf;
+char debug_buf[PAGE_SIZE];
 ppnum_t debug_buf_page;
 char *debug_buf_ptr;
 unsigned int debug_buf_size;
@@ -183,9 +183,6 @@ debug_log_init(void)
 {
 	if (debug_buf_size != 0)
 		return;
-	if (kmem_alloc(kernel_map, (vm_offset_t *) &debug_buf, PAGE_SIZE)
-			!= KERN_SUCCESS)
-		panic("cannot allocate debug_buf\n");
 	debug_buf_ptr = debug_buf;
 	debug_buf_size = PAGE_SIZE;
         debug_buf_page = pmap_find_phys(kernel_pmap,

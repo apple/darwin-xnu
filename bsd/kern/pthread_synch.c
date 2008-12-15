@@ -1001,12 +1001,6 @@ bsdthread_terminate(__unused struct proc *p, struct bsdthread_terminate_args  *u
 #if 0
 	KERNEL_DEBUG_CONSTANT(0x9000084 |DBG_FUNC_START, (unsigned int)freeaddr, (unsigned int)freesize, (unsigned int)kthport, 0xff, 0);
 #endif
-	if (sem != MACH_PORT_NULL) {
-		 kret = semaphore_signal_internal_trap(sem);
-		if (kret != KERN_SUCCESS) {
-			return(EINVAL);
-		}
-	}
 	if ((freesize != (mach_vm_size_t)0) && (freeaddr != (mach_vm_offset_t)0)) {
 		kret = mach_vm_deallocate(current_map(), freeaddr, freesize);
 		if (kret != KERN_SUCCESS) {
@@ -1015,6 +1009,13 @@ bsdthread_terminate(__unused struct proc *p, struct bsdthread_terminate_args  *u
 	}
 	
 	(void) thread_terminate(current_thread());
+	if (sem != MACH_PORT_NULL) {
+		 kret = semaphore_signal_internal_trap(sem);
+		if (kret != KERN_SUCCESS) {
+			return(EINVAL);
+		}
+	}
+	
 	if (kthport != MACH_PORT_NULL)
 			mach_port_deallocate(get_task_ipcspace(current_task()), kthport);
 	thread_exception_return();
@@ -1982,7 +1983,6 @@ wq_runitem(proc_t p, user_addr_t item, thread_t th, struct threadlist *tl,
 int
 setup_wqthread(proc_t p, thread_t th, user_addr_t item, int reuse_thread, struct threadlist *tl)
 {
-
 #if defined(__ppc__)
 	/*
 	 * Set up PowerPC registers...

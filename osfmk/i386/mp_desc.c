@@ -94,7 +94,12 @@ extern uint32_t		low_eintstack[];	/* top */
  * The master cpu (cpu 0) has its data area statically allocated;
  * others are allocated dynamically and this array is updated at runtime.
  */
-cpu_data_t	cpu_data_master;
+cpu_data_t	cpu_data_master = {
+			.cpu_this = &cpu_data_master,
+			.cpu_nanotime = &rtc_nanotime_info,
+			.cpu_is64bit = FALSE,
+			.cpu_int_stack_top = (vm_offset_t) low_eintstack,
+		};
 cpu_data_t	*cpu_data_ptr[MAX_CPUS] = { [0] &cpu_data_master };
 
 decl_simple_lock_data(,cpu_lock);	/* protects real_ncpus */
@@ -488,9 +493,6 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 		if (cdp->cpu_processor == NULL) {
 			cdp->cpu_processor = cpu_processor_alloc(TRUE);
 			cdp->cpu_pmap = pmap_cpu_alloc(TRUE);
-			cdp->cpu_this = cdp;
-			cdp->cpu_is64bit = FALSE;
-			cdp->cpu_int_stack_top = (vm_offset_t) low_eintstack;
 			cpu_desc_init(cdp, TRUE);
 			fast_syscall_init();
 		}
@@ -565,6 +567,8 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 	cdp->cpu_number = real_ncpus;
 	real_ncpus++;
 	simple_unlock(&cpu_lock);
+
+	cdp->cpu_nanotime = &rtc_nanotime_info;
 
 	kprintf("cpu_data_alloc(%d) %p desc_table: %p "
 		"ldt: %p "

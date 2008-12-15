@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -46,7 +46,7 @@ extern void		processor_up(
 extern void		processor_offline(
 					processor_t		processor);
 
-extern void		processor_start_thread(void);
+extern void		processor_start_thread(void *machine_param);
 
 /*
  * Must be implemented in machine dependent code.

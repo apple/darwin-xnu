@@ -373,7 +373,7 @@ bool validateExtensionDict(OSDictionary * extension, int index) {
             goto finish;
         }
 
-    } else if (PE_parse_boot_arg("-x", namep)) { /* safe boot */
+    } else if (PE_parse_boot_argn("-x", namep, sizeof (namep))) { /* safe boot */
         ineligible_for_safe_boot = true;
         result = false;
         goto finish;
@@ -502,6 +502,30 @@ OSDictionary * compareExtensionVersions(
         goto finish;
      }
   
+    if (0 == strcmp("com.apple.driver.AppleIntelCPUPowerManagement",
+                    incumbentName->getCStringNoCopy())) {
+      /* Special rules. Always favor version 51.0.0 exactly at the
+       * expense of all other versions newer or older.
+       */
+      if(0 == strcmp(incumbentVersionString->getCStringNoCopy(), "51.0.0")) {
+	IOLog(VTYELLOW "Skipping duplicate extension \"%s\" with "
+	      " version (%s -> %s).\n" VTRESET,
+	      candidateName->getCStringNoCopy(),
+	      candidateVersionString->getCStringNoCopy(),
+	      incumbentVersionString->getCStringNoCopy());
+	winner = incumbent;
+	goto finish;
+      } else if (0 == strcmp(candidateVersionString->getCStringNoCopy(), "51.0.0")) {
+	IOLog(VTYELLOW "Skipping duplicate extension \"%s\" with "
+	      " version (%s -> %s).\n" VTRESET,
+	      candidateName->getCStringNoCopy(),
+	      incumbentVersionString->getCStringNoCopy(),
+	      candidateVersionString->getCStringNoCopy());
+	winner = candidate;
+	goto finish;
+      }
+    }
+
     if (candidate_vers > incumbent_vers) {
         IOLog(VTYELLOW "Replacing extension \"%s\" with newer version "
             "(%s -> %s).\n" VTRESET,

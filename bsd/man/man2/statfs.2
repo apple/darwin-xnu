@@ -38,9 +38,7 @@
 .Os
 .Sh NAME
 .Nm statfs,
-.Nm statfs64,
-.Nm fstatfs,
-.Nm fstatfs64
+.Nm fstatfs
 .Nd get file system statistics
 .Sh SYNOPSIS
 .Fd #include <sys/param.h>
@@ -48,11 +46,7 @@
 .Ft int
 .Fn statfs "const char *path" "struct statfs *buf"
 .Ft int
-.Fn statfs64 "const char *path" "struct statfs64 *buf"
-.Ft int
 .Fn fstatfs "int fd" "struct statfs *buf"
-.Ft int
-.Fn fstatfs64 "int fd" "struct statfs64 *buf"
 .Sh DESCRIPTION
 .Fn Statfs
 returns information about a mounted file system.
@@ -61,41 +55,14 @@ is the path name of any file within the mounted file system.
 .Fa Buf
 is a pointer to a 
 .Fa statfs
-or
-.Fa statfs64
 structure defined as follows:
 .Bd -literal
 typedef struct { int32_t val[2]; } fsid_t;
 
-#define MFSNAMELEN      15 /* length of fs type name, not inc. nul */
-#define MNAMELEN        90 /* length of buffer for returned name */
 #define MFSTYPENAMELEN  16 /* length of fs type name including null */
 #define MAXPATHLEN      1024	
 
 struct statfs {
-    short   f_otype;	/* type of file system (reserved: zero) */
-    short   f_oflags;	/* copy of mount flags (reserved: zero) */
-    long    f_bsize;	/* fundamental file system block size */
-    long    f_iosize;	/* optimal transfer block size */
-    long    f_blocks;	/* total data blocks in file system */
-    long    f_bfree;	/* free blocks in fs */
-    long    f_bavail;	/* free blocks avail to non-superuser */
-    long    f_files;	/* total file nodes in file system */
-    long    f_ffree;	/* free file nodes in fs */
-    fsid_t  f_fsid;	/* file system id */
-    uid_t   f_owner;	/* user that mounted the file system */
-    short   f_reserved1;	/* reserved for future use */
-    short   f_type;	/* type of file system (reserved) */
-    long    f_flags;	/* copy of mount flags (reserved) */
-    long    f_reserved2[2];	/* reserved for future use */
-    char    f_fstypename[MFSNAMELEN]; /* fs type name */
-    char    f_mntonname[MNAMELEN];    /* directory on which mounted */
-    char    f_mntfromname[MNAMELEN];  /* mounted file system */
-    char    f_reserved3;	/* reserved for future use */
-    long    f_reserved4[4];	/* reserved for future use */
-};
-
-struct statfs64 {
     uint32_t        f_bsize;        /* fundamental file system block size */ 
     int32_t         f_iosize;       /* optimal transfer block size */ 
     uint64_t        f_blocks;       /* total data blocks in file system */ 
@@ -223,8 +190,4 @@ error occurred while reading from or writing to the file system.
 .Sh HISTORY
 The
 .Fn statfs
-function first appeared in 4.4BSD. The
-.Fn statfs64
-and 
-.Fn fstatfs64
-first appeared in Max OS X 10.5 (Leopard).
+function first appeared in 4.4BSD.

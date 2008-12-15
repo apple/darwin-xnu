@@ -35,7 +35,7 @@
 #include <mach/message.h>
 #include <mach/exception.h>
 #include <mach/mig_errors.h>
-#include <mach-o/dyld.h>
+#include <dlfcn.h>
 #include <stdlib.h>
 
 __private_extern__ kern_return_t internal_catch_exception_raise (
@@ -52,7 +52,7 @@ __private_extern__ kern_return_t internal_catch_exception_raise (
     static kern_return_t (*func)(mach_port_t, mach_port_t, mach_port_t, exception_type_t, exception_data_t, mach_msg_type_number_t);
     if (checkForFunction == 0) {
         checkForFunction = 1;
-        _dyld_lookup_and_bind("_catch_exception_raise", (unsigned long *)&func, (void **)0);
+		func = dlsym(RTLD_DEFAULT, "catch_exception_raise");
     }
     if (func == 0) {
         /* The user hasn't defined catch_exception_raise in their binary */

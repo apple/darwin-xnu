@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -201,28 +201,28 @@ ppc_init(
       
 	PE_init_platform(FALSE, args);						/* Get platform expert set up */
 
-	if (!PE_parse_boot_arg("novmx", &novmx)) novmx=0;	/* Special run without VMX? */
+	if (!PE_parse_boot_argn("novmx", &novmx, sizeof (novmx))) novmx=0;	/* Special run without VMX? */
 	if(novmx) {											/* Yeah, turn it off */
 		BootProcInfo.pf.Available &= ~pfAltivec;		/* Turn off Altivec available */
 		__asm__ volatile("mtsprg 2,%0" : : "r" (BootProcInfo.pf.Available));	/* Set live value */
 	}
 
-	if (!PE_parse_boot_arg("fn", &forcenap)) forcenap = 0;	/* If force nap not set, make 0 */
+	if (!PE_parse_boot_argn("fn", &forcenap, sizeof (forcenap))) forcenap = 0;	/* If force nap not set, make 0 */
 	else {
 		if(forcenap < 2) forcenap = forcenap + 1;		/* Else set 1 for off, 2 for on */
 		else forcenap = 0;								/* Clear for error case */
 	}
 	
-	if (!PE_parse_boot_arg("pmsx", &pmsExperimental)) pmsExperimental = 0;	/* Check if we should start in experimental power management stepper mode */
-	if (!PE_parse_boot_arg("lcks", &LcksOpts)) LcksOpts = 0;	/* Set lcks options */
-	if (!PE_parse_boot_arg("diag", &dgWork.dgFlags)) dgWork.dgFlags = 0;	/* Set diagnostic flags */
+	if (!PE_parse_boot_argn("pmsx", &pmsExperimental, sizeof (pmsExperimental))) pmsExperimental = 0;	/* Check if we should start in experimental power management stepper mode */
+	if (!PE_parse_boot_argn("lcks", &LcksOpts, sizeof (LcksOpts))) LcksOpts = 0;	/* Set lcks options */
+	if (!PE_parse_boot_argn("diag", &dgWork.dgFlags, sizeof (dgWork.dgFlags))) dgWork.dgFlags = 0;	/* Set diagnostic flags */
 	if(dgWork.dgFlags & enaExpTrace) trcWork.traceMask = 0xFFFFFFFF;	/* If tracing requested, enable it */
 
-	if(PE_parse_boot_arg("ctrc", &cputrace)) {			/* See if tracing is limited to a specific cpu */
+	if(PE_parse_boot_argn("ctrc", &cputrace, sizeof (cputrace))) {			/* See if tracing is limited to a specific cpu */
 		trcWork.traceMask = (trcWork.traceMask & 0xFFFFFFF0) | (cputrace & 0xF);	/* Limit to 4 */
 	}
 
-	if(!PE_parse_boot_arg("tb", &trcWork.traceSize)) {	/* See if non-default trace buffer size */
+	if(!PE_parse_boot_argn("tb", &trcWork.traceSize, sizeof (trcWork.traceSize))) {	/* See if non-default trace buffer size */
 #if DEBUG
 		trcWork.traceSize = 32;							/* Default 32 page trace table for DEBUG */
 #else
@@ -234,18 +234,18 @@ ppc_init(
 	if(trcWork.traceSize > 256) trcWork.traceSize = 256;	/* Maximum size of 256 pages */
 	trcWork.traceSize = trcWork.traceSize * 4096;		/* Change page count to size */
 
-	if (!PE_parse_boot_arg("maxmem", &maxmem))
+	if (!PE_parse_boot_argn("maxmem", &maxmem, sizeof (maxmem)))
 		xmaxmem=0;
 	else
 		xmaxmem = (uint64_t)maxmem * (1024 * 1024);
 
-	if (!PE_parse_boot_arg("wcte", &wcte)) wcte = 0;	/* If write combine timer enable not supplied, make 1 */
+	if (!PE_parse_boot_argn("wcte", &wcte, sizeof (wcte))) wcte = 0;	/* If write combine timer enable not supplied, make 1 */
 	else wcte = (wcte != 0);							/* Force to 0 or 1 */
 
-	if (!PE_parse_boot_arg("mcklog", &mckFlags)) mckFlags = 0;	/* If machine check flags not specified, clear */
+	if (!PE_parse_boot_argn("mcklog", &mckFlags, sizeof (mckFlags))) mckFlags = 0;	/* If machine check flags not specified, clear */
 	else if(mckFlags > 1) mckFlags = 0;					/* If bogus, clear */
     
-    if (!PE_parse_boot_arg("ht_shift", &hash_table_shift))  /* should we use a non-default hash table size? */
+    if (!PE_parse_boot_argn("ht_shift", &hash_table_shift, sizeof (hash_table_shift)))  /* should we use a non-default hash table size? */
         hash_table_shift = 0;                           /* no, use default size */
 
 	/*   
@@ -262,7 +262,7 @@ ppc_init(
 			(void)ml_scom_write(GUSModeReg << 8, scdata);	/* Get GUS mode register */
 		}
 		
-		if(PE_parse_boot_arg("mcksoft", &mcksoft)) {	/* Have they supplied "machine check software recovery? */
+		if(PE_parse_boot_argn("mcksoft", &mcksoft, sizeof (mcksoft))) {	/* Have they supplied "machine check software recovery? */
 			newhid = BootProcInfo.pf.pfHID5;			/* Get the old HID5 */
 			if(mcksoft < 2) {
 				newhid &= 0xFFFFFFFFFFFFDFFFULL;		/* Clear the old one */
@@ -296,5 +296,5 @@ ppc_init_cpu(
 
 	cpu_init();
 	
-	slave_main();
+	slave_main(NULL);
 }

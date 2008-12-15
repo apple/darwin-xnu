@@ -288,7 +288,10 @@ extern int IS_64BIT_PROCESS(proc_t);
 
 extern int	tsleep(void *chan, int pri, const char *wmesg, int timo);
 extern int	msleep1(void *chan, lck_mtx_t *mtx, int pri, const char *wmesg, u_int64_t timo);
-#endif
+
+extern int proc_pidversion(proc_t);
+extern int proc_getcdhash(proc_t, unsigned char *);
+#endif /* KERNEL_PRIVATE */
 
 __END_DECLS
 

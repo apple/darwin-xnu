@@ -38,7 +38,7 @@
 #include <kern/thread.h>
 #include <i386/cpu_data.h>
 #include <i386/machine_cpu.h>
-#include <i386/mp.h>
+#include <i386/lapic.h>
 #include <i386/mp_events.h>
 #include <i386/pmap.h>
 #include <i386/misc_protos.h>
@@ -293,39 +293,6 @@ void ml_install_interrupt_handler(
 
 
 void
-machine_idle(void)
-{
-	x86_core_t	*my_core = x86_core();
-	cpu_data_t	*my_cpu  = current_cpu_datap();
-	int		others_active;
-
-	/*
-	 * We halt this cpu thread
-	 * unless kernel param idlehalt is false and no other thread
-	 * in the same core is active - if so, don't halt so that this
-	 * core doesn't go into a low-power mode.
-	 * For 4/4, we set a null "active cr3" while idle.
-	 */
-	if (my_core == NULL || my_cpu == NULL)
-	    goto out;
-
-	others_active = !atomic_decl_and_test(
-				(long *) &my_core->active_lcpus, 1);
-	my_cpu->lcpu.idle = TRUE;
-	if (idlehalt || others_active) {
-		DBGLOG(cpu_handle, cpu_number(), MP_IDLE);
-		MARK_CPU_IDLE(cpu_number());
-		machine_idle_cstate(FALSE);
-		MARK_CPU_ACTIVE(cpu_number());
-		DBGLOG(cpu_handle, cpu_number(), MP_UNIDLE);
-	}
-	my_cpu->lcpu.idle = FALSE;
-	atomic_incl((long *) &my_core->active_lcpus, 1);
-  out:
-	__asm__ volatile("sti");
-}
-
-void
 machine_signal_idle(
         processor_t processor)
 {
@@ -376,7 +343,7 @@ ml_processor_register(
 		goto failed;
 
 	if (!boot_cpu) {
-		this_cpu_datap->lcpu.core = cpu_thread_alloc(this_cpu_datap->cpu_number);
+		cpu_thread_alloc(this_cpu_datap->cpu_number);
 		if (this_cpu_datap->lcpu.core == NULL)
 			goto failed;
 
@@ -526,7 +493,7 @@ ml_init_lock_timeout(void)
 	LockTimeOut = (uint32_t) abstime;
 	LockTimeOutTSC = (uint32_t) tmrCvt(abstime, tscFCvtn2t);
 
-	if (PE_parse_boot_arg("mtxspin", &mtxspin)) {
+	if (PE_parse_boot_argn("mtxspin", &mtxspin, sizeof (mtxspin))) {
 		if (mtxspin > USEC_PER_SEC>>4)
 			mtxspin =  USEC_PER_SEC>>4;
 		nanoseconds_to_absolutetime(mtxspin*NSEC_PER_USEC, &abstime);

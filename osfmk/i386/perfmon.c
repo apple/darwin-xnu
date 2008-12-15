@@ -32,7 +32,7 @@
 #include <i386/perfmon.h>
 #include <i386/proc_reg.h>
 #include <i386/cpu_threads.h>
-#include <i386/mp.h>
+#include <i386/lapic.h>
 #include <i386/cpuid.h>
 #include <i386/lock.h>
 #include <vm/vm_kern.h>
@@ -260,7 +260,7 @@ _pmc_machine_type(void)
 static void
 pmc_p4_intr(void *state)
 {
-	pmc_table_t	*pmc_table = (pmc_table_t *) x86_core()->pmc;
+	pmc_table_t	*pmc_table = (pmc_table_t *) x86_lcpu()->pmc;
 	uint32_t	cccr_addr;
 	pmc_cccr_t	cccr;
 	pmc_id_t	id;
@@ -300,7 +300,7 @@ pmc_p4_intr(void *state)
 static void
 pmc_p6_intr(void *state)
 {
-	pmc_table_t	*pmc_table = (pmc_table_t *) x86_core()->pmc;
+	pmc_table_t	*pmc_table = (pmc_table_t *) x86_lcpu()->pmc;
 	pmc_id_t	id;
 
 	/*
@@ -315,7 +315,7 @@ pmc_p6_intr(void *state)
 static void
 pmc_core_intr(void *state)
 {
-	pmc_table_t	*pmc_table = (pmc_table_t *) x86_core()->pmc;
+	pmc_table_t	*pmc_table = (pmc_table_t *) x86_lcpu()->pmc;
 	pmc_id_t	id;
 	pmc_global_status_t	ovf_status;
 
@@ -367,7 +367,7 @@ pmc_alloc(void)
 		pmc_table->id_max = 17;
 		pmc_table->msr_counter_base = MSR_COUNTER_ADDR(0);
 		pmc_table->msr_control_base = MSR_CCCR_ADDR(0);
-		lapic_set_pmi_func(&pmc_p4_intr);
+		lapic_set_pmi_func((i386_intr_func_t) &pmc_p4_intr);
 		break;
 	case pmc_Core:
 		pmc_table->id_max = 1;
@@ -376,13 +376,13 @@ pmc_alloc(void)
 		pmc_table->Core.msr_global_ctrl = MSR_PERF_GLOBAL_CTRL;
 		pmc_table->Core.msr_global_ovf_ctrl = MSR_PERF_GLOBAL_OVF_CTRL;
 		pmc_table->Core.msr_global_status = MSR_PERF_GLOBAL_STATUS;
-		lapic_set_pmi_func(&pmc_core_intr);
+		lapic_set_pmi_func((i386_intr_func_t) &pmc_core_intr);
 		break;
 	case pmc_P6:
 		pmc_table->id_max = 1;
 		pmc_table->msr_counter_base = MSR_P6_COUNTER_ADDR(0);
 		pmc_table->msr_control_base = MSR_P6_PES_ADDR(0);
-		lapic_set_pmi_func(&pmc_p6_intr);
+		lapic_set_pmi_func((i386_intr_func_t) &pmc_p6_intr);
 		break;
 	default:
 		break;
@@ -398,12 +398,12 @@ pmc_alloc(void)
 static inline pmc_table_t *
 pmc_table_valid(pmc_id_t id)
 {
-	x86_core_t	*my_core = x86_core();
+	x86_lcpu_t	*my_lcpu = x86_lcpu();
 	pmc_table_t	*pmc;
 
-	assert(my_core != NULL);
+	assert(my_lcpu != NULL);
 	
-	pmc = (pmc_table_t *) my_core->pmc;
+	pmc = (pmc_table_t *) my_lcpu->pmc;
 	if ((pmc == NULL) ||
 	    (id > pmc->id_max) ||
 	    (pmc->machine_type == pmc_P4_Xeon && !pmc->P4.reserved[id]) ||
@@ -416,12 +416,12 @@ pmc_table_valid(pmc_id_t id)
 int
 pmc_machine_type(pmc_machine_t *type)
 {
-	x86_core_t	*my_core = x86_core();
+	x86_lcpu_t	*my_lcpu = x86_lcpu();
 	pmc_table_t	*pmc_table;
 
-	assert(my_core != NULL);
+	assert(my_lcpu != NULL);
 
-	pmc_table = (pmc_table_t *) my_core->pmc;
+	pmc_table = (pmc_table_t *) my_lcpu->pmc;
 	if (pmc_table == NULL)
 		return KERN_FAILURE;
 
@@ -433,12 +433,12 @@ pmc_machine_type(pmc_machine_t *type)
 int
 pmc_reserve(pmc_id_t id)
 {
-	x86_core_t	*my_core = x86_core();
+	x86_lcpu_t	*my_lcpu = x86_lcpu();
 	pmc_table_t	*pmc_table;
 
-	assert(my_core != NULL);
+	assert(my_lcpu != NULL);
 
-	pmc_table = (pmc_table_t *) my_core->pmc;
+	pmc_table = (pmc_table_t *) my_lcpu->pmc;
 	if (pmc_table == NULL)
 		return KERN_FAILURE;
 	if (id > pmc_table->id_max)

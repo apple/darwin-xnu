@@ -222,6 +222,11 @@ options   CONFIG_NO_KPRINTF_STRINGS		# <no_kprintf_str>
 #
 options   CONFIG_EMBEDDED                       # <config_embedded>
 
+# only execute signed code. Hang this off config_embedded since there's
+# nothing more appropriate right now
+#
+options   CONFIG_ENFORCE_SIGNED_CODE		# <config_embedded>
+
 #  jettison_kernel_linker - jettison kernel linker after kernel init; don't wait for kextd to launch
 options   CONFIG_JETTISON_KERNEL_LINKER		# <jettison_kernel_linker>
 
@@ -230,3 +235,9 @@ options	  CONFIG_VC_PROGRESS_WHITE		# <vc_progress_white>
 
 # secure_kernel - secure kernel from user programs
 options		SECURE_KERNEL		# <secure_kernel>
+
+#
+# code decryption... used on embedded for app protection
+# must be set in all the bsd/conf and osfmk/conf MASTER files
+#
+options		CONFIG_CODE_DECRYPTION	# <config_embedded>

@@ -61,10 +61,15 @@
 #include <libkern/libkern.h>
 #include <sys/sysctl.h>
 
+extern unsigned int    vm_page_free_count;
+extern unsigned int    vm_page_active_count;
+extern unsigned int    vm_page_inactive_count;
+extern unsigned int    vm_page_purgeable_count;
+extern unsigned int    vm_page_wire_count;
+
 static void kern_memorystatus_thread(void);
 
 int kern_memorystatus_wakeup = 0;
-int kern_memorystatus_pause = 0;
 int kern_memorystatus_level = 0;
 int kern_memorystatus_last_level = 0;
 unsigned int kern_memorystatus_kev_failure_count = 0;
@@ -82,6 +87,13 @@ static void
 kern_memorystatus_thread(void)
 {
 	struct kev_msg ev_msg;
+	struct {
+		uint32_t free_pages;
+		uint32_t active_pages;
+		uint32_t inactive_pages;
+		uint32_t purgeable_pages;
+		uint32_t wired_pages;
+	} data;
 	int ret;
 
 	while(1) {
@@ -95,16 +107,21 @@ kern_memorystatus_thread(void)
 		/* pass the memory status level in the event code (as percent used) */
 		ev_msg.event_code     = 100 - kern_memorystatus_last_level;
 
-		ev_msg.dv[0].data_length = 0;
+		ev_msg.dv[0].data_length = sizeof data;
+		ev_msg.dv[0].data_ptr = &data;
+		ev_msg.dv[1].data_length = 0;
+
+		data.free_pages = vm_page_free_count;
+		data.active_pages = vm_page_active_count;
+		data.inactive_pages = vm_page_inactive_count;
+		data.purgeable_pages = vm_page_purgeable_count;
+		data.wired_pages = vm_page_wire_count;
 
 		ret = kev_post_msg(&ev_msg);
 		if (ret) {
 			kern_memorystatus_kev_failure_count++;
 			printf("%s: kev_post_msg() failed, err %d\n", __func__, ret);
 		}
-
-		assert_wait_timeout((event_t)&kern_memorystatus_pause, THREAD_UNINT, 1, 250*1000*NSEC_PER_USEC);
-		(void)thread_block(THREAD_CONTINUE_NULL);
 
 		if (kern_memorystatus_level >= kern_memorystatus_last_level + 5 ||
 		    kern_memorystatus_level <= kern_memorystatus_last_level - 5)

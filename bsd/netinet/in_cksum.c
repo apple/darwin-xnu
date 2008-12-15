@@ -156,7 +156,7 @@ inet_cksum(struct mbuf *m, unsigned int nxt, unsigned int skip,
 	KERNEL_DEBUG(DBG_FNC_IN_CKSUM | DBG_FUNC_START, len,0,0,0,0);
 
 	/* sanity check */
-	if (m->m_pkthdr.len < skip + len) {
+	if ((m->m_flags & M_PKTHDR) && m->m_pkthdr.len < skip + len) {
 		panic("inet_cksum: mbuf len (%d) < off+len (%d+%d)\n",
 		    m->m_pkthdr.len, skip, len);
 	}
@@ -248,7 +248,7 @@ inet_cksum(struct mbuf *m, unsigned int nxt, unsigned int skip,
 	KERNEL_DEBUG(DBG_FNC_IN_CKSUM | DBG_FUNC_START, len,0,0,0,0);
 
 	/* sanity check */
-	if (m->m_pkthdr.len < skip + len) {
+	if ((m->m_flags & M_PKTHDR) && m->m_pkthdr.len < skip + len) {
 		panic("inet_cksum: mbuf len (%d) < off+len (%d+%d)\n",
 		    m->m_pkthdr.len, skip, len);
 	}

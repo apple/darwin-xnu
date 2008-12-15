@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -70,7 +70,6 @@
 #include <i386/eflags.h>
 #include <i386/trap.h>
 #include <i386/pmCPU.h>
-#include <i386/hpet.h>
 
 typedef	addr64_t	db_addr_t;	/* address - unsigned */
 typedef	uint64_t	db_expr_t;	/* expression */
@@ -172,9 +171,6 @@ extern void db_msr(db_expr_t addr, boolean_t have_addr, db_expr_t count,
 		   char *modif);
 extern void db_apic(db_expr_t addr, boolean_t have_addr, db_expr_t count,
 		    char *modif);
-extern void db_display_hpet(hpetReg_t *);
-extern void db_hpet(db_expr_t addr, boolean_t have_addr, db_expr_t count,
-		    char *modif);
 
 /* macros for printing OS server dependent task name */
 
@@ -203,7 +199,6 @@ extern void		kdb_on(
 				int			cpu);
 
 #if MACH_KDB
-extern void db_getpmgr(pmData_t *pmj);
 extern void db_chkpmgr(void);
 #endif /* MACH_KDB */
 extern void db_pmgr(db_expr_t addr, int have_addr, db_expr_t count, char * modif);

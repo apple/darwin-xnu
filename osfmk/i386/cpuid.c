@@ -213,6 +213,76 @@ cpuid_set_cache_info( i386_cpu_info_t * info_p )
 	else if (linesizes[L1D])
 		info_p->cache_linesize = linesizes[L1D];
 	else panic("no linesize");
+
+	/*
+	 * Extract and publish TLB information.
+	 */
+	for (i = 1; i < sizeof(info_p->cache_info); i++) {
+		uint8_t		desc = info_p->cache_info[i];
+
+		switch (desc) {
+		case CPUID_CACHE_ITLB_4K_32_4:
+			info_p->cpuid_itlb_small = 32;
+			break;
+		case CPUID_CACHE_ITLB_4M_2:
+			info_p->cpuid_itlb_large = 2;
+			break;
+		case CPUID_CACHE_DTLB_4K_64_4:
+			info_p->cpuid_dtlb_small = 64;
+			break;
+		case CPUID_CACHE_DTLB_4M_8_4:
+			info_p->cpuid_dtlb_large = 8;
+			break;
+		case CPUID_CACHE_DTLB_4M_32_4:
+			info_p->cpuid_dtlb_large = 32;
+			break;
+		case CPUID_CACHE_ITLB_64:
+			info_p->cpuid_itlb_small = 64;
+			info_p->cpuid_itlb_large = 64;
+			break;
+		case CPUID_CACHE_ITLB_128:
+			info_p->cpuid_itlb_small = 128;
+			info_p->cpuid_itlb_large = 128;
+			break;
+		case CPUID_CACHE_ITLB_256:
+			info_p->cpuid_itlb_small = 256;
+			info_p->cpuid_itlb_large = 256;
+			break;
+		case CPUID_CACHE_DTLB_64:
+			info_p->cpuid_dtlb_small = 64;
+			info_p->cpuid_dtlb_large = 64;
+			break;
+		case CPUID_CACHE_DTLB_128:
+			info_p->cpuid_dtlb_small = 128;
+			info_p->cpuid_dtlb_large = 128;
+			break;
+		case CPUID_CACHE_DTLB_256:
+			info_p->cpuid_dtlb_small = 256;
+			info_p->cpuid_dtlb_large = 256;
+			break;
+		case CPUID_CACHE_ITLB_4M2M_7:
+			info_p->cpuid_itlb_large = 7;
+			break;
+		case CPUID_CACHE_DTLB_4K_16_4:
+			info_p->cpuid_dtlb_small = 16;
+			break;
+		case CPUID_CACHE_DTLB_4M2M_32_4:
+			info_p->cpuid_dtlb_large = 32;
+			break;
+		case CPUID_CACHE_ITLB_4K_128_4:
+			info_p->cpuid_itlb_small = 128;
+			break;
+		case CPUID_CACHE_ITLB_4M_8:
+			info_p->cpuid_itlb_large = 8;
+			break;
+		case CPUID_CACHE_DTLB_4K_128_4:
+			info_p->cpuid_dtlb_small = 128;
+			break;
+		case CPUID_CACHE_DTLB_4K_256_4:
+			info_p->cpuid_dtlb_small = 256;
+			break;
+		}
+	}
 }
 
 static void
@@ -291,7 +361,7 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 	/* Fold extensions into family/model */
 	if (info_p->cpuid_family == 0x0f)
 		info_p->cpuid_family += info_p->cpuid_extfamily;
-	if (info_p->cpuid_family == 0x0f || info_p->cpuid_family== 0x06)
+	if (info_p->cpuid_family == 0x0f || info_p->cpuid_family == 0x06)
 		info_p->cpuid_model += (info_p->cpuid_extmodel << 4);
 
 	if (info_p->cpuid_features & CPUID_FEATURE_HTT)
@@ -306,7 +376,7 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 				quad(cpuid_reg[ecx], cpuid_reg[edx]);
 	}
 
-	if (info_p->cpuid_extfeatures && CPUID_FEATURE_MONITOR) {
+	if (info_p->cpuid_features & CPUID_FEATURE_MONITOR) {
 		/*
 		 * Extract the Monitor/Mwait Leaf info:
 		 */
@@ -373,6 +443,13 @@ cpuid_set_info(void)
 
 	cpuid_set_cache_info(&cpuid_cpu_info);
 
+	if (cpuid_cpu_info.core_count == 0) {
+		cpuid_cpu_info.core_count =
+			cpuid_cpu_info.cpuid_cores_per_package;
+		cpuid_cpu_info.thread_count =
+			cpuid_cpu_info.cpuid_logical_per_package;
+	}
+
 	cpuid_cpu_info.cpuid_model_string = ""; /* deprecated */
 }
 
@@ -422,6 +499,7 @@ static struct {
 	{CPUID_FEATURE_PDCM,    "PDCM"},
 	{CPUID_FEATURE_SSE4_1,  "SSE4.1"},
 	{CPUID_FEATURE_SSE4_2,  "SSE4.2"},
+	{CPUID_FEATURE_xAPIC,   "xAPIC"},
 	{CPUID_FEATURE_POPCNT,  "POPCNT"},
 	{0, 0}
 },
@@ -436,7 +514,7 @@ extfeature_map[] = {
 i386_cpu_info_t	*
 cpuid_info(void)
 {
-	/* Set-up the cpuid_indo stucture lazily */
+	/* Set-up the cpuid_info stucture lazily */
 	if (cpuid_cpu_infop == NULL) {
 		cpuid_set_info();
 		cpuid_cpu_infop = &cpuid_cpu_info;
@@ -571,12 +649,12 @@ uint64_t
 cpuid_features(void)
 {
 	static int checked = 0;
-	char	fpu_arg[16] = { 0 };
+	char	fpu_arg[20] = { 0 };
 
 	(void) cpuid_info();
 	if (!checked) {
 		    /* check for boot-time fpu limitations */
-			if (PE_parse_boot_arg("_fpu", &fpu_arg[0])) {
+			if (PE_parse_boot_argn("_fpu", &fpu_arg[0], sizeof (fpu_arg))) {
 				printf("limiting fpu features to: %s\n", fpu_arg);
 				if (!strncmp("387", fpu_arg, sizeof("387")) || !strncmp("mmx", fpu_arg, sizeof("mmx"))) {
 					printf("no sse or sse2\n");

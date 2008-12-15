@@ -44,7 +44,7 @@
 #  
 #  Standard Apple Research Configurations:
 #  -------- ----- -------- ---------------
-#  BASE =        [ intel mach medium config_dtrace vol pst gdb kernobjc fixpri simple_clock mdebug kernserv driverkit uxpr kernstack ipc_compat ipc_debug compat_43_tty sysv_sem sysv_msg sysv_shm audit panic_info config_imageboot ]
+#  BASE =        [ intel mach medium config_dtrace vol pst gdb kernobjc fixpri simple_clock mdebug kernserv driverkit uxpr kernstack ipc_compat ipc_debug compat_43_tty sysv_sem sysv_msg sysv_shm audit panic_info config_imageboot config_workqueue ]
 #  FILESYS =	 [ devfs revfs hfs journaling fdesc config_fse quota namedstreams fifo ffs union cd9660 config_volfs ]
 #  NETWORKING =  [ inet inet6 compat_oldsock mrouting tcpdrop_synfin bpfilter ipdivert netat ipfirewall ipv6firewall ipfw2 dummynet traffic_mgt sendfile netmibs bond vlan gif stf zlib randomipid ifnet_input_chk config_mbuf_jumbo ]
 #  NFS =         [ nfsclient nfsserver ]
@@ -53,7 +53,7 @@
 #  PROFILE =     [ RELEASE profile ]
 #  DEBUG =       [ BASE NETWORKING NFS VPN FILESYS libdriver_g debug xpr_debug mach_assert ]
 #
-#  EMBEDDED_BASE =	[ intel mach bsmall vol pst gdb kernobjc fixpri simple_clock mdebug kernserv driverkit uxpr kernstack ipc_compat ipc_debug compat_43_tty sysv_sem sysv_msg sysv_shm audit panic_info config_imageboot ]
+#  EMBEDDED_BASE =	[ intel mach bsmall vol pst gdb kernobjc fixpri simple_clock mdebug kernserv driverkit uxpr kernstack ipc_compat ipc_debug compat_43_tty sysv_sem sysv_msg sysv_shm audit panic_info config_imageboot config_workqueue ]
 #  EMBEDDED_FILESYS =	[ devfs hfs journaling fdesc fifo ]
 #  EMBEDDED_NET =	[ inet compat_oldsock mrouting tcpdrop_synfin bpfilter config_mbuf_noexpand ]
 #  EMBEDDED =		[ EMBEDDED_BASE EMBEDDED_NET VPN EMBEDDED_FILESYS libdriver no_printf_str no_kprintf_str no_kdebug ]
@@ -91,6 +91,12 @@ options		CONFIG_MACF_SOCKET_SUBSET	# MAC socket subest (no labels)
 
 # app-profiling i.e. pre-heating - off? 
 options   CONFIG_APP_PROFILE=0  
+
+#
+# code decryption... used on i386 for DSMOS
+# must be set in all the bsd/conf and osfmk/conf MASTER files
+#
+options		CONFIG_CODE_DECRYPTION
 
 #
 #  Ipl measurement system

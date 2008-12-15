@@ -191,7 +191,8 @@ __BEGIN_DECLS
 #define DBG_IOBLUETOOTH		46	/* Bluetooth */
 #define DBG_IOFIREWIRE		47	/* FireWire */
 #define DBG_IOINFINIBAND	48	/* Infiniband */
-#define DBG_IOCPUPM		49	/* CPU Power Management */
+#define DBG_IOCPUPM			49	/* CPU Power Management */
+#define DBG_IOGRAPHICS		50	/* Graphics */
 
 /* Backwards compatibility */
 #define	DBG_IOPOINTING		DBG_IOHID			/* OBSOLETE: Use DBG_IOHID instead */
@@ -214,6 +215,7 @@ __BEGIN_DECLS
 #define DBG_DRVBLUETOOTH	15	/* Bluetooth */
 #define DBG_DRVFIREWIRE		16	/* FireWire */
 #define DBG_DRVINFINIBAND	17	/* Infiniband */
+#define DBG_DRVGRAPHICS		18  /* Graphics */
 
 /* Backwards compatibility */
 #define	DBG_DRVPOINTING		DBG_DRVHID		/* OBSOLETE: Use DBG_DRVHID instead */

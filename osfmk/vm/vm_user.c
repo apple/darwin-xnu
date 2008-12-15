@@ -2870,6 +2870,10 @@ kernel_upl_commit_range(
 	if (flags & UPL_COMMIT_FREE_ON_EMPTY)
 		flags |= UPL_COMMIT_NOTIFY_EMPTY;
 
+	if (flags & UPL_COMMIT_KERNEL_ONLY_FLAGS) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
 	kr = upl_commit_range(upl, offset, size, flags, pl, count, &finished);
 
 	if ((flags & UPL_COMMIT_NOTIFY_EMPTY) && finished)

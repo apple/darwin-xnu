@@ -66,6 +66,7 @@
 #include <kern/kalloc.h>
 #include <kern/task.h>
 #include <kern/thread.h>
+#include <kern/page_decrypt.h>
 
 #include <mach-o/fat.h>
 #include <mach-o/loader.h>
@@ -162,6 +163,15 @@ int load_code_signature(
 	cpu_type_t			cputype,
 	load_result_t			*result);
 	
+#if CONFIG_CODE_DECRYPTION
+static load_return_t
+set_code_unprotect(
+	struct encryption_info_command	*lcp,
+	caddr_t				addr,
+	vm_map_t			map,
+	struct vnode			*vp);
+#endif
+
 static load_return_t
 load_unixthread(
 	struct thread_command	*tcp,
@@ -436,7 +446,6 @@ parse_machfile(
 			kfree(kl_addr, kl_size);
 		return(LOAD_IOERROR);
 	}
-	/* (void)ubc_map(vp, PROT_EXEC); */ /* NOT HERE */
 	
 	/*
 	 *	Scan through the commands, processing each one as necessary.
@@ -551,6 +560,21 @@ parse_machfile(
 					got_code_signatures = TRUE;
 				}
 				break;
+#if CONFIG_CODE_DECRYPTION
+			case LC_ENCRYPTION_INFO:
+				if (pass != 2)
+					break;
+				ret = set_code_unprotect(
+					(struct encryption_info_command *) lcp,
+					addr, map, vp);
+				if (ret != LOAD_SUCCESS) {
+					printf("proc %d: set unprotect error %d "
+					       "for file \"%s\"\n",
+					       p->p_pid, ret, vp->v_name);
+					ret = LOAD_SUCCESS; /* ignore error */
+				}
+				break;
+#endif
 			default:
 				/* Other commands are ignored by the kernel */
 				ret = LOAD_SUCCESS;
@@ -597,13 +621,10 @@ parse_machfile(
 	if (kl_addr )
 		kfree(kl_addr, kl_size);
 
-	if (ret == LOAD_SUCCESS)
-		(void)ubc_map(vp, PROT_READ | PROT_EXEC);
-		
 	return(ret);
 }
 
-#ifdef __i386__
+#if CONFIG_CODE_DECRYPTION
 
 #define	APPLE_UNPROTECTED_HEADER_SIZE	(3 * PAGE_SIZE_64)
 
@@ -640,9 +661,14 @@ unprotect_segment_64(
 			map_size -= delta;
 		}
 		/* ... transform the rest of the mapping. */
+		struct pager_crypt_info crypt_info;
+		crypt_info.page_decrypt = dsmos_page_transform;
+		crypt_info.crypt_ops = NULL;
+		crypt_info.crypt_end = NULL;
 		kr = vm_map_apple_protected(map,
 					    map_addr,
-					    map_addr + map_size);
+					    map_addr + map_size,
+					    &crypt_info);
 	}
 
 	if (kr != KERN_SUCCESS) {
@@ -650,10 +676,10 @@ unprotect_segment_64(
 	}
 	return LOAD_SUCCESS;
 }
-#else	/* __i386__ */
+#else	/* CONFIG_CODE_DECRYPTION */
 #define unprotect_segment_64(file_off, file_size, map, map_addr, map_size) \
 	LOAD_SUCCESS
-#endif	/* __i386__ */
+#endif	/* CONFIG_CODE_DECRYPTION */
 
 static
 load_return_t
@@ -1293,7 +1319,6 @@ load_dylinker(
 	if (ret == LOAD_SUCCESS) {		
 		result->dynlinker = TRUE;
 		result->entry_point = myresult.entry_point;
-		(void)ubc_map(vp, PROT_READ | PROT_EXEC);
 	}
 out:
 	vnode_put(vp);
@@ -1316,6 +1341,7 @@ load_code_signature(
 	int		resid;
 	struct cs_blob	*blob;
 	int		error;
+	vm_size_t	blob_size;
 
 	addr = 0;
 	blob = NULL;
@@ -1341,7 +1367,8 @@ load_code_signature(
 		goto out;
 	}
 
-	kr = kmem_alloc(kernel_map, &addr, round_page(lcp->datasize));
+	blob_size = lcp->datasize;
+	kr = ubc_cs_blob_allocate(&addr, &blob_size);
 	if (kr != KERN_SUCCESS) {
 		ret = LOAD_NOSPACE;
 		goto out;
@@ -1383,12 +1410,116 @@ out:
 		result->csflags |= blob->csb_flags;
 	}
 	if (addr != 0) {
-		kmem_free(kernel_map, addr, round_page(lcp->datasize));
+		ubc_cs_blob_deallocate(addr, blob_size);
 		addr = 0;
 	}
 
 	return ret;
 }
+
+
+#if CONFIG_CODE_DECRYPTION
+
+static load_return_t
+set_code_unprotect(
+		   struct encryption_info_command *eip,
+		   caddr_t addr, 	
+		   vm_map_t map,
+		   struct vnode	*vp)
+{
+	int result, len;
+	char vpath[MAXPATHLEN];
+	pager_crypt_info_t crypt_info;
+	const char * cryptname = 0;
+	
+	size_t offset;
+	struct segment_command_64 *seg64;
+	struct segment_command *seg32;
+	vm_map_offset_t map_offset, map_size;
+	kern_return_t kr;
+	
+	switch(eip->cryptid) {
+		case 0:
+			/* not encrypted, just an empty load command */
+			return LOAD_SUCCESS;
+		case 1:
+			cryptname="com.apple.unfree";
+			break;
+		case 0x10:	
+			/* some random cryptid that you could manually put into
+			 * your binary if you want NULL */
+			cryptname="com.apple.null";
+			break;
+		default:
+			return LOAD_FAILURE;
+	}
+	
+	len = MAXPATHLEN;
+	result = vn_getpath(vp, vpath, &len);
+	if(result) return result;
+	
+	/* set up decrypter first */
+	if(NULL==text_crypter_create) return LOAD_FAILURE;
+	kr=text_crypter_create(&crypt_info, cryptname, (void*)vpath);
+	
+	if(kr) {
+		printf("set_code_unprotect: unable to find decrypter %s, kr=%d\n",
+		       cryptname, kr);
+		return LOAD_FAILURE;
+	}
+	
+	/* this is terrible, but we have to rescan the load commands to find the
+	 * virtual address of this encrypted stuff. This code is gonna look like
+	 * the dyld source one day... */
+	struct mach_header *header = (struct mach_header *)addr;
+	size_t mach_header_sz = sizeof(struct mach_header);
+	if (header->magic == MH_MAGIC_64 ||
+	    header->magic == MH_CIGAM_64) {
+	    	mach_header_sz = sizeof(struct mach_header_64);
+	}
+	offset = mach_header_sz;
+	uint32_t ncmds = header->ncmds;
+	while (ncmds--) {
+		/*
+		 *	Get a pointer to the command.
+		 */
+		struct load_command *lcp = (struct load_command *)(addr + offset);
+		offset += lcp->cmdsize;
+		
+		switch(lcp->cmd) {
+			case LC_SEGMENT_64:
+				seg64 = (struct segment_command_64 *)lcp;
+				if ((seg64->fileoff <= eip->cryptoff) &&
+				    (seg64->fileoff+seg64->filesize >= 
+				     eip->cryptoff+eip->cryptsize)) {
+					map_offset = seg64->vmaddr + eip->cryptoff - seg64->fileoff;
+					map_size = eip->cryptsize;
+					goto remap_now;
+				}
+			case LC_SEGMENT:
+				seg32 = (struct segment_command *)lcp;
+				if ((seg32->fileoff <= eip->cryptoff) &&
+				    (seg32->fileoff+seg32->filesize >= 
+				     eip->cryptoff+eip->cryptsize)) {
+					map_offset = seg32->vmaddr + eip->cryptoff - seg32->fileoff;
+					map_size = eip->cryptsize;
+					goto remap_now;
+				}
+		}
+	}
+	
+	/* if we get here, did not find anything */
+	return LOAD_FAILURE;
+	
+remap_now:
+	/* now remap using the decrypter */
+	kr = vm_map_apple_protected(map, map_offset, map_offset+map_size, &crypt_info);
+	if(kr) printf("set_code_unprotect(): mapping failed with %x\n", kr);
+	
+	return LOAD_SUCCESS;
+}
+
+#endif
 
 /*
  * This routine exists to support the load_dylinker().

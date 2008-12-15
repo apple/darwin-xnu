@@ -220,10 +220,6 @@ export CFLAGS_DEVELOPMENT 	=
 export CFLAGS_DEBUG 	= 
 export CFLAGS_PROFILE 	=  -pg
 
-ifeq ($(ARCH_CONFIG),ARM)
-BUILD_STABS = 1
-endif
-
 ifeq ($(BUILD_STABS),1)
 export CFLAGS_PPC 	= -Dppc -DPPC -D__PPC__ -DPAGE_SIZE_FIXED \
 				-mno-altivec -gstabs+ -force_cpusubtype_ALL

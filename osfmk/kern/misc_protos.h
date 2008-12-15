@@ -124,6 +124,8 @@ extern int kdb_printf(const char *format, ...) __printflike(1,2);
 
 extern void printf_init(void);
 
+extern int snprintf(char *, size_t, const char *, ...) __printflike(3,4);
+
 extern void log(int level, char *fmt, ...);
 
 void 

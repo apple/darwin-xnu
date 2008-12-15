@@ -754,7 +754,7 @@ ml_init_lock_timeout(void)
 	nanoseconds_to_absolutetime(NSEC_PER_SEC>>2, &abstime);
 	LockTimeOut = (unsigned int)abstime;
 
-	if (PE_parse_boot_arg("mtxspin", &mtxspin)) {
+	if (PE_parse_boot_argn("mtxspin", &mtxspin, sizeof (mtxspin))) {
 		if (mtxspin > USEC_PER_SEC>>4)
 			mtxspin =  USEC_PER_SEC>>4;
 		nanoseconds_to_absolutetime(mtxspin*NSEC_PER_USEC, &abstime);

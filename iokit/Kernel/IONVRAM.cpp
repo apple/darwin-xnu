@@ -31,6 +31,8 @@
 #include <IOKit/IOPlatformExpert.h>
 #include <IOKit/IOUserClient.h>
 #include <IOKit/IOKitKeys.h>
+#include <kern/debug.h>
+#include <pexpert/pexpert.h>
 
 #define super IOService
 
@@ -926,6 +928,9 @@ OFVariable gOFVariables[] = {
   {"security-password", kOFVariableTypeData, kOFVariablePermRootOnly, -1},
   {"boot-image", kOFVariableTypeData, kOFVariablePermUserWrite, -1},
   {"com.apple.System.fp-state", kOFVariableTypeData, kOFVariablePermKernelOnly, -1},
+#if CONFIG_EMBEDDED
+  {"backlight-level", kOFVariableTypeData, kOFVariablePermUserWrite, -1},
+#endif
   {0, kOFVariableTypeData, kOFVariablePermUserRead, -1}
 };
 
