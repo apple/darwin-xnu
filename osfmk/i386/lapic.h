@@ -62,6 +62,7 @@
 #define LAPIC_TMR_BASE			0x00000180
 #define LAPIC_IRR_BASE			0x00000200
 #define LAPIC_ERROR_STATUS		0x00000280
+#define LAPIC_LVT_CMCI			0x000002F0
 #define LAPIC_ICR			0x00000300
 #define		LAPIC_ICR_VECTOR_MASK	0x000FF
 #define		LAPIC_ICR_DM_MASK	0x00700
@@ -237,6 +238,10 @@ static inline void	lapic_set_pmi_func(i386_intr_func_t func)
 static inline void	lapic_set_thermal_func(i386_intr_func_t func)
 {
 	lapic_set_intr_func(LAPIC_VECTOR(THERMAL), func);
+}
+static inline void	lapic_set_cmci_func(i386_intr_func_t func)
+{
+	lapic_set_intr_func(LAPIC_VECTOR(CMCI), func);
 }
 
 #ifdef MP_DEBUG

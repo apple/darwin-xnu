@@ -1599,6 +1599,22 @@ vnode_isnamedstream(
 #endif
 }
 
+int     
+vnode_isshadow(
+#if NAMEDSTREAMS
+		                vnode_t vp
+#else
+				                __unused vnode_t vp
+#endif
+						                )    
+{
+#if NAMEDSTREAMS
+	        return ((vp->v_flag & VISSHADOW) ? 1 : 0);
+#else
+		        return (0); 
+#endif
+}
+
 /* TBD:  set vnode_t to not cache data after it is consumed once; used for quota */
 void 
 vnode_setnocache(vnode_t vp)
@@ -4366,7 +4382,7 @@ VNOP_INACTIVE(struct vnode *vp, vfs_context_t ctx)
 	 */
 	if (vnode_isnamedstream(vp) &&
 			(vp->v_parent != NULLVP) &&
-			((vp->v_parent->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS) == 0) &&
+			(vnode_isshadow(vp)) &&
 			((vp->v_lflag & VL_TERMINATE) == 0)) {
 		vnode_recycle(vp);
 	}

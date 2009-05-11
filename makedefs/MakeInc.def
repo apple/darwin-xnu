@@ -197,6 +197,10 @@ ARCH_FLAGS_PPC		  = -arch ppc
 ARCH_FLAGS_I386		  = -arch i386
 ARCH_FLAGS_ARM		  = $($(addsuffix $(MACHINE_CONFIG),ARCH_FLAGS_ARM_))
 
+ARCH_FLAGS_ALL_PPC		= $(ARCH_FLAGS_PPC)
+ARCH_FLAGS_ALL_I386		= $(ARCH_FLAGS_I386)
+ARCH_FLAGS_ALL_ARM		= -arch arm
+
 
 #
 # Default CFLAGS
@@ -215,35 +219,36 @@ export CFLAGS_GEN = -static $(DEBUG_CFLAGS) -nostdinc -nostdlib \
 	-fno-builtin -finline -msoft-float \
 	-fsigned-bitfields $(OTHER_CFLAGS)
 
+ifeq ($(BUILD_STABS),1)
+export CFLAGS_GEN += -gstabs+
+export BUILD_DWARF = 0
+export BUILD_STABS = 1
+else
+export CFLAGS_GEN += -gdwarf-2
+export BUILD_DWARF = 1
+export BUILD_STABS = 0
+endif
+
 export CFLAGS_RELEASE 	= 
 export CFLAGS_DEVELOPMENT 	=
 export CFLAGS_DEBUG 	= 
 export CFLAGS_PROFILE 	=  -pg
 
-ifeq ($(BUILD_STABS),1)
 export CFLAGS_PPC 	= -Dppc -DPPC -D__PPC__ -DPAGE_SIZE_FIXED \
-				-mno-altivec -gstabs+ -force_cpusubtype_ALL
+				-mno-altivec -force_cpusubtype_ALL
 export CFLAGS_I386 	= -Di386 -DI386 -D__I386__ \
-				-DPAGE_SIZE_FIXED -gstabs+ -force_cpusubtype_ALL
+				-DPAGE_SIZE_FIXED -force_cpusubtype_ALL
 export CFLAGS_ARM 	= -Darm -DARM -D__ARM__ -DPAGE_SIZE_FIXED \
-	-fno-strict-aliasing -gstabs+ -fno-keep-inline-functions
-export BUILD_DWARF = 0
-export BUILD_STABS = 1
-else
-export CFLAGS_PPC 	= -Dppc -DPPC -D__PPC__ -DPAGE_SIZE_FIXED \
-				-mno-altivec -gdwarf-2 -force_cpusubtype_ALL
-export CFLAGS_I386 	= -Di386 -DI386 -D__I386__ \
-				-DPAGE_SIZE_FIXED -gdwarf-2 -force_cpusubtype_ALL
-export CFLAGS_ARM 	= -Darm -DARM -D__ARM__ -DPAGE_SIZE_FIXED \
-	-fno-strict-aliasing -gdwarf-2 -fno-keep-inline-functions
-export BUILD_DWARF = 1
-export BUILD_STABS = 0
+				-fno-strict-aliasing -fno-keep-inline-functions
+
+ifeq (-arch armv7,$(ARCH_FLAGS_ARM))
+CFLAGS_ARM		+= -mthumb
 endif
 ifeq (-arch armv6,$(ARCH_FLAGS_ARM))
 CFLAGS_ARM		+= -mthumb
 endif
 ifeq (-arch armv5,$(ARCH_FLAGS_ARM))
-CFLAGS_ARM		+= -mthumb
+#CFLAGS_ARM		+= -mthumb # <rdar://problem/6174175>
 endif
 ifeq (-arch xscale,$(ARCH_FLAGS_ARM))
 CFLAGS_ARM		+= -mthumb
@@ -327,7 +332,7 @@ export LDFLAGS_COMPONENT_PROFILE =  $(COMP_LDFLAGS_COMPONENT_PROFILE)
 
 export LDFLAGS_COMPONENT_PPC 	= $(COMP_LDFLAGS_COMPONENT_PPC) -force_cpusubtype_ALL
 export LDFLAGS_COMPONENT_I386 	= $(COMP_LDFLAGS_COMPONENT_i386)
-export LDFLAGS_COMPONENT_ARM 	= $(COMP_LDFLAGS_COMPONENT_ARM)
+export LDFLAGS_COMPONENT_ARM 	= $(COMP_LDFLAGS_COMPONENT_ARM) -Wl,-new_linker
 
 export LDFLAGS_COMPONENT	= $(LDFLAGS_COMPONENT_GEN) \
 		  $($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_)) \
@@ -364,6 +369,7 @@ export LDFLAGS_KERNEL_I386     = \
 	-Wl,-segaddr,__TEXT,0x111000 
 
 export LDFLAGS_KERNEL_ARM     = \
+	-Wl,-new_linker \
 	-Wl,-segaddr,__HIB,0xC0000000 \
 	-Wl,-segaddr,__TEXT,0xC0008000
 

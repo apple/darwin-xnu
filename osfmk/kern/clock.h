@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -45,6 +45,8 @@
 #include <sys/cdefs.h>
 
 #ifdef	MACH_KERNEL_PRIVATE
+
+#include <kern/queue.h>
 
 /*
  * Clock operations list structure. Contains vectors to machine
@@ -95,15 +97,6 @@ extern void		clock_timebase_init(void);
  * Initialize the clock ipc service facility.
  */
 extern void		clock_service_create(void);
-
-typedef void		(*clock_timer_func_t)(
-						uint64_t			timestamp);
-
-extern void			clock_set_timer_func(
-						clock_timer_func_t	func);
-
-extern void			clock_set_timer_deadline(
-						uint64_t			deadline);
 
 extern void			clock_gettimeofday_set_commpage(
 						uint64_t				abstime,

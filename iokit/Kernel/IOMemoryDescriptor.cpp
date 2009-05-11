@@ -813,6 +813,12 @@ IOGeneralMemoryDescriptor::initWithOptions(void *	buffers,
         gIOSystemMapper = mapper = IOMapper::gSystem;
     }
 
+    // Temp binary compatibility for kIOMemoryThreadSafe
+    if (kIOMemoryReserved6156215 & options)
+    {
+	options &= ~kIOMemoryReserved6156215;
+	options |= kIOMemoryThreadSafe;
+    }
     // Remove the dynamic internal use flags from the initial setting
     options 		  &= ~(kIOMemoryPreparedReadOnly);
     _flags		   = options;
@@ -2565,10 +2571,6 @@ IOReturn IOMemoryDescriptor::doMap(
 
     return (err);
 }
-
-enum {
-    kIOMemoryRedirected	= 0x00010000
-};
 
 IOReturn IOMemoryDescriptor::handleFault(
         void *			_pager,

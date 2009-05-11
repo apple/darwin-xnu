@@ -176,6 +176,10 @@ INSTALL_KF_MI_LCL_LIST = \
 	mach_interface.h \
 	$(filter-out mach_traps.h mach_syscalls.h thread_switch.h, ${DATAFILES})
 
+INSTALL_MI_LCL_LIST = kext_panic_report.h \
+	bootstrap.h \
+	${DATAFILES}
+
 INSTALL_MI_GEN_LIST =
 
 INSTALL_MI_DIR = mach

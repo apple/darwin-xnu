@@ -376,6 +376,27 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 				quad(cpuid_reg[ecx], cpuid_reg[edx]);
 	}
 
+	/* Fold in the Invariant TSC feature bit, if present */
+	if (max_extid >= 0x80000007) {
+		do_cpuid(0x80000007, cpuid_reg);  
+		info_p->cpuid_extfeatures |=
+				cpuid_reg[edx] & CPUID_EXTFEATURE_TSCI;
+	}
+
+	/* Find the microcode version number a.k.a. signature a.k.a. BIOS ID */
+        info_p->cpuid_microcode_version =
+                (uint32_t) (rdmsr64(MSR_IA32_BIOS_SIGN_ID) >> 32);
+
+	if (info_p->cpuid_model == CPUID_MODEL_NEHALEM) {
+		/*
+		 * For Nehalem, find the number of enabled cores and threads
+		 * (which determines whether SMT/Hyperthreading is active).
+		 */
+		uint64_t msr_core_thread_count = rdmsr64(MSR_CORE_THREAD_COUNT);
+		info_p->core_count   = bitfield(msr_core_thread_count, 31, 16);
+		info_p->thread_count = bitfield(msr_core_thread_count, 15,  0);
+	}
+	
 	if (info_p->cpuid_features & CPUID_FEATURE_MONITOR) {
 		/*
 		 * Extract the Monitor/Mwait Leaf info:
@@ -508,6 +529,8 @@ extfeature_map[] = {
 	{CPUID_EXTFEATURE_XD,      "XD"},
 	{CPUID_EXTFEATURE_EM64T,   "EM64T"},
 	{CPUID_EXTFEATURE_LAHF,    "LAHF"},
+	{CPUID_EXTFEATURE_RDTSCP,  "RDTSCP"},
+	{CPUID_EXTFEATURE_TSCI,    "TSCI"},
 	{0, 0}
 };
 

@@ -148,12 +148,47 @@ tsc_init(void)
 			cpuid_info()->cpuid_family);
 	}
 
-	{
+	switch (cpuid_info()->cpuid_model) {
+	case CPUID_MODEL_NEHALEM: {
+		uint64_t cpu_mhz;
+		uint64_t msr_flex_ratio;
+		uint64_t msr_platform_info;
+
+		/* See if FLEX_RATIO is being used */
+		msr_flex_ratio = rdmsr64(MSR_FLEX_RATIO);
+		msr_platform_info = rdmsr64(MSR_PLATFORM_INFO);
+		flex_ratio_min = (uint32_t)bitfield(msr_platform_info, 47, 40);
+		flex_ratio_max = (uint32_t)bitfield(msr_platform_info, 15, 8);
+		/* No BIOS-programed flex ratio. Use hardware max as default */
+		tscGranularity = flex_ratio_max;
+		if (msr_flex_ratio & bit(16)) {
+		 	/* Flex Enabled: Use this MSR if less than max */
+			flex_ratio = (uint32_t)bitfield(msr_flex_ratio, 15, 8);
+			if (flex_ratio < flex_ratio_max)
+				tscGranularity = flex_ratio;
+		}
+
+		/* If EFI isn't configured correctly, use a constant 
+		 * value. See 6036811.
+		 */
+		if (busFreq == 0)
+			busFreq = BASE_NHM_CLOCK_SOURCE;
+
+		cpu_mhz = tscGranularity * BASE_NHM_CLOCK_SOURCE;
+
+	        kprintf("[NHM] Maximum Non-Turbo Ratio = [%d]\n",
+			(uint32_t)tscGranularity);
+	        kprintf("[NHM] CPU: Frequency          = %6d.%04dMhz\n", 
+			(uint32_t)(cpu_mhz / Mega), (uint32_t)(cpu_mhz % Mega));
+		break;
+            }
+	default: {
 		uint64_t	prfsts;
 
 		prfsts = rdmsr64(IA32_PERF_STS);
 		tscGranularity = (uint32_t)bitfield(prfsts, 44, 40);
 		N_by_2_bus_ratio = (prfsts & bit(46)) != 0;
+	    }
 	}
 
 	if (busFreq != 0) {

@@ -113,6 +113,7 @@ in_gif_output(
 	struct ip iphdr;	/* capsule IP header, host byte ordered */
 	int proto, error;
 	u_int8_t tos;
+	struct ip_out_args ipoa = { IFSCOPE_NONE };
 
 	if (sin_src == NULL || sin_dst == NULL ||
 	    sin_src->sin_family != AF_INET ||
@@ -226,7 +227,7 @@ in_gif_output(
 #endif
 	}
 
-	error = ip_output(m, NULL, &sc->gif_ro, 0, NULL, NULL);
+	error = ip_output(m, NULL, &sc->gif_ro, IP_OUTARGS, NULL, &ipoa);
 	return(error);
 }
 
@@ -386,7 +387,10 @@ gif_encapcheck4(
 		sin.sin_family = AF_INET;
 		sin.sin_len = sizeof(struct sockaddr_in);
 		sin.sin_addr = ip.ip_src;
-		rt = rtalloc1((struct sockaddr *)&sin, 0, 0UL);
+		lck_mtx_lock(rt_mtx);
+		rt = rtalloc1_scoped_locked((struct sockaddr *)&sin, 0, 0,
+		    m->m_pkthdr.rcvif->if_index);
+		lck_mtx_unlock(rt_mtx);
 		if (!rt || rt->rt_ifp != m->m_pkthdr.rcvif) {
 #if 0
 			log(LOG_WARNING, "%s: packet from 0x%x dropped "

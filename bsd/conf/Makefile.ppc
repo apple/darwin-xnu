@@ -51,7 +51,6 @@ OBJS_NO_WERROR =		\
 	ip_fw2_compat.o		\
 	kpi_ipfilter.o		\
 	in_gif.o		\
-	in_pcb.o		\
 	ip_divert.o		\
 	ip_dummynet.o		\
 	ip_icmp.o		\

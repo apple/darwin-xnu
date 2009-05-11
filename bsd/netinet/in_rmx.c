@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000,2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -91,6 +91,9 @@ extern u_long route_generation;
 static void in_rtqtimo(void *rock);
 #endif
 
+static struct radix_node *in_matroute_args(void *, struct radix_node_head *,
+    rn_matchf_t *f, void *);
+
 #define RTPRF_OURS		RTF_PROTO3	/* set on routes we manage */
 
 /*
@@ -154,8 +157,8 @@ in_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 		 * Find out if it is because of an
 		 * ARP entry and delete it if so.
 		 */
-		rt2 = rtalloc1_locked((struct sockaddr *)sin, 0,
-				RTF_CLONING | RTF_PRCLONING);
+		rt2 = rtalloc1_scoped_locked(rt_key(rt), 0,
+		    RTF_CLONING | RTF_PRCLONING, sa_get_ifscope(rt_key(rt)));
 		if (rt2) {
 			if (rt2->rt_flags & RTF_LLINFO &&
 				rt2->rt_flags & RTF_HOST &&
@@ -175,23 +178,42 @@ in_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 }
 
 /*
+ * Validate (unexpire) an expiring AF_INET route.
+ */
+struct radix_node *
+in_validate(struct radix_node *rn)
+{
+	struct rtentry *rt = (struct rtentry *)rn;
+
+	/* This is first reference? */
+	if (rt != NULL && rt->rt_refcnt == 0 && (rt->rt_flags & RTPRF_OURS)) {
+		rt->rt_flags &= ~RTPRF_OURS;
+		rt->rt_rmx.rmx_expire = 0;
+	}
+	return (rn);
+}
+
+/*
+ * Similar to in_matroute_args except without the leaf-matching parameters.
+ */
+static struct radix_node *
+in_matroute(void *v_arg, struct radix_node_head *head)
+{
+	return (in_matroute_args(v_arg, head, NULL, NULL));
+}
+
+/*
  * This code is the inverse of in_clsroute: on first reference, if we
  * were managing the route, stop doing so and set the expiration timer
  * back off again.
  */
 static struct radix_node *
-in_matroute(void *v_arg, struct radix_node_head *head)
+in_matroute_args(void *v_arg, struct radix_node_head *head,
+    rn_matchf_t *f, void *w)
 {
-	struct radix_node *rn = rn_match(v_arg, head);
-	struct rtentry *rt = (struct rtentry *)rn;
+	struct radix_node *rn = rn_match_args(v_arg, head, f, w);
 
-	if(rt && rt->rt_refcnt == 0) { /* this is first reference */
-		if(rt->rt_flags & RTPRF_OURS) {
-			rt->rt_flags &= ~RTPRF_OURS;
-			rt->rt_rmx.rmx_expire = 0;
-		}
-	}
-	return rn;
+	return (in_validate(rn));
 }
 
 static int rtq_reallyold = 60*60;
@@ -430,6 +452,7 @@ in_inithead(void **head, int off)
 	rnh = *head;
 	rnh->rnh_addaddr = in_addroute;
 	rnh->rnh_matchaddr = in_matroute;
+	rnh->rnh_matchaddr_args = in_matroute_args;
 	rnh->rnh_close = in_clsroute;
 	in_rtqtimo(rnh);	/* kick off timeout first time */
 	return 1;

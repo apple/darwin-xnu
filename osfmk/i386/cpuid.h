@@ -107,9 +107,17 @@
  */
 #define CPUID_EXTFEATURE_SYSCALL   _Bit(11)	/* SYSCALL/sysret */
 #define CPUID_EXTFEATURE_XD	   _Bit(20)	/* eXecute Disable */
+#define CPUID_EXTFEATURE_RDTSCP	   _Bit(27)	/* RDTSCP */
 #define CPUID_EXTFEATURE_EM64T	   _Bit(29)	/* Extended Mem 64 Technology */
 
 #define CPUID_EXTFEATURE_LAHF	   _HBit(20)	/* LAFH/SAHF instructions */
+
+/*
+ * The CPUID_EXTFEATURE_XXX values define 64-bit values
+ * returned in %ecx:%edx to a CPUID request with %eax of 0x80000007: 
+ */
+#define CPUID_EXTFEATURE_TSCI      _Bit(8)	/* TSC Invariant */
+
 
 #define	CPUID_CACHE_SIZE	16	/* Number of descriptor vales */
 

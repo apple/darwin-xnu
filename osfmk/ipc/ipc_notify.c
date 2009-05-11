@@ -84,13 +84,8 @@ ipc_notify_port_deleted(
 	ipc_port_t		port,
 	mach_port_name_t	name)
 {
-	kern_return_t kr;
-
-	kr = mach_notify_port_deleted(port, name);
-	if (kr != KERN_SUCCESS) {
-		printf("dropped port-deleted (%p, 0x%x)\n", port, name);
-		ipc_port_release_sonce(port);
-	}
+	(void)mach_notify_port_deleted(port, name);
+	/* send-once right consumed */
 }
 
 /*
@@ -110,15 +105,8 @@ ipc_notify_port_destroyed(
 	ipc_port_t	port,
 	ipc_port_t	right)
 {
-	kern_return_t kr;
-
-	kr = mach_notify_port_destroyed(port, right);
-	if (kr != KERN_SUCCESS) {
-		printf("dropped port-destroyed (%p, %p)\n",
-		       port, right);
-		ipc_port_release_sonce(port);
-		ipc_port_release_receive(right);
-	}
+	mach_notify_port_destroyed(port, right);
+	/* send-once and receive rights consumed */
 }
 
 /*
@@ -135,13 +123,8 @@ ipc_notify_no_senders(
 	ipc_port_t		port,
 	mach_port_mscount_t	mscount)
 {
-	kern_return_t kr;
-
-	kr = mach_notify_no_senders(port, mscount);
-	if (kr != KERN_SUCCESS) {
-		printf("dropped no-senders (%p, %u)\n", port, mscount);
-		ipc_port_release_sonce(port);
-	}
+	(void)mach_notify_no_senders(port, mscount);
+	/* send-once right consumed */
 }
 
 /*
@@ -157,13 +140,8 @@ void
 ipc_notify_send_once(
 	ipc_port_t	port)
 {
-	kern_return_t kr;
-
-	kr = mach_notify_send_once(port);
-	if (kr != KERN_SUCCESS) {
-		printf("dropped send-once (%p)\n", port);
-		ipc_port_release_sonce(port);
-	}
+	(void)mach_notify_send_once(port);
+	/* send-once right consumed */
 }
 
 /*
@@ -180,11 +158,6 @@ ipc_notify_dead_name(
 	ipc_port_t		port,
 	mach_port_name_t	name)
 {
-	kern_return_t kr;
-
-	kr = mach_notify_dead_name(port, name);
-	if (kr != KERN_SUCCESS) {
-		printf("dropped dead-name (%p, 0x%x)\n", port, name);
-		ipc_port_release_sonce(port);
-	}
+	(void)mach_notify_dead_name(port, name);
+	/* send-once right consumed */
 }

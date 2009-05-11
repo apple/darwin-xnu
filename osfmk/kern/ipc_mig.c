@@ -93,8 +93,9 @@
  *		Nothing locked.
  *	Returns:
  *		MACH_MSG_SUCCESS	Sent the message.
- *		MACH_MSG_SEND_NO_BUFFER Destination port had inuse fixed bufer
  *		MACH_SEND_INVALID_DEST	Bad destination port.
+ *		MACH_MSG_SEND_NO_BUFFER Destination port had inuse fixed bufer
+ *		                        or destination is above kernel limit
  */
 
 mach_msg_return_t
@@ -113,9 +114,13 @@ mach_msg_send_from_kernel(
 		return mr;
 
 	ipc_kmsg_copyin_from_kernel(kmsg);
-	ipc_kmsg_send_always(kmsg);
 
-	return MACH_MSG_SUCCESS;
+	mr = ipc_kmsg_send_always(kmsg);
+	if (mr != MACH_MSG_SUCCESS) {
+		ipc_kmsg_destroy(kmsg);
+	}
+
+	return mr;
 }
 
 mach_msg_return_t
@@ -138,7 +143,7 @@ mach_msg_send_from_kernel_with_options(
 	ipc_kmsg_copyin_from_kernel(kmsg);
 	mr = ipc_kmsg_send(kmsg, option, timeout_val);
 	if (mr != MACH_MSG_SUCCESS) {
-		ipc_kmsg_free(kmsg);
+		ipc_kmsg_destroy(kmsg);
 	}
 	
 	return mr;
@@ -196,7 +201,11 @@ mach_msg_rpc_from_kernel(
 
 	ipc_kmsg_copyin_from_kernel(kmsg);
 
-	ipc_kmsg_send_always(kmsg);
+	mr = ipc_kmsg_send_always(kmsg);
+	if (mr != MACH_MSG_SUCCESS) {
+		ipc_kmsg_destroy(kmsg);
+		return mr;
+	}
 
 	for (;;) {
 		ipc_mqueue_t mqueue;

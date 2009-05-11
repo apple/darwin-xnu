@@ -93,7 +93,7 @@ $(OBJPATH)/allsymbols: $(OBJPATH)/mach_kernel
 
 $(SYMBOL_SET_BUILD): $(OBJPATH)/%.symbolset :  %.exports %.$(ARCH_CONFIG_LC).exports $(OBJPATH)/allsymbols
 	$(_v)$(KEXT_CREATE_SYMBOL_SET) \
-		$($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_)) \
+		$($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_ALL_)) \
 		-import $(OBJPATH)/allsymbols \
 		-export $*.exports \
 		-export $*.$(ARCH_CONFIG_LC).exports \
@@ -109,7 +109,7 @@ endif
 
 build_symbol_sets:	$(SYMBOL_SET_BUILD)
 	$(_v)$(KEXT_CREATE_SYMBOL_SET) \
-		$($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_)) \
+		$($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_ALL_)) \
 		-import $(OBJPATH)/allsymbols \
 		-export $(SRCROOT)/$(COMPONENT)/Libkern.exports \
 		-export $(SRCROOT)/$(COMPONENT)/Libkern.$(ARCH_CONFIG_LC).exports \

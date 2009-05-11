@@ -146,11 +146,11 @@ LNotShort:
 //      rdi = ptr to 1st dest byte not to move (aligned)
 
 LDestAligned:
-        movl    %edx,%ecx               // copy length
+        movq    %rdx,%rcx               // copy length
 	movl	%esi,%eax		// copy low half of source address
         andl    $63,%edx                // get remaining bytes for LShort
 	andl	$15,%eax		// mask to low 4 bits of source address
-        andl    $-64,%ecx               // get number of bytes we will copy in inner loop
+        andq    $-64,%rcx               // get number of bytes we will copy in inner loop
 // We'd like to use lea with rip-relative addressing, but cannot in a .code64 block.
 //	lea	LTable(%rip),%r8	// point to dispatch table
 	movq	$(_COMM_PAGE_32_TO_64(_COMM_PAGE_BCOPY)),%r8 // work around 4586528
@@ -794,4 +794,4 @@ LReverseUnalignedLoop:                  // loop over 64-byte chunks
         jmp     LReverseShort           // copy remaining 0..63 bytes and done
 
 
-	COMMPAGE_DESCRIPTOR(bcopy_sse3x_64,_COMM_PAGE_BCOPY,kHasSSE2+kHasSupplementalSSE3+kCache64,0)
+	COMMPAGE_DESCRIPTOR(bcopy_sse3x_64,_COMM_PAGE_BCOPY,kHasSSE2+kHasSupplementalSSE3+kCache64,kHasSSE4_2)

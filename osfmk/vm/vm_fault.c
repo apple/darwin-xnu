@@ -2256,6 +2256,7 @@ vm_fault(
 	boolean_t		need_collapse = FALSE;
 	int			object_lock_type = 0;
 	int			cur_object_lock_type;
+	vm_object_t		top_object = VM_OBJECT_NULL;
 
 
 	KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 2)) | DBG_FUNC_START,
@@ -2618,16 +2619,26 @@ RetryFault:
 
 				prot &= ~VM_PROT_WRITE;
 
-				/*
-				 * Set up to map the page...
-				 * mark the page busy, drop
-				 * unneeded object lock
-				 */	
 			  	if (object != cur_object) {
-				        /*	
-					 * don't need the original object anymore
+				        /*
+					 * We still need to hold the top object
+					 * lock here to prevent a race between
+					 * a read fault (taking only "shared"
+					 * locks) and a write fault (taking
+					 * an "exclusive" lock on the top
+					 * object.
+					 * Otherwise, as soon as we release the
+					 * top lock, the write fault could
+					 * proceed and actually complete before
+					 * the read fault, and the copied page's
+					 * translation could then be overwritten
+					 * by the read fault's translation for
+					 * the original page.
+					 *
+					 * Let's just record what the top object
+					 * is and we'll release it later.
 					 */
-					vm_object_unlock(object);
+					top_object = object;
 
 					/*
 					 * switch to the object that has the new page
@@ -2666,6 +2677,20 @@ FastPmapEnter:
 							    change_wiring,
 							    fault_info.no_cache,
 							    &type_of_fault);
+				}
+
+				if (top_object != VM_OBJECT_NULL) {
+					/*
+					 * It's safe to drop the top object
+					 * now that we've done our
+					 * vm_fault_enter().  Any other fault
+					 * in progress for that virtual
+					 * address will either find our page
+					 * and translation or put in a new page
+					 * and translation.
+					 */
+					vm_object_unlock(top_object);
+					top_object = VM_OBJECT_NULL;
 				}
 
 				if (need_collapse == TRUE)

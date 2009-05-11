@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -188,6 +188,14 @@ SYSCTL_INT(_net_inet_ip, OID_AUTO, maxfrags, CTLFLAG_RW,
 	&maxfrags, 0, "Maximum number of IPv4 fragments allowed");
 
 static int    currentfrags = 0;
+
+#if CONFIG_SCOPEDROUTING
+int	ip_doscopedroute = 1;
+#else
+int	ip_doscopedroute = 0;
+#endif
+SYSCTL_INT(_net_inet_ip, OID_AUTO, scopedroute, CTLFLAG_RW,
+     &ip_doscopedroute, 0, "Enable IPv4 scoped routing");
 
 /*
  * XXX - Setting ip_checkinterface mostly implements the receive side of
@@ -586,12 +594,14 @@ ip_input(struct mbuf *m)
 		panic("ip_input no HDR");
 #endif
 
+#if DUMMYNET
 	if (args.rule) {	/* dummynet already filtered us */
             ip = mtod(m, struct ip *);
             hlen = IP_VHL_HL(ip->ip_vhl) << 2;
             inject_filter_ref = ipf_get_inject_filter(m);
             goto iphack ;
 	}
+#endif /* DUMMYNET */
 #endif /* IPFIREWALL */
 	
 	/*
@@ -2080,12 +2090,9 @@ ip_forward(struct mbuf *m, int srcrt, struct sockaddr_in *next_hop, struct route
 	n_long dest;
 	struct in_addr pkt_dst;
 	struct ifnet *destifp;
-	struct ifnet *rcvif = m->m_pkthdr.rcvif;
 #if IPSEC
 	struct ifnet dummyifp;
 #endif
-
-	m->m_pkthdr.rcvif = NULL;
 
 	dest = 0;
 	/*

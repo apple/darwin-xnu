@@ -351,6 +351,8 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr *addr,
 
 	/* Reinject packet into the system as incoming or outgoing */
 	if (!sin || sin->sin_addr.s_addr == 0) {
+		struct ip_out_args ipoa = { IFSCOPE_NONE };
+
 		/*
 		 * Don't allow both user specified and setsockopt options,
 		 * and don't allow packet length sizes that will crash
@@ -377,8 +379,8 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr *addr,
 		error = ip_output(m,
 			    inp->inp_options, &inp->inp_route,
 			(so->so_options & SO_DONTROUTE) |
-			IP_ALLOWBROADCAST | IP_RAWOUTPUT,
-			inp->inp_moptions, NULL);
+			IP_ALLOWBROADCAST | IP_RAWOUTPUT | IP_OUTARGS,
+			inp->inp_moptions, &ipoa);
 		socket_lock(so, 0);
 	} else {
 		struct	ifaddr *ifa;

@@ -1771,6 +1771,7 @@ fasttrap_add_probe(fasttrap_probe_spec_t *pdata)
 			tp->ftt_pc = pdata->ftps_offs[i] + pdata->ftps_pc;
 			tp->ftt_pid = pdata->ftps_pid;
 
+
 			pp->ftp_tps[0].fit_tp = tp;
 			pp->ftp_tps[0].fit_id.fti_probe = pp;
 #if defined(__APPLE__)
@@ -2368,6 +2369,8 @@ fasttrap_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	 * Yes, this is a WAG.
 	 */
 	fasttrap_max = (sane_size >> 28) * 100000;
+	if (fasttrap_max == 0)
+		fasttrap_max = 50000;
 #endif
 	fasttrap_total = 0;
 

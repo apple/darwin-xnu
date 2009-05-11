@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1995, 1999-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 1993-1995, 1999-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -45,45 +45,31 @@ typedef void				(*thread_call_func_t)(
 									thread_call_param_t		param1);
 __BEGIN_DECLS
 
-boolean_t
-thread_call_enter(
-	thread_call_t		call
-);
+extern boolean_t	thread_call_enter(
+						thread_call_t		call);
 
-boolean_t
-thread_call_enter1(
-	thread_call_t			call,
-	thread_call_param_t		param1
-);
+extern boolean_t	thread_call_enter1(
+						thread_call_t			call,
+						thread_call_param_t		param1);
 
-boolean_t
-thread_call_enter_delayed(
-	thread_call_t		call,
-	uint64_t			deadline
-);
+extern boolean_t	thread_call_enter_delayed(
+						thread_call_t		call,
+						uint64_t			deadline);
 
-boolean_t
-thread_call_enter1_delayed(
-	thread_call_t			call,
-	thread_call_param_t		param1,
-	uint64_t				deadline
-);
+extern boolean_t	thread_call_enter1_delayed(
+						thread_call_t			call,
+						thread_call_param_t		param1,
+						uint64_t				deadline);
 
-boolean_t
-thread_call_cancel(
-	thread_call_t		call
-);
+extern boolean_t	thread_call_cancel(
+						thread_call_t		call);
 
-thread_call_t
-thread_call_allocate(
-	thread_call_func_t		func,
-	thread_call_param_t		param0
-);
+extern thread_call_t	thread_call_allocate(
+							thread_call_func_t		func,
+							thread_call_param_t		param0);
 
-boolean_t
-thread_call_free(
-	thread_call_t		call
-);
+extern boolean_t		thread_call_free(
+							thread_call_t		call);
 
 __END_DECLS
 
@@ -93,15 +79,12 @@ __END_DECLS
 
 typedef struct call_entry	thread_call_data_t;
 
-void
-thread_call_initialize(void);
+extern void		thread_call_initialize(void);
 
-void
-thread_call_setup(
-	thread_call_t			call,
-	thread_call_func_t		func,
-	thread_call_param_t		param0
-);
+extern void		thread_call_setup(
+					thread_call_t			call,
+					thread_call_func_t		func,
+					thread_call_param_t		param0);
 
 #endif	/* MACH_KERNEL_PRIVATE */
 
@@ -113,32 +96,24 @@ __BEGIN_DECLS
  * Obsolete interfaces.
  */
 
-boolean_t
-thread_call_is_delayed(
-	thread_call_t		call,
-	uint64_t			*deadline
-);
+extern boolean_t	thread_call_is_delayed(
+						thread_call_t		call,
+						uint64_t			*deadline);
 
-void
-thread_call_func(
-	thread_call_func_t		func,
-	thread_call_param_t		param,
-	boolean_t				unique_call
-);
+extern void		thread_call_func(
+					thread_call_func_t		func,
+					thread_call_param_t		param,
+					boolean_t				unique_call);
 
-void
-thread_call_func_delayed(
-	thread_call_func_t		func,
-	thread_call_param_t		param,
-	uint64_t				deadline
-);
+extern void		thread_call_func_delayed(
+					thread_call_func_t		func,
+					thread_call_param_t		param,
+					uint64_t				deadline);
 
-boolean_t
-thread_call_func_cancel(
-	thread_call_func_t		func,
-	thread_call_param_t		param,
-	boolean_t				cancel_all
-);
+extern boolean_t	thread_call_func_cancel(
+						thread_call_func_t		func,
+						thread_call_param_t		param,
+						boolean_t				cancel_all);
 
 #ifndef	MACH_KERNEL_PRIVATE
 

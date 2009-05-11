@@ -758,8 +758,10 @@ in6_pcbdetach(inp)
 			m_freem(inp->in6p_options);
  		ip6_freepcbopts(inp->in6p_outputopts);
  		ip6_freemoptions(inp->in6p_moptions);
-		if (inp->in6p_route.ro_rt)
+		if (inp->in6p_route.ro_rt) {
 			rtfree(inp->in6p_route.ro_rt);
+			inp->in6p_route.ro_rt = NULL;
+		}
 		/* Check and free IPv4 related resources in case of mapped addr */
 		if (inp->inp_options)
 			(void)m_free(inp->inp_options);

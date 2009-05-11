@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -41,6 +41,7 @@
 
 #include <kern/clock.h>
 #include <kern/thread.h>
+#include <kern/timer_queue.h>
 #include <kern/processor.h>
 #include <kern/macro_help.h>
 #include <kern/spl.h>
@@ -52,9 +53,6 @@
 
 #include <sys/kdebug.h>
 #include <ppc/exception.h>
-
-/* XXX from <arch>/rtclock.c */
-clock_timer_func_t		rtclock_timer_expire;
 
 /*
  * 	Event timer interrupt.
@@ -91,8 +89,7 @@ __unused uint64_t iaddr)
 	/* has a pending clock timer expired? */
 	if (mytimer->deadline <= abstime) {			/* Have we expired the deadline? */
 		mytimer->has_expired = TRUE;			/* Remember that we popped */
-		mytimer->deadline = EndOfAllTime;		/* Set timer request to the end of all time in case we have no more events */
-		(*rtclock_timer_expire)(abstime);		/* Process pop */
+		mytimer->deadline = timer_queue_expire(&mytimer->queue, abstime);
 		mytimer->has_expired = FALSE;
 	}
 
@@ -102,7 +99,7 @@ __unused uint64_t iaddr)
 }
 
 /*
- * Set the clock deadline; called by the thread scheduler.
+ * Set the clock deadline.
  */
 void etimer_set_deadline(uint64_t deadline)
 {
@@ -164,4 +161,35 @@ etimer_resync_deadlines(void)
 		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI, 1) | DBG_FUNC_NONE, decr, 2, 0, 0, 0);
 	}
 	splx(s);
+}
+
+queue_t
+timer_queue_assign(
+	uint64_t		deadline)
+{
+	struct per_proc_info	*pp = getPerProc();
+	rtclock_timer_t			*timer;
+
+	if (pp->running) {
+		timer = &pp->rtclock_timer;
+
+		if (deadline < timer->deadline)
+			etimer_set_deadline(deadline);
+	}
+	else
+		timer = &PerProcTable[master_cpu].ppe_vaddr->rtclock_timer;
+
+	return (&timer->queue);
+}
+
+void
+timer_queue_cancel(
+	queue_t			queue,
+	uint64_t		deadline,
+	uint64_t		new_deadline)
+{
+	if (queue == &getPerProc()->rtclock_timer.queue) {
+		if (deadline < new_deadline)
+			etimer_set_deadline(new_deadline);
+	}
 }

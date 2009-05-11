@@ -66,6 +66,7 @@
 #include <kern/assert.h>
 #include <kern/sched_prim.h>
 #include <kern/misc_protos.h>
+#include <kern/clock.h>
 #include <vm/vm_kern.h>
 #include <vm/pmap.h>
 #include <stdarg.h>
@@ -106,10 +107,15 @@ unsigned int		panic_is_inited = 0;
 unsigned int		return_on_panic = 0;
 unsigned long		panic_caller;
 
-char debug_buf[PAGE_SIZE];
-ppnum_t debug_buf_page;
-char *debug_buf_ptr;
-unsigned int debug_buf_size;
+#if CONFIG_EMBEDDED
+#define DEBUG_BUF_SIZE (PAGE_SIZE)
+#else
+#define DEBUG_BUF_SIZE (3 * PAGE_SIZE)
+#endif
+
+char debug_buf[DEBUG_BUF_SIZE];
+char *debug_buf_ptr = debug_buf;
+unsigned int debug_buf_size = sizeof(debug_buf);
 
 static char model_name[64];
 
@@ -184,9 +190,7 @@ debug_log_init(void)
 	if (debug_buf_size != 0)
 		return;
 	debug_buf_ptr = debug_buf;
-	debug_buf_size = PAGE_SIZE;
-        debug_buf_page = pmap_find_phys(kernel_pmap,
-					(addr64_t)(uintptr_t)debug_buf_ptr);
+	debug_buf_size = sizeof(debug_buf);
 }
 
 #if __i386__
@@ -397,6 +401,13 @@ static void panic_display_model_name(void) {
 		kdb_printf("System model name: %s\n", model_name);
 }
 
+static void panic_display_uptime(void) {
+	uint64_t	uptime;
+	absolutetime_to_nanoseconds(mach_absolute_time(), &uptime);
+
+	kdb_printf("\nSystem uptime in nanoseconds: %llu\n", uptime);
+}
+
 extern const char version[];
 extern char osversion[];
 
@@ -409,7 +420,51 @@ __private_extern__ void panic_display_system_configuration(void) {
 		    (osversion[0] != 0) ? osversion : "Not yet set");
 		kdb_printf("\nKernel version:\n%s\n",version);
 		panic_display_model_name();
+		panic_display_uptime();
 		config_displayed = TRUE;
+	}
+}
+
+extern zone_t		first_zone;
+extern unsigned int	num_zones, stack_total;
+
+#if defined(__i386__)
+extern unsigned int	inuse_ptepages_count;
+#endif
+
+extern boolean_t	panic_include_zprint;
+extern vm_size_t	kalloc_large_total;
+
+__private_extern__ void panic_display_zprint()
+{
+	if(panic_include_zprint == TRUE) {
+
+		unsigned int	i;
+		struct zone	zone_copy;
+
+		if(first_zone!=NULL) {
+			if(ml_nofault_copy((vm_offset_t)first_zone, (vm_offset_t)&zone_copy, sizeof(struct zone)) == sizeof(struct zone)) {
+				for (i = 0; i < num_zones; i++) {
+					if(zone_copy.cur_size > (1024*1024)) {
+						kdb_printf("%.20s:%lu\n",zone_copy.zone_name,(uintptr_t)zone_copy.cur_size);
+					}	
+					
+					if(zone_copy.next_zone == NULL) {
+						break;
+					}
+
+					if(ml_nofault_copy((vm_offset_t)zone_copy.next_zone, (vm_offset_t)&zone_copy, sizeof(struct zone)) != sizeof(struct zone)) {
+						break;
+					}
+				}
+			}
+		}
+
+		kdb_printf("Kernel Stacks:%lu\n",(uintptr_t)(KERNEL_STACK_SIZE * stack_total));
+#if defined(__i386__)
+		kdb_printf("PageTables:%lu\n",(uintptr_t)(PAGE_SIZE * inuse_ptepages_count));
+#endif
+		kdb_printf("Kalloc.Large:%lu\n",(uintptr_t)kalloc_large_total);
 	}
 }
 

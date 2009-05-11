@@ -47,6 +47,7 @@ ENTRY(ml_get_timebase)
 
 			movl    S_ARG0, %ecx
 			
+			lfence
 			rdtsc
 			lfence
 			
@@ -235,7 +236,9 @@ Lslow:
 		pushl		%esi					/* save generation */
 		pushl		RNT_SHIFT(%edi)				/* save low 32 bits of tscFreq */
 
-		rdtsc							/* get TSC in %edx:%eax */
+		lfence
+		rdtsc	  						/* get TSC in %edx:%eax */
+		lfence
 		subl		RNT_TSC_BASE(%edi),%eax
 		sbbl		RNT_TSC_BASE+4(%edi),%edx
 

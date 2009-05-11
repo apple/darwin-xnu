@@ -49,9 +49,10 @@ typedef union {
 	uint64_t	count			:BITS(7,0);
 	uint64_t	mcg_ctl_p		:BIT1(8);
 	uint64_t	mcg_ext_p		:BIT1(9);
-	uint64_t	mcg_reserved1		:BIT1(10);
+	uint64_t	mcg_ext_corr_err_p	:BIT1(10);
 	uint64_t	mcg_tes_p		:BIT1(11);
-	uint64_t	mcg_reserved2		:BITS(15,12);
+	uint64_t	mcg_ecms		:BIT1(12);
+	uint64_t	mcg_reserved2		:BITS(15,13);
 	uint64_t	mcg_ext_cnt		:BITS(23,16);
      }		bits;
      uint64_t	u64;
@@ -123,7 +124,7 @@ typedef union {
 	uint64_t	over			:BIT1(62);
 	uint64_t	val			:BIT1(63);
     }		bits;
-    struct {		/* Variant if threshold-based error status present: */
+     struct {		/* Variant if threshold-based error status present: */
 	uint64_t	mca_error		:BITS(15,0);
 	uint64_t	model_specific_error	:BITS(31,16);
 	uint64_t	other_information	:BITS(52,32);
@@ -136,6 +137,21 @@ typedef union {
 	uint64_t	over			:BIT1(62);
 	uint64_t	val			:BIT1(63);
     }		bits_tes_p;
+    struct ia32_mc8_specific {
+	uint64_t	channel_number		:BITS(3,0);
+	uint64_t	memory_operation	:BITS(6,4);
+	uint64_t	unused			:BITS(15,7);
+	uint64_t	read_ecc		:BIT1(16);
+	uint64_t	ecc_on_a_scrub		:BIT1(17);
+	uint64_t	write_parity		:BIT1(18);
+	uint64_t	redundant_memory	:BIT1(19);
+	uint64_t	sparing			:BIT1(20);
+	uint64_t	access_out_of_range	:BIT1(21);
+	uint64_t	address_parity		:BIT1(23);
+	uint64_t	byte_enable_parity	:BIT1(24);
+	uint64_t	reserved		:BITS(37,25);
+	uint64_t	cor_err_cnt		:BITS(52,38);
+    }		bits_mc8;
     uint64_t	u64;
 } ia32_mci_status_t;
 
@@ -144,6 +160,24 @@ typedef union {
 #define THRESHOLD_STATUS_GREEN		1
 #define THRESHOLD_STATUS_YELLOW		2
 #define THRESHOLD_STATUS_RESERVED	3
+
+/* MC8 memory operations encoding: */
+#define	MC8_MMM_GENERIC			0
+#define	MC8_MMM_READ			1
+#define	MC8_MMM_WRITE			2
+#define	MC8_MMM_ADDRESS_COMMAND		3
+#define	MC8_MMM_RESERVED		4
+
+typedef union {
+    struct {
+	uint64_t	reserved1		:BITS(15,0);
+	uint64_t	dimm			:BITS(17,16);
+	uint64_t	channel			:BITS(19,18);
+	uint64_t	reserved2		:BITS(31,20);
+	uint64_t	syndrome		:BITS(63,32);
+    }		bits;
+    uint64_t	u64;
+} ia32_mc8_misc_t;
 
 typedef uint64_t	ia32_mci_addr_t;
 typedef uint64_t	ia32_mci_misc_t;
@@ -189,6 +223,7 @@ extern void		mca_cpu_alloc(cpu_data_t *cdp);
 extern void		mca_cpu_init(void);
 extern void		mca_dump(void);
 extern void		mca_check_save(void);
+extern boolean_t	mca_is_cmci_present(void);
 
 #endif	/* _I386_MACHINE_CHECK_H_ */
 #endif	/* KERNEL_PRIVATE */

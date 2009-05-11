@@ -625,7 +625,7 @@ $(OBJPATH)/kgmacros: $(SRCROOT)/kgmacros
 
 $(DSTROOT)$(INSTALL_FILE_DIR)mach.$(KERNEL_CONFIG_LC).$(MACHINE_CONFIG_LC): $(TARGET)/mach_kernel force_file_install
 	@echo Installing $< in $@;
-	@if [ ! -e $(DSTROOT)$(INSTALL_FILE_DIR) ]; then	\
+	$(_v)if [ ! -e $(DSTROOT)$(INSTALL_FILE_DIR) ]; then	\
 		$(MKDIR) $(DSTROOT)$(INSTALL_FILE_DIR);		\
 	fi;							\
 	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then	\
@@ -636,14 +636,38 @@ $(DSTROOT)$(INSTALL_FILE_DIR)mach.$(KERNEL_CONFIG_LC).$(MACHINE_CONFIG_LC): $(TA
 			echo >empty_file_$(notdir $@);			\
 			lipo_arg="$(subst _empty_file, empty_file_$(notdir $@),$(foreach lipo_arch,$(INSTALL_ARCHS_LC), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
 			$(LIPO) $${lipo_arg} -create -output $@;	\
-			$(RM) $(RMFLAGS) empty_file_$(notdir $@);		\
+			$(RM) $(RMFLAGS) empty_file_$(notdir $@);	\
 		fi;							\
 		$(LIPO) $@ -replace $(ARCH_CONFIG_LC)  $< -o $@;	\
+	fi;								\
+	if [ $(BUILD_DWARF) -eq 1 ]; then				\
+		if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then	\
+			$(CP) -f $< $<.ctfsys;				\
+			$(FIND) $(OBJPATH)/ -name \*.ctf -size 0	\
+				-exec $(RM) -rf {} \;	;		\
+			$(CTFMERGE) -l xnu -o $<.ctfsys 		\
+				$(OBJPATH)/*/$(KERNEL_CONFIG)/*.*o.ctf || true;	\
+			$(INSTALL) $(FILE_INSTALL_FLAGS) $<.ctfsys $@.ctfsys; \
+		else							\
+			if [ ! -e $@.ctfsys ]; then			\
+				echo >empty_file_$(notdir $@);		\
+				lipo_arg="$(subst _empty_file, empty_file_$(notdir $@),$(foreach lipo_arch,$(INSTALL_ARCHS_LC), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
+				$(LIPO) $${lipo_arg} -create -output $@.ctfsys;\
+				$(RM) $(RMFLAGS) empty_file_$(notdir $@);\
+			fi;						\
+			$(FIND) $(OBJPATH)/ -name \*.ctf -size 0	\
+				-exec $(RM) -rf {} \;	;		\
+			$(CP) -f $< $<.ctfsys;				\
+			$(CTFMERGE) -l xnu -o $<.ctfsys			\
+				$(OBJPATH)/*/$(KERNEL_CONFIG)/*.*o.ctf || true;	\
+			$(LIPO) $@.ctfsys -replace $(ARCH_CONFIG_LC)	\
+				$<.ctfsys -o $@.ctfsys;			\
+		fi;							\
 	fi
 
 $(SYMROOT)$(INSTALL_FILE_DIR)mach.$(KERNEL_CONFIG_LC).$(MACHINE_CONFIG_LC): $(TARGET)/mach_kernel.sys force_file_install
 	@echo Installing $< in $@;
-	@if [ ! -e $(SYMROOT)$(INSTALL_FILE_DIR) ]; then	\
+	$(_v)if [ ! -e $(SYMROOT)$(INSTALL_FILE_DIR) ]; then	\
 		$(MKDIR) $(SYMROOT)$(INSTALL_FILE_DIR);		\
 	fi;							\
 	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then	\
@@ -682,7 +706,9 @@ $(INSTALL_FILE_FILES_GENERIC): $(DSTROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/% forc
 	fi;								\
 	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then		\
 		$(RM) $(RMFLAGS) $@;					\
-		$(INSTALL) $(FILE_INSTALL_FLAGS) $< $@;		\
+		if [ $(MACHINE_CONFIG) = DEFAULT ]; then		\
+			$(INSTALL) $(FILE_INSTALL_FLAGS) $< $@;		\
+		fi;							\
 	else								\
 		if [ ! -e $@ ]; then					\
 			echo >empty_file_$(notdir $@);			\
@@ -699,7 +725,9 @@ $(INSTALL_FILE_FILES_GENERIC): $(DSTROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/% forc
 				-exec $(RM) -rf {} \;	;		\
 			$(CTFMERGE) -l xnu -o $<.ctfsys 		\
 				$(OBJPATH)/*/$(KERNEL_CONFIG)/*.*o.ctf || true;	\
-			$(INSTALL) $(FILE_INSTALL_FLAGS) $<.ctfsys $(dir $@); \
+			if [ $(MACHINE_CONFIG) = DEFAULT ]; then	\
+				$(INSTALL) $(FILE_INSTALL_FLAGS) $<.ctfsys $(dir $@); \
+			fi;						\
 		else							\
 			if [ ! -e $@.ctfsys ]; then			\
 				echo >empty_file_$(notdir $@);		\

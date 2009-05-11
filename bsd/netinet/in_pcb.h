@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -192,17 +192,11 @@ struct inpcb {
 #else
 	void	  *inpcb_mtx;
 #endif
-	u_int32_t reserved[4];		/* future use (some already used) */
+	unsigned int inp_boundif;	/* interface scope for INP_BOUND_IF */
+	u_int32_t inp_reserved[3];	/* reserved for future use */
 #if CONFIG_MACF_NET
 	struct label *inp_label;	/* MAC label */
 #endif
-#if CONFIG_FORCE_OUT_IFP
-#ifdef _KERN_SYS_KERNELTYPES_H_
-	ifnet_t	pdp_ifp;
-#else
-	void	*pdp_ifp;
-#endif /* _KERN_SYS_KERNELTYPES_H_ */
-#endif /* CONFIG_EMBEDDED */
 #if CONFIG_IP_EDGEHOLE
 	u_int32_t	inpcb_edgehole_flags;
 	u_int32_t	inpcb_edgehole_mask;
@@ -448,6 +442,7 @@ struct inpcbinfo {		/* XXX documentation, prefixes */
 
 #define INP_RECVTTL		0x1000
 #define	INP_UDP_NOCKSUM		0x2000	/* Turn off outbound UDP checksum */
+#define	INP_BOUND_IF		0x4000	/* bind socket to an ifindex */
 
 #define IN6P_IPV6_V6ONLY	0x008000 /* restrict AF_INET6 socket for v6 */
 
@@ -577,9 +572,6 @@ in_pcb_rem_share_client(struct inpcbinfo *pcbinfo, u_char owner_id);
 void	in_pcbremlists(struct inpcb *inp);
 int 	in_pcb_ckeckstate(struct inpcb *, int, int);
 void	inpcb_to_compat(struct inpcb *inp, struct inpcb_compat *inp_compat);
-#if CONFIG_FORCE_OUT_IFP
-void	pdp_context_route_locked(ifnet_t ifp, struct route *ro);
-#endif
 
 #endif /* KERNEL */
 #endif /* KERNEL_PRIVATE */

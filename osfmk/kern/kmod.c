@@ -45,6 +45,7 @@
 #include <mach/host_priv_server.h>
 #include <mach/vm_map.h>
 
+#include <kern/clock.h>
 #include <kern/kalloc.h>
 #include <kern/kern_types.h>
 #include <kern/thread.h>
@@ -54,6 +55,8 @@
 #include <mach-o/mach_header.h>
 #include <mach-o/loader.h>
 #include <mach-o/nlist.h>
+
+#include <mach/kext_panic_report.h>
 
 /*
  * XXX headers for which prototypes should be in a common include file;
@@ -99,6 +102,377 @@ typedef struct cmd_queue_entry {
 
 queue_head_t kmod_cmd_queue;
 
+/*******************************************************************************
+*******************************************************************************/
+#define KMOD_PANICLIST_SIZE  (2 * PAGE_SIZE)
+
+char     * unloaded_kext_paniclist        = NULL;
+uint32_t   unloaded_kext_paniclist_size   = 0;
+uint32_t   unloaded_kext_paniclist_length = 0;
+uint64_t   last_loaded_timestamp          = 0;
+
+char     * loaded_kext_paniclist          = NULL;
+uint32_t   loaded_kext_paniclist_size     = 0;
+uint32_t   loaded_kext_paniclist_length   = 0;
+uint64_t   last_unloaded_timestamp        = 0;
+
+int substitute(
+    const char * scan_string,
+    char       * string_out,
+    uint32_t   * to_index,
+    uint32_t   * from_index,
+    const char * substring,
+    char         marker,
+    char         substitution);
+
+/* identifier_out must be at least KMOD_MAX_NAME bytes.
+ */
+int substitute(
+    const char * scan_string,
+    char       * string_out,
+    uint32_t   * to_index,
+    uint32_t   * from_index,
+    const char * substring,
+    char         marker,
+    char         substitution)
+{
+    uint32_t substring_length = strnlen(substring, KMOD_MAX_NAME - 1);
+
+    if (!strncmp(scan_string, substring, substring_length)) {
+        if (marker) {
+            string_out[(*to_index)++] = marker;
+        }
+        string_out[(*to_index)++] = substitution;
+        (*from_index) += substring_length;
+        return 1;
+    }
+    return 0;
+}
+
+void compactIdentifier(
+    const char * identifier,
+    char       * identifier_out,
+    char      ** identifier_out_end);
+
+void compactIdentifier(
+    const char * identifier,
+    char       * identifier_out,
+    char      ** identifier_out_end)
+{
+    uint32_t       from_index, to_index;
+    uint32_t       scan_from_index = 0;
+    uint32_t       scan_to_index   = 0;
+    subs_entry_t * subs_entry    = NULL;
+    int            did_sub       = 0;
+
+    from_index = to_index = 0;
+    identifier_out[0] = '\0';
+
+   /* Replace certain identifier prefixes with shorter @+character sequences.
+    */
+    for (subs_entry = &kext_identifier_prefix_subs[0];
+         subs_entry->substring && !did_sub;
+         subs_entry++) {
+
+        did_sub = substitute(identifier, identifier_out,
+            &scan_to_index, &scan_from_index,
+            subs_entry->substring, /* marker */ '\0', subs_entry->substitute);
+    }
+    did_sub = 0;
+
+   /* Now scan through the identifier looking for the common substrings
+    * and replacing them with shorter !+character sequences.
+    */
+    for (/* see above */;
+         scan_from_index < KMOD_MAX_NAME - 1 && identifier[scan_from_index];
+         /* see loop */) {
+         
+        const char   * scan_string = &identifier[scan_from_index];
+
+        did_sub = 0;
+
+        if (scan_from_index) {
+            for (subs_entry = &kext_identifier_substring_subs[0];
+                 subs_entry->substring && !did_sub;
+                 subs_entry++) {
+
+                did_sub = substitute(scan_string, identifier_out,
+                    &scan_to_index, &scan_from_index,
+                    subs_entry->substring, '!', subs_entry->substitute);
+            }
+        }
+
+        if (!did_sub) {
+            identifier_out[scan_to_index++] = identifier[scan_from_index++];
+        }
+    }
+    
+    identifier_out[scan_to_index] = '\0';
+    if (identifier_out_end) {
+        *identifier_out_end = &identifier_out[scan_to_index];
+    }
+    
+    return;
+}
+
+/* identPlusVers must be at least 2*KMOD_MAX_NAME in length.
+ */
+int assemble_identifier_and_version(
+    kmod_info_t * kmod_info, 
+    char        * identPlusVers);
+int assemble_identifier_and_version(
+    kmod_info_t * kmod_info, 
+    char        * identPlusVers)
+{
+    int result = 0;
+
+    compactIdentifier(kmod_info->name, identPlusVers, NULL);
+    result = strnlen(identPlusVers, KMOD_MAX_NAME - 1);
+    identPlusVers[result++] = '\t';  // increment for real char
+    identPlusVers[result] = '\0';    // don't increment for nul char
+    result = strlcat(identPlusVers, kmod_info->version, KMOD_MAX_NAME);
+
+    return result;
+}
+
+#define LAST_LOADED " - last loaded "
+#define LAST_LOADED_TS_WIDTH  (16)
+
+uint32_t save_loaded_kext_paniclist_typed(
+    const char * prefix,
+    int          invertFlag,
+    int          libsFlag,
+    char       * paniclist,
+    uint32_t     list_size,
+    uint32_t   * list_length_ptr,
+    int         (*printf_func)(const char *fmt, ...));
+uint32_t save_loaded_kext_paniclist_typed(
+    const char * prefix,
+    int          invertFlag,
+    int          libsFlag,
+    char       * paniclist,
+    uint32_t     list_size,
+    uint32_t   * list_length_ptr,
+    int         (*printf_func)(const char *fmt, ...))
+{
+    uint32_t      result = 0;
+    int           error  = 0;
+    kmod_info_t * kmod_info;
+
+    for (kmod_info = kmod;
+         kmod_info && (*list_length_ptr + 1 < list_size);
+         kmod_info = kmod_info->next) {
+
+        int      match;
+        char     identPlusVers[2*KMOD_MAX_NAME];
+        uint32_t identPlusVersLength;
+        char     timestampBuffer[17]; // enough for a uint64_t
+
+        if (!pmap_find_phys(kernel_pmap, (addr64_t)((uintptr_t)kmod_info))) {
+            (*printf_func)("kmod scan stopped due to missing kmod page: %p\n",
+                kmod_info);
+            error = 1;
+            goto finish;
+        }
+
+       /* Skip all built-in/fake entries.
+        */
+        if (!kmod_info->address) {
+            continue;
+        }
+
+       /* Filter for kmod name (bundle identifier).
+        */
+        match = !strncmp(kmod_info->name, prefix, strnlen(prefix, KMOD_MAX_NAME));
+        if ((match && invertFlag) || (!match && !invertFlag)) {
+            continue;
+        }
+
+       /* Filter for libraries. This isn't a strictly correct check,
+        * but any kext that does have references to it has to be a library.
+        * A kext w/o references may or may not be a library.
+        */
+        if ((libsFlag == 0 && kmod_info->reference_count) ||
+            (libsFlag == 1 && !kmod_info->reference_count)) {
+
+            continue;
+        }
+
+        identPlusVersLength = assemble_identifier_and_version(kmod_info,
+            identPlusVers);
+        if (!identPlusVersLength) {
+            printf_func("error saving loaded kext info\n");
+            goto finish;
+        }
+
+       /* We're going to note the last-loaded kext in the list.
+        */
+        if (kmod_info == kmod) {
+            snprintf(timestampBuffer, sizeof(timestampBuffer), "%llu",
+                last_loaded_timestamp);
+            identPlusVersLength += sizeof(LAST_LOADED) - 1 +
+                strnlen(timestampBuffer, sizeof(timestampBuffer));
+        }
+
+       /* Adding 1 for the newline.
+        */
+        if (*list_length_ptr + identPlusVersLength + 1 >= list_size) {
+            goto finish;
+        }
+        
+        *list_length_ptr = strlcat(paniclist, identPlusVers, list_size);
+        if (kmod_info == kmod) {
+            *list_length_ptr = strlcat(paniclist, LAST_LOADED, list_size);
+            *list_length_ptr = strlcat(paniclist, timestampBuffer, list_size);
+        }
+        *list_length_ptr = strlcat(paniclist, "\n", list_size);
+    }
+    
+finish:
+    if (!error) {
+        if (*list_length_ptr + 1 <= list_size) {
+            result = list_size - (*list_length_ptr + 1);
+        }
+    }
+
+    return result;
+}
+
+void save_loaded_kext_paniclist(
+    int         (*printf_func)(const char *fmt, ...));
+
+void save_loaded_kext_paniclist(
+    int         (*printf_func)(const char *fmt, ...))
+{
+    char     * newlist        = NULL;
+    uint32_t   newlist_size   = 0;
+    uint32_t   newlist_length = 0;
+
+    newlist_length = 0;
+    newlist_size = KMOD_PANICLIST_SIZE;
+    newlist = (char *)kalloc(newlist_size);
+    
+    if (!newlist) {
+        printf_func("couldn't allocate kext panic log buffer\n");
+        goto finish;
+    }
+    
+    newlist[0] = '\0';
+
+    // non-"com.apple." kexts
+    if (!save_loaded_kext_paniclist_typed("com.apple.", /* invert? */ 1,
+        /* libs? */ -1, newlist, newlist_size, &newlist_length,
+        printf_func)) {
+        
+        goto finish;
+    }
+    // "com.apple." nonlibrary kexts
+    if (!save_loaded_kext_paniclist_typed("com.apple.", /* invert? */ 0,
+        /* libs? */ 0, newlist, newlist_size, &newlist_length,
+        printf_func)) {
+        
+        goto finish;
+    }
+    // "com.apple." library kexts
+    if (!save_loaded_kext_paniclist_typed("com.apple.", /* invert? */ 0,
+        /* libs? */ 1, newlist, newlist_size, &newlist_length,
+        printf_func)) {
+        
+        goto finish;
+    }
+
+    if (loaded_kext_paniclist) {
+        kfree(loaded_kext_paniclist, loaded_kext_paniclist_size);
+    }
+    loaded_kext_paniclist = newlist;
+    loaded_kext_paniclist_size = newlist_size;
+    loaded_kext_paniclist_length = newlist_length;
+
+finish:
+    return;
+}
+
+void save_unloaded_kext_paniclist(
+    kmod_info_t * kmod_info,
+    int         (*printf_func)(const char *fmt, ...));
+void save_unloaded_kext_paniclist(
+    kmod_info_t * kmod_info,
+    int         (*printf_func)(const char *fmt, ...))
+{
+    char     * newlist        = NULL;
+    uint32_t   newlist_size   = 0;
+    uint32_t   newlist_length = 0;
+    char       identPlusVers[2*KMOD_MAX_NAME];
+    uint32_t   identPlusVersLength;
+
+    identPlusVersLength = assemble_identifier_and_version(kmod_info,
+        identPlusVers);
+    if (!identPlusVersLength) {
+        printf_func("error saving unloaded kext info\n");
+        goto finish;
+    }
+
+    newlist_length = identPlusVersLength;
+    newlist_size = newlist_length + 1;
+    newlist = (char *)kalloc(newlist_size);
+    
+    if (!newlist) {
+        printf_func("couldn't allocate kext panic log buffer\n");
+        goto finish;
+    }
+    
+    newlist[0] = '\0';
+
+    strlcpy(newlist, identPlusVers, newlist_size);
+
+    if (unloaded_kext_paniclist) {
+        kfree(unloaded_kext_paniclist, unloaded_kext_paniclist_size);
+    }
+    unloaded_kext_paniclist = newlist;
+    unloaded_kext_paniclist_size = newlist_size;
+    unloaded_kext_paniclist_length = newlist_length;
+
+finish:
+    return;
+}
+
+// proto is in header
+void record_kext_unload(kmod_t kmod_id)
+{
+    kmod_info_t * kmod_info = NULL;
+
+    mutex_lock(kmod_lock);
+    
+    kmod_info = kmod_lookupbyid(kmod_id);
+    if (kmod_info) {
+        clock_get_uptime(&last_unloaded_timestamp);
+        save_unloaded_kext_paniclist(kmod_info, &printf);
+    }
+    mutex_unlock(kmod_lock);
+    return;
+}
+
+void dump_kext_info(int (*printf_func)(const char *fmt, ...))
+{
+    printf_func("unloaded kexts:\n");
+    if (unloaded_kext_paniclist && (pmap_find_phys(kernel_pmap, (addr64_t) (uintptr_t) unloaded_kext_paniclist))) {
+        printf_func("%.*s - last unloaded %llu\n",
+            unloaded_kext_paniclist_length, unloaded_kext_paniclist,
+            last_unloaded_timestamp);
+    } else {
+        printf_func("(none)\n");
+    }
+    printf_func("loaded kexts:\n");
+    if (loaded_kext_paniclist && (pmap_find_phys(kernel_pmap, (addr64_t) (uintptr_t) loaded_kext_paniclist)) && loaded_kext_paniclist[0]) {
+        printf_func("%.*s", loaded_kext_paniclist_length, loaded_kext_paniclist);
+    } else {
+        printf_func("(none)\n");
+    }
+    return;
+}
+
+/*******************************************************************************
+*******************************************************************************/
 void
 kmod_init(void)
 {
@@ -141,27 +515,27 @@ kmod_lookupbyname(const char * name)
 int kmod_lookupidbyaddress_locked(vm_address_t addr)
 {
     kmod_info_t *k = 0;
-	
+    
     mutex_lock(kmod_queue_lock);
     k = kmod;
-	if(NULL != k) {
-		while (k) {
-			if ((k->address <= addr) && ((k->address + k->size) > addr)) {
-				break;
-			}
-			k = k->next;
-		}
-		mutex_unlock(kmod_queue_lock);
-	} else {
-		mutex_unlock(kmod_queue_lock);
-		return -1;
-	}
-	
-	if(NULL == k) {
-		return -1;
-	} else {
-		return k->id;
-	}
+    if(NULL != k) {
+        while (k) {
+            if ((k->address <= addr) && ((k->address + k->size) > addr)) {
+                break;
+            }
+            k = k->next;
+        }
+        mutex_unlock(kmod_queue_lock);
+    } else {
+        mutex_unlock(kmod_queue_lock);
+        return -1;
+    }
+    
+    if(NULL == k) {
+        return -1;
+    } else {
+        return k->id;
+    }
 }
 
 kmod_info_t *
@@ -387,6 +761,9 @@ kmod_create_internal(kmod_info_t *info, kmod_t *id)
 
     *id = info->id;
 
+    clock_get_uptime(&last_loaded_timestamp);
+    save_loaded_kext_paniclist(&printf);
+
     mutex_unlock(kmod_lock);
 
 #if DEBUG
@@ -540,6 +917,10 @@ _kmod_destroy_internal(kmod_t id, boolean_t fake)
         }
         p = k;
         k = k->next;
+    }
+
+    if (!fake) {
+        save_loaded_kext_paniclist(&printf);
     }
 
     mutex_unlock(kmod_lock);

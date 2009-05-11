@@ -2938,6 +2938,11 @@ unlink1(vfs_context_t ctx, struct nameidata *ndp, int nodelbusy)
 	int need_event = 0;
 	int has_listeners = 0;
 
+#if NAMEDRSRCFORK
+	/* unlink or delete is allowed on rsrc forks and named streams */
+	ndp->ni_cnd.cn_flags |= CN_ALLOWRSRCFORK;
+#endif
+
 	ndp->ni_cnd.cn_flags |= LOCKPARENT;
 	cnp = &ndp->ni_cnd;
 
@@ -3051,6 +3056,15 @@ unlink1(vfs_context_t ctx, struct nameidata *ndp, int nodelbusy)
 	 * since it may need to release the fs_nodelock on the dvp
 	 */
 out:
+#if NAMEDRSRCFORK
+	/* recycle deleted rsrc fork to force reclaim on shadow file if necessary */
+	if ((vnode_isnamedstream(ndp->ni_vp)) &&
+			(ndp->ni_vp->v_parent != NULLVP) &&
+			(vnode_isshadow(ndp->ni_vp))) {
+		vnode_recycle(ndp->ni_vp);
+	}	
+#endif
+
 	nameidone(ndp);
 	vnode_put(dvp);
 	vnode_put(vp);
@@ -3540,7 +3554,7 @@ access(__unused proc_t p, struct access_args *uap, __unused register_t *retval)
 	 */
 	if (vnode_isnamedstream(nd.ni_vp) &&
 			(nd.ni_vp->v_parent != NULLVP) &&
-			((nd.ni_vp->v_parent->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS) == 0)) {
+			(vnode_isshadow(nd.ni_vp))) {
 		is_namedstream = 1;
 		vnode_ref(nd.ni_vp);
 	}
@@ -3606,7 +3620,7 @@ stat2(vfs_context_t ctx, struct nameidata *ndp, user_addr_t ub, user_addr_t xsec
 	 */
 	if (vnode_isnamedstream(ndp->ni_vp) &&
 			(ndp->ni_vp->v_parent != NULLVP) &&
-			((ndp->ni_vp->v_parent->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS) == 0)) {
+			(vnode_isshadow(ndp->ni_vp))) {
 		is_namedstream = 1;
 		vnode_ref (ndp->ni_vp);
 	}
@@ -4593,7 +4607,7 @@ fsync_nocancel(proc_t p, struct fsync_nocancel_args *uap, __unused register_t *r
 	if ((error == 0) &&
 	    (vp->v_flag & VISNAMEDSTREAM) && 
 	    (vp->v_parent != NULLVP) &&
-	    !(vp->v_parent->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS) &&
+	    (vnode_isshadow(vp)) &&
 	    (fp->f_flags & FP_WRITTEN)) {
 		(void) vnode_flushnamedstream(vp->v_parent, vp, ctx);
 	}

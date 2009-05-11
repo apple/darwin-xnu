@@ -37,7 +37,7 @@
  * This value should be changed each time that pmDsipatch_t or pmCallBacks_t
  * changes.
  */
-#define PM_DISPATCH_VERSION	12
+#define PM_DISPATCH_VERSION	15
 
 /*
  * Dispatch table for functions that get installed when the power
@@ -69,11 +69,13 @@ typedef struct
     void		(*pmTimerStateRestore)(void);
     kern_return_t	(*exitHalt)(x86_lcpu_t *lcpu);
     void		(*markAllCPUsOff)(void);
+    void		(*pmSetRunCount)(uint32_t count);
+    boolean_t		(*pmIsCPUUnAvailable)(x86_lcpu_t *lcpu);
 } pmDispatch_t;
 
 typedef struct {
     int			(*setRTCPop)(uint64_t time);
-    void		(*resyncDeadlines)(void);
+    void		(*resyncDeadlines)(int cpu);
     void		(*initComplete)(void);
     x86_lcpu_t		*(*GetLCPU)(int cpu);
     x86_core_t		*(*GetCore)(int cpu);
@@ -88,6 +90,7 @@ typedef struct {
     boolean_t		(*GetHibernate)(int cpu);
     processor_t		(*LCPUtoProcessor)(int lcpu);
     processor_t		(*ThreadBind)(processor_t proc);
+    uint32_t		(*GetSavedRunCount)(void);
     x86_topology_parameters_t	*topoParms;
 } pmCallBacks_t;
 

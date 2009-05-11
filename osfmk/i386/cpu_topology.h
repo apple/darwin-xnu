@@ -133,6 +133,7 @@ typedef struct x86_lcpu
     struct x86_die	*die;		/* die containing the logical cpu */
     struct x86_pkg	*package;	/* package containing the logical cpu */
     struct cpu_data	*cpu;		/* cpu_data structure */
+    uint32_t		flags;
     uint32_t		cpu_num;	/* cpu number */
     uint32_t		lnum;		/* logical cpu number (within core) */
     uint32_t		pnum;		/* physical cpu number */
@@ -150,8 +151,10 @@ typedef struct x86_lcpu
 
 #define X86CORE_FL_PRESENT	0x80000000	/* core is present */
 #define X86CORE_FL_READY	0x40000000	/* core struct is init'd */
+#define X86CORE_FL_HAS_HPET	0x10000000	/* core has HPET assigned */
 #define X86CORE_FL_HALTED	0x00008000	/* core is halted */
 #define X86CORE_FL_IDLE		0x00004000	/* core is idle */
+#define X86CORE_FL_WAKEUP	0x00002000	/* wakeup is pending */
 
 typedef struct x86_core
 {

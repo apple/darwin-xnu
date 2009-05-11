@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 1993-1995, 1999-2000 Apple Computer, Inc.
- * All rights reserved.
+ * Copyright (c) 1993-1995, 1999-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -27,15 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
- * Private declarations for thread-based callouts.
- *
- * HISTORY
- *
- * 10 July 1999 (debo)
- *  Pulled into Mac OS X (microkernel).
- *
- * 3 July 1993 (debo)
- *	Created.
+ * Declarations for generic call outs.
  */
 
 #ifndef _KERN_CALL_ENTRY_H_
@@ -51,21 +42,32 @@ typedef void			(*call_entry_func_t)(
 
 typedef struct call_entry {
     queue_chain_t		q_link;
+	queue_t				queue;
     call_entry_func_t	func;
     call_entry_param_t	param0;
     call_entry_param_t	param1;
     uint64_t			deadline;
-    enum {
-	  IDLE,
-	  PENDING,
-	  DELAYED }			state;
 } call_entry_data_t;
+
+typedef struct call_entry		*call_entry_t;
+
+extern queue_t		call_entry_enqueue_deadline(
+							call_entry_t		entry,
+							queue_t				queue,
+							uint64_t			deadline);
+
+extern queue_t		call_entry_enqueue_tail(
+							call_entry_t	entry,
+							queue_t			queue);
+
+extern queue_t		call_entry_dequeue(
+							call_entry_t	entry);
 
 #define	call_entry_setup(entry, pfun, p0)				\
 MACRO_BEGIN												\
 	(entry)->func		= (call_entry_func_t)(pfun);	\
 	(entry)->param0		= (call_entry_param_t)(p0);		\
-	(entry)->state		= IDLE;							\
+	(entry)->queue		= NULL;							\
 MACRO_END
 
 #endif /* MACH_KERNEL_PRIVATE */

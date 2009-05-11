@@ -61,7 +61,8 @@ decl_simple_lock_data(static,stack_lock_data)
 static vm_offset_t		stack_free_list;
 
 static unsigned int		stack_free_count, stack_free_hiwat;		/* free list count */
-static unsigned int		stack_total, stack_hiwat;				/* current total count */
+static unsigned int		stack_hiwat;
+unsigned int			stack_total;				/* current total count */
 
 static unsigned int		stack_free_target;
 static int				stack_free_delta;

@@ -394,11 +394,16 @@ vnode_getnamedstream(vnode_t vp, vnode_t *svpp, const char *name, enum nsoperati
 		error = default_getnamedstream(vp, svpp, name, op, context);
 
 	if (error == 0) {
+		uint32_t streamflags = VISNAMEDSTREAM;
 		vnode_t svp = *svpp;
-		
+
+		if ((vp->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS) == 0) { 
+			streamflags |= VISSHADOW;
+		}    
+
 		/* Tag the vnode. */
-		vnode_lock(svp);
-		svp->v_flag |= VISNAMEDSTREAM;
+		vnode_lock_spin(svp);
+		svp->v_flag |= streamflags;
 		vnode_unlock(svp);
 		/* Make the file its parent. 
 		 * Note: This parent link helps us distinguish vnodes for 
@@ -427,12 +432,19 @@ vnode_makenamedstream(vnode_t vp, vnode_t *svpp, const char *name, int flags, vf
 		error = default_makenamedstream(vp, svpp, name, context);
 
 	if (error == 0) {
+		uint32_t streamflags = VISNAMEDSTREAM;
 		vnode_t svp = *svpp;
 
 		/* Tag the vnode. */
-		vnode_lock(svp);
-		svp->v_flag |= VISNAMEDSTREAM;
-		vnode_unlock(svp);		
+		if ((vp->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS) == 0) {
+			streamflags |= VISSHADOW;
+		}
+
+		/* Tag the vnode. */
+		vnode_lock_spin(svp);
+		svp->v_flag |= streamflags;
+		vnode_unlock(svp);
+
 		/* Make the file its parent. 
 		 * Note: This parent link helps us distinguish vnodes for 
 		 * shadow stream files from vnodes for resource fork on file

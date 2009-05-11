@@ -220,17 +220,32 @@ hfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_context_t conte
 		    vfs_isrdonly(mp)) {
 			int flags;
 
+			/* Set flag to indicate that a downgrade to read-only
+			 * is in progress and therefore block any further 
+			 * modifications to the file system.
+			 */
+			hfs_global_exclusive_lock_acquire(hfsmp);
+			hfsmp->hfs_flags |= HFS_RDONLY_DOWNGRADE;
+			hfsmp->hfs_downgrading_proc = current_thread();
+			hfs_global_exclusive_lock_release(hfsmp);
+
 			/* use VFS_SYNC to push out System (btree) files */
 			retval = VFS_SYNC(mp, MNT_WAIT, context);
-			if (retval && ((cmdflags & MNT_FORCE) == 0))
+			if (retval && ((cmdflags & MNT_FORCE) == 0)) {
+				hfsmp->hfs_flags &= ~HFS_RDONLY_DOWNGRADE;
+				hfsmp->hfs_downgrading_proc = NULL;
 				goto out;
+			}
 		
 			flags = WRITECLOSE;
 			if (cmdflags & MNT_FORCE)
 				flags |= FORCECLOSE;
 				
-			if ((retval = hfs_flushfiles(mp, flags, p)))
+			if ((retval = hfs_flushfiles(mp, flags, p))) {
+				hfsmp->hfs_flags &= ~HFS_RDONLY_DOWNGRADE;
+				hfsmp->hfs_downgrading_proc = NULL;
 				goto out;
+			}
 
 			/* mark the volume cleanly unmounted */
 			hfsmp->vcbAtrb |= kHFSVolumeUnmountedMask;
@@ -248,6 +263,8 @@ hfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_context_t conte
 				}
 			}
 			if (retval) {
+				hfsmp->hfs_flags &= ~HFS_RDONLY_DOWNGRADE;
+				hfsmp->hfs_downgrading_proc = NULL;
 				hfsmp->hfs_flags &= ~HFS_READ_ONLY;
 				goto out;
 			}
@@ -263,6 +280,8 @@ hfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_context_t conte
 
 			    hfs_global_exclusive_lock_release(hfsmp);
 			}
+
+			hfsmp->hfs_downgrading_proc = NULL;
 		}
 
 		/* Change to a writable file system. */
@@ -316,6 +335,13 @@ hfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_context_t conte
 
 			/* Only clear HFS_READ_ONLY after a successfull write */
 			hfsmp->hfs_flags &= ~HFS_READ_ONLY;
+
+			/* If this mount point was downgraded from read-write 
+			 * to read-only, clear that information as we are now 
+			 * moving back to read-write.
+			 */
+			hfsmp->hfs_flags &= ~HFS_RDONLY_DOWNGRADE;
+			hfsmp->hfs_downgrading_proc = NULL;
 
 			/* mark the volume dirty (clear clean unmount bit) */
 			hfsmp->vcbAtrb &= ~kHFSVolumeUnmountedMask;
@@ -885,8 +911,13 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 	 * block size to be 4k if there are more than 31-bits
 	 * worth of blocks but to insure compatibility with
 	 * pre-Tiger systems we have to do it.
+	 *
+	 * If the device size is not a multiple of 4K (8 * 512), then
+	 * switching the logical block size isn't going to help because
+	 * we will be unable to write the alternate volume header.
+	 * In this case, just leave the logical block size unchanged.
 	 */
-	if (log_blkcnt > 0x000000007fffffff) {
+	if (log_blkcnt > 0x000000007fffffff && (log_blkcnt & 7) == 0) {
 		minblksize = log_blksize = 4096;
 		if (phys_blksize < log_blksize)
 			phys_blksize = log_blksize;
@@ -1024,6 +1055,8 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 			}
 			hfsmp->hfs_logical_block_size = log_blksize;
 			hfsmp->hfs_logical_block_count = log_blkcnt;
+			hfsmp->hfs_physical_block_size = log_blksize;
+			hfsmp->hfs_log_per_phys = 1;
 		}
 		if (args) {
 			hfsmp->hfs_encoding = args->hfs_encoding;
@@ -1078,6 +1111,11 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 				hfsmp->hfs_logical_block_count *=
 				    hfsmp->hfs_logical_block_size / log_blksize;
 				hfsmp->hfs_logical_block_size = log_blksize;
+				
+				/* Update logical/physical block size */
+				hfsmp->hfs_physical_block_size = log_blksize;
+				phys_blksize = log_blksize;
+				hfsmp->hfs_log_per_phys = 1;
 			}
 
 			disksize = (u_int64_t)SWAP_BE16(mdbp->drEmbedExtent.blockCount) *
@@ -1218,6 +1256,7 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 			/* Note: relative block count adjustment (in case this is an embedded volume). */
     			hfsmp->hfs_logical_block_count *= hfsmp->hfs_logical_block_size / log_blksize;
      			hfsmp->hfs_logical_block_size = log_blksize;
+     			hfsmp->hfs_log_per_phys = hfsmp->hfs_physical_block_size / log_blksize;
  
 			if (hfsmp->jnl) {
 			    // close and re-open this with the new block size
@@ -3155,9 +3194,6 @@ hfs_extendfs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 		/* If ioctl is not supported, force physical and logical sector size to be same */
 		phys_sectorsize = sectorsize;
 	}
-	if (phys_sectorsize != hfsmp->hfs_physical_block_size) {
-		return (ENXIO);
-	}
 	oldsize = (u_int64_t)hfsmp->totalBlocks * (u_int64_t)hfsmp->blockSize;
 
 	/*
@@ -4493,19 +4529,29 @@ end_iteration:
 	/* Now move any files that are in the way. */
 	for (i = 0; i < filecnt; ++i) {
 		struct vnode * rvp;
+        struct cnode * cp;
 
 		if (hfs_vget(hfsmp, cnidbufp[i], &vp, 0) != 0)
 			continue;
 
+        /* Relocating directory hard links is not supported, so we
+         * punt (see radar 6217026). */
+        cp = VTOC(vp);
+        if ((cp->c_flag & C_HARDLINK) && vnode_isdir(vp)) {
+            printf("hfs_reclaimspace: unable to relocate directory hard link %d\n", cp->c_cnid);
+            error = EINVAL;
+            goto out;
+        }
+
 		/* Relocate any data fork blocks. */
-		if (VTOF(vp)->ff_blocks > 0) {
+		if (VTOF(vp) && VTOF(vp)->ff_blocks > 0) {
 			error = hfs_relocate(vp, hfsmp->hfs_metazone_end + 1, kauth_cred_get(), current_proc());
 		}
 		if (error) 
 			break;
 
 		/* Relocate any resource fork blocks. */
-		if ((VTOC((vp))->c_blocks - VTOF((vp))->ff_blocks) > 0) {
+		if ((cp->c_blocks - (VTOF(vp) ? VTOF((vp))->ff_blocks : 0)) > 0) {
 			error = hfs_vgetrsrc(hfsmp, vp, &rvp, TRUE);
 			if (error)
 				break;
@@ -4514,7 +4560,7 @@ end_iteration:
 			if (error)
 				break;
 		}
-		hfs_unlock(VTOC(vp));
+		hfs_unlock(cp);
 		vnode_put(vp);
 		vp = NULL;
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -372,7 +372,8 @@ arp_lookup_route(
 	const struct in_addr *addr,
 	int	create,
 	int proxy,
-	route_t *route)
+	route_t *route,
+	unsigned int ifscope)
 {
 	struct sockaddr_inarp sin = {sizeof(sin), AF_INET, 0, {0}, {0}, 0, 0};
 	const char *why = NULL;
@@ -383,8 +384,9 @@ arp_lookup_route(
 
 	sin.sin_addr.s_addr = addr->s_addr;
 	sin.sin_other = proxy ? SIN_PROXY : 0;
-	
-	*route = rtalloc1_locked((struct sockaddr*)&sin, create, 0);
+
+	*route = rtalloc1_scoped_locked((struct sockaddr*)&sin,
+	    create, 0, ifscope);
 	if (*route == NULL)
 		return ENETUNREACH;
 	
@@ -416,7 +418,7 @@ arp_lookup_route(
 	
 	if (why && create && log_arp_warnings) {
 		char	tmp[MAX_IPv4_STR_LEN];
-		log(LOG_DEBUG, "arplookup %s failed: %s\n",
+		log(LOG_DEBUG, "arplookup link#%d %s failed: %s\n", ifscope,
 			inet_ntop(AF_INET, addr, tmp, sizeof(tmp)), why);
 	}
 	
@@ -453,7 +455,8 @@ arp_route_to_gateway_route(
 		
 		if ((route->rt_flags & RTF_UP) == 0) {
 			/* route is down, find a new one */
-			hint = route = rtalloc1_locked(net_dest, 1, 0);
+			hint = route = rtalloc1_scoped_locked(net_dest,
+			    1, 0, route->rt_ifp->if_index);
 			if (hint) {
 				rtunref(hint);
 			}
@@ -474,7 +477,9 @@ arp_route_to_gateway_route(
 				if (route->rt_gwroute != 0)
 					rtfree_locked(route->rt_gwroute);
 				
-				route->rt_gwroute = rtalloc1_locked(route->rt_gateway, 1, 0);
+				route->rt_gwroute = rtalloc1_scoped_locked(
+				    route->rt_gateway, 1, 0,
+				    route->rt_ifp->if_index);
 				if (route->rt_gwroute == 0) {
 					lck_mtx_unlock(rt_mtx);
 					return EHOSTUNREACH;
@@ -560,7 +565,8 @@ arp_lookup_ip(
 	 * route and link layer information.
 	 */
 	if (route == NULL || route->rt_llinfo == NULL)
-		result = arp_lookup_route(&net_dest->sin_addr, 1, 0, &route);
+		result = arp_lookup_route(&net_dest->sin_addr, 1, 0, &route,
+		    ifp->if_index);
 	
 	if (result || route == NULL || route->rt_llinfo == NULL) {
 		char	tmp[MAX_IPv4_STR_LEN];
@@ -706,10 +712,11 @@ arp_ip_handle_input(
 	
 	/*
 	 * Look up the routing entry. If it doesn't exist and we are the
-	 * target, go ahead and create one.
+	 * target, and the sender isn't 0.0.0.0, go ahead and create one.
 	 */
-	error = arp_lookup_route(&sender_ip->sin_addr, (target_ip->sin_addr.s_addr ==
-				best_ia->ia_addr.sin_addr.s_addr), 0, &route);
+	error = arp_lookup_route(&sender_ip->sin_addr,
+	    (target_ip->sin_addr.s_addr == best_ia->ia_addr.sin_addr.s_addr &&
+	    sender_ip->sin_addr.s_addr != 0), 0, &route, ifp->if_index);
 	if (error || route == 0 || route->rt_gateway == 0) {
 		if (arpop != ARPOP_REQUEST) {
 			goto respond;
@@ -723,7 +730,8 @@ arp_ip_handle_input(
 			 * Verify this ARP probe doesn't conflict with an IPv4LL we know of
 			 * on another interface.
 			 */
-			error = arp_lookup_route(&target_ip->sin_addr, 0, 0, &route);
+			error = arp_lookup_route(&target_ip->sin_addr, 0, 0,
+			    &route, ifp->if_index);
 			if (error == 0 && route && route->rt_gateway) {
 				gateway = SDL(route->rt_gateway);
 				if (route->rt_ifp != ifp && gateway->sdl_alen != 0 
@@ -768,7 +776,8 @@ arp_ip_handle_input(
 			/* don't create entry if link-local address and link-local is disabled */
 			if (!IN_LINKLOCAL(ntohl(sender_ip->sin_addr.s_addr)) 
 			    || (ifp->if_eflags & IFEF_ARPLL) != 0) {
-				error = arp_lookup_route(&sender_ip->sin_addr, 1, 0, &route);
+				error = arp_lookup_route(&sender_ip->sin_addr,
+				    1, 0, &route, ifp->if_index);
 				if (error == 0 && route != NULL && route->rt_gateway != NULL) {
 					created_announcement = 1;
 				}
@@ -877,7 +886,8 @@ respond:
 	if (target_ip->sin_addr.s_addr != best_ia->ia_addr.sin_addr.s_addr) {
 	
 		/* Find a proxy route */
-		error = arp_lookup_route(&target_ip->sin_addr, 0, SIN_PROXY, &route);
+		error = arp_lookup_route(&target_ip->sin_addr, 0, SIN_PROXY,
+		    &route, ifp->if_index);
 		if (error || route == NULL) {
 			
 			/* We don't have a route entry indicating we should use proxy */
@@ -888,7 +898,9 @@ respond:
 			}
 			
 			/* See if we have a route to the target ip before we proxy it */
-			route = rtalloc1_locked((const struct sockaddr*)target_ip, 0, 0);
+			route = rtalloc1_scoped_locked(
+			    (const struct sockaddr *)target_ip, 0, 0,
+			    ifp->if_index);
 			if (!route) {
 				lck_mtx_unlock(rt_mtx);
 				return 0;

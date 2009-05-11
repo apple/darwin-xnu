@@ -524,6 +524,7 @@ int	vnode_ischr(vnode_t);
 
 #ifdef __APPLE_API_UNSTABLE
 int	vnode_isnamedstream(vnode_t);
+int     vnode_isshadow(vnode_t);
 #endif
 
 enum vtype	vnode_iftovt(int);

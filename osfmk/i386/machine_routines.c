@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -296,7 +296,7 @@ void
 machine_signal_idle(
         processor_t processor)
 {
-	cpu_interrupt(PROCESSOR_DATA(processor, slot_num));
+	cpu_interrupt(processor->cpu_num);
 }
 
 thread_t        

@@ -1154,8 +1154,10 @@ done:
 		lck_mtx_unlock(ip6_mutex);
 	if (ro == &ip6route && ro->ro_rt) { /* brace necessary for rtfree */
 		rtfree(ro->ro_rt);
+		ro->ro_rt = NULL;
 	} else if (ro_pmtu == &ip6route && ro_pmtu->ro_rt) {
 		rtfree(ro_pmtu->ro_rt);
+		ro_pmtu->ro_rt = NULL;
 	}
 
 #if IPSEC
@@ -2174,6 +2176,7 @@ ip6_setmoptions(
 				}
 				ifp = ro.ro_rt->rt_ifp;
 				rtfree(ro.ro_rt);
+				ro.ro_rt = NULL;
 			}
 		} else
 			ifp = ifindex2ifnet[mreq->ipv6mr_interface];

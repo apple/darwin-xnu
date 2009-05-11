@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000,2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -84,8 +84,12 @@ struct  rtentry;
 struct route {
 	struct	rtentry *ro_rt;
 	struct	sockaddr ro_dst;
-	u_long	reserved[2];	/* for future use if needed */
+	u_int32_t	ro_flags;	/* route flags (see below) */
+	u_int32_t	reserved;	/* for future use if needed */
 };
+
+#define	ROF_SRCIF_SELECTED	0x1 /* source interface was selected */
+
 #else
 struct route;
 #endif /* PRIVATE */
@@ -195,8 +199,8 @@ struct ortentry {
 #define	RTF_LOCAL	0x200000	/* route represents a local address */
 #define	RTF_BROADCAST	0x400000	/* route represents a bcast address */
 #define	RTF_MULTICAST	0x800000	/* route represents a mcast address */
-#define RTF_TRACKREFS	0x1000000	/* Debug references and releases */
-					/* 0x1000000 and up unassigned */
+#define RTF_IFSCOPE	0x1000000	/* has valid interface scope */
+					/* 0x2000000 and up unassigned */
 
 /*
  * Routing statistics.
@@ -323,6 +327,11 @@ struct route_cb {
 };
 
 #ifdef KERNEL_PRIVATE
+/*
+ * For scoped routing; a zero interface scope value means nil/no scope.
+ */
+#define	IFSCOPE_NONE	0
+
 #define RTFREE(rt)	rtfree(rt)
 extern struct route_cb route_cb;
 extern struct radix_node_head *rt_tables[AF_MAX+1];
@@ -338,11 +347,19 @@ extern void rt_missmsg(int, struct rt_addrinfo *, int, int);
 extern void rt_newaddrmsg(int, struct ifaddr *, int, struct rtentry *);
 extern void rt_newmaddrmsg(int, struct ifmultiaddr *);
 extern int rt_setgate(struct rtentry *, struct sockaddr *, struct sockaddr *);
+extern void set_primary_ifscope(unsigned int);
+extern unsigned int get_primary_ifscope(void);
+extern boolean_t rt_inet_default(struct rtentry *, struct sockaddr *);
+extern struct rtentry *rt_lookup(boolean_t, struct sockaddr *,
+    struct sockaddr *, struct radix_node_head *, unsigned int);
 extern void rtalloc(struct route *);
 extern void rtalloc_ign(struct route *, u_long);
-extern void rtalloc_ign_locked(struct route *, u_long );
+extern void rtalloc_ign_locked(struct route *, u_long);
+extern void rtalloc_scoped_ign_locked(struct route *, u_long, unsigned int);
 extern struct rtentry *rtalloc1(struct sockaddr *, int, u_long);
 extern struct rtentry *rtalloc1_locked(struct sockaddr *, int, u_long);
+extern struct rtentry *rtalloc1_scoped_locked(struct sockaddr *, int,
+    u_long, unsigned int);
 extern void rtfree(struct rtentry *);
 extern void rtfree_locked(struct rtentry *);
 extern void rtref(struct rtentry *);
@@ -356,14 +373,17 @@ extern void rtsetifa(struct rtentry *, struct ifaddr *);
 extern int rtinit(struct ifaddr *, int, int);
 extern int rtinit_locked(struct ifaddr *, int, int);
 extern int rtioctl(int, caddr_t, struct proc *);
-extern void rtredirect(struct sockaddr *, struct sockaddr *,
+extern void rtredirect(struct ifnet *, struct sockaddr *, struct sockaddr *,
     struct sockaddr *, int, struct sockaddr *, struct rtentry **);
 extern int rtrequest(int, struct sockaddr *,
     struct sockaddr *, struct sockaddr *, int, struct rtentry **);
 extern int rtrequest_locked(int, struct sockaddr *,
     struct sockaddr *, struct sockaddr *, int, struct rtentry **);
+extern int rtrequest_scoped_locked(int, struct sockaddr *, struct sockaddr *,
+    struct sockaddr *, int, struct rtentry **, unsigned int);
 extern struct rtentry *rte_alloc(void);
 extern void rte_free(struct rtentry *);
+extern unsigned int sa_get_ifscope(struct sockaddr *);
 #endif KERNEL_PRIVATE
 
 #endif

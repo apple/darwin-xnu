@@ -164,6 +164,15 @@ extern cpu_t mp_cpus_call(
 		void		(*action_func)(void *),
 		void		*arg);
 
+/*
+ * Power-management-specific SPI to:
+ *  - register a callout function, and
+ *  - request the callout (if registered) on a given cpu.
+ */
+extern void PM_interrupt_register(void (*fn)(void));
+extern void cpu_PM_interrupt(int cpu);
+
+
 __END_DECLS
 
 #if MP_DEBUG

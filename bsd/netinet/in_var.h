@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -94,9 +94,6 @@ struct in_ifaddr {
 	struct sockaddr_in	ia_dstaddr;	/* reserve space for broadcast addr */
 #define	ia_broadaddr		ia_dstaddr
 	struct sockaddr_in	ia_sockmask;	/* reserve space for general netmask */
-#if CONFIG_FORCE_OUT_IFP
-	struct	rtentry		*ia_route; /* PDP context hack - a faux route we can use */
-#endif
 };
 #endif /* PRIVATE */
 
@@ -307,6 +304,7 @@ void	in_delmulti(struct in_multi **);
 int	in_control(struct socket *, u_long, caddr_t, struct ifnet *,
 			struct proc *);
 void	in_rtqdrain(void);
+extern struct radix_node *in_validate(struct radix_node *);
 void	ip_input(struct mbuf *);
 int	in_ifadown(struct ifaddr *ifa, int);
 void	in_ifscrub(struct ifnet *, struct in_ifaddr *, int);

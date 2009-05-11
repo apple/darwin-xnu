@@ -935,10 +935,22 @@ nextname:
 		}
 		switch (cnp->cn_nameiop) {
 		case DELETE:
-			nsop = NS_DELETE;
+			if (cnp->cn_flags & CN_ALLOWRSRCFORK) {
+				nsop = NS_DELETE;
+			}
+			else {
+				error = EPERM;
+				goto bad;
+			}
 			break;
 		case CREATE:
-			nsop = NS_CREATE;
+			if (cnp->cn_flags & CN_ALLOWRSRCFORK) {
+				nsop = NS_CREATE;
+			}
+			else {
+				error = EPERM;
+				goto bad;
+			}
 			break;
 		case LOOKUP:
 			/* Make sure our lookup of "/..namedfork/rsrc" is allowed. */

@@ -1652,8 +1652,12 @@ mach_msg_overwrite_trap(
 		    (reply_port->ip_receiver_name != rcv_name) ||
 		    (reply_port->ip_pset_count != 0))
 		{
+			/* try to enqueue by sending with an immediate timeout */
 			ip_unlock(reply_port);
-			ipc_kmsg_send_always(kmsg);
+			mr = ipc_kmsg_send(kmsg, MACH_SEND_TIMEOUT, 0);
+			if (mr != MACH_MSG_SUCCESS) {
+				ipc_kmsg_destroy(kmsg);
+			}
 			HOT(c_mmot_cold_052++);
 			goto slow_get_rcv_port;
 		}
@@ -1668,6 +1672,8 @@ mach_msg_overwrite_trap(
 		 * If there are messages on the port
 		 * or other threads waiting for a message,
 		 * we cannot directly receive the reply.
+		 * Try to enqueue it by sending with an
+		 * immediate timeout.
 		 */
 		if (!wait_queue_empty(&rcv_mqueue->imq_wait_queue) ||
 		    (ipc_kmsg_queue_first(&rcv_mqueue->imq_messages) != IKM_NULL))
@@ -1675,7 +1681,10 @@ mach_msg_overwrite_trap(
 			imq_unlock(rcv_mqueue);
 			splx(s);
 			ip_unlock(reply_port);
-			ipc_kmsg_send_always(kmsg);
+			mr = ipc_kmsg_send(kmsg, MACH_SEND_TIMEOUT, 0);
+			if (mr != MACH_MSG_SUCCESS) {
+				ipc_kmsg_destroy(kmsg);
+			}
 			HOT(c_mmot_cold_053++);
 			goto slow_get_rcv_port;
 		}

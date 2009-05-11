@@ -161,8 +161,12 @@ dtrace_systrace_syscall(struct proc *pp, void *uap, int *rv)
 	// Bounds "check" the value of code a la unix_syscall
 	sy = (code >= NUM_SYSENT) ? &systrace_sysent[63] : &systrace_sysent[code];
 
-	if ((id = sy->stsy_entry) != DTRACE_IDNONE)
-		(*systrace_probe)(id, *ip, *(ip+1), *(ip+2), *(ip+3), *(ip+4));
+	if ((id = sy->stsy_entry) != DTRACE_IDNONE) {
+		if (ip)
+			(*systrace_probe)(id, *ip, *(ip+1), *(ip+2), *(ip+3), *(ip+4));
+		else
+			(*systrace_probe)(id, 0, 0, 0, 0, 0);
+	}
 
 #if 0 /* XXX */
 	/*

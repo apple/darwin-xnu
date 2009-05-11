@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1638,6 +1638,13 @@ tcp_ip_output(struct socket *so, struct tcpcb *tp, struct mbuf *pkt,
 	int error = 0;
 	boolean_t chain;
 	boolean_t unlocked = FALSE;
+	struct inpcb *inp = tp->t_inpcb;
+	struct ip_out_args ipoa;
+
+	/* If socket was bound to an ifindex, tell ip_output about it */
+	ipoa.ipoa_ifscope = (inp->inp_flags & INP_BOUND_IF) ?
+	    inp->inp_boundif : IFSCOPE_NONE;
+	flags |= IP_OUTARGS;
 
 	/* Make sure ACK/DELACK conditions are cleared before
 	 * we unlock the socket.
@@ -1691,13 +1698,8 @@ tcp_ip_output(struct socket *so, struct tcpcb *tp, struct mbuf *pkt,
 			 */
 			cnt = 0;
 		}
-#if CONFIG_FORCE_OUT_IFP
-		error = ip_output_list(pkt, cnt, opt, &tp->t_inpcb->inp_route,
-		    flags, 0, tp->t_inpcb->pdp_ifp);
-#else
-		error = ip_output_list(pkt, cnt, opt, &tp->t_inpcb->inp_route,
-		    flags, 0, NULL);
-#endif
+		error = ip_output_list(pkt, cnt, opt, &inp->inp_route,
+		    flags, 0, &ipoa);
 		if (chain || error) {
 			/*
 			 * If we sent down a chain then we are done since

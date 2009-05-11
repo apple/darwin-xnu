@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -320,6 +320,12 @@ rip_output(m, so, dst)
 	register struct ip *ip;
 	register struct inpcb *inp = sotoinpcb(so);
 	int flags = (so->so_options & SO_DONTROUTE) | IP_ALLOWBROADCAST;
+	struct ip_out_args ipoa;
+
+	/* If socket was bound to an ifindex, tell ip_output about it */
+	ipoa.ipoa_ifscope = (inp->inp_flags & INP_BOUND_IF) ?
+	    inp->inp_boundif : IFSCOPE_NONE;
+	flags |= IP_OUTARGS;
 
 	/*
 	 * If the user handed us a complete IP packet, use it.
@@ -384,14 +390,8 @@ rip_output(m, so, dst)
 #if CONFIG_IP_EDGEHOLE
 	ip_edgehole_mbuf_tag(inp, m);
 #endif
-
-#if CONFIG_FORCE_OUT_IFP
-	return (ip_output_list(m, 0, inp->inp_options, &inp->inp_route, flags,
-			  inp->inp_moptions, inp->pdp_ifp));
-#else
-	return (ip_output_list(m, 0, inp->inp_options, &inp->inp_route, flags,
-			  inp->inp_moptions, NULL));
-#endif
+	return (ip_output(m, inp->inp_options, &inp->inp_route, flags,
+	    inp->inp_moptions, &ipoa));
 }
 
 #if IPFIREWALL

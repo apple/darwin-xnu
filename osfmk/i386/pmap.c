@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -3581,12 +3581,6 @@ phys_attribute_clear(
 		    vm_map_offset_t va;
 
 		    va = pv_e->va;
-		    /*
-		     * first make sure any processor actively
-		     * using this pmap, flushes its TLB state
-		     */
-
-		    PMAP_UPDATE_TLBS(pmap, va, va + PAGE_SIZE);
 
 		    /*
 		     * Clear modify and/or reference bits.
@@ -3594,7 +3588,13 @@ phys_attribute_clear(
 
 		    pte = pmap_pte(pmap, va);
 		    pmap_update_pte(pte, *pte, (*pte & ~bits));
-
+		    /* Ensure all processors using this translation
+		     * invalidate this TLB entry. The invalidation *must* follow
+		     * the PTE update, to ensure that the TLB shadow of the
+		     * 'D' bit (in particular) is synchronized with the
+		     * updated PTE.
+		     */
+		    PMAP_UPDATE_TLBS(pmap, va, va + PAGE_SIZE);
 		}
 
 		pv_e = (pv_hashed_entry_t)queue_next(&pv_e->qlink);

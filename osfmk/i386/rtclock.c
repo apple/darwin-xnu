@@ -86,9 +86,6 @@ uint64_t	rtc_decrementer_min;
 void			rtclock_intr(x86_saved_state_t *regs);
 static uint64_t		maxDec;			/* longest interval our hardware timer can handle (nsec) */
 
-/* XXX this should really be in a header somewhere */
-extern clock_timer_func_t	rtclock_timer_expire;
-
 static void	rtc_set_timescale(uint64_t cycles);
 static uint64_t	rtc_export_speed(uint64_t cycles);
 
@@ -460,14 +457,6 @@ clock_timebase_info(
 {
 	info->numer = info->denom =  1;
 }	
-
-void
-clock_set_timer_func(
-	clock_timer_func_t		func)
-{
-	if (rtclock_timer_expire == NULL)
-		rtclock_timer_expire = func;
-}
 
 /*
  * Real-time clock device interrupt.

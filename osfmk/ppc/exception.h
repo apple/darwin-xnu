@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -349,7 +349,6 @@ struct per_proc_info {
 	/* PPC cache line boundary here - 140 */
 	void *			pp_cbfr;
 	void *			pp_chud;
-	uint64_t		rtclock_intr_deadline;
 	rtclock_timer_t	rtclock_timer;
 	unsigned int	ppbbTaskEnv;		/* BlueBox Task Environment */
     

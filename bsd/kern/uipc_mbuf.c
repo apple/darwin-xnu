@@ -388,7 +388,6 @@ typedef struct mcl_slab {
  * whenever a new piece of memory mapped in from the VM crosses the 1MB
  * boundary.
  */
-#define	MBSHIFT		20				/* 1MB */
 #define	NSLABSPMB	((1 << MBSHIFT) >> MCLSHIFT)	/* 512 slabs/grp */
 
 typedef struct mcl_slabg {

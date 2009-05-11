@@ -413,21 +413,24 @@ mac_vnode_label_store(vfs_context_t ctx, struct vnode *vp,
 	return (error);
 }
 
-void
+int
 mac_cred_label_update_execve(vfs_context_t ctx, kauth_cred_t new, struct vnode *vp,
     struct label *scriptvnodelabel, struct label *execl)
 {
 	kauth_cred_t cred;
+	int disjoint = 0;
 
 	if (!mac_proc_enforce && !mac_vnode_enforce)
-		return;	
+		return disjoint;
 
 	/* mark the new cred to indicate "matching" includes the label */
 	new->cr_flags |= CRF_MAC_ENFORCE;
 
 	cred = vfs_context_ucred(ctx);
 	MAC_PERFORM(cred_label_update_execve, cred, new, vp, vp->v_label,
-	    scriptvnodelabel, execl);
+	    scriptvnodelabel, execl, &disjoint);
+
+	return (disjoint);
 }
 
 int

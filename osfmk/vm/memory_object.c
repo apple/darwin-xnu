@@ -636,7 +636,9 @@ vm_object_update_extent(
 			    m->list_req_pending = TRUE;
 			    m->cleaning = TRUE;
 
-			    if (should_flush) {
+			    if (should_flush &&
+				/* let's no flush a wired page... */
+				!m->wire_count) {
 			            /*
 				     * and add additional state
 				     * for the flush

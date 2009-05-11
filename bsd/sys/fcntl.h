@@ -258,6 +258,7 @@ typedef __darwin_pid_t	pid_t;
 #define	F_FLOCK		0x020	 	/* Use flock(2) semantics for lock */
 #define	F_POSIX		0x040	 	/* Use POSIX semantics for lock */
 #define	F_PROV		0x080		/* Non-coelesced provisional lock */
+#define F_WAKE1_SAFE    0x100           /* its safe to only wake one waiter */
 #endif
 
 /*

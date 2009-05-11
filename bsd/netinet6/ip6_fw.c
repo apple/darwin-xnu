@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -866,7 +866,7 @@ got_match:
 			}
 			bcopy(&ti, ip6, sizeof(ti));
 			tcp_respond(NULL, ip6, (struct tcphdr *)(ip6 + 1),
-				*m, ack, seq, flags, NULL);
+				*m, ack, seq, flags, IFSCOPE_NONE);
 			*m = NULL;
 			break;
 		  }

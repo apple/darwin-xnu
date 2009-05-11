@@ -159,7 +159,7 @@ int	mac_cred_label_externalize_audit(proc_t p, struct mac *mac);
 void	mac_cred_label_free(struct label *label);
 void	mac_cred_label_init(kauth_cred_t cred);
 void	mac_cred_label_update(kauth_cred_t cred, struct label *newlabel);
-void	mac_cred_label_update_execve(vfs_context_t ctx, kauth_cred_t newcred,
+int	mac_cred_label_update_execve(vfs_context_t ctx, kauth_cred_t newcred,
 	    struct vnode *vp, struct label *scriptvnodelabel,
 	    struct label *execlabel);
 void	mac_devfs_label_associate_device(dev_t dev, struct devnode *de,

@@ -266,6 +266,7 @@ typedef struct hfsmount {
 
 	lck_mtx_t      hfs_mutex;      /* protects access to hfsmount data */
 	void          *hfs_freezing_proc;  /* who froze the fs */
+	void          *hfs_downgrading_proc; /* process who's downgrading to rdonly */
 	lck_rw_t       hfs_insync;     /* protects sync/freeze interaction */
 
 	/* Resize variables: */
@@ -341,6 +342,9 @@ enum privdirtype {FILE_HARDLINKS, DIR_HARDLINKS};
 #define HFS_VIRTUAL_DEVICE        0x20000
 /* When set, we're in hfs_changefs, so hfs_sync should do nothing. */
 #define HFS_IN_CHANGEFS           0x40000
+/* When set, we are in process of downgrading or have downgraded to read-only, 
+ * so hfs_start_transaction should return EROFS. */
+#define HFS_RDONLY_DOWNGRADE      0x80000
 
 
 /* Macro to update next allocation block in the HFS mount structure.  If 

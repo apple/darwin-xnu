@@ -187,7 +187,6 @@ extern void (*lockstat_probe)(dtrace_id_t, uint64_t, uint64_t,
 #if	CONFIG_DTRACE
 extern int lockstat_depth(void);
 extern void lockstat_hot_patch(boolean_t);
-extern void dtrace_membar_producer(void);
 
 /*
  * Macros to record lockstat probes.

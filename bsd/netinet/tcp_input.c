@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -210,7 +210,7 @@ struct inpcbhead tcb;
 struct inpcbinfo tcbinfo;
 
 static void	 tcp_dooptions(struct tcpcb *,
-	    u_char *, int, struct tcphdr *, struct tcpopt *);
+	    u_char *, int, struct tcphdr *, struct tcpopt *, unsigned int);
 static void	 tcp_pulloutofband(struct socket *,
 	    struct tcphdr *, struct mbuf *, int);
 static int	 tcp_reass(struct tcpcb *, struct tcphdr *, int *,
@@ -552,6 +552,19 @@ tcp_input(m, off0)
 #endif
 	struct m_tag *fwd_tag;
 	u_char ip_ecn = IPTOS_ECN_NOTECT;
+	unsigned int ifscope;
+
+	/*
+	 * Record the interface where this segment arrived on; this does not
+	 * affect normal data output (for non-detached TCP) as it provides a
+	 * hint about which route and interface to use for sending in the
+	 * absence of a PCB, when scoped routing (and thus source interface
+	 * selection) are enabled.
+	 */
+	if ((m->m_flags & M_PKTHDR) && m->m_pkthdr.rcvif != NULL)
+		ifscope = m->m_pkthdr.rcvif->if_index;
+	else
+		ifscope = IFSCOPE_NONE;
 
 	/* Grab info from PACKET_TAG_IPFORWARD tag prepended to the chain. */
 	fwd_tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_IPFORWARD, NULL);
@@ -821,6 +834,14 @@ findpcb:
 	    ip->ip_dst, th->th_dport, 1, m->m_pkthdr.rcvif);
       }
 
+	/*
+	 * Use the interface scope information from the PCB for outbound
+	 * segments.  If the PCB isn't present and if scoped routing is
+	 * enabled, tcp_respond will use the scope of the interface where
+	 * the segment arrived on.
+	 */
+	if (inp != NULL && (inp->inp_flags & INP_BOUND_IF))
+		ifscope = inp->inp_boundif;
 #if IPSEC
 	if (ipsec_bypass == 0)  {
 #if INET6
@@ -981,6 +1002,11 @@ findpcb:
 			struct inpcb *oinp = sotoinpcb(so);
 #endif /* INET6 */
 			int ogencnt = so->so_gencnt;
+			unsigned int head_ifscope;
+
+			/* Get listener's bound-to-interface, if any */
+			head_ifscope = (inp->inp_flags & INP_BOUND_IF) ?
+			    inp->inp_boundif : IFSCOPE_NONE;
 
 #if !IPSEC
 			/*
@@ -1107,6 +1133,21 @@ findpcb:
 			 */
 			dropsocket++;
 			inp = (struct inpcb *)so->so_pcb;
+
+			/*
+			 * Inherit INP_BOUND_IF from listener; testing if
+			 * head_ifscope is non-zero is sufficient, since it
+			 * can only be set to a non-zero value earlier if
+			 * the listener has such a flag set.
+			 */
+#if INET6
+			if (head_ifscope != IFSCOPE_NONE && !isipv6) {
+#else
+			if (head_ifscope != IFSCOPE_NONE) {
+#endif /* INET6 */
+				inp->inp_flags |= INP_BOUND_IF;
+				inp->inp_boundif = head_ifscope;
+			}
 #if INET6
 			if (isipv6)
 				inp->in6p_laddr = ip6->ip6_dst;
@@ -1344,7 +1385,7 @@ findpcb:
 	 * else do it below (after getting remote address).
 	 */
 	if (tp->t_state != TCPS_LISTEN && optp)
-		tcp_dooptions(tp, optp, optlen, th, &to);
+		tcp_dooptions(tp, optp, optlen, th, &to, ifscope);
 
 	if (tp->t_state == TCPS_SYN_SENT && (thflags & TH_SYN)) {
 		if (to.to_flags & TOF_SCALE) {
@@ -1359,7 +1400,7 @@ findpcb:
 			tp->ts_recent_age = tcp_now;
 		}
 		if (to.to_flags & TOF_MSS)
-			tcp_mss(tp, to.to_mss);
+			tcp_mss(tp, to.to_mss, ifscope);
 		if (tp->sack_enable) {
 			if (!(to.to_flags & TOF_SACK))
 				tp->sack_enable = 0;
@@ -1405,6 +1446,11 @@ findpcb:
 			tp->ts_recent_age = tcp_now;
 			tp->ts_recent = to.to_tsval;
 		}
+
+		/* Force acknowledgment if we received a FIN */
+
+		if (thflags & TH_FIN)
+			tp->t_flags |= TF_ACKNOW;
 
 		if (tlen == 0) {
 			if (SEQ_GT(th->th_ack, tp->snd_una) &&
@@ -1700,7 +1746,7 @@ findpcb:
 			FREE(sin, M_SONAME);
 		}
 
-		tcp_dooptions(tp, optp, optlen, th, &to);
+		tcp_dooptions(tp, optp, optlen, th, &to, ifscope);
 
 		if (tp->sack_enable) {
 			if (!(to.to_flags & TOF_SACK))
@@ -2667,8 +2713,9 @@ process_ACK:
 					soisdisconnected(so);
 				}
 				tp->t_state = TCPS_FIN_WAIT_2;
-				goto drop;
+				/* fall through and make sure we also recognize data ACKed with the FIN */
 			}
+			tp->t_flags |= TF_ACKNOW;
 			break;
 
 	 	/*
@@ -2691,6 +2738,7 @@ process_ACK:
 				add_to_time_wait(tp);
 				soisdisconnected(so);
 			}
+			tp->t_flags |= TF_ACKNOW;
 			break;
 
 		/*
@@ -2811,7 +2859,7 @@ dodata:							/* XXX */
 	 * case PRU_RCVD).  If a FIN has already been received on this
 	 * connection then we just ignore the text.
 	 */
-	if ((tlen || (thflags&TH_FIN)) &&
+	if ((tlen || (thflags & TH_FIN)) &&
 	    TCPS_HAVERCVDFIN(tp->t_state) == 0) {
 		tcp_seq save_start = th->th_seq;
 		tcp_seq save_end = th->th_seq + tlen;
@@ -3056,13 +3104,13 @@ dropwithreset:
 	if (thflags & TH_ACK)
 		/* mtod() below is safe as long as hdr dropping is delayed */
 		tcp_respond(tp, mtod(m, void *), th, m, (tcp_seq)0, th->th_ack,
-			    TH_RST, m->m_pkthdr.rcvif);
+		    TH_RST, ifscope);
 	else {
 		if (thflags & TH_SYN)
 			tlen++;
 		/* mtod() below is safe as long as hdr dropping is delayed */
 		tcp_respond(tp, mtod(m, void *), th, m, th->th_seq+tlen,
-			    (tcp_seq)0, TH_RST|TH_ACK, m->m_pkthdr.rcvif);
+		    (tcp_seq)0, TH_RST|TH_ACK, ifscope);
 	}
 	/* destroy temporarily created socket */
 	if (dropsocket) {
@@ -3099,7 +3147,7 @@ drop:
 }
 
 static void
-tcp_dooptions(tp, cp, cnt, th, to)
+tcp_dooptions(tp, cp, cnt, th, to, input_ifscope)
 /*
  * Parse TCP options and place in tcpopt.
  */
@@ -3108,6 +3156,7 @@ tcp_dooptions(tp, cp, cnt, th, to)
 	int cnt;
 	struct tcphdr *th;
 	struct tcpopt *to;
+	unsigned int input_ifscope;
 {
 	u_short mss = 0;
 	int opt, optlen;
@@ -3187,7 +3236,7 @@ tcp_dooptions(tp, cp, cnt, th, to)
 		}
 	}
 	if (th->th_flags & TH_SYN)
-		tcp_mss(tp, mss);	/* sets t_maxseg */
+		tcp_mss(tp, mss, input_ifscope);	/* sets t_maxseg */
 }
 
 /*
@@ -3361,9 +3410,10 @@ tcp_maxmtu6(struct rtentry *rt)
  *
  */
 void
-tcp_mss(tp, offer)
+tcp_mss(tp, offer, input_ifscope)
 	struct tcpcb *tp;
 	int offer;
+	unsigned int input_ifscope;
 {
 	register struct rtentry *rt;
 	struct ifnet *ifp;
@@ -3398,7 +3448,7 @@ tcp_mss(tp, offer)
 	else
 #endif /* INET6 */
 	{
-		rt = tcp_rtlookup(inp);
+		rt = tcp_rtlookup(inp, input_ifscope);
 		if (rt && (rt->rt_gateway->sa_family == AF_LINK ||
 			rt->rt_ifp->if_flags & IFF_LOOPBACK)) 
 		         isnetlocal = TRUE;
@@ -3620,7 +3670,7 @@ tcp_mssopt(tp)
 		rt = tcp_rtlookup6(tp->t_inpcb);
 	else
 #endif /* INET6 */
-	rt = tcp_rtlookup(tp->t_inpcb);
+	rt = tcp_rtlookup(tp->t_inpcb, IFSCOPE_NONE);
 	if (rt == NULL) {
 		lck_mtx_unlock(rt_mtx);
 		return (

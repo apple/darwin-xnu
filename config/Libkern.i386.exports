@@ -1,2 +1,5 @@
 _OSCompareAndSwap64
 _OSAddAtomic64
+_strcpy
+_strcat
+_sprintf

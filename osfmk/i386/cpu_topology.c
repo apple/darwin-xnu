@@ -45,6 +45,7 @@
 #define DBG(x...)
 #endif
 void debug_topology_print(void);
+void validate_topology(void);
 
 __private_extern__ void qsort(
     void * array,
@@ -144,6 +145,7 @@ cpu_topology_start(void)
 #if TOPO_DEBUG
 	debug_topology_print();
 #endif /* TOPO_DEBUG */
+	validate_topology();
 
 	ml_set_interrupts_enabled(istate);
 	DBG("cpu_topology_start() LLC is L%d\n", topoParms.LLCDepth + 1);

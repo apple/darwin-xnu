@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -112,8 +112,10 @@ static int	rn_lexobetter(void *m_arg, void *n_arg);
 static struct radix_mask *
 		rn_new_radix_mask(struct radix_node *tt,
 				       struct radix_mask *next);
-static int	rn_satsifies_leaf(char *trial, struct radix_node *leaf,
-				       int skip);
+static int rn_satisfies_leaf(char *trial, struct radix_node *leaf, int skip,
+    rn_matchf_t *f, void *w);
+
+#define	RN_MATCHF(rn, f, arg)	(f == NULL || (*f)((rn), arg))
 
 /*
  * The data structure for the keys is a radix tree with one way
@@ -209,6 +211,13 @@ rn_refines(void *m_arg, void *n_arg)
 struct radix_node *
 rn_lookup(void *v_arg, void *m_arg, struct radix_node_head *head)
 {
+	return (rn_lookup_args(v_arg, m_arg, head, NULL, NULL));
+}
+
+struct radix_node *
+rn_lookup_args(void *v_arg, void *m_arg, struct radix_node_head *head,
+    rn_matchf_t *f, void *w)
+{
 	struct radix_node *x;
 	caddr_t netmask = NULL;
 
@@ -218,7 +227,7 @@ rn_lookup(void *v_arg, void *m_arg, struct radix_node_head *head)
 			return (NULL);
 		netmask = x->rn_key;
 	}
-	x = rn_match(v_arg, head);
+	x = rn_match_args(v_arg, head, f, w);
 	if (x && netmask) {
 		while (x && x->rn_mask != netmask)
 			x = x->rn_dupedkey;
@@ -226,8 +235,16 @@ rn_lookup(void *v_arg, void *m_arg, struct radix_node_head *head)
 	return x;
 }
 
+/*
+ * Returns true if address 'trial' has no bits differing from the
+ * leaf's key when compared under the leaf's mask.  In other words,
+ * returns true when 'trial' matches leaf.  If a leaf-matching
+ * routine is passed in, it is also used to find a match on the
+ * conditions defined by the caller of rn_match.
+ */
 static int
-rn_satsifies_leaf(char *trial, struct radix_node *leaf, int skip)
+rn_satisfies_leaf(char *trial, struct radix_node *leaf, int skip,
+    rn_matchf_t *f, void *w)
 {
 	char *cp = trial, *cp2 = leaf->rn_key, *cp3 = leaf->rn_mask;
 	char *cplim;
@@ -241,11 +258,19 @@ rn_satsifies_leaf(char *trial, struct radix_node *leaf, int skip)
 	for (cp += skip; cp < cplim; cp++, cp2++, cp3++)
 		if ((*cp ^ *cp2) & *cp3)
 			return 0;
-	return 1;
+
+	return (RN_MATCHF(leaf, f, w));
 }
 
 struct radix_node *
 rn_match(void *v_arg, struct radix_node_head *head)
+{
+	return (rn_match_args(v_arg, head, NULL, NULL));
+}
+
+struct radix_node *
+rn_match_args(void *v_arg, struct radix_node_head *head,
+    rn_matchf_t *f, void *w)
 {
 	caddr_t v = v_arg;
 	struct radix_node *t = head->rnh_treetop, *x;
@@ -291,11 +316,26 @@ rn_match(void *v_arg, struct radix_node_head *head)
 	 */
 	if (t->rn_flags & RNF_ROOT)
 		t = t->rn_dupedkey;
-	return t;
+	if (t == NULL || RN_MATCHF(t, f, w)) {
+		return (t);
+	} else {
+		/*
+		 * Although we found an exact match on the key,
+		 * f() is looking for some other criteria as well.
+		 * Continue looking as if the exact match failed.
+		 */
+		if (t->rn_parent->rn_flags & RNF_ROOT) {
+			/* Hit the top; have to give up */
+			return (NULL);
+		}
+		b = 0;
+		goto keeplooking;
+	}
 on1:
 	test = (*cp ^ *cp2) & 0xff; /* find first bit that differs */
 	for (b = 7; (test >>= 1) > 0;)
 		b--;
+keeplooking:
 	matched_off = cp - v;
 	b += matched_off << 3;
 	rn_bit = -1 - b;
@@ -304,17 +344,19 @@ on1:
 	 */
 	if ((saved_t = t)->rn_mask == 0)
 		t = t->rn_dupedkey;
-	for (; t; t = t->rn_dupedkey)
+	for (; t; t = t->rn_dupedkey) {
 		/*
 		 * Even if we don't match exactly as a host,
 		 * we may match if the leaf we wound up at is
 		 * a route to a net.
 		 */
 		if (t->rn_flags & RNF_NORMAL) {
-			if (rn_bit <= t->rn_bit)
-				return t;
-		} else if (rn_satsifies_leaf(v, t, matched_off))
-				return t;
+			if ((rn_bit <= t->rn_bit) && RN_MATCHF(t, f, w))
+				return (t);
+		} else if (rn_satisfies_leaf(v, t, matched_off, f, w)) {
+			return (t);
+		}
+	}
 	t = saved_t;
 	/* start searching up the tree */
 	do {
@@ -329,20 +371,21 @@ on1:
 		 */
 		while (m) {
 			if (m->rm_flags & RNF_NORMAL) {
-				if (rn_bit <= m->rm_bit)
+				if ((rn_bit <= m->rm_bit) &&
+				    RN_MATCHF(m->rm_leaf, f, w))
 					return (m->rm_leaf);
 			} else {
 				off = min(t->rn_offset, matched_off);
 				x = rn_search_m(v, t, m->rm_mask);
 				while (x && x->rn_mask != m->rm_mask)
 					x = x->rn_dupedkey;
-				if (x && rn_satsifies_leaf(v, x, off))
-					return x;
+				if (x && rn_satisfies_leaf(v, x, off, f, w))
+					return (x);
 			}
 			m = m->rm_mklist;
 		}
 	} while (t != top);
-	return NULL;
+	return (NULL);
 }
 
 #ifdef RN_DEBUG
@@ -1093,7 +1136,9 @@ rn_inithead(void **head, int off)
 	rnh->rnh_addaddr = rn_addroute;
 	rnh->rnh_deladdr = rn_delete;
 	rnh->rnh_matchaddr = rn_match;
+	rnh->rnh_matchaddr_args = rn_match_args;
 	rnh->rnh_lookup = rn_lookup;
+	rnh->rnh_lookup_args = rn_lookup_args;
 	rnh->rnh_walktree = rn_walktree;
 	rnh->rnh_walktree_from = rn_walktree_from;
 	rnh->rnh_treetop = t;

@@ -78,8 +78,15 @@ enum {
     kIOMemoryAsReference	= 0x00000100,
     kIOMemoryBufferPageable	= 0x00000400,
     kIOMemoryDontMap		= 0x00000800,
+#ifdef XNU_KERNEL_PRIVATE
+    kIOMemoryRedirected		= 0x00004000,
+    kIOMemoryPreparedReadOnly	= 0x00008000,
+#endif
     kIOMemoryPersistent		= 0x00010000,
-    kIOMemoryThreadSafe		= 0x00020000
+#ifdef XNU_KERNEL_PRIVATE
+    kIOMemoryReserved6156215	= 0x00020000,
+#endif
+    kIOMemoryThreadSafe		= 0x00100000,	// Shared with Buffer MD
 };
 
 #define kIOMapperNone	((IOMapper *) -1)
@@ -741,13 +748,6 @@ public:
 // IOMemoryDescriptor class. For example, an IOGeneralMemoryDescriptor instance
 // might be created by IOMemoryDescriptor::withAddress(), but there should be 
 // no need to reference as anything but a generic IOMemoryDescriptor *.
-
-// Also these flags should not overlap with the options to
-//	IOMemoryDescriptor::initWithRanges(... IOOptionsBits options);
-
-enum {
-    kIOMemoryPreparedReadOnly	= 0x00008000,
-};
 
 class IOGeneralMemoryDescriptor : public IOMemoryDescriptor
 {

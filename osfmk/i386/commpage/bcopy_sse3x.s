@@ -802,4 +802,4 @@ LReverseUnalignedLoop:                  // loop over 64-byte chunks
         jmp     LReverseShort           // copy remaining 0..63 bytes and done
 
 
-	COMMPAGE_DESCRIPTOR(bcopy_sse3x,_COMM_PAGE_BCOPY,kHasSSE2+kHasSupplementalSSE3+kCache64,0)
+	COMMPAGE_DESCRIPTOR(bcopy_sse3x,_COMM_PAGE_BCOPY,kHasSSE2+kHasSupplementalSSE3+kCache64,kHasSSE4_2)

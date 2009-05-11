@@ -809,13 +809,10 @@ _sha1_init:_SHA1Init
 _sha1_loop:_SHA1Update
 _sha1_result:_SHA1Final_r
 _snprintf
-_sprintf
 _sscanf
 _strcasecmp
-_strcat
 _strchr
 _strcmp
-_strcpy
 _STRDUP
 _strlen
 _strncasecmp

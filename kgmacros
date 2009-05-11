@@ -159,6 +159,11 @@ document kgm
 |     kdp-reenter	Schedule reentry into the debugger and continue.
 |     kdp-reboot	Restart remote target
 |
+|     zstack		Print zalloc caller stack (zone leak debugging)
+|     findoldest	Find oldest zone leak debugging record
+|     countpcs		Print how often a pc occurs in the zone leak log
+|
+|
 | Type "help <macro>" for more specific help on a particular macro.
 | Type "show user <macro>" to see what the macro is really doing.
 end
@@ -454,6 +459,7 @@ end
 define showcurrentthreads
 set $kgm_prp = (struct processor *)processor_list
     while $kgm_prp != 0
+    	printf "Processor 0x%08x State %d (cpu_id %x)\n", $kgm_prp, ($kgm_prp)->state, ($kgm_prp)->cpu_num
 	if ($kgm_prp)->active_thread != 0
 	    set $kgm_actp = ($kgm_prp)->active_thread
 	    showtaskheader
@@ -504,6 +510,7 @@ end
 define showcurrentstacks
 set $kgm_prp = processor_list
     while $kgm_prp != 0
+    	printf "Processor 0x%08x State %d (cpu_id %x)\n", $kgm_prp, ($kgm_prp)->state, ($kgm_prp)->cpu_num
 	if ($kgm_prp)->active_thread != 0
 	    set $kgm_actp = ($kgm_prp)->active_thread
 	    showtaskheader
@@ -2539,6 +2546,10 @@ define showobjectint
     set $kgm_obj = (OSObject *) $arg1
     set $kgm_vt = *((void **) $arg1)
 
+    if ($kgm_mtype == 12)
+        set $kgm_vt = $kgm_vt - 2 * sizeof(void *)
+    end
+
     if ($kgm_show_object_addrs)
 	printf "`object %p, vt ", $arg1
 	output /a (unsigned) $kgm_vt
@@ -2668,6 +2679,9 @@ define showregistryentryrecurse
     printf "  <object %p, ", $kgm_re
     printf "vtable "
     set $kgm_vt = (unsigned) *(void**) $kgm_re
+    if ($kgm_mtype == 12)
+        set $kgm_vt = $kgm_vt - 2 * sizeof(void *)
+    end
     output /a $kgm_vt
 
     if ($kgm_vt != _ZTV15IORegistryEntry)
@@ -5563,3 +5577,173 @@ Syntax: (gdb) pmap_vtop <pmap> <virtual_address>
 | For page-tables in <pmap> translate <virtual_address> to physical address.
 end
 
+define zstack
+	set $index = $arg0
+
+	if (log_records == 0)
+		set $count = 0
+		printf "Zone logging not enabled.  Add 'zlog=<zone name>' to boot-args.\n"
+	else 
+		if ($argc == 2)
+			set $count = $arg1
+		else
+			set $count = 1
+		end
+	end
+
+	while ($count)
+		printf "\n--------------- "
+
+		if (zrecords[$index].z_opcode == 1)
+			printf "ALLOC "
+		else
+			printf "FREE "
+		end
+
+		printf " 0x%x : index %d  :  ztime %d -------------\n", zrecords[$index].z_element, $index, zrecords[$index].z_time
+
+		set $frame = 0
+
+		while ($frame < 15)
+			set $frame_pc = zrecords[$index].z_pc[$frame]
+
+			if ($frame_pc == 0)
+				loop_break
+			end
+
+			x/i $frame_pc
+			set $frame = $frame + 1
+		end
+
+		set $index = $index + 1
+		set $count = $count - 1
+	end
+end
+
+document zstack
+Syntax: (gdb) zstack <index> [<count>]
+| Zone leak debugging: print the stack trace of log element at <index>.
+| If a <count> is supplied, it prints <count> log elements starting at <index>.
+|
+| The suggested usage is to look at indexes below zcurrent and look for common stack traces.
+| The stack trace that occurs the most is probably the cause of the leak.  Find the pc of the
+| function calling into zalloc and use the countpcs kgmacro to find out how often that pc occurs in the log.
+| The pc occuring in a high percentage of records is most likely the source of the leak.
+|
+| The findoldest kgmacro is also useful for leak debugging since it identifies the oldest record
+| in the log, which may indicate the leaker.
+end
+
+define findoldest
+	set $index = 0
+	set $count = log_records
+	set $cur_min = 2000000000
+	set $cur_index = 0
+
+	if (log_records == 0)
+		printf "Zone logging not enabled.  Add 'zlog=<zone name>' to boot-args.\n"
+	else
+
+		while ($count)
+			if (zrecords[$index].z_element && zrecords[$index].z_time < $cur_min)
+				set $cur_index = $index
+				set $cur_min = zrecords[$index].z_time
+			end
+	
+			set $count = $count - 1
+			set $index = $index + 1
+		end
+	
+		printf "oldest record is at log index %d:\n", $cur_index
+		zstack $cur_index
+	end
+end
+
+document findoldest
+Syntax: (gdb) findoldest
+| Zone leak debugging: find and print the oldest record in the log.  Note that this command
+| can take several minutes to run since it uses linear search.
+|
+| Once it prints a stack trace, find the pc of the caller above all the zalloc, kalloc and
+| IOKit layers.  Then use the countpcs kgmacro to see how often this caller has allocated
+| memory.  A caller with a high percentage of records in the log is probably the leaker.
+end
+
+define countpcs
+	set $target_pc = $arg0
+	set $index = 0
+	set $count = log_records
+	set $found = 0
+
+	if (log_records == 0)
+		printf "Zone logging not enabled.  Add 'zlog=<zone name>' to boot-args.\n"
+	else
+
+		while ($count)
+			set $frame = 0
+	
+			if (zrecords[$index].z_element != 0)
+				while ($frame < 15)
+					if (zrecords[$index].z_pc[$frame] == $target_pc)
+						set $found = $found + 1
+						set $frame = 15
+					end
+		
+					set $frame = $frame + 1
+				end
+			end
+	
+			set $index = $index + 1
+			set $count = $count - 1
+		end
+	
+		printf "occurred %d times in log (%d%c of records)\n", $found, ($found * 100) / zrecorded, '%'
+	end
+end
+
+document countpcs
+Syntax: (gdb) countpcs <pc>
+| Zone leak debugging: search the log and print a count of all log entries that contain the given <pc>
+| in the stack trace.  This is useful for verifying a suspected <pc> as being the source of
+| the leak.  If a high percentage of the log entries contain the given <pc>, then it's most
+| likely the source of the leak.  Note that this command can take several minutes to run.
+end
+
+define findelem
+	set $fe_index = zcurrent
+	set $fe_count = log_records
+	set $fe_elem = $arg0
+	set $fe_prev_op = -1
+
+	if (log_records == 0)
+		printf "Zone logging not enabled.  Add 'zlog=<zone name>' to boot-args.\n"
+	end
+
+	while ($fe_count)
+		if (zrecords[$fe_index].z_element == $fe_elem)
+			zstack $fe_index
+
+			if (zrecords[$fe_index].z_opcode == $fe_prev_op)
+				printf "***************   DOUBLE OP!   *********************\n
+			end
+
+			set $fe_prev_op = zrecords[$fe_index].z_opcode
+		end
+
+		set $fe_count = $fe_count - 1
+		set $fe_index = $fe_index + 1
+
+		if ($fe_index >= log_records)
+			set $fe_index = 0
+		end
+	end
+end
+
+document findelem
+Syntax: (gdb) findelem <elem addr>
+| Zone corruption debugging: search the log and print out the stack traces for all log entries that
+| refer to the given zone element.  When the kernel panics due to a corrupted zone element, get the
+| element address and use this macro.  This will show you the stack traces of all logged zalloc and
+| zfree operations which tells you who touched the element in the recent past.  This also makes
+| double-frees readily apparent.
+end

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -48,6 +48,7 @@ extern void rtclock_intr(struct savearea *ssp);
 
 #pragma pack(push,4)
 struct rtclock_timer_t  {
+	queue_head_t	queue;
 	uint64_t		deadline;
 	uint32_t
 	/*boolean_t*/	is_set:1,

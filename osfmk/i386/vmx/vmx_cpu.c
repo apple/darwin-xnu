@@ -368,6 +368,7 @@ void
 vmx_resume()
 {
 	VMX_KPRINTF("vmx_resume\n");
+	vmx_init(); /* init VMX on CPU #0 */
 	if (vmx_use_count)
 		vmx_on();
 }

@@ -1704,8 +1704,28 @@ journal_open(struct vnode *jvp,
 	}
 
     if (phys_blksz != (size_t)jnl->jhdr->jhdr_size && jnl->jhdr->jhdr_size != 0) {
-		printf("jnl: %s: open: phys_blksz %lu does not match journal header size %d\n",
-		    jdev_name, phys_blksz, jnl->jhdr->jhdr_size);
+    	/*
+    	 * The volume has probably been resized (such that we had to adjust the
+    	 * logical sector size), or copied to media with a different logical
+    	 * sector size.  If the journal is empty, then just switch to the
+    	 * current logical sector size.  If the journal is not empty, then
+    	 * fail to open the journal.
+    	 */
+    	 
+    	if (jnl->jhdr->start == jnl->jhdr->end) {
+    	    int err;
+    	    printf("jnl: %s: open: changing journal header size from %d to %lu\n",
+		jdev_name, jnl->jhdr->jhdr_size, phys_blksz);
+	    jnl->jhdr->jhdr_size = phys_blksz;
+	    if (write_journal_header(jnl)) {
+		printf("jnl: %s: open: failed to update journal header size\n", jdev_name);
+		goto bad_journal;
+	    }
+	} else {
+	    printf("jnl: %s: open: phys_blksz %lu does not match journal header size %d, and journal is not empty!\n",
+		jdev_name, phys_blksz, jnl->jhdr->jhdr_size);
+	    goto bad_journal;
+	}
     }
 
     if (   jnl->jhdr->start <= 0

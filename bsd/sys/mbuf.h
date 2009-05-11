@@ -399,6 +399,8 @@ union m16kcluster {
 /* compatiblity with 4.3 */
 #define  m_copy(m, o, l)	m_copym((m), (o), (l), M_DONTWAIT)
 
+#define MBSHIFT         20                              /* 1MB */
+
 #endif /* KERNEL_PRIVATE */
 
 /*

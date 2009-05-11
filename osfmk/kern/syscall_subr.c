@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -436,7 +436,7 @@ thread_poll_yield(
 				self->depress_timer_active++;
 			thread_unlock(self);
 
-			if ((preempt = csw_check(self, myprocessor)) != AST_NONE)
+			if ((preempt = csw_check(myprocessor)) != AST_NONE)
 				ast_on(preempt);
 		}
 	}

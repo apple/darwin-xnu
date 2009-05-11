@@ -407,7 +407,7 @@ load_context(
 	load_context_kprintf("calling processor_up\n");
 	processor_up(processor);
 
-	PMAP_ACTIVATE_KERNEL(PROCESSOR_DATA(processor, slot_num));
+	PMAP_ACTIVATE_KERNEL(processor->cpu_num);
 
 	/*
 	 * Acquire a stack if none attached.  The panic
@@ -441,7 +441,7 @@ load_context(
 	timer_start(&PROCESSOR_DATA(processor, system_state), processor->last_dispatch);
 	PROCESSOR_DATA(processor, current_state) = &PROCESSOR_DATA(processor, system_state);
 
-	PMAP_ACTIVATE_USER(thread, PROCESSOR_DATA(processor, slot_num));
+	PMAP_ACTIVATE_USER(thread, processor->cpu_num);
 
 	load_context_kprintf("calling machine_load_context\n");
 	machine_load_context(thread);

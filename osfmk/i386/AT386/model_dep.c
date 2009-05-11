@@ -142,6 +142,8 @@ typedef struct _cframe_t {
 static unsigned panic_io_port;
 static unsigned	commit_paniclog_to_nvram;
 
+int debug_boot_arg;
+
 void
 machine_startup(void)
 {
@@ -157,7 +159,8 @@ machine_startup(void)
 		if (boot_arg & DB_PRT) disable_debug_output=FALSE; 
 		if (boot_arg & DB_SLOG) systemLogDiags=TRUE; 
 		if (boot_arg & DB_NMI) panicDebugging=TRUE; 
-		if (boot_arg & DB_LOG_PI_SCRN) logPanicDataToScreen=TRUE; 
+		if (boot_arg & DB_LOG_PI_SCRN) logPanicDataToScreen=TRUE;
+		debug_boot_arg = boot_arg;
 	}
 
 	if (!PE_parse_boot_argn("nvram_paniclog", &commit_paniclog_to_nvram, sizeof (commit_paniclog_to_nvram)))
@@ -1052,6 +1055,9 @@ out:
 		kmod_dump(&PC, 1);
 
 	panic_display_system_configuration();
+	panic_display_zprint();
+	dump_kext_info(&kdb_log);
+
 	/* Release print backtrace lock, to permit other callers in the
 	 * event of panics on multiple processors.
 	 */

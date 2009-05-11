@@ -796,6 +796,13 @@ consdebug_putc(char c)
 			PE_kputc(c);
 }
 
+
+void
+consdebug_log(char c)
+{
+	debug_putc(c);
+}
+
 int
 kdb_printf(const char *fmt, ...)
 {
@@ -803,6 +810,17 @@ kdb_printf(const char *fmt, ...)
 
 	va_start(listp, fmt);
 	_doprnt(fmt, &listp, consdebug_putc, 16);
+	va_end(listp);
+	return 0;
+}
+
+int
+kdb_log(const char *fmt, ...)
+{
+	va_list	listp;
+
+	va_start(listp, fmt);
+	_doprnt(fmt, &listp, consdebug_log, 16);
 	va_end(listp);
 	return 0;
 }

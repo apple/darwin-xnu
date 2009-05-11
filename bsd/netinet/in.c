@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -785,15 +785,6 @@ in_control(
 		 */
 		in_ifscrub(ifp, ia, 1);
 		ifa = &ia->ia_ifa;
-#if CONFIG_FORCE_OUT_IFP	
-		// Cleanup any pdp hack related route
-		if (ia->ia_route)
-		{
-			ia->ia_route->rt_flags &= ~RTF_UP;
-			rtfree_locked(ia->ia_route);
-			ia->ia_route = NULL;
-		}
-#endif
 		lck_mtx_unlock(rt_mtx);
 		ifnet_lock_exclusive(ifp);
 		if_detach_ifa(ifp, ifa);

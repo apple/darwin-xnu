@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -672,10 +672,14 @@ void	ifma_reference(struct ifmultiaddr *ifma);
 void	ifma_release(struct ifmultiaddr *ifma);
 
 struct	ifaddr *ifa_ifwithaddr(const struct sockaddr *);
+struct	ifaddr *ifa_ifwithaddr_scoped(const struct sockaddr *, unsigned int);
 struct	ifaddr *ifa_ifwithdstaddr(const struct sockaddr *);
 struct	ifaddr *ifa_ifwithnet(const struct sockaddr *);
+struct	ifaddr *ifa_ifwithnet_scoped(const struct sockaddr *, unsigned int);
 struct	ifaddr *ifa_ifwithroute(int, const struct sockaddr *, const struct sockaddr *);
 struct	ifaddr *ifa_ifwithroute_locked(int, const struct sockaddr *, const struct sockaddr *);
+struct ifaddr *ifa_ifwithroute_scoped_locked(int, const struct sockaddr *,
+    const struct sockaddr *, unsigned int);
 struct	ifaddr *ifaof_ifpforaddr(const struct sockaddr *, struct ifnet *);
 struct	ifaddr *ifa_ifpgetprimary(struct ifnet *, int);
 void	ifafree(struct ifaddr *);

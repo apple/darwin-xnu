@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -59,9 +59,6 @@ struct processor_data {
 		unsigned int			count;
 	}						stack_cache;
 
-	/* Pending timer callouts */
-	queue_head_t			timer_call_queue;
-
 	/* VM event counters */
 	vm_statistics_data_t	vm_stat;
 
@@ -71,8 +68,6 @@ struct processor_data {
 		ipc_kmsg_t				entries[IKM_STASH];
 		unsigned int			avail;
 	}						ikm_cache;
-
-	int						slot_num;
 
 	unsigned long			page_grab_count;
 	int						start_color;

@@ -316,8 +316,10 @@ ipf_injectv4_out(
 	error = ip_output(m, NULL, &ro, IP_ALLOWBROADCAST | IP_RAWOUTPUT, imo, NULL);
 	
 	/* Release the route */
-	if (ro.ro_rt)
+	if (ro.ro_rt) {
 		rtfree(ro.ro_rt);
+		ro.ro_rt = NULL;
+	}
 	
 	return error;
 }
@@ -390,8 +392,10 @@ ipf_injectv6_out(
 	error = ip6_output(m, NULL, &ro, 0, im6o, NULL, 0);
 	
 	/* Release the route */
-	if (ro.ro_rt)
+	if (ro.ro_rt) {
 		rtfree(ro.ro_rt);
+		ro.ro_rt = NULL;
+	}
 	
 	return error;
 }

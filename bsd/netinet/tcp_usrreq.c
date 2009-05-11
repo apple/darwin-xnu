@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -710,7 +710,7 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 			if (error)
 				goto out;
 			tp->snd_wnd = TTCP_CLIENT_SND_WND;
-			tcp_mss(tp, -1);
+			tcp_mss(tp, -1, IFSCOPE_NONE);
 		}
 
 		if (flags & PRUS_EOF) {
@@ -759,7 +759,7 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 			if (error)
 				goto out;
 			tp->snd_wnd = TTCP_CLIENT_SND_WND;
-			tcp_mss(tp, -1);
+			tcp_mss(tp, -1, IFSCOPE_NONE);
 		}
 		tp->snd_up = tp->snd_una + so->so_snd.sb_cc;
 		tp->t_force = 1;

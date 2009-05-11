@@ -528,6 +528,10 @@ typedef int mpo_cred_label_internalize_t(
   The final label, execlabel, corresponds to a label supplied by a
   user space application through the use of the mac_execve system call.
 
+  If non-NULL, the value pointed to by disjointp will be set to 0 to
+  indicate that the old and new credentials are not disjoint, or 1 to
+  indicate that they are.
+
   The vnode lock is held during this operation.  No changes should be
   made to the old credential structure.
 */
@@ -537,7 +541,8 @@ typedef void mpo_cred_label_update_execve_t(
 	struct vnode *vp,
 	struct label *vnodelabel,
 	struct label *scriptvnodelabel,
-	struct label *execlabel
+	struct label *execlabel,
+	int *disjointp
 );
 /**
   @brief Update a credential label

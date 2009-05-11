@@ -85,9 +85,13 @@ osfmk/i386/commpage/bcopy_scalar.s	standard
 osfmk/i386/commpage/bcopy_sse2.s	standard
 osfmk/i386/commpage/bcopy_sse3x.s	standard
 osfmk/i386/commpage/bcopy_sse3x_64.s	standard
+osfmk/i386/commpage/bcopy_sse42.s	standard
+osfmk/i386/commpage/bcopy_sse42_64.s	standard
 osfmk/i386/commpage/bzero_scalar.s	standard
 osfmk/i386/commpage/bzero_sse2.s	standard
 osfmk/i386/commpage/bzero_sse2_64.s	standard
+osfmk/i386/commpage/bzero_sse42.s	standard
+osfmk/i386/commpage/bzero_sse42_64.s	standard
 osfmk/i386/commpage/memset_pattern_sse2.s	standard
 osfmk/i386/commpage/memset_pattern_sse2_64.s	standard
 osfmk/i386/commpage/longcopy_sse3x.s	standard

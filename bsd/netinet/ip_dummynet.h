@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -148,6 +148,8 @@ struct dn_heap {
  * processing requirements.
  */
 #ifdef KERNEL
+#include <netinet/ip_var.h>	/* for ip_out_args */
+
 struct dn_pkt_tag {
     struct ip_fw *rule;		/* matching rule */
     int dn_dir;			/* action when packet comes out. */
@@ -160,6 +162,7 @@ struct dn_pkt_tag {
     struct sockaddr_in *dn_dst ;
     struct route ro;		/* route, for ip_output. MUST COPY	*/
     int flags ;			/* flags, for ip_output (IPv6 ?)	*/
+    struct ip_out_args ipoa;	/* output args, for ip_output. MUST COPY */
 };
 #else
 struct dn_pkt;

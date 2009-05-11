@@ -87,6 +87,7 @@ const vm_offset_t vm_min_kernel_address = VM_MIN_KERNEL_ADDRESS;
 const vm_offset_t vm_max_kernel_address = VM_MAX_KERNEL_ADDRESS;
 
 boolean_t vm_kernel_ready = FALSE;
+boolean_t zlog_ready = FALSE;
 
 /*
  *	vm_mem_bootstrap initializes the virtual memory system.
@@ -131,6 +132,8 @@ vm_mem_bootstrap(void)
 	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling pmap_init\n"));
 	pmap_init();
 	
+	zlog_ready = TRUE;
+
 	if (PE_parse_boot_argn("zsize", &zsizearg, sizeof (zsizearg)))
 		zsize = zsizearg * 1024ULL * 1024ULL;
 	else {

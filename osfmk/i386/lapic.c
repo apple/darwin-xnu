@@ -78,6 +78,15 @@ static i386_intr_func_t	lapic_intr_func[LAPIC_FUNC_TABLE_SIZE];
 /* TRUE if local APIC was enabled by the OS not by the BIOS */
 static boolean_t lapic_os_enabled = FALSE;
 
+static boolean_t lapic_errors_masked = FALSE;
+static uint64_t lapic_last_master_error = 0;
+static uint64_t lapic_error_time_threshold = 0;
+static unsigned lapic_master_error_count = 0;
+static unsigned lapic_error_count_threshold = 5;
+static boolean_t lapic_dont_panic = FALSE;
+
+extern int	debug_boot_arg;
+
 /* Base vector for local APIC interrupt sources */
 int lapic_interrupt_base = LAPIC_DEFAULT_INTERRUPT_BASE;
 
@@ -255,6 +264,12 @@ lapic_dump(void)
 		BOOL(LAPIC_READ(SVR)&LAPIC_SVR_ENABLE),
 		BOOL(!(LAPIC_READ(SVR)&LAPIC_SVR_FOCUS_OFF)),
 		LAPIC_READ(SVR) & LAPIC_SVR_MASK);
+	if (mca_is_cmci_present())
+		kprintf("LVT_CMCI:    Vector 0x%02x [%s] %s %cmasked\n",
+			VEC(LVT_CMCI),
+			DM(LVT_CMCI),
+			DS(LVT_CMCI),
+			MASK(LVT_CMCI));
 	kprintf("LVT_TIMER:   Vector 0x%02x %s %cmasked %s\n",
 		VEC(LVT_TIMER),
 		DS(LVT_TIMER),
@@ -386,14 +401,14 @@ lapic_shutdown(void)
 		LAPIC_WRITE(LVT_LINT0, value);
 	}
 
+	/* Error: masked */
+	LAPIC_WRITE(LVT_ERROR, LAPIC_READ(LVT_ERROR) | LAPIC_LVT_MASKED);
+
 	/* Timer: masked */
 	LAPIC_WRITE(LVT_TIMER, LAPIC_READ(LVT_TIMER) | LAPIC_LVT_MASKED);
 
 	/* Perfmon: masked */
 	LAPIC_WRITE(LVT_PERFCNT, LAPIC_READ(LVT_PERFCNT) | LAPIC_LVT_MASKED);
-
-	/* Error: masked */
-	LAPIC_WRITE(LVT_ERROR, LAPIC_READ(LVT_ERROR) | LAPIC_LVT_MASKED);
 
 	/* APIC software disabled */
 	LAPIC_WRITE(SVR, LAPIC_READ(SVR) & ~LAPIC_SVR_ENABLE);
@@ -411,6 +426,13 @@ void
 lapic_configure(void)
 {
 	int	value;
+
+	if (lapic_error_time_threshold == 0 && cpu_number() == 0) {
+		nanoseconds_to_absolutetime(NSEC_PER_SEC >> 2, &lapic_error_time_threshold);
+		if (!PE_parse_boot_argn("lapic_dont_panic", &lapic_dont_panic, sizeof(lapic_dont_panic))) {
+			lapic_dont_panic = FALSE;
+		}
+	}
 
 	/* Set flat delivery model, logical processor id */
 	LAPIC_WRITE(DFR, LAPIC_DFR_FLAT);
@@ -438,9 +460,15 @@ lapic_configure(void)
 	/* Thermal: unmasked */
 	LAPIC_WRITE(LVT_THERMAL, LAPIC_VECTOR(THERMAL));
 
-	lapic_esr_clear();
+	/* CMCI, if available */
+	if (mca_is_cmci_present())
+		LAPIC_WRITE(LVT_CMCI, LAPIC_VECTOR(CMCI));
 
-	LAPIC_WRITE(LVT_ERROR, LAPIC_VECTOR(ERROR));
+	if (((cpu_number() == master_cpu) && lapic_errors_masked == FALSE) ||
+		(cpu_number() != master_cpu)) {
+		lapic_esr_clear();
+		LAPIC_WRITE(LVT_ERROR, LAPIC_VECTOR(ERROR));
+	}
 }
 
 void
@@ -510,6 +538,7 @@ lapic_set_intr_func(int vector, i386_intr_func_t func)
 	case LAPIC_TIMER_INTERRUPT:
 	case LAPIC_THERMAL_INTERRUPT:
 	case LAPIC_PERFCNT_INTERRUPT:
+	case LAPIC_CMCI_INTERRUPT:
 		lapic_intr_func[vector] = func;
 		break;
 	default:
@@ -522,6 +551,7 @@ int
 lapic_interrupt(int interrupt, x86_saved_state_t *state)
 {
 	int	retval = 0;
+	int 	esr = -1;
 
 	interrupt -= lapic_interrupt_base;
 	if (interrupt < 0) {
@@ -538,17 +568,64 @@ lapic_interrupt(int interrupt, x86_saved_state_t *state)
 	switch(interrupt) {
 	case LAPIC_TIMER_INTERRUPT:
 	case LAPIC_THERMAL_INTERRUPT:
+	case LAPIC_PERFCNT_INTERRUPT:
 	case LAPIC_INTERPROCESSOR_INTERRUPT:
 		if (lapic_intr_func[interrupt] != NULL)
 			(void) (*lapic_intr_func[interrupt])(state);
 		if (interrupt == LAPIC_PERFCNT_INTERRUPT)
+			/* Clear interrupt masked */
 			LAPIC_WRITE(LVT_PERFCNT, LAPIC_VECTOR(PERFCNT));
 		_lapic_end_of_interrupt();
 		retval = 1;
 		break;
+	case LAPIC_CMCI_INTERRUPT:
+		if (lapic_intr_func[interrupt] != NULL)
+			(void) (*lapic_intr_func[interrupt])(state);
+		/* return 0 for plaform expert to handle */
+		break;
 	case LAPIC_ERROR_INTERRUPT:
+		/* We treat error interrupts on APs as fatal.
+		 * The current interrupt steering scheme directs most
+		 * external interrupts to the BSP (HPET interrupts being
+		 * a notable exception); hence, such an error
+		 * on an AP may signify LVT corruption (with "may" being
+		 * the operative word). On the BSP, we adopt a more
+		 * lenient approach, in the interests of enhancing
+		 * debuggability and reducing fragility.
+		 * If "lapic_error_count_threshold" error interrupts
+		 * occur within "lapic_error_time_threshold" absolute
+		 * time units, we mask the error vector and log. The
+		 * error interrupts themselves are likely
+		 * side effects of issues which are beyond the purview of
+		 * the local APIC interrupt handler, however. The Error
+		 * Status Register value (the illegal destination
+		 * vector code is one observed in practice) indicates
+		 * the immediate cause of the error.
+		 */
+		esr = lapic_esr_read();
 		lapic_dump();
-		panic("Local APIC error\n");
+
+		if ((debug_boot_arg && (lapic_dont_panic == FALSE)) ||
+			cpu_number() != master_cpu) {
+			panic("Local APIC error, ESR: %d\n", esr);
+		}
+
+		if (cpu_number() == master_cpu) {
+			uint64_t abstime = mach_absolute_time();
+			if ((abstime - lapic_last_master_error) < lapic_error_time_threshold) {
+				if (lapic_master_error_count++ > lapic_error_count_threshold) {
+					lapic_errors_masked = TRUE;
+					LAPIC_WRITE(LVT_ERROR, LAPIC_READ(LVT_ERROR) | LAPIC_LVT_MASKED);
+					printf("Local APIC: errors masked\n");
+				}
+			}
+			else {
+				lapic_last_master_error = abstime;
+				lapic_master_error_count = 0;
+			}
+			printf("Local APIC error on master CPU, ESR: %d, error count this run: %d\n", esr, lapic_master_error_count);
+		}
+
 		_lapic_end_of_interrupt();
 		retval = 1;
 		break;

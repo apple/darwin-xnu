@@ -453,6 +453,7 @@ struct ip_fw_args {
 	struct route	*ro;		/* for dummynet			*/
 	struct sockaddr_in *dst;	/* for dummynet			*/
 	int flags;			/* for dummynet			*/
+	struct ip_out_args *ipoa;	/* for dummynet			*/
 
 	struct ipfw_flow_id f_id;	/* grabbed from IP header	*/
 	u_int16_t	divert_rule;	/* divert cookie		*/

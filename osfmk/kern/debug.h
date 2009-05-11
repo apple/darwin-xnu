@@ -84,6 +84,7 @@ int	packA(char *inbuf, uint32_t length, uint32_t buflen);
 void	unpackA(char *inbuf, uint32_t length);
 
 void	panic_display_system_configuration(void);
+void	panic_display_zprint(void);
 
 #endif /* MACH_KERNEL_PRIVATE */
 

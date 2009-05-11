@@ -625,7 +625,7 @@ ipc_right_clean(
 	    }
 
 	    default:
-		panic("ipc_right_clean: strange type");
+		panic("ipc_right_clean: strange type - 0x%x", type);
 	}
 }
 

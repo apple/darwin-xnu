@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -43,6 +43,4 @@ processor_data_init(
 	timer_init(&PROCESSOR_DATA(processor, idle_state));
 	timer_init(&PROCESSOR_DATA(processor, system_state));
 	timer_init(&PROCESSOR_DATA(processor, user_state));
-
-	queue_init(&PROCESSOR_DATA(processor, timer_call_queue));
 }

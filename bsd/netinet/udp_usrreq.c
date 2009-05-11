@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1008,10 +1008,11 @@ udp_output(inp, m, addr, control, p)
 	struct sockaddr_in *ifaddr;
 	int error = 0, udp_dodisconnect = 0;
 	struct socket *so = inp->inp_socket;
-	int soopts;
+	int soopts = 0;
 	struct mbuf *inpopts;
 	struct ip_moptions *mopts;
 	struct route ro;
+	struct ip_out_args ipoa;
 
 	KERNEL_DEBUG(DBG_FNC_UDP_OUTPUT | DBG_FUNC_START, 0,0,0,0,0);
 
@@ -1027,15 +1028,17 @@ udp_output(inp, m, addr, control, p)
 		goto release;
 	}
 
+        lck_mtx_assert(inp->inpcb_mtx, LCK_MTX_ASSERT_OWNED);
+
+	/* If socket was bound to an ifindex, tell ip_output about it */
+	ipoa.ipoa_ifscope = (inp->inp_flags & INP_BOUND_IF) ?
+	    inp->inp_boundif : IFSCOPE_NONE;
+	soopts |= IP_OUTARGS;
+
 	/* If there was a routing change, discard cached route and check
 	 * that we have a valid source address. 
 	 * Reacquire a new source address if INADDR_ANY was specified
 	 */
-
-#if 1
-        lck_mtx_assert(inp->inpcb_mtx, LCK_MTX_ASSERT_OWNED);
-#endif
-
 	if (inp->inp_route.ro_rt && inp->inp_route.ro_rt->generation_id != route_generation) {
 		if (ifa_foraddr(inp->inp_laddr.s_addr) == 0) { /* src address is gone */
 			if (inp->inp_flags & INP_INADDR_ANY)
@@ -1158,7 +1161,7 @@ udp_output(inp, m, addr, control, p)
 	m->m_pkthdr.socket_id = get_socket_id(inp->inp_socket);
 
 	inpopts = inp->inp_options;
-	soopts = (inp->inp_socket->so_options & (SO_DONTROUTE | SO_BROADCAST));
+	soopts |= (inp->inp_socket->so_options & (SO_DONTROUTE | SO_BROADCAST));
 	mopts = inp->inp_moptions;
 
 	/* We don't want to cache the route for non-connected UDP */
@@ -1170,13 +1173,15 @@ udp_output(inp, m, addr, control, p)
 	socket_unlock(so, 0);
 	/* XXX jgraessley please look at XXX */
 	error = ip_output_list(m, 0, inpopts,
-	    udp_dodisconnect ? &ro : &inp->inp_route, soopts, mopts, NULL);
+	    udp_dodisconnect ? &ro : &inp->inp_route, soopts, mopts, &ipoa);
 	socket_lock(so, 0);
 
 	if (udp_dodisconnect) {
 		/* Discard the cached route, if there is one */
-		if (ro.ro_rt != NULL)
+		if (ro.ro_rt != NULL) {
 			rtfree(ro.ro_rt);
+			ro.ro_rt = NULL;
+		}
 		in_pcbdisconnect(inp);
 		inp->inp_laddr = origladdr;	/* XXX rehash? */
 	}

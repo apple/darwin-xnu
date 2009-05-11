@@ -206,6 +206,7 @@ profile_fire(void *arg)
 	    CPU->cpu_profile_upc, late, 0, 0);
 #else
 #if defined(__ppc__) || defined(__ppc64__)
+	{
 	struct savearea *sv = find_kern_regs(current_thread());
 
 	if (sv) {
@@ -218,7 +219,9 @@ profile_fire(void *arg)
 		dtrace_probe(prof->prof_id, 0xcafebabe,
 	    	0x0, late, 0, 0); /* XXX_BOGUS also see profile_usermode() below. */
 	}
+	}
 #elif defined(__i386__) || defined(__x86_64__)
+	{
 	x86_saved_state32_t *kern_regs = find_kern_regs(current_thread());
 
 	if (NULL != kern_regs) {
@@ -241,6 +244,7 @@ profile_fire(void *arg)
 
 			dtrace_probe(prof->prof_id, 0x0, regs->eip, 0, 0, 0);
 		}	
+	}
 	}
 #else
 #error Unknown architecture
@@ -258,6 +262,7 @@ profile_tick(void *arg)
 	    CPU->cpu_profile_upc, 0, 0, 0);
 #else
 #if defined(__ppc__) || defined(__ppc64__)
+	{
 	struct savearea *sv = find_kern_regs(current_thread());
 
 	if (sv) {
@@ -270,7 +275,9 @@ profile_tick(void *arg)
 		dtrace_probe(prof->prof_id, 0xcafebabe,
 	    	0x0, 0, 0, 0); /* XXX_BOGUS also see profile_usermode() below. */
 	}
+	}
 #elif defined(__i386__) || defined(__x86_64__)
+	{
 	x86_saved_state32_t *kern_regs = find_kern_regs(current_thread());
 
 	if (NULL != kern_regs) {
@@ -293,6 +300,7 @@ profile_tick(void *arg)
 
 			dtrace_probe(prof->prof_id, 0x0, regs->eip, 0, 0, 0);
 		}	
+	}
 	}
 #else
 #error Unknown architecture

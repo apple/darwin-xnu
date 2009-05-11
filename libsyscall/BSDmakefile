@@ -16,7 +16,7 @@ RC_ARCHS = $(ARCH)
 RC_$(RC_ARCHS) = 1
 .endif
 NARCHS != echo $(RC_ARCHS) | wc -w
-LIBSYS = $(NEXT_ROOT)/usr/local/lib/system
+LIBSYS = $(SDKROOT)/usr/local/lib/system
 NJOBS != perl -e '$$n = `/usr/sbin/sysctl -n hw.ncpu`; printf "%d\n", $$n < 2 ? 2 : ($$n * 1.5)'
 BSDMAKE = bsdmake -f Makefile
 BSDMAKEJ = $(BSDMAKE) -j $(NJOBS)

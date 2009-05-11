@@ -165,6 +165,7 @@ options		CONFIG_SOWUPCALL	# SB_UPCALL on sowwakeup	# <config_sowupcall>
 options		CONFIG_FORCE_OUT_IFP	# Force IP output to use an interface # <config_force_out_ifp>
 options		CONFIG_MBUF_NOEXPAND	# limit mbuf expansion	# <config_mbuf_noexpand>
 options		CONFIG_MBUF_JUMBO	# jumbo cluster pool	# <config_mbuf_jumbo>
+options		CONFIG_SCOPEDROUTING	# scoped routing on by default	# <config_scopedrouting>
 options		CONFIG_IP_EDGEHOLE	# Drop tagged packets at EDGE interface # <config_ip_edgehole>
 
 options		CONFIG_WORKQUEUE	# <config_workqueue>

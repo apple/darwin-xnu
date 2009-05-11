@@ -1588,6 +1588,9 @@ kdebug_ops(int *name, u_int namelen, user_addr_t where,
 {
 	int ret=0;
 
+	if (namelen == 0)
+		return(ENOTSUP);
+
     ret = suser(kauth_cred_get(), &p->p_acflag);
 	if (ret)
 		return(ret);
@@ -1637,7 +1640,7 @@ sysctl_procargs2(int *name, u_int namelen, user_addr_t where,
 }
 
 static int
-sysctl_procargsx(int *name, __unused u_int namelen, user_addr_t where, 
+sysctl_procargsx(int *name, u_int namelen, user_addr_t where, 
                  size_t *sizep, proc_t cur_proc, int argc_yes)
 {
 	proc_t p;
@@ -1656,6 +1659,9 @@ sysctl_procargsx(int *name, __unused u_int namelen, user_addr_t where,
 	int pid;
 	kauth_cred_t my_cred;
 	uid_t uid;
+
+	if ( namelen < 1 )
+		return(EINVAL);
 
 	if (argc_yes)
 		buflen -= sizeof(int);		/* reserve first word to return argc */

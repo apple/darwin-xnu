@@ -1195,8 +1195,6 @@ insmntque(vnode_t vp, mount_t mp)
 			TAILQ_INSERT_HEAD(&mp->mnt_vnodelist, vp, v_mntvnodes);
 		if (vp->v_lflag & VNAMED_MOUNT)
 			panic("insmntque: vp already in mount vnode list");
-		if ((vp->v_freelist.tqe_prev != (struct vnode **)0xdeadb))
-		        panic("insmntque: vp on the free list\n");
 		vp->v_lflag |= VNAMED_MOUNT;
 		mount_ref(mp, 1);
 		mount_unlock(mp);
@@ -1976,7 +1974,7 @@ vclean(vnode_t vp, int flags)
 	/* Delete the shadow stream file before we reclaim its vnode */
 	if ((is_namedstream != 0) &&
 			(vp->v_parent != NULLVP) &&
-			((vp->v_parent->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS) == 0)) {
+			(vnode_isshadow(vp))) {
 		vnode_relenamedstream(vp->v_parent, vp, ctx);
 	}
 #endif
@@ -4019,6 +4017,9 @@ vnode_create(int flavor, size_t size, void *data, vnode_t *vpp)
 					if (param->vnfs_mp->mnt_kern_flag & MNTK_LOCK_LOCAL)
 						vp->v_flag |= VLOCKLOCAL;
 			        if (insert) {
+					if ((vp->v_freelist.tqe_prev != (struct vnode **)0xdeadb))
+						panic("insmntque: vp on the free list\n");
+
 				        /*
 					 * enter in mount vnode list
 					 */

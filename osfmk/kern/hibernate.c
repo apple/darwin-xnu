@@ -189,11 +189,13 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
     uint64_t start, end, nsec;
     vm_page_t m;
     uint32_t pages = page_list->page_count;
-    uint32_t count_zf = 0, count_throttled = 0, count_inactive = 0, count_active = 0;
+    uint32_t count_zf = 0, count_throttled = 0;
+    uint32_t count_inactive = 0, count_active = 0, count_speculative = 0;
     uint32_t count_wire = pages;
     uint32_t count_discard_active    = 0;
     uint32_t count_discard_inactive  = 0;
     uint32_t count_discard_purgeable = 0;
+    uint32_t count_discard_speculative = 0;
     uint32_t i;
     uint32_t             bank;
     hibernate_bitmap_t * bitmap;
@@ -262,7 +264,7 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
     queue_iterate( &vm_page_queue_zf,
                     m,
                     vm_page_t,
-                    pageq )
+		    pageq )
     {
         if ((kIOHibernateModeDiscardCleanInactive & gIOHibernateMode) 
          && consider_discard(m))
@@ -297,6 +299,26 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
             count_inactive++;
 	count_wire--;
 	hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
+    }
+
+    for( i = 0; i <= VM_PAGE_MAX_SPECULATIVE_AGE_Q; i++ )
+    {
+	queue_iterate(&vm_page_queue_speculative[i].age_q,
+		      m,
+		      vm_page_t,
+		      pageq)
+	{
+	    if ((kIOHibernateModeDiscardCleanInactive & gIOHibernateMode) 
+	     && consider_discard(m))
+	    {
+		hibernate_page_bitset(page_list, TRUE, m->phys_page);
+		count_discard_speculative++;
+	    }
+	    else
+		count_speculative++;
+	    count_wire--;
+	    hibernate_page_bitset(page_list_wired, TRUE, m->phys_page);
+	}
     }
 
     queue_iterate( &vm_page_queue_active,
@@ -338,11 +360,11 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
     absolutetime_to_nanoseconds(end - start, &nsec);
     HIBLOG("hibernate_page_list_setall time: %qd ms\n", nsec / 1000000ULL);
 
-    HIBLOG("pages %d, wire %d, act %d, inact %d, zf %d, throt %d, could discard act %d inact %d purgeable %d\n", 
-                pages, count_wire, count_active, count_inactive, count_zf, count_throttled,
-                count_discard_active, count_discard_inactive, count_discard_purgeable);
+    HIBLOG("pages %d, wire %d, act %d, inact %d, spec %d, zf %d, throt %d, could discard act %d inact %d purgeable %d spec %d\n", 
+                pages, count_wire, count_active, count_inactive, count_speculative, count_zf, count_throttled,
+                count_discard_active, count_discard_inactive, count_discard_purgeable, count_discard_speculative);
 
-    *pagesOut = pages - count_discard_active - count_discard_inactive - count_discard_purgeable;
+    *pagesOut = pages - count_discard_active - count_discard_inactive - count_discard_purgeable - count_discard_speculative;
 }
 
 void
@@ -351,9 +373,11 @@ hibernate_page_list_discard(hibernate_page_list_t * page_list)
     uint64_t  start, end, nsec;
     vm_page_t m;
     vm_page_t next;
+    uint32_t  i;
     uint32_t  count_discard_active    = 0;
     uint32_t  count_discard_inactive  = 0;
     uint32_t  count_discard_purgeable = 0;
+    uint32_t  count_discard_speculative = 0;
 
     clock_get_uptime(&start);
 
@@ -370,6 +394,21 @@ hibernate_page_list_discard(hibernate_page_list_t * page_list)
             discard_page(m);
         }
         m = next;
+    }
+
+    for( i = 0; i <= VM_PAGE_MAX_SPECULATIVE_AGE_Q; i++ )
+    {
+	m = (vm_page_t) queue_first(&vm_page_queue_speculative[i].age_q);
+	while (m && !queue_end(&vm_page_queue_speculative[i].age_q, (queue_entry_t)m))
+	{
+	    next = (vm_page_t) m->pageq.next;
+	    if (hibernate_page_bittst(page_list, m->phys_page))
+	    {
+		count_discard_speculative++;
+		discard_page(m);
+	    }
+	    m = next;
+	}
     }
 
     m = (vm_page_t) queue_first(&vm_page_queue_inactive);
@@ -404,9 +443,9 @@ hibernate_page_list_discard(hibernate_page_list_t * page_list)
 
     clock_get_uptime(&end);
     absolutetime_to_nanoseconds(end - start, &nsec);
-    HIBLOG("hibernate_page_list_discard time: %qd ms, discarded act %d inact %d purgeable %d\n",
+    HIBLOG("hibernate_page_list_discard time: %qd ms, discarded act %d inact %d purgeable %d spec %d\n",
                 nsec / 1000000ULL,
-                count_discard_active, count_discard_inactive, count_discard_purgeable);
+                count_discard_active, count_discard_inactive, count_discard_purgeable, count_discard_speculative);
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */

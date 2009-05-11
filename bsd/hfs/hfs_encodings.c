@@ -211,6 +211,7 @@ hfs_relconverter(u_int32_t encoding)
 				lck_mtx_unlock(&encodinglst_mutex);
  
  				FREE(encp, M_TEMP);
+                record_kext_unload(id);
    				kmod_destroy((host_priv_t) host_priv_self(), id);
 				return (0);
 			}

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -479,6 +479,7 @@ transmit_event(struct dn_pipe *pipe)
 				(void)ip_output(m, NULL, NULL, pkt->flags, NULL, NULL);
 				if (tmp_rt.ro_rt) {
 					rtfree(tmp_rt.ro_rt);
+					tmp_rt.ro_rt = NULL;
 				}
 				break ;
 			}
@@ -1254,6 +1255,8 @@ dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa)
 	
 	pkt->dn_dst = fwa->dst;
 	pkt->flags = fwa->flags;
+	if (fwa->ipoa != NULL)
+		pkt->ipoa = *(fwa->ipoa);
 	}
     if (q->head == NULL)
 	q->head = m;
@@ -1362,8 +1365,10 @@ dropit:
 	struct m_tag *tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_DUMMYNET, NULL); \
 	if (tag) { 					\
 		struct dn_pkt_tag *n = (struct dn_pkt_tag *)(tag+1);	\
-		if (n->ro.ro_rt)				\
+		if (n->ro.ro_rt) {				\
 			rtfree(n->ro.ro_rt);	\
+			n->ro.ro_rt = NULL;	\
+		}				\
 	}									\
 	m_tag_delete(_m, tag);			\
 	m_freem(_m);					\

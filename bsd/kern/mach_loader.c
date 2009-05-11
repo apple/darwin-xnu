@@ -568,10 +568,13 @@ parse_machfile(
 					(struct encryption_info_command *) lcp,
 					addr, map, vp);
 				if (ret != LOAD_SUCCESS) {
-					printf("proc %d: set unprotect error %d "
+					printf("proc %d: set_code_unprotect() error %d "
 					       "for file \"%s\"\n",
 					       p->p_pid, ret, vp->v_name);
-					ret = LOAD_SUCCESS; /* ignore error */
+					/* Don't let the app run if it's 
+					 * encrypted but we failed to set up the
+					 * decrypter */
+					 psignal(p, SIGKILL);
 				}
 				break;
 #endif
@@ -1451,7 +1454,7 @@ set_code_unprotect(
 			cryptname="com.apple.null";
 			break;
 		default:
-			return LOAD_FAILURE;
+			return LOAD_BADMACHO;
 	}
 	
 	len = MAXPATHLEN;
@@ -1463,9 +1466,9 @@ set_code_unprotect(
 	kr=text_crypter_create(&crypt_info, cryptname, (void*)vpath);
 	
 	if(kr) {
-		printf("set_code_unprotect: unable to find decrypter %s, kr=%d\n",
+		printf("set_code_unprotect: unable to create decrypter %s, kr=%d\n",
 		       cryptname, kr);
-		return LOAD_FAILURE;
+		return LOAD_RESOURCE;
 	}
 	
 	/* this is terrible, but we have to rescan the load commands to find the
@@ -1509,12 +1512,16 @@ set_code_unprotect(
 	}
 	
 	/* if we get here, did not find anything */
-	return LOAD_FAILURE;
+	return LOAD_BADMACHO;
 	
 remap_now:
 	/* now remap using the decrypter */
 	kr = vm_map_apple_protected(map, map_offset, map_offset+map_size, &crypt_info);
-	if(kr) printf("set_code_unprotect(): mapping failed with %x\n", kr);
+	if(kr) {
+		printf("set_code_unprotect(): mapping failed with %x\n", kr);
+		crypt_info.crypt_end(crypt_info.crypt_ops);
+		return LOAD_PROTECT;
+	}
 	
 	return LOAD_SUCCESS;
 }

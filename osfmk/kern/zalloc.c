@@ -102,88 +102,73 @@
 #include <ppc/mappings.h>
 #endif
 
-int check_freed_element = 0;
 
-#if	MACH_ASSERT
-/* Detect use of zone elt after freeing it by two methods:
+/* 
+ * Zone Corruption Debugging
+ *
+ * We provide three methods to detect use of a zone element after it's been freed.  These
+ * checks are enabled by specifying "-zc" and/or "-zp" in the boot-args:
+ *
  * (1) Range-check the free-list "next" ptr for sanity.
  * (2) Store the ptr in two different words, and compare them against
- *     each other when re-using the zone elt, to detect modifications;
+ *     each other when re-using the zone element, to detect modifications.
+ * (3) poison the freed memory by overwriting it with 0xdeadbeef.
+ *
+ * The first two checks are farily light weight and are enabled by specifying "-zc" 
+ * in the boot-args.  If you want more aggressive checking for use-after-free bugs
+ * and you don't mind the additional overhead, then turn on poisoning by adding
+ * "-zp" to the boot-args in addition to "-zc".  If you specify -zp without -zc,
+ * it still poisons the memory when it's freed, but doesn't check if the memory
+ * has been altered later when it's reallocated.
  */
 
-#if defined(__alpha)
+boolean_t check_freed_element = FALSE;		/* enabled by -zc in boot-args */
+boolean_t zfree_clear = FALSE;			/* enabled by -zp in boot-args */
 
-#define is_kernel_data_addr(a)						\
-  (!(a) || (IS_SYS_VA(a) && !((a) & (sizeof(long)-1))))
-
-#else /* !defined(__alpha) */
-
-#define is_kernel_data_addr(a)						\
-  (!(a) || ((a) >= vm_min_kernel_address && !((a) & 0x3)))
-
-#endif /* defined(__alpha) */
-
-/* Should we set all words of the zone element to an illegal address
- * when it is freed, to help catch usage after freeing?  The down-side
- * is that this obscures the identity of the freed element.
- */
-boolean_t zfree_clear = FALSE;
+#define is_kernel_data_addr(a)	(!(a) || ((a) >= vm_min_kernel_address && !((a) & 0x3)))
 
 #define ADD_TO_ZONE(zone, element)					\
 MACRO_BEGIN								\
-		if (zfree_clear)					\
-		{   unsigned int i;					\
-		    for (i=1;						\
-			 i < zone->elem_size/sizeof(vm_offset_t) - 1;	\
-			 i++)						\
-		    ((vm_offset_t *)(element))[i] = 0xdeadbeef;		\
-		}							\
-		((vm_offset_t *)(element))[0] = (zone)->free_elements;	\
-		(zone)->free_elements = (vm_offset_t) (element);	\
-		(zone)->count--;					\
-MACRO_END
-
-#define REMOVE_FROM_ZONE(zone, ret, type)				\
-MACRO_BEGIN								\
-	(ret) = (type) (zone)->free_elements;				\
-	if ((ret) != (type) 0) {					\
-	    if (!is_kernel_data_addr(((vm_offset_t *)(ret))[0])) {	\
-		panic("A freed zone element has been modified.\n");	\
-	    }								\
-	    (zone)->count++;						\
-	    (zone)->free_elements = *((vm_offset_t *)(ret));		\
+	if (zfree_clear)						\
+	{   unsigned int i;						\
+	    for (i=0;							\
+		 i < zone->elem_size/sizeof(uint32_t);			\
+		 i++)							\
+	    ((uint32_t *)(element))[i] = 0xdeadbeef;			\
 	}								\
-MACRO_END
-#else	/* MACH_ASSERT */
-
-#define ADD_TO_ZONE(zone, element)					\
-MACRO_BEGIN								\
-		*((vm_offset_t *)(element)) = (zone)->free_elements;	\
-		if (check_freed_element) {  \
-			if ((zone)->elem_size >= (2 * sizeof(vm_offset_t)))	\
-				((vm_offset_t *)(element))[((zone)->elem_size/sizeof(vm_offset_t))-1] = \
-					(zone)->free_elements;				\
-		}	\
-		(zone)->free_elements = (vm_offset_t) (element);	\
-		(zone)->count--;					\
-MACRO_END
-
-#define REMOVE_FROM_ZONE(zone, ret, type)				\
-MACRO_BEGIN								\
-	(ret) = (type) (zone)->free_elements;				\
-	if ((ret) != (type) 0) {					\
-		if (check_freed_element) {		\
-	        if ((zone)->elem_size >= (2 * sizeof(vm_offset_t)) &&		\
-		    ((vm_offset_t *)(ret))[((zone)->elem_size/sizeof(vm_offset_t))-1] != \
-		    ((vm_offset_t *)(ret))[0])				\
-		        panic("a freed zone element has been modified");\
-		}		\
-		(zone)->count++;					\
-		(zone)->free_elements = *((vm_offset_t *)(ret));	\
+	*((vm_offset_t *)(element)) = (zone)->free_elements;		\
+	if (check_freed_element) {					\
+		if ((zone)->elem_size >= (2 * sizeof(vm_offset_t)))	\
+			((vm_offset_t *)(element))[((zone)->elem_size/sizeof(vm_offset_t))-1] = \
+				(zone)->free_elements;			\
 	}								\
+	(zone)->free_elements = (vm_offset_t) (element);		\
+	(zone)->count--;						\
 MACRO_END
 
-#endif	/* MACH_ASSERT */
+#define REMOVE_FROM_ZONE(zone, ret, type)					\
+MACRO_BEGIN									\
+	(ret) = (type) (zone)->free_elements;					\
+	if ((ret) != (type) 0) {						\
+		if (check_freed_element) {					\
+			if (!is_kernel_data_addr(((vm_offset_t *)(ret))[0]) ||	\
+			    ((zone)->elem_size >= (2 * sizeof(vm_offset_t)) &&	\
+			    ((vm_offset_t *)(ret))[((zone)->elem_size/sizeof(vm_offset_t))-1] != \
+			    ((vm_offset_t *)(ret))[0]))				\
+				panic("a freed zone element has been modified");\
+			if (zfree_clear) {					\
+				unsigned int ii;				\
+				for (ii = sizeof(vm_offset_t) / sizeof(uint32_t); \
+					 ii < zone->elem_size/sizeof(uint32_t) - sizeof(vm_offset_t) / sizeof(uint32_t); \
+					 ii++)					\
+					if (((uint32_t *)(ret))[ii] != (uint32_t)0xdeadbeef) \
+						panic("a freed zone element has been modified");\
+			}							\
+		}								\
+		(zone)->count++;						\
+		(zone)->free_elements = *((vm_offset_t *)(ret));		\
+	}									\
+MACRO_END
 
 #if	ZONE_DEBUG
 #define zone_debug_enabled(z) z->active_zones.next
@@ -326,10 +311,146 @@ unsigned int		num_zones;
 
 boolean_t zone_gc_allowed = TRUE;
 boolean_t zone_gc_forced = FALSE;
+boolean_t panic_include_zprint = FALSE;
 unsigned zone_gc_last_tick = 0;
 unsigned zone_gc_max_rate = 0;		/* in ticks */
 
+/*
+ * Zone leak debugging code
+ *
+ * When enabled, this code keeps a log to track allocations to a particular zone that have not
+ * yet been freed.  Examining this log will reveal the source of a zone leak.  The log is allocated
+ * only when logging is enabled, so there is no effect on the system when it's turned off.  Logging is
+ * off by default.
+ *
+ * Enable the logging via the boot-args. Add the parameter "zlog=<zone>" to boot-args where <zone>
+ * is the name of the zone you wish to log.  
+ *
+ * This code only tracks one zone, so you need to identify which one is leaking first.
+ * Generally, you'll know you have a leak when you get a "zalloc retry failed 3" panic from the zone
+ * garbage collector.  Note that the zone name printed in the panic message is not necessarily the one
+ * containing the leak.  So do a zprint from gdb and locate the zone with the bloated size.  This
+ * is most likely the problem zone, so set zlog in boot-args to this zone name, reboot and re-run the test.  The
+ * next time it panics with this message, examine the log using the kgmacros zstack, findoldest and countpcs.
+ * See the help in the kgmacros for usage info.
+ *
+ *
+ * Zone corruption logging
+ *
+ * Logging can also be used to help identify the source of a zone corruption.  First, identify the zone
+ * that is being corrupted, then add "-zc zlog=<zone name>" to the boot-args.  When -zc is used in conjunction
+ * with zlog, it changes the logging style to track both allocations and frees to the zone.  So when the
+ * corruption is detected, examining the log will show you the stack traces of the callers who last allocated
+ * and freed any particular element in the zone.  Use the findelem kgmacro with the address of the element that's been
+ * corrupted to examine its history.  This should lead to the source of the corruption.
+ */
 
+static int log_records;	/* size of the log, expressed in number of records */
+
+#define MAX_ZONE_NAME	32	/* max length of a zone name we can take from the boot-args */
+
+static char zone_name_to_log[MAX_ZONE_NAME] = "";	/* the zone name we're logging, if any */
+
+/*
+ * The number of records in the log is configurable via the zrecs parameter in boot-args.  Set this to 
+ * the number of records you want in the log.  For example, "zrecs=1000" sets it to 1000 records.  Note
+ * that the larger the size of the log, the slower the system will run due to linear searching in the log,
+ * but one doesn't generally care about performance when tracking down a leak.  The log is capped at 8000
+ * records since going much larger than this tends to make the system unresponsive and unbootable on small
+ * memory configurations.  The default value is 4000 records.
+ *
+ * MAX_DEPTH configures how deep of a stack trace is taken on each zalloc in the zone of interrest.  15
+ * levels is usually enough to get past all the layers of code in kalloc and IOKit and see who the actual
+ * caller is up above these lower levels.
+ */
+
+#define ZRECORDS_MAX 		8000		/* Max records allowed in the log */
+#define ZRECORDS_DEFAULT	4000		/* default records in log if zrecs is not specificed in boot-args */
+#define MAX_DEPTH 		15		/* number of levels of the stack trace to record */
+
+/*
+ * Each record in the log contains a pointer to the zone element it refers to, a "time" number that allows
+ * the records to be ordered chronologically, and a small array to hold the pc's from the stack trace.  A
+ * record is added to the log each time a zalloc() is done in the zone_of_interest.  For leak debugging,
+ * the record is cleared when a zfree() is done.  For corruption debugging, the log tracks both allocs and frees.
+ * If the log fills, old records are replaced as if it were a circular buffer.
+ */
+
+struct zrecord {
+        void		*z_element;		/* the element that was zalloc'ed of zfree'ed */
+        uint32_t	z_opcode:1,		/* whether it was a zalloc or zfree */
+			z_time:31;		/* time index when operation was done */
+        void		*z_pc[MAX_DEPTH];	/* stack trace of caller */
+};
+
+/*
+ * Opcodes for the z_opcode field:
+ */
+
+#define ZOP_ALLOC	1
+#define ZOP_FREE	0
+
+/*
+ * The allocation log and all the related variables are protected by the zone lock for the zone_of_interest
+ */
+
+static struct zrecord *zrecords;		/* the log itself, dynamically allocated when logging is enabled  */
+static int zcurrent  = 0;			/* index of the next slot in the log to use */
+static int zrecorded = 0;			/* number of allocations recorded in the log */
+static unsigned int ztime = 0;			/* a timestamp of sorts */
+static zone_t  zone_of_interest = NULL;		/* the zone being watched; corresponds to zone_name_to_log */
+
+/*
+ * Decide if we want to log this zone by doing a string compare between a zone name and the name
+ * of the zone to log. Return true if the strings are equal, false otherwise.  Because it's not
+ * possible to include spaces in strings passed in via the boot-args, a period in the logname will
+ * match a space in the zone name.
+ */
+
+static int
+log_this_zone(const char *zonename, const char *logname) 
+{
+	int len;
+	const char *zc = zonename;
+	const char *lc = logname;
+
+	/*
+	 * Compare the strings.  We bound the compare by MAX_ZONE_NAME.
+	 */
+
+	for (len = 1; len <= MAX_ZONE_NAME; zc++, lc++, len++) {
+
+		/*
+		 * If the current characters don't match, check for a space in
+		 * in the zone name and a corresponding period in the log name.
+		 * If that's not there, then the strings don't match.
+		 */
+
+		if (*zc != *lc && !(*zc == ' ' && *lc == '.')) 
+			break;
+
+		/*
+		 * The strings are equal so far.  If we're at the end, then it's a match.
+		 */
+
+		if (*zc == '\0')
+			return TRUE;
+	}
+
+	return FALSE;
+}
+
+
+/*
+ * Test if we want to log this zalloc/zfree event.  We log if this is the zone we're interested in and
+ * the buffer for the records has been allocated.
+ */
+
+#define DO_LOGGING(z)		(zrecords && (z) == zone_of_interest)
+
+extern boolean_t zlog_ready;
+
+	
 /*
  *	zinit initializes a new zone.  The zone data structures themselves
  *	are stored in a zone, which is initially a static structure that
@@ -434,6 +555,40 @@ use_this_allocation:
 	last_zone = &z->next_zone;
 	num_zones++;
 	simple_unlock(&all_zones_lock);
+
+	/*
+	 * Check if we should be logging this zone.  If so, remember the zone pointer.
+	 */
+
+	 if (log_this_zone(z->zone_name, zone_name_to_log)) {
+	 	zone_of_interest = z;
+	}
+
+	/*
+	 * If we want to log a zone, see if we need to allocate buffer space for the log.  Some vm related zones are
+	 * zinit'ed before we can do a kmem_alloc, so we have to defer allocation in that case.  zlog_ready is set to
+	 * TRUE once enough of the VM system is up and running to allow a kmem_alloc to work.  If we want to log one
+	 * of the VM related zones that's set up early on, we will skip allocation of the log until zinit is called again
+	 * later on some other zone.  So note we may be allocating a buffer to log a zone other than the one being initialized
+	 * right now.
+	 */
+
+	if (zone_of_interest != NULL && zrecords == NULL && zlog_ready) {
+		if (kmem_alloc(kernel_map, (vm_offset_t *)&zrecords, log_records * sizeof(struct zrecord)) == KERN_SUCCESS) {
+
+			/*
+			 * We got the memory for the log.  Zero it out since the code needs this to identify unused records.
+			 * At this point, everything is set up and we're ready to start logging this zone.
+			 */
+	
+			bzero((void *)zrecords, log_records * sizeof(struct zrecord));
+			printf("zone: logging started for zone %s (%p)\n", zone_of_interest->zone_name, zone_of_interest);
+
+		} else {
+			printf("zone: couldn't allocate memory for zrecords, turning off zleak logging\n");
+			zone_of_interest = NULL;
+		}
+	}
 
 	return(z);
 }
@@ -613,9 +768,40 @@ zone_bootstrap(void)
 	vm_offset_t zone_zone_space;
 	char temp_buf[16];
 
-	/* see if we want freed zone element checking */
+	/* see if we want freed zone element checking and/or poisoning */
 	if (PE_parse_boot_argn("-zc", temp_buf, sizeof (temp_buf))) {
-		check_freed_element = 1;
+		check_freed_element = TRUE;
+	}
+
+	if (PE_parse_boot_argn("-zp", temp_buf, sizeof (temp_buf))) {
+		zfree_clear = TRUE;
+	}
+
+	/*
+	 * Check for and set up zone leak detection if requested via boot-args.  We recognized two
+	 * boot-args:
+	 *
+	 *	zlog=<zone_to_log>
+	 *	zrecs=<num_records_in_log>
+	 *
+	 * The zlog arg is used to specify the zone name that should be logged, and zrecs is used to
+	 * control the size of the log.  If zrecs is not specified, a default value is used.
+	 */
+
+	if (PE_parse_boot_argn("zlog", zone_name_to_log, sizeof(zone_name_to_log)) == TRUE) {
+		if (PE_parse_boot_argn("zrecs", &log_records, sizeof(log_records)) == TRUE) {
+
+			/*
+			 * Don't allow more than ZRECORDS_MAX records even if the user asked for more.
+			 * This prevents accidentally hogging too much kernel memory and making the system
+			 * unusable.
+			 */
+
+			log_records = MIN(ZRECORDS_MAX, log_records);
+
+		} else {
+			log_records = ZRECORDS_DEFAULT;
+		}
 	}
 
 	simple_lock_init(&all_zones_lock, 0);
@@ -681,8 +867,18 @@ zalloc_canblock(
 {
 	vm_offset_t	addr;
 	kern_return_t retval;
+	void	  	*bt[MAX_DEPTH];		/* only used if zone logging is enabled */
+	int 		numsaved = 0;
+	int		i;
 
 	assert(zone != ZONE_NULL);
+
+	/*
+	 * If zone logging is turned on and this is the zone we're tracking, grab a backtrace.
+	 */
+
+	if (DO_LOGGING(zone))
+	        numsaved = OSBacktrace(&bt[0], MAX_DEPTH);
 
 	lock_zone(zone);
 
@@ -765,8 +961,10 @@ zalloc_canblock(
 							zone_gc();
 							printf("zalloc did gc\n");
 						}
-					        if (retry == 3)
+					        if (retry == 3) {
+							panic_include_zprint = TRUE;
 						        panic("zalloc: \"%s\" (%d elements) retry fail %d", zone->zone_name, zone->count, retval);
+						}
 					} else {
 					        break;
 					}
@@ -824,6 +1022,76 @@ zalloc_canblock(
 		}
 		if (addr == 0)
 			REMOVE_FROM_ZONE(zone, addr, vm_offset_t);
+	}
+
+	/*
+	 * See if we should be logging allocations in this zone.  Logging is rarely done except when a leak is
+	 * suspected, so this code rarely executes.  We need to do this code while still holding the zone lock
+	 * since it protects the various log related data structures.
+	 */
+
+	if (DO_LOGGING(zone) && addr) {
+
+		/*
+		 * Look for a place to record this new allocation.  We implement two different logging strategies
+		 * depending on whether we're looking for the source of a zone leak or a zone corruption.  When looking
+		 * for a leak, we want to log as many allocations as possible in order to clearly identify the leaker
+		 * among all the records.  So we look for an unused slot in the log and fill that in before overwriting
+		 * an old entry.  When looking for a corrution however, it's better to have a chronological log of all
+		 * the allocations and frees done in the zone so that the history of operations for a specific zone 
+		 * element can be inspected.  So in this case, we treat the log as a circular buffer and overwrite the
+		 * oldest entry whenever a new one needs to be added.
+		 *
+		 * The check_freed_element flag tells us what style of logging to do.  It's set if we're supposed to be
+		 * doing corruption style logging (indicated via -zc in the boot-args).
+		 */
+
+		if (!check_freed_element && zrecords[zcurrent].z_element && zrecorded < log_records) {
+
+			/*
+			 * If we get here, we're doing leak style logging and there's still some unused entries in
+			 * the log (since zrecorded is smaller than the size of the log).  Look for an unused slot
+			 * starting at zcurrent and wrap-around if we reach the end of the buffer.  If the buffer
+			 * is already full, we just fall through and overwrite the element indexed by zcurrent.
+		 	 */
+	
+		       for (i = zcurrent; i < log_records; i++) {
+			        if (zrecords[i].z_element == NULL) {
+				        zcurrent = i;
+				        goto empty_slot;
+				}
+			}
+
+			for (i = 0; i < zcurrent; i++) {
+			        if (zrecords[i].z_element == NULL) {
+				        zcurrent = i;
+				        goto empty_slot;
+				}
+			}
+		 }
+	
+		/*
+		 * Save a record of this allocation
+		 */
+	
+empty_slot:
+		  if (zrecords[zcurrent].z_element == NULL)
+		        zrecorded++;
+	
+		  zrecords[zcurrent].z_element = (void *)addr;
+		  zrecords[zcurrent].z_time = ztime++;
+		  zrecords[zcurrent].z_opcode = ZOP_ALLOC;
+			
+		  for (i = 0; i < numsaved; i++)
+		        zrecords[zcurrent].z_pc[i] = bt[i];
+
+		  for (; i < MAX_DEPTH; i++)
+			zrecords[zcurrent].z_pc[i] = 0;
+	
+		  zcurrent++;
+	
+		  if (zcurrent >= log_records)
+		          zcurrent = 0;
 	}
 
 	if ((addr == 0) && !canblock && (zone->async_pending == FALSE) && (zone->exhaustible == FALSE) && (!vm_pool_low())) {
@@ -922,6 +1190,17 @@ zfree(
 	void 		*addr)
 {
 	vm_offset_t	elem = (vm_offset_t) addr;
+	void		*bt[MAX_DEPTH];			/* only used if zone logging is enable via boot-args */
+	int		numsaved = 0;
+
+	assert(zone != ZONE_NULL);
+
+	/*
+	 * If zone logging is turned on and this is the zone we're tracking, grab a backtrace.
+	 */
+
+	if (DO_LOGGING(zone))
+		numsaved = OSBacktrace(&bt[0], MAX_DEPTH);
 
 #if MACH_ASSERT
 	/* Basic sanity checks */
@@ -945,6 +1224,61 @@ zfree(
 	}
 
 	lock_zone(zone);
+
+	/*
+	 * See if we're doing logging on this zone.  There are two styles of logging used depending on
+	 * whether we're trying to catch a leak or corruption.  See comments above in zalloc for details.
+	 */
+
+	if (DO_LOGGING(zone)) {
+	        int  i;
+
+		if (check_freed_element) {
+
+			/*
+			 * We're logging to catch a corruption.  Add a record of this zfree operation
+			 * to log.
+			 */
+
+			if (zrecords[zcurrent].z_element == NULL)
+				zrecorded++;
+
+			zrecords[zcurrent].z_element = (void *)addr;
+			zrecords[zcurrent].z_time = ztime++;
+			zrecords[zcurrent].z_opcode = ZOP_FREE;
+
+			for (i = 0; i < numsaved; i++)
+				zrecords[zcurrent].z_pc[i] = bt[i];
+
+			for (; i < MAX_DEPTH; i++)
+				zrecords[zcurrent].z_pc[i] = 0;
+
+			zcurrent++;
+
+			if (zcurrent >= log_records)
+				zcurrent = 0;
+
+		} else {
+
+			/*
+			 * We're logging to catch a leak. Remove any record we might have for this
+			 * element since it's being freed.  Note that we may not find it if the buffer
+			 * overflowed and that's OK.  Since the log is of a limited size, old records
+			 * get overwritten if there are more zallocs than zfrees.
+			 */
+	
+		        for (i = 0; i < log_records; i++) {
+			        if (zrecords[i].z_element == addr) {
+				        zrecords[i].z_element = NULL;
+					zcurrent = i;
+					zrecorded--;
+					break;
+				}
+			}
+		}
+	}
+
+
 #if	ZONE_DEBUG
 	if (zone_debug_enabled(zone)) {
 		queue_t tmp_elem;

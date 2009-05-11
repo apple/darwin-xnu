@@ -161,6 +161,16 @@ dtrace_ptss_allocate_page(struct proc* p)
 	mach_vm_address_t addr = 0LL;
 	mach_vm_size_t size = PAGE_SIZE; // We need some way to assert that this matches vm_map_round_page() !!!
 
+#if CONFIG_EMBEDDED
+	/* The embedded OS has extra permissions for writable and executable pages. We can't pass in the flags
+	 * we need for the correct permissions from mach_vm_allocate, so need to call mach_vm_map directly. */
+	vm_map_offset_t map_addr = 0;
+	kern_return_t kr = mach_vm_map(map, &map_addr, size, 0, VM_FLAGS_ANYWHERE, IPC_PORT_NULL, 0, FALSE, VM_PROT_READ|VM_PROT_EXECUTE, VM_PROT_READ|VM_PROT_EXECUTE, VM_INHERIT_DEFAULT);
+	if (kr != KERN_SUCCESS) {
+		goto err;
+	}
+	addr = map_addr;
+#else
 	kern_return_t kr = mach_vm_allocate(map, &addr, size, VM_FLAGS_ANYWHERE);
 	if (kr != KERN_SUCCESS) {
 		goto err;
@@ -171,6 +181,7 @@ dtrace_ptss_allocate_page(struct proc* p)
 		mach_vm_deallocate(map, addr, size);
 		goto err;
 	}	
+#endif
 
 	// Chain the page entries.
 	int i;

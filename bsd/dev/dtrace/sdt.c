@@ -657,6 +657,7 @@ void
 sdt_provide_module(void *arg, struct modctl *ctl)
 {
 #pragma unused(ctl)
+#pragma unused(arg)
     __sdt_provide_module(arg, &g_sdt_kernctl);
 
 	sdt_probedesc_t *sdpd = g_sdt_mach_module.sdt_probes;

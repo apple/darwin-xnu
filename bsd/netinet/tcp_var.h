@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -688,7 +688,7 @@ struct rmxp_tao *
 	 tcp_gettaocache(struct inpcb *);
 void	 tcp_init(void) __attribute__((section("__TEXT, initcode")));
 void	 tcp_input(struct mbuf *, int);
-void	 tcp_mss(struct tcpcb *, int);
+void	 tcp_mss(struct tcpcb *, int, unsigned int);
 int	 tcp_mssopt(struct tcpcb *);
 void	 tcp_drop_syn_sent(struct inpcb *, int);
 void	 tcp_mtudisc(struct inpcb *, int);
@@ -697,9 +697,9 @@ struct tcpcb *
 int	 tcp_output(struct tcpcb *);
 void	 tcp_quench(struct inpcb *, int);
 void	 tcp_respond(struct tcpcb *, void *,
-	    struct tcphdr *, struct mbuf *, tcp_seq, tcp_seq, int, ifnet_t);
-struct rtentry *
-	 tcp_rtlookup(struct inpcb *);
+	    struct tcphdr *, struct mbuf *, tcp_seq, tcp_seq, int,
+	    unsigned int);
+struct rtentry *tcp_rtlookup(struct inpcb *, unsigned int);
 void	 tcp_setpersist(struct tcpcb *);
 void	 tcp_slowtimo(void);
 struct tcptemp *

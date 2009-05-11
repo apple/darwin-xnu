@@ -420,6 +420,7 @@ LEAF_ENTRY(hw_lock_to)
 	push	%ebx
 	mov	%edx,%edi
 
+	lfence
 	rdtsc				/* read cyclecount into %edx:%eax */
 	lfence
 	addl	%ecx,%eax		/* fetch and timeout */
@@ -442,6 +443,7 @@ LEAF_ENTRY(hw_lock_to)
 	/*
 	 * Here after spinning INNER_LOOP_COUNT times, check for timeout
 	 */
+	lfence
 	rdtsc				/* cyclecount into %edx:%eax */
 	lfence
 	cmpl	%ecx,%edx		/* compare high-order 32-bits */

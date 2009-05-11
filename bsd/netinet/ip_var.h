@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -195,11 +195,19 @@ struct ip_linklocal_stat {
 #define	IP_NOIPSEC		0x4		/* No IPSec processing */
 #define	IP_ROUTETOIF		SO_DONTROUTE	/* bypass routing tables (0x0010) */
 #define	IP_ALLOWBROADCAST	SO_BROADCAST	/* can send broadcast packets (0x0020) */
+#define	IP_OUTARGS		0x100		/* has ancillary output info */
 
 struct ip;
 struct inpcb;
 struct route;
 struct sockopt;
+
+/*
+ * Extra information passed to ip_output when IP_OUTARGS is set.
+ */
+struct ip_out_args {
+	unsigned int	ipoa_ifscope;	/* interface scope */
+};
 
 extern struct	ipstat	ipstat;
 #if !defined(RANDOM_IP_ID) || RANDOM_IP_ID == 0
@@ -214,6 +222,7 @@ extern int	(*legal_vif_num)(int);
 extern u_long	(*ip_mcast_src)(int);
 extern int rsvp_on;
 extern struct	pr_usrreqs rip_usrreqs;
+extern int	ip_doscopedroute;
 
 int	 ip_ctloutput(struct socket *, struct sockopt *sopt);
 void	 ip_drain(void);
@@ -221,10 +230,10 @@ void	 ip_freemoptions(struct ip_moptions *);
 void	 ip_init(void) __attribute__((section("__TEXT, initcode")));
 extern int	 (*ip_mforward)(struct ip *, struct ifnet *, struct mbuf *,
 			  struct ip_moptions *);
-int	 ip_output(struct mbuf *,
-	    struct mbuf *, struct route *, int, struct ip_moptions *, struct ifnet *);
-int	 ip_output_list(struct mbuf *, int,
-	    struct mbuf *, struct route *, int, struct ip_moptions *, struct ifnet *);
+extern int ip_output(struct mbuf *, struct mbuf *, struct route *, int,
+    struct ip_moptions *, struct ip_out_args *);
+extern int ip_output_list(struct mbuf *, int, struct mbuf *, struct route *,
+    int, struct ip_moptions *, struct ip_out_args *);
 struct in_ifaddr *
 	 ip_rtaddr(struct in_addr, struct route *);
 void	 ip_savecontrol(struct inpcb *, struct mbuf **, struct ip *,

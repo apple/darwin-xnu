@@ -451,7 +451,8 @@ print_backtrace(struct savearea *ssp)
 	while(pbtcnt);							/* Wait for completion */
 pbt_exit:
 	panic_display_system_configuration();
-
+	panic_display_zprint();
+        dump_kext_info(&kdb_log);
 	return;
 }
 

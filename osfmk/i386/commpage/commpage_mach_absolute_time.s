@@ -56,6 +56,7 @@ Lnanotime:
 	testl	%esi,%esi			/* if being updated, loop until stable */
 	jz	0b
 
+	lfence
 	rdtsc					/* get TSC in %edx:%eax */
 	lfence
 
@@ -99,7 +100,9 @@ Lnanotime_slow:
 	testl	%esi,%esi			/* if generation is 0, data being changed */
 	jz	0b				/* so loop until stable */
 
+	lfence
 	rdtsc					/* get TSC in %edx:%eax */
+	lfence
 	subl	_COMM_PAGE_NT_TSC_BASE,%eax
 	sbbl	_COMM_PAGE_NT_TSC_BASE+4,%edx
 
@@ -161,6 +164,7 @@ Lnanotime_64:					// NB: must preserve r9, r10, and r11
 	movl	_NT_GENERATION(%rsi),%r8d	// get generation
 	testl	%r8d,%r8d			// if 0, data is being changed...
 	jz	1b				// ...so loop until stable
+	lfence
 	rdtsc					// edx:eax := tsc
 	lfence
 	shlq	$32,%rdx			// rax := ((edx << 32) | eax), ie 64-bit tsc

@@ -39,6 +39,7 @@ ENTRY(PE_get_timebase)
 
         movl    S_ARG0, %ecx
 
+	lfence
         rdtsc
 	lfence
 

@@ -1040,6 +1040,16 @@ icmp6_mtudisc_update(ip6cp, validated)
 	if (!validated)
 		return;
 
+	/*
+	 * In case the suggested mtu is less than IPV6_MMTU, we
+	 * only need to remember that it was for above mentioned
+	 * "alwaysfrag" case.
+	 * Try to be as close to the spec as possible.
+	 */
+	if (mtu < IPV6_MMTU)
+		mtu = IPV6_MMTU - 8;
+
+
 	bzero(&sin6, sizeof(sin6));
 	sin6.sin6_family = PF_INET6;
 	sin6.sin6_len = sizeof(struct sockaddr_in6);
@@ -2061,8 +2071,10 @@ icmp6_reflect(m, off)
 		 */
 		bzero(&ro, sizeof(ro));
 		src = in6_selectsrc(&sa6_src, NULL, NULL, &ro, NULL, &src_storage, &e);
-		if (ro.ro_rt)
+		if (ro.ro_rt) {
 			rtfree(ro.ro_rt); /* XXX: we could use this */
+			ro.ro_rt = NULL;
+		}
 		if (src == NULL) {
 			nd6log((LOG_DEBUG,
 			    "icmp6_reflect: source can't be determined: "
@@ -2307,10 +2319,9 @@ icmp6_redirect_input(m, off)
 		bcopy(&redtgt6, &sgw.sin6_addr, sizeof(struct in6_addr));
 		bcopy(&reddst6, &sdst.sin6_addr, sizeof(struct in6_addr));
 		bcopy(&src6, &ssrc.sin6_addr, sizeof(struct in6_addr));
-		rtredirect((struct sockaddr *)&sdst, (struct sockaddr *)&sgw,
-			   (struct sockaddr *)NULL, RTF_GATEWAY | RTF_HOST,
-			   (struct sockaddr *)&ssrc,
-			   (struct rtentry **)NULL);
+		rtredirect(ifp, (struct sockaddr *)&sdst,
+		    (struct sockaddr *)&sgw, NULL, RTF_GATEWAY | RTF_HOST,
+		    (struct sockaddr *)&ssrc, NULL);
 	}
 	/* finally update cached route in each socket via pfctlinput */
     {

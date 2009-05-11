@@ -22,3 +22,6 @@ _rtc_clock_stepping
 _smp_initialized
 __ZN24IOBufferMemoryDescriptor20initWithPhysicalMaskEP4taskmyyy
 __ZN24IOBufferMemoryDescriptor22inTaskWithPhysicalMaskEP4taskmyy
+_strcat
+_strcpy
+_sprintf

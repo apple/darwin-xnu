@@ -1556,6 +1556,9 @@ workq_ops(struct proc *p, struct workq_ops_args  *uap, __unused register_t *retv
 
 		        KERNEL_DEBUG(0xefffd008 | DBG_FUNC_NONE, (int)item, 0, 0, 0, 0);
 
+			if ((prio < 0) || (prio >= 5))
+				return (EINVAL);
+
 			workqueue_lock_spin(p);
 
 			if ((wq = (struct workqueue *)p->p_wqptr) == NULL) {
@@ -1567,6 +1570,9 @@ workq_ops(struct proc *p, struct workq_ops_args  *uap, __unused register_t *retv
 		        }
 			break;
 		case WQOPS_QUEUE_REMOVE: {
+
+			if ((prio < 0) || (prio >= 5))
+				return (EINVAL);
 
 			workqueue_lock_spin(p);
 

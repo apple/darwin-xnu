@@ -36,7 +36,13 @@ enum {
     kIOMemoryPurgeable	      		= 0x00000040,
     kIOMemorySharingTypeMask		= 0x000f0000,
     kIOMemoryUnshared			= 0x00000000,
-    kIOMemoryKernelUserShared		= 0x00010000
+    kIOMemoryKernelUserShared		= 0x00010000,
+    // shared IOMemoryDescriptor options for IOBufferMemoryDescriptor:
+    kIOBufferDescriptorMemoryFlags	= kIOMemoryDirectionMask 
+#ifdef XNU_KERNEL_PRIVATE
+					| kIOMemoryAutoPrepare
+#endif
+					| kIOMemoryThreadSafe
 };
 
 #define _IOBUFFERMEMORYDESCRIPTOR_INTASKWITHOPTIONS_	1

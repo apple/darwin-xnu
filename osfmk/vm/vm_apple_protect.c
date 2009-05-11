@@ -412,6 +412,7 @@ apple_protect_pager_data_request(
 	pl_count = length / PAGE_SIZE;
 	for (cur_offset = 0; cur_offset < length; cur_offset += PAGE_SIZE) {
 		ppnum_t dst_pnum;
+		int	type_of_fault;
 
 		if (!upl_page_present(upl_pl, cur_offset / PAGE_SIZE)) {
 			/* this page is not in the UPL: skip it */
@@ -435,7 +436,7 @@ apple_protect_pager_data_request(
 				   &prot,
 				   &src_page,
 				   &top_page,
-				   NULL,
+				   &type_of_fault,
 				   &error_code,
 				   FALSE,
 				   FALSE,

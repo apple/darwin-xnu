@@ -131,7 +131,15 @@ static struct lockf *lf_getblock(struct lockf *);
 static int	 lf_getlock(struct lockf *, struct flock *);
 static int	 lf_setlock(struct lockf *);
 static int	 lf_split(struct lockf *, struct lockf *);
-static void	 lf_wakelock(struct lockf *);
+static void	 lf_wakelock(struct lockf *, boolean_t);
+
+
+/*
+ * in order to mitigate risk
+ * don't switch to new wake-one method unless
+ * we have at least this many waiters to wake up
+ */
+#define SAFE_WAITER_LIMIT    20
 
 
 /*
@@ -259,8 +267,12 @@ lf_advlock(struct vnop_advlock_args *ap)
 	lock->lf_type = fl->l_type;
 	lock->lf_head = head;
 	lock->lf_next = (struct lockf *)0;
+	lock->lf_waiters = 0;
 	TAILQ_INIT(&lock->lf_blkhd);
 	lock->lf_flags = ap->a_flags;
+
+	if (ap->a_flags & F_FLOCK)
+	        lock->lf_flags |= F_WAKE1_SAFE;
 
 	lck_mtx_lock(&vp->v_lock);	/* protect the lockf list */
 	/*
@@ -502,6 +514,11 @@ lf_setlock(struct lockf *lock)
 		 */
 		lock->lf_next = block;
 		TAILQ_INSERT_TAIL(&block->lf_blkhd, lock, lf_block);
+		block->lf_waiters++;
+
+		if ( !(lock->lf_flags & F_FLOCK))
+		        block->lf_flags &= ~F_WAKE1_SAFE;
+
 #ifdef LOCKF_DEBUGGING
 		if (lockf_debug & 1) {
 			lf_print("lf_setlock: blocking on", block);
@@ -509,6 +526,20 @@ lf_setlock(struct lockf *lock)
 		}
 #endif /* LOCKF_DEBUGGING */
 		error = msleep(lock, &vp->v_lock, priority, lockstr, 0);
+
+		if (!TAILQ_EMPTY(&lock->lf_blkhd)) {
+			struct lockf *tlock;
+
+		        if ((block = lf_getblock(lock))) {
+			        TAILQ_FOREACH(tlock, &lock->lf_blkhd, lf_block) {
+				        tlock->lf_next = block;
+				}
+			        TAILQ_CONCAT(&block->lf_blkhd, &lock->lf_blkhd, lf_block);
+
+				block->lf_waiters += lock->lf_waiters;
+				lock->lf_waiters = 0;
+			}
+		}
 		if (error) {	/* XXX */
 			/*
 			 * We may have been awakened by a signal and/or by a
@@ -520,8 +551,12 @@ lf_setlock(struct lockf *lock)
 			 */
 			if (lock->lf_next) {
 				TAILQ_REMOVE(&lock->lf_next->lf_blkhd, lock, lf_block);
+				lock->lf_next->lf_waiters--;
 				lock->lf_next = NOLOCKF;
 			}
+			if (!TAILQ_EMPTY(&lock->lf_blkhd))
+			        lf_wakelock(lock, TRUE);
+			  
 			FREE(lock, M_LOCKF);
 			return (error);
 		}	/* XXX */
@@ -565,7 +600,7 @@ lf_setlock(struct lockf *lock)
 			 */
 			if (lock->lf_type == F_RDLCK &&
 			    overlap->lf_type == F_WRLCK)
-				lf_wakelock(overlap);
+			        lf_wakelock(overlap, TRUE);
 			overlap->lf_type = lock->lf_type;
 			FREE(lock, M_LOCKF);
 			lock = overlap; /* for lf_coelesce_adjacent() */
@@ -595,7 +630,7 @@ lf_setlock(struct lockf *lock)
 					return (ENOLCK);
 				}
 			}
-			lf_wakelock(overlap);
+			lf_wakelock(overlap, TRUE);
 			break;
 
 		case OVERLAP_CONTAINED_BY_LOCK:
@@ -605,14 +640,18 @@ lf_setlock(struct lockf *lock)
 			 */
 			if (lock->lf_type == F_RDLCK &&
 			    overlap->lf_type == F_WRLCK) {
-				lf_wakelock(overlap);
+			        lf_wakelock(overlap, TRUE);
 			} else {
 				while (!TAILQ_EMPTY(&overlap->lf_blkhd)) {
 					ltmp = TAILQ_FIRST(&overlap->lf_blkhd);
 					TAILQ_REMOVE(&overlap->lf_blkhd, ltmp,
 					    lf_block);
+					overlap->lf_waiters--;
+
 					TAILQ_INSERT_TAIL(&lock->lf_blkhd,
 					    ltmp, lf_block);
+					lock->lf_waiters++;
+
 					ltmp->lf_next = lock;
 				}
 			}
@@ -637,7 +676,7 @@ lf_setlock(struct lockf *lock)
 			overlap->lf_next = lock;
 			overlap->lf_end = lock->lf_start - 1;
 			prev = &lock->lf_next;
-			lf_wakelock(overlap);
+			lf_wakelock(overlap, TRUE);
 			needtolink = 0;
 			continue;
 
@@ -650,7 +689,7 @@ lf_setlock(struct lockf *lock)
 				lock->lf_next = overlap;
 			}
 			overlap->lf_start = lock->lf_end + 1;
-			lf_wakelock(overlap);
+			lf_wakelock(overlap, TRUE);
 			break;
 		}
 		break;
@@ -704,7 +743,7 @@ lf_clearlock(struct lockf *unlock)
 		/*
 		 * Wakeup the list of locks to be retried.
 		 */
-		lf_wakelock(overlap);
+	        lf_wakelock(overlap, FALSE);
 
 		switch (ovcase) {
 		case OVERLAP_NONE:	/* satisfy compiler enum/switch */
@@ -1048,19 +1087,42 @@ lf_split(struct lockf *lock1, struct lockf *lock2)
  *		in a real-world performance problem.
  */
 static void
-lf_wakelock(struct lockf *listhead)
+lf_wakelock(struct lockf *listhead, boolean_t force_all)
 {
 	struct lockf *wakelock;
+	boolean_t wake_all = TRUE;
+
+	if (force_all == FALSE && (listhead->lf_flags & F_WAKE1_SAFE) && listhead->lf_waiters > SAFE_WAITER_LIMIT)
+	        wake_all = FALSE;
 
 	while (!TAILQ_EMPTY(&listhead->lf_blkhd)) {
 		wakelock = TAILQ_FIRST(&listhead->lf_blkhd);
 		TAILQ_REMOVE(&listhead->lf_blkhd, wakelock, lf_block);
+		listhead->lf_waiters--;
+
 		wakelock->lf_next = NOLOCKF;
 #ifdef LOCKF_DEBUGGING
 		if (lockf_debug & 2)
 			lf_print("lf_wakelock: awakening", wakelock);
 #endif /* LOCKF_DEBUGGING */
+		if (wake_all == FALSE) {
+
+		        TAILQ_CONCAT(&wakelock->lf_blkhd, &listhead->lf_blkhd, lf_block);
+			wakelock->lf_waiters = listhead->lf_waiters;
+			listhead->lf_waiters = 0;
+
+			if (!TAILQ_EMPTY(&wakelock->lf_blkhd)) {
+			        struct lockf *tlock;
+
+			        TAILQ_FOREACH(tlock, &wakelock->lf_blkhd, lf_block) {
+				        tlock->lf_next = wakelock;
+				}
+			}
+		}
 		wakeup(wakelock);
+
+		if (wake_all == FALSE)
+		        break;
 	}
 }
 

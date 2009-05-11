@@ -308,6 +308,7 @@ typedef struct mach_port_status {
 #define MACH_PORT_QLIMIT_BASIC		((mach_port_msgcount_t) 5)
 #define MACH_PORT_QLIMIT_SMALL		((mach_port_msgcount_t) 16)
 #define MACH_PORT_QLIMIT_LARGE		((mach_port_msgcount_t) 1024)
+#define MACH_PORT_QLIMIT_KERNEL		((mach_port_msgcount_t) 65536)
 #define MACH_PORT_QLIMIT_MIN		MACH_PORT_QLIMIT_ZERO
 #define MACH_PORT_QLIMIT_DEFAULT	MACH_PORT_QLIMIT_BASIC
 #define MACH_PORT_QLIMIT_MAX		MACH_PORT_QLIMIT_LARGE

@@ -40,6 +40,7 @@
 
 #include <kern/kern_types.h>
 #include <kern/startup.h>
+#include <kern/timer_queue.h>
 #include <kern/processor.h>
 #include <kern/cpu_number.h>
 #include <kern/cpu_data.h>
@@ -145,6 +146,7 @@ decl_mutex_data(static, mp_bc_lock);
 static	volatile int 	debugger_cpu = -1;
 
 static void	mp_cpus_call_action(void); 
+static void	mp_call_PM(void);
 
 #if GPROF
 /*
@@ -208,13 +210,51 @@ mp_wait_for_cpu_up(int slot_num, unsigned int iters, unsigned int usecdelay)
 	}
 }
 
+typedef struct {
+	int		target_cpu;
+	int		target_lapic;
+	int		starter_cpu;
+ 	boolean_t	is_nehalem;
+} processor_start_info_t;
+
+static processor_start_info_t start_info;
+
+static void
+start_cpu(void *arg)
+{
+	int			i = 1000;
+	processor_start_info_t	*psip = (processor_start_info_t *) arg;
+
+	/* Ignore this if the current processor is not the starter */
+	if (cpu_number() != psip->starter_cpu)
+		return;
+
+	LAPIC_WRITE(ICRD, psip->target_lapic << LAPIC_ICRD_DEST_SHIFT);
+	LAPIC_WRITE(ICR, LAPIC_ICR_DM_INIT);
+	delay(psip->is_nehalem ? 100 : 10000);
+
+	LAPIC_WRITE(ICRD, psip->target_lapic << LAPIC_ICRD_DEST_SHIFT);
+	LAPIC_WRITE(ICR, LAPIC_ICR_DM_STARTUP|(MP_BOOT>>12));
+
+	if (!psip->is_nehalem) {
+		delay(200);
+		LAPIC_WRITE(ICRD, psip->target_lapic << LAPIC_ICRD_DEST_SHIFT);
+		LAPIC_WRITE(ICR, LAPIC_ICR_DM_STARTUP|(MP_BOOT>>12));
+	}
+
+#ifdef	POSTCODE_DELAY
+	/* Wait much longer if postcodes are displayed for a delay period. */
+	i *= 10000;
+#endif
+	mp_wait_for_cpu_up(psip->target_cpu, i*100, 100);
+}
+
 kern_return_t
 intel_startCPU(
 	int	slot_num)
 {
-
-	int	i = 1000;
-	int	lapic = cpu_to_lapic[slot_num];
+	int		lapic = cpu_to_lapic[slot_num];
+	boolean_t	istate;
 
 	assert(lapic != -1);
 
@@ -232,35 +272,33 @@ intel_startCPU(
 	else
 		cpu_desc_init(cpu_datap(slot_num), FALSE);
 
-	/* Serialize use of the slave boot stack. */
+	/* Serialize use of the slave boot stack, etc. */
 	mutex_lock(&mp_cpu_boot_lock);
 
-	mp_disable_preemption();
+	istate = ml_set_interrupts_enabled(FALSE);
 	if (slot_num == get_cpu_number()) {
-		mp_enable_preemption();
+		ml_set_interrupts_enabled(istate);
 		mutex_unlock(&mp_cpu_boot_lock);
 		return KERN_SUCCESS;
 	}
 
-	LAPIC_WRITE(ICRD, lapic << LAPIC_ICRD_DEST_SHIFT);
-	LAPIC_WRITE(ICR, LAPIC_ICR_DM_INIT);
-	delay(10000);
+	start_info.starter_cpu = cpu_number();
+	start_info.is_nehalem = (cpuid_info()->cpuid_model
+					== CPUID_MODEL_NEHALEM);
+	start_info.target_cpu = slot_num;
+	start_info.target_lapic = lapic;
 
-	LAPIC_WRITE(ICRD, lapic << LAPIC_ICRD_DEST_SHIFT);
-	LAPIC_WRITE(ICR, LAPIC_ICR_DM_STARTUP|(MP_BOOT>>12));
-	delay(200);
+	/*
+	 * For Nehalem, perform the processor startup with all running
+	 * processors rendezvous'ed. This is required during periods when
+	 * the cache-disable bit is set for MTRR/PAT initialization.
+	 */
+	if (start_info.is_nehalem)
+		mp_rendezvous_no_intrs(start_cpu, (void *) &start_info);
+	else
+		start_cpu((void *) &start_info);
 
-	LAPIC_WRITE(ICRD, lapic << LAPIC_ICRD_DEST_SHIFT);
-	LAPIC_WRITE(ICR, LAPIC_ICR_DM_STARTUP|(MP_BOOT>>12));
-	delay(200);
-
-#ifdef	POSTCODE_DELAY
-	/* Wait much longer if postcodes are displayed for a delay period. */
-	i *= 10000;
-#endif
-	mp_wait_for_cpu_up(slot_num, i, 10000);
-
-	mp_enable_preemption();
+	ml_set_interrupts_enabled(istate);
 	mutex_unlock(&mp_cpu_boot_lock);
 
 	if (!cpu_datap(slot_num)->cpu_running) {
@@ -432,6 +470,10 @@ cpu_signal_handler(x86_saved_state_t *regs)
 			DBGLOG(cpu_handle,my_cpu,MP_CALL);
 			i_bit_clear(MP_CALL, my_word);
 			mp_cpus_call_action();
+		} else if (i_bit(MP_CALL_PM, my_word)) {
+			DBGLOG(cpu_handle,my_cpu,MP_CALL_PM);
+			i_bit_clear(MP_CALL_PM, my_word);
+			mp_call_PM();
 		}
 	} while (*my_word);
 
@@ -546,6 +588,36 @@ cpu_NMI_interrupt(int cpu)
 		LAPIC_WRITE(ICR, LAPIC_VECTOR(INTERPROCESSOR)|LAPIC_ICR_DM_NMI);
 		(void) ml_set_interrupts_enabled(state);
 	}
+}
+
+static volatile void	(*mp_PM_func)(void) = NULL;
+
+static void
+mp_call_PM(void)
+{
+	assert(!ml_get_interrupts_enabled());
+
+	if (mp_PM_func != NULL)
+		mp_PM_func();
+}
+
+void
+cpu_PM_interrupt(int cpu)
+{
+	assert(!ml_get_interrupts_enabled());
+
+	if (mp_PM_func != NULL) {
+		if (cpu == cpu_number())
+			mp_PM_func();
+		else
+			i386_signal_cpu(cpu, MP_CALL_PM, ASYNC);
+	}
+}
+
+void
+PM_interrupt_register(void (*fn)(void))
+{
+	mp_PM_func = fn;
 }
 
 void
@@ -977,6 +1049,8 @@ i386_activate_cpu(void)
 	simple_unlock(&x86_topo_lock);
 }
 
+extern void etimer_timer_expire(void	*arg);
+
 void
 i386_deactivate_cpu(void)
 {
@@ -987,6 +1061,10 @@ i386_deactivate_cpu(void)
 	simple_lock(&x86_topo_lock);
 	cdp->cpu_running = FALSE;
 	simple_unlock(&x86_topo_lock);
+
+	timer_queue_shutdown(&cdp->rtclock_timer.queue);
+	cdp->rtclock_timer.deadline = EndOfAllTime;
+	mp_cpus_call(cpu_to_cpumask(master_cpu), ASYNC, etimer_timer_expire, NULL);
 
 	/*
 	 * In case a rendezvous/braodcast/call was initiated to this cpu
@@ -1188,7 +1266,7 @@ void
 cause_ast_check(
 	processor_t	processor)
 {
-	int	cpu = PROCESSOR_DATA(processor, slot_num);
+	int	cpu = processor->cpu_num;
 
 	if (cpu != cpu_number()) {
 		i386_signal_cpu(cpu, MP_AST, ASYNC);

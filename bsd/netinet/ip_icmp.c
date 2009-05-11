@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -641,10 +641,9 @@ reflect:
 		}
 #endif
 		icmpsrc.sin_addr = icp->icmp_ip.ip_dst;
-		rtredirect((struct sockaddr *)&icmpsrc,
-		  (struct sockaddr *)&icmpdst,
-		  (struct sockaddr *)0, RTF_GATEWAY | RTF_HOST,
-		  (struct sockaddr *)&icmpgw, (struct rtentry **)0);
+		rtredirect(m->m_pkthdr.rcvif, (struct sockaddr *)&icmpsrc,
+		  (struct sockaddr *)&icmpdst, NULL, RTF_GATEWAY | RTF_HOST,
+		  (struct sockaddr *)&icmpgw, NULL);
 		pfctlinput(PRC_REDIRECT_HOST, (struct sockaddr *)&icmpsrc);
 #if IPSEC
 		key_sa_routechange((struct sockaddr *)&icmpsrc);
@@ -826,6 +825,10 @@ icmp_send(struct mbuf *m, struct mbuf *opts)
 	int hlen;
 	struct icmp *icp;
 	struct route ro;
+	struct ip_out_args ipoa = { IFSCOPE_NONE };
+
+	if ((m->m_flags & M_PKTHDR) && m->m_pkthdr.rcvif != NULL)
+		ipoa.ipoa_ifscope = m->m_pkthdr.rcvif->if_index;
 
 	hlen = IP_VHL_HL(ip->ip_vhl) << 2;
 	m->m_data += hlen;
@@ -849,9 +852,11 @@ icmp_send(struct mbuf *m, struct mbuf *opts)
 	}
 #endif
 	bzero(&ro, sizeof ro);
-	(void) ip_output(m, opts, &ro, 0, NULL, NULL);
-	if (ro.ro_rt)
+	(void) ip_output(m, opts, &ro, IP_OUTARGS, NULL, &ipoa);
+	if (ro.ro_rt) {
 		rtfree(ro.ro_rt);
+		ro.ro_rt = NULL;
+	}
 }
 
 n_time
@@ -1075,6 +1080,10 @@ icmp_dgram_ctloutput(struct socket *so, struct sockopt *sopt)
 #endif
 		case IP_STRIPHDR:
 		case IP_RECVTTL:
+		case IP_BOUND_IF:
+#if CONFIG_FORCE_OUT_IFP
+		case IP_FORCE_OUT_IFP:
+#endif
 			error = rip_ctloutput(so, sopt);
 			break;
 		

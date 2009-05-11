@@ -654,6 +654,4 @@ sysctl_mib_init(void)
 # warning we do not support this platform yet
 #endif /* __ppc__ */
 
-
 }
-

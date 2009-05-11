@@ -424,7 +424,13 @@ bad2:
 bad:
 	ndp->ni_vp = NULL;
 	if (vp) {
-	        vnode_put(vp);
+#if NAMEDRSRCFORK
+		if ((vnode_isnamedstream(vp)) && (vp->v_parent != NULLVP) &&
+					(vnode_isshadow (vp))) {
+			vnode_recycle(vp);
+		}
+#endif
+		vnode_put(vp);
 		/*
 		 * Check for a race against unlink.  We had a vnode
 		 * but according to vnode_authorize or VNOP_OPEN it
@@ -489,7 +495,7 @@ vn_close(struct vnode *vp, int flags, vfs_context_t ctx)
 	/* Sync data from resource fork shadow file if needed. */
 	if ((vp->v_flag & VISNAMEDSTREAM) && 
 	    (vp->v_parent != NULLVP) &&
-	    !(vp->v_parent->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS)) {
+	    (vnode_isshadow(vp))) {
 		if (flags & FWASWRITTEN) {
 			(void) vnode_flushnamedstream(vp->v_parent, vp, ctx);
 		}

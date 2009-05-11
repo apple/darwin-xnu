@@ -43,6 +43,8 @@ void debug_topology_print(void);
 #define DBG(x...)
 #endif /* TOPO_DEBUG */
 
+void validate_topology(void);
+
 #define bitmask(h,l)	((bit(h)|(bit(h)-1)) & ~(bit(l)-1))
 #define bitfield(x,h,l)	(((x) & bitmask(h,l)) >> l)
 
@@ -187,10 +189,6 @@ x86_LLC_info(void)
 	topoParms.nCoresSharingLLC = cpuinfo->core_count;
     if (nCPUsSharing > cpuinfo->thread_count)
 	topoParms.nLCPUsSharingLLC = cpuinfo->thread_count;
-
-
-    if (nCPUsSharing > cpuinfo->thread_count)
-	topoParms.maxSharingLLC = cpuinfo->thread_count;
 }
 
 static void
@@ -1037,6 +1035,180 @@ cpu_thread_halt(void)
 	pmCPUHalt(PM_HALT_NORMAL);
     }
     /* NOT REACHED */
+}
+
+/*
+ * Validates that the topology was built correctly.  Must be called only
+ * after the complete topology is built and no other changes are being made.
+ */
+void
+validate_topology(void)
+{
+    x86_pkg_t		*pkg;
+    x86_die_t		*die;
+    x86_core_t		*core;
+    x86_lcpu_t		*lcpu;
+    uint32_t		nDies;
+    uint32_t		nCores;
+    uint32_t		nCPUs;
+
+    /*
+     * XXX
+     *
+     * Right now this only works if the number of CPUs started is the total
+     * number of CPUs.  However, when specifying cpus=n the topology is only
+     * partially constructed and the checks below will fail.
+     *
+     * We should *always* build the complete topology and only start the CPUs
+     * indicated by cpus=n.  Until that happens, this code will not check the
+     * topology if the number of cpus defined is < that described the the
+     * topology parameters.
+     */
+    nCPUs = topoParms.nPackages * topoParms.nLThreadsPerPackage;
+    if (nCPUs > real_ncpus)
+	return;
+
+    pkg = x86_pkgs;
+    while (pkg != NULL) {
+	/*
+	 * Make sure that the package has the correct number of dies.
+	 */
+	nDies = 0;
+	die = pkg->dies;
+	while (die != NULL) {
+	    if (die->package == NULL)
+		panic("Die(%d)->package is NULL",
+		      die->pdie_num);
+	    if (die->package != pkg)
+		panic("Die %d points to package %d, should be %d",
+		      die->pdie_num, die->package->lpkg_num, pkg->lpkg_num);
+
+	    DBG("Die(%d)->package %d\n",
+		die->pdie_num, pkg->lpkg_num);
+
+	    /*
+	     * Make sure that the die has the correct number of cores.
+	     */
+	    DBG("Die(%d)->cores: ");
+	    nCores = 0;
+	    core = die->cores;
+	    while (core != NULL) {
+		if (core->die == NULL)
+		    panic("Core(%d)->die is NULL",
+			  core->pcore_num);
+		if (core->die != die)
+		    panic("Core %d points to die %d, should be %d",
+			  core->pcore_num, core->die->pdie_num, die->pdie_num);
+		nCores += 1;
+		DBG("%d ", core->pcore_num);
+		core = core->next_in_die;
+	    }
+	    DBG("\n");
+
+	    if (nCores != topoParms.nLCoresPerDie)
+		panic("Should have %d Cores, but only found %d for Die %d",
+		      topoParms.nLCoresPerDie, nCores, die->pdie_num);
+
+	    /*
+	     * Make sure that the die has the correct number of CPUs.
+	     */
+	    DBG("Die(%d)->lcpus: ", die->pdie_num);
+	    nCPUs = 0;
+	    lcpu = die->lcpus;
+	    while (lcpu != NULL) {
+		if (lcpu->die == NULL)
+		    panic("CPU(%d)->die is NULL",
+			  lcpu->cpu_num);
+		if (lcpu->die != die)
+		    panic("CPU %d points to die %d, should be %d",
+			  lcpu->cpu_num, lcpu->die->pdie_num, die->pdie_num);
+		nCPUs += 1;
+		DBG("%d ", lcpu->cpu_num);
+		lcpu = lcpu->next_in_die;
+	    }
+	    DBG("\n");
+
+	    if (nCPUs != topoParms.nLThreadsPerDie)
+		panic("Should have %d Threads, but only found %d for Die %d",
+		      topoParms.nLThreadsPerDie, nCPUs, die->pdie_num);
+
+	    nDies += 1;
+	    die = die->next_in_pkg;
+	}
+
+	if (nDies != topoParms.nLDiesPerPackage)
+	    panic("Should have %d Dies, but only found %d for package %d",
+		  topoParms.nLDiesPerPackage, nDies, pkg->lpkg_num);
+
+	/*
+	 * Make sure that the package has the correct number of cores.
+	 */
+	nCores = 0;
+	core = pkg->cores;
+	while (core != NULL) {
+	    if (core->package == NULL)
+		panic("Core(%d)->package is NULL",
+		      core->pcore_num);
+	    if (core->package != pkg)
+		panic("Core %d points to package %d, should be %d",
+		      core->pcore_num, core->package->lpkg_num, pkg->lpkg_num);
+	    DBG("Core(%d)->package %d\n",
+		core->pcore_num, pkg->lpkg_num);
+
+	    /*
+	     * Make sure that the core has the correct number of CPUs.
+	     */
+	    nCPUs = 0;
+	    lcpu = core->lcpus;
+	    DBG("Core(%d)->lcpus: ");
+	    while (lcpu != NULL) {
+		if (lcpu->core == NULL)
+		    panic("CPU(%d)->core is NULL",
+			  lcpu->cpu_num);
+		if (lcpu->core != core)
+		    panic("CPU %d points to core %d, should be %d",
+			  lcpu->cpu_num, lcpu->core->pcore_num, core->pcore_num);
+		DBG("%d ", lcpu->cpu_num);
+		nCPUs += 1;
+		lcpu = lcpu->next_in_core;
+	    }
+	    DBG("\n");
+
+	    if (nCPUs != topoParms.nLThreadsPerCore)
+		panic("Should have %d Threads, but only found %d for Core %d",
+		      topoParms.nLThreadsPerCore, nCPUs, core->pcore_num);
+	    nCores += 1;
+	    core = core->next_in_pkg;
+	}
+
+	if (nCores != topoParms.nLCoresPerPackage)
+	    panic("Should have %d Cores, but only found %d for package %d",
+		  topoParms.nLCoresPerPackage, nCores, pkg->lpkg_num);
+
+	/*
+	 * Make sure that the package has the correct number of CPUs.
+	 */
+	nCPUs = 0;
+	lcpu = pkg->lcpus;
+	while (lcpu != NULL) {
+	    if (lcpu->package == NULL)
+		panic("CPU(%d)->package is NULL",
+		      lcpu->cpu_num);
+	    if (lcpu->package != pkg)
+		panic("CPU %d points to package %d, should be %d",
+		      lcpu->cpu_num, lcpu->package->lpkg_num, pkg->lpkg_num);
+	    DBG("CPU(%d)->package %d\n",
+		lcpu->cpu_num, pkg->lpkg_num);
+	    nCPUs += 1;
+	    lcpu = lcpu->next_in_pkg;
+	}
+
+	if (nCPUs != topoParms.nLThreadsPerPackage)
+	    panic("Should have %d Threads, but only found %d for package %d",
+		  topoParms.nLThreadsPerPackage, nCPUs, pkg->lpkg_num);
+
+	pkg = pkg->next;
+    }
 }
 
 #if TOPO_DEBUG

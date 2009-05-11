@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -140,6 +140,7 @@ struct radix_mask {
 #define MKFree(m) { (m)->rm_mklist = rn_mkfreelist; rn_mkfreelist = (m);}
 
 typedef int walktree_f_t(struct radix_node *, void *);
+typedef int rn_matchf_t(struct radix_node *, void *);
 
 struct radix_node_head {
 	struct	radix_node *rnh_treetop;
@@ -157,8 +158,16 @@ struct radix_node_head {
 		(void *v, void *mask, struct radix_node_head *head);
 	struct	radix_node *(*rnh_matchaddr)	/* locate based on sockaddr */
 		(void *v, struct radix_node_head *head);
+	/* locate based on sockaddr and rn_matchf_t() */
+	struct	radix_node *(*rnh_matchaddr_args)
+		(void *v, struct radix_node_head *head,
+		rn_matchf_t *f, void *w);
 	struct	radix_node *(*rnh_lookup)	/* locate based on sockaddr */
 		(void *v, void *mask, struct radix_node_head *head);
+	/* locate based on sockaddr, mask and rn_matchf_t() */
+	struct	radix_node *(*rnh_lookup_args)
+		(void *v, void *mask, struct radix_node_head *head,
+		rn_matchf_t *f, void *);
 	struct	radix_node *(*rnh_matchpkt)	/* locate based on packet hdr */
 		(void *v, struct radix_node_head *head);
 	int	(*rnh_walktree)			/* traverse tree */
@@ -195,7 +204,10 @@ struct radix_node
 			struct radix_node [2]),
 	 *rn_delete(void *, void *, struct radix_node_head *),
 	 *rn_lookup(void *v_arg, void *m_arg, struct radix_node_head *head),
-	 *rn_match(void *, struct radix_node_head *);
+	 *rn_lookup_args(void *v_arg, void *m_arg, struct radix_node_head *head,
+	     rn_matchf_t *, void *),
+	 *rn_match(void *, struct radix_node_head *),
+	 *rn_match_args(void *, struct radix_node_head *, rn_matchf_t *, void *);
 
 #endif /* PRIVATE */
 #endif /* _RADIX_H_ */

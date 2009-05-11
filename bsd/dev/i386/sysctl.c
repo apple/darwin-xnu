@@ -101,6 +101,59 @@ hw_cpu_logical_per_package SYSCTL_HANDLER_ARGS
 			  sizeof(cpu_info->cpuid_logical_per_package));
 }
 
+static int
+hw_cpu_sysctl_nehalem SYSCTL_HANDLER_ARGS
+{
+	i386_cpu_info_t *cpu_info = cpuid_info();
+
+	if (cpu_info->cpuid_model != 26)
+		return ENOENT;
+
+	hw_cpu_sysctl(oidp, arg1, arg2, req);
+}
+
+static int
+hw_cpu_flex_ratio_desired SYSCTL_HANDLER_ARGS
+{
+	__unused struct sysctl_oid *unused_oidp = oidp;
+	__unused void *unused_arg1 = arg1;
+	__unused int unused_arg2 = arg2;
+	i386_cpu_info_t *cpu_info = cpuid_info();
+
+	if (cpu_info->cpuid_model != 26)
+		return ENOENT;
+
+	return SYSCTL_OUT(req, &flex_ratio, sizeof(flex_ratio));
+}
+
+static int
+hw_cpu_flex_ratio_min SYSCTL_HANDLER_ARGS
+{
+	__unused struct sysctl_oid *unused_oidp = oidp;
+	__unused void *unused_arg1 = arg1;
+	__unused int unused_arg2 = arg2;
+	i386_cpu_info_t *cpu_info = cpuid_info();
+
+	if (cpu_info->cpuid_model != 26)
+		return ENOENT;
+
+	return SYSCTL_OUT(req, &flex_ratio_min, sizeof(flex_ratio_min));
+}
+
+static int
+hw_cpu_flex_ratio_max SYSCTL_HANDLER_ARGS
+{
+	__unused struct sysctl_oid *unused_oidp = oidp;
+	__unused void *unused_arg1 = arg1;
+	__unused int unused_arg2 = arg2;
+	i386_cpu_info_t *cpu_info = cpuid_info();
+
+	if (cpu_info->cpuid_model != 26)
+		return ENOENT;
+
+	return SYSCTL_OUT(req, &flex_ratio_max, sizeof(flex_ratio_max));
+}
+
 SYSCTL_NODE(_machdep, OID_AUTO, cpu, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 	"CPU info");
 
@@ -353,6 +406,23 @@ SYSCTL_PROC(_machdep_cpu, OID_AUTO, thread_count,
 	    sizeof(uint32_t),
 	    hw_cpu_sysctl, "I", "Number of enabled threads per package");
 
+SYSCTL_NODE(_machdep_cpu, OID_AUTO, flex_ratio, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
+	"Flex ratio");
+
+SYSCTL_PROC(_machdep_cpu_flex_ratio, OID_AUTO, desired,
+	    CTLTYPE_INT | CTLFLAG_RD, 
+	    0, 0,
+	    hw_cpu_flex_ratio_desired, "I", "Flex ratio desired (0 disabled)");
+
+SYSCTL_PROC(_machdep_cpu_flex_ratio, OID_AUTO, min,
+	    CTLTYPE_INT | CTLFLAG_RD, 
+	    0, 0,
+	    hw_cpu_flex_ratio_min, "I", "Flex ratio min (efficiency)");
+
+SYSCTL_PROC(_machdep_cpu_flex_ratio, OID_AUTO, max,
+	    CTLTYPE_INT | CTLFLAG_RD, 
+	    0, 0,
+	    hw_cpu_flex_ratio_max, "I", "Flex ratio max (non-turbo)");
 
 uint64_t pmap_pv_hashlist_walks;
 uint64_t pmap_pv_hashlist_cnts;

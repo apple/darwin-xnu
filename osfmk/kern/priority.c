@@ -165,7 +165,7 @@ thread_quantum_expire(
 	/*
 	 *	Context switch check.
 	 */
-	if ((preempt = csw_check(thread, processor)) != AST_NONE)
+	if ((preempt = csw_check(processor)) != AST_NONE)
 		ast_on(preempt);
 	else {
 		processor_set_t		pset = processor->processor_set;
@@ -173,6 +173,7 @@ thread_quantum_expire(
 		pset_lock(pset);
 
 		pset_pri_hint(pset, processor, processor->current_pri);
+		pset_count_hint(pset, processor, processor->runq.count);
 
 		pset_unlock(pset);
 	}

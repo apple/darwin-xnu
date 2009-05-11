@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -468,7 +468,7 @@ int diagCall(struct savearea *save) {
 			prssr = (processor_t)port->ip_kobject;	/* Extract the processor */
 			is_write_unlock(current_space());		/* All done with the space now, unlock it */
 			
-			save->save_r3 = (uint64_t)(uint32_t)PerProcTable[prssr->processor_data.slot_num].ppe_vaddr;	/* Pass back ther per proc */
+			save->save_r3 = (uint64_t)(uint32_t)PerProcTable[prssr->cpu_num].ppe_vaddr;	/* Pass back ther per proc */
 			return -1;								/* Return and check asts */
 
 /*

@@ -189,6 +189,9 @@ extern kern_return_t kmod_send_generic(int type, void *data, int size);
 extern kern_return_t kmod_initialize_cpp(kmod_info_t *info);
 extern kern_return_t kmod_finalize_cpp(kmod_info_t *info);
 
+void record_kext_unload(kmod_t kmod_id);
+void dump_kext_info(int (*printf_func)(const char *fmt, ...));
+
 extern void kmod_dump(vm_offset_t *addr, unsigned int dump_cnt);
 __END_DECLS
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -103,6 +103,7 @@
 /*XXX*/
 #include <netinet/in.h>
 #include <netinet/in_var.h>
+#include <netinet/ip_var.h>
 #if INET6
 #include <netinet6/in6_var.h>
 #include <netinet6/in6_ifattach.h>
@@ -143,6 +144,9 @@ struct	ifnethead ifnet_head = TAILQ_HEAD_INITIALIZER(ifnet_head);
 
 static int	if_cloners_count;
 LIST_HEAD(, if_clone) if_cloners = LIST_HEAD_INITIALIZER(if_cloners);
+
+static struct ifaddr *ifa_ifwithnet_common(const struct sockaddr *,
+    unsigned int);
 
 #if INET6
 /*
@@ -642,18 +646,85 @@ ifa_ifwithdstaddr(
 }
 
 /*
+ * Locate the source address of an interface based on a complete address.
+ */
+struct ifaddr *
+ifa_ifwithaddr_scoped(const struct sockaddr *addr, unsigned int ifscope)
+{
+	struct ifaddr *result = NULL;
+	struct ifnet *ifp;
+
+	if (ifscope == IFSCOPE_NONE)
+		return (ifa_ifwithaddr(addr));
+
+	ifnet_head_lock_shared();
+	if (ifscope > (unsigned int)if_index) {
+		ifnet_head_done();
+		return (NULL);
+	}
+
+	ifp = ifindex2ifnet[ifscope];
+	if (ifp != NULL) {
+		struct ifaddr *ifa = NULL;
+
+		/*
+		 * This is suboptimal; there should be a better way
+		 * to search for a given address of an interface.
+		 */
+		ifnet_lock_shared(ifp);
+		for (ifa = ifp->if_addrhead.tqh_first; ifa != NULL;
+		    ifa = ifa->ifa_link.tqe_next) {
+			if (ifa->ifa_addr->sa_family != addr->sa_family)
+				continue;
+			if (equal(addr, ifa->ifa_addr)) {
+				result = ifa;
+				break;
+			}
+			if ((ifp->if_flags & IFF_BROADCAST) &&
+			    ifa->ifa_broadaddr != NULL &&
+			    /* IP6 doesn't have broadcast */
+			    ifa->ifa_broadaddr->sa_len != 0 &&
+			    equal(ifa->ifa_broadaddr, addr)) {
+				result = ifa;
+				break;
+			}
+		}
+		if (result != NULL)
+			ifaref(result);
+		ifnet_lock_done(ifp);
+	}
+	ifnet_head_done();
+
+	return (result);
+}
+
+struct ifaddr *
+ifa_ifwithnet(const struct sockaddr *addr)
+{
+	return (ifa_ifwithnet_common(addr, IFSCOPE_NONE));
+}
+
+struct ifaddr *
+ifa_ifwithnet_scoped(const struct sockaddr *addr, unsigned int ifscope)
+{
+	return (ifa_ifwithnet_common(addr, ifscope));
+}
+
+/*
  * Find an interface on a specific network.  If many, choice
  * is most specific found.
  */
-struct ifaddr *
-ifa_ifwithnet(
-	const struct sockaddr *addr)
+static struct ifaddr *
+ifa_ifwithnet_common(const struct sockaddr *addr, unsigned int ifscope)
 {
 	struct ifnet *ifp;
 	struct ifaddr *ifa = NULL;
 	struct ifaddr *ifa_maybe = (struct ifaddr *) 0;
 	u_int af = addr->sa_family;
 	const char *addr_data = addr->sa_data, *cplim;
+
+	if (!ip_doscopedroute || addr->sa_family != AF_INET)
+		ifscope = IFSCOPE_NONE;
 
 	ifnet_head_lock_shared();
 	/*
@@ -711,6 +782,14 @@ next:				continue;
 			} else
 #endif /* __APPLE__*/
 			{
+				/*
+				 * If we're looking up with a scope,
+				 * find using a matching interface.
+				 */
+				if (ifscope != IFSCOPE_NONE &&
+				    ifp->if_index != ifscope)
+					continue;
+
 				/*
 				 * if we have a special address handler,
 				 * then use it instead of the generic one.

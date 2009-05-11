@@ -50,6 +50,7 @@
  * DKIOCISFORMATTED                      is media formatted?
  * DKIOCISWRITABLE                       is media writable?
  *
+ * DKIOCREQUESTIDLE                      idle media
  * DKIOCDISCARD                          delete unused data
  *
  * DKIOCGETMAXBLOCKCOUNTREAD             get maximum block count for reads
@@ -114,6 +115,7 @@ typedef struct
 #define DKIOCISFORMATTED                      _IOR('d', 23, uint32_t)
 #define DKIOCISWRITABLE                       _IOR('d', 29, uint32_t)
 
+#define DKIOCREQUESTIDLE                      _IO('d', 30)
 #define DKIOCDISCARD                          _IOW('d', 31, dk_discard_t)
 
 #define DKIOCGETMAXBLOCKCOUNTREAD             _IOR('d', 64, uint64_t)

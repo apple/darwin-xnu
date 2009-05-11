@@ -346,6 +346,7 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	 */
 	if (blockSize < hfsmp->hfs_physical_block_size) {
 		hfsmp->hfs_physical_block_size = hfsmp->hfs_logical_block_size;
+		hfsmp->hfs_log_per_phys = 1;
 	}
 
 	/*
@@ -438,14 +439,18 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	retval = hfs_getnewvnode(hfsmp, NULL, NULL, &cndesc, 0, &cnattr, &cfork,
 	                         &hfsmp->hfs_extents_vp);
 	if (retval)
+	{
 		goto ErrorExit;
+	}
 	hfsmp->hfs_extents_cp = VTOC(hfsmp->hfs_extents_vp);
 	hfs_unlock(hfsmp->hfs_extents_cp);
 
 	retval = MacToVFSError(BTOpenPath(VTOF(hfsmp->hfs_extents_vp),
 	                                  (KeyCompareProcPtr) CompareExtentKeysPlus));
 	if (retval)
+	{
 		goto ErrorExit;
+	}
 	/*
 	 * Set up Catalog B-tree vnode
 	 */ 
@@ -2372,6 +2377,16 @@ hfs_start_transaction(struct hfsmount *hfsmp)
 	unlock_on_err = 1;
     }
 
+	/* If a downgrade to read-only mount is in progress, no other
+	 * process than the downgrade process is allowed to modify 
+	 * the file system.
+	 */
+	if ((hfsmp->hfs_flags & HFS_RDONLY_DOWNGRADE) && 
+			(hfsmp->hfs_downgrading_proc != thread)) {
+		ret = EROFS;
+		goto out;
+	}
+
     if (hfsmp->jnl) {
 	ret = journal_start_transaction(hfsmp->jnl);
 	if (ret == 0) {
@@ -2381,6 +2396,7 @@ hfs_start_transaction(struct hfsmount *hfsmp)
 	ret = 0;
     }
 
+out:
     if (ret != 0 && unlock_on_err) {
 	lck_rw_unlock_shared(&hfsmp->hfs_global_lock);
     }

@@ -83,6 +83,7 @@ extern rtc_nanotime_t	rtc_nanotime_info;
 0:	movl	RNT_GENERATION(%edi),%esi	/* being updated? */	; \
 	testl	%esi,%esi						; \
 	jz	0b				/* wait until done */	; \
+	lfence								; \
 	rdtsc								; \
 	lfence								; \
 	subl	RNT_TSC_BASE(%edi),%eax					; \
@@ -111,6 +112,7 @@ extern rtc_nanotime_t	rtc_nanotime_info;
 0:	movl	RNT_GENERATION(%rdi),%esi				; \
 	test	%esi,%esi			/* info updating? */	; \
 	jz	0b				/* - wait if so */	; \
+	lfence								; \
 	rdtsc								; \
 	lfence								; \
 	shlq	$32,%rdx						; \

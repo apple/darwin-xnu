@@ -241,30 +241,9 @@ MACRO_END
 /*
  *	extern void
  *	ipc_kmsg_send_always(ipc_kmsg_t);
- *
- *	Unfortunately, to avoid warnings/lint about unused variables
- *	when assertions are turned off, we need two versions of this.
  */
-#if	MACH_ASSERT
-
 #define	ipc_kmsg_send_always(kmsg)					\
-MACRO_BEGIN								\
-	mach_msg_return_t mr2;						\
-									\
-	mr2 = ipc_kmsg_send((kmsg), MACH_SEND_ALWAYS,			\
-			     MACH_MSG_TIMEOUT_NONE);			\
-	assert(mr == MACH_MSG_SUCCESS);					\
-MACRO_END
-
-#else	/* MACH_ASSERT */
-
-#define	ipc_kmsg_send_always(kmsg)					\
-MACRO_BEGIN								\
-	(void) ipc_kmsg_send((kmsg), MACH_SEND_ALWAYS,			\
-			       MACH_MSG_TIMEOUT_NONE);			\
-MACRO_END
-
-#endif	/* MACH_ASSERT */
+	ipc_kmsg_send((kmsg), MACH_SEND_ALWAYS, MACH_MSG_TIMEOUT_NONE)
 
 
 /* Allocate a kernel message */

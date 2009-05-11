@@ -210,7 +210,7 @@ bool IOMachPort::noMoreSendersForObject( OSObject * obj,
 
 	machPort = (IOMachPort *) dict->getObject( (const OSSymbol *) obj );
 	if( machPort) {
-	    destroyed = (machPort->mscount == *mscount);
+	    destroyed = (machPort->mscount <= *mscount);
 	    if( destroyed)
 		dict->removeObject( (const OSSymbol *) obj );
 	    else

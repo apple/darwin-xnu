@@ -60,6 +60,7 @@ void PE_init_platform(
 
 
 
+
 void PE_init_kprintf(
 	boolean_t vm_initialized);
 

@@ -46,6 +46,7 @@
 #include <sys/vnode.h>
 #include <sys/sysctl.h>
 #include <dev/ppc/cons.h>
+#include <pexpert/pexpert.h>
 
 extern vm_map_t mb_map;
 
@@ -81,6 +82,7 @@ SYSCTL_INT (_kern, OID_AUTO, maxnbuf, CTLFLAG_RW, &max_nbuf_headers, 0, "");
 __private_extern__ int customnbuf = 0;
 int             srv = 0;	/* Flag indicates a server boot when set */
 int             ncl = 0;
+static unsigned int mbuf_poolsz;
 
 vm_map_t        buffer_map;
 vm_map_t        bufferhdr_map;
@@ -209,6 +211,9 @@ bsd_bufferinit(void)
 	bufinit();
 }
 
+/* 512 MB hard limit on size of the mbuf pool */
+#define MAX_MBUF_POOL   (512 << MBSHIFT)
+#define MAX_NCL         (MAX_MBUF_POOL >> MCLSHIFT)
 
 /*
  * this has been broken out into a separate routine that
@@ -220,8 +225,13 @@ bsd_bufferinit(void)
 int
 bsd_mbuf_cluster_reserve(void)
 {
-        if (sane_size > (64 * 1024 * 1024) || ncl) {
+	/* If called more than once, return the previously calculated size */
+        if (mbuf_poolsz != 0)
+                goto done;
 
+	PE_parse_boot_argn("ncl", &ncl, sizeof (ncl));
+
+        if (sane_size > (64 * 1024 * 1024) || ncl) {
 	        if ((nmbclusters = ncl) == 0) {
 		        if ((nmbclusters = ((sane_size / 16)/MCLBYTES)) > 32768)
 			        nmbclusters = 32768;
@@ -229,7 +239,13 @@ bsd_mbuf_cluster_reserve(void)
 		/* Make sure it's not odd in case ncl is manually set */
 		if (nmbclusters & 0x1)
 			--nmbclusters;
-	}
 
+                /* And obey the upper limit */
+                if (nmbclusters > MAX_NCL)
+                	nmbclusters = MAX_NCL;
+
+	}
+	mbuf_poolsz = nmbclusters << MCLSHIFT;
+done:
 	return (nmbclusters * MCLBYTES);
 }

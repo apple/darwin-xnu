@@ -106,6 +106,7 @@ machine_idle(void)
 	goto out;
 
     my_cpu->lcpu.state = LCPU_IDLE;
+    my_cpu->lcpu.flags |= X86CORE_FL_IDLE;
     DBGLOG(cpu_handle, cpu_number(), MP_IDLE);
     MARK_CPU_IDLE(cpu_number());
 
@@ -129,6 +130,7 @@ machine_idle(void)
      */
     MARK_CPU_ACTIVE(cpu_number());
     DBGLOG(cpu_handle, cpu_number(), MP_UNIDLE);
+    my_cpu->lcpu.flags &= ~(X86CORE_FL_IDLE | X86CORE_FL_WAKEUP);
     my_cpu->lcpu.state = LCPU_RUN;
 
     /*
@@ -325,12 +327,16 @@ pmCPUExitIdle(cpu_data_t *cpu)
 {
     boolean_t		do_ipi;
 
+    cpu->lcpu.flags |= X86CORE_FL_WAKEUP;
     if (pmInitDone
 	&& pmDispatch != NULL
 	&& pmDispatch->exitIdle != NULL)
 	do_ipi = (*pmDispatch->exitIdle)(&cpu->lcpu);
     else
 	do_ipi = TRUE;
+
+    if (do_ipi)
+	cpu->lcpu.flags &= ~X86CORE_FL_WAKEUP;
 
     return(do_ipi);
 }
@@ -534,6 +540,34 @@ pmSafeMode(x86_lcpu_t *lcpu, uint32_t flags)
     }
 }
 
+static uint32_t		saved_run_count = 0;
+
+void
+machine_run_count(uint32_t count)
+{
+    if (pmDispatch != NULL
+	&& pmDispatch->pmSetRunCount != NULL)
+	pmDispatch->pmSetRunCount(count);
+    else
+	saved_run_count = count;
+}
+
+boolean_t
+machine_cpu_is_inactive(int cpu)
+{
+    if (pmDispatch != NULL
+	&& pmDispatch->pmIsCPUUnAvailable != NULL)
+	return(pmDispatch->pmIsCPUUnAvailable(cpu_to_lcpu(cpu)));
+    else
+	return(FALSE);
+}
+
+static uint32_t
+pmGetSavedRunCount(void)
+{
+    return(saved_run_count);
+}
+
 /*
  * Returns the root of the package tree.
  */
@@ -555,6 +589,22 @@ pmLCPUtoProcessor(int lcpu)
     return(cpu_datap(lcpu)->cpu_processor);
 }
 
+static void
+pmReSyncDeadlines(int cpu)
+{
+    static boolean_t	registered	= FALSE;
+
+    if (!registered) {
+	PM_interrupt_register(&etimer_resync_deadlines);
+	registered = TRUE;
+    }
+
+    if ((uint32_t)cpu == current_cpu_datap()->lcpu.cpu_num)
+	etimer_resync_deadlines();
+    else
+	cpu_PM_interrupt(cpu);
+}
+
 /*
  * Called by the power management kext to register itself and to get the
  * callbacks it might need into other kernel functions.  This interface
@@ -566,23 +616,26 @@ pmKextRegister(uint32_t version, pmDispatch_t *cpuFuncs,
 	       pmCallBacks_t *callbacks)
 {
     if (callbacks != NULL && version == PM_DISPATCH_VERSION) {
-	callbacks->setRTCPop   = setPop;
-	callbacks->resyncDeadlines = etimer_resync_deadlines;
-	callbacks->initComplete= pmInitComplete;
-	callbacks->GetLCPU     = pmGetLogicalCPU;
-	callbacks->GetCore     = pmGetCore;
-	callbacks->GetDie      = pmGetDie;
-	callbacks->GetPackage  = pmGetPackage;
-	callbacks->GetMyLCPU   = pmGetMyLogicalCPU;
-	callbacks->GetMyCore   = pmGetMyCore;
-	callbacks->GetMyDie    = pmGetMyDie;
-	callbacks->GetMyPackage= pmGetMyPackage;
-	callbacks->GetPkgRoot  = pmGetPkgRoot;
-	callbacks->LockCPUTopology = pmLockCPUTopology;
-	callbacks->GetHibernate    = pmCPUGetHibernate;
-	callbacks->LCPUtoProcessor = pmLCPUtoProcessor;
-	callbacks->ThreadBind      = thread_bind;
-	callbacks->topoParms       = &topoParms;
+	callbacks->setRTCPop            = setPop;
+	callbacks->resyncDeadlines      = pmReSyncDeadlines;
+	callbacks->initComplete         = pmInitComplete;
+	callbacks->GetLCPU              = pmGetLogicalCPU;
+	callbacks->GetCore              = pmGetCore;
+	callbacks->GetDie               = pmGetDie;
+	callbacks->GetPackage           = pmGetPackage;
+	callbacks->GetMyLCPU            = pmGetMyLogicalCPU;
+	callbacks->GetMyCore            = pmGetMyCore;
+	callbacks->GetMyDie             = pmGetMyDie;
+	callbacks->GetMyPackage         = pmGetMyPackage;
+	callbacks->GetPkgRoot           = pmGetPkgRoot;
+	callbacks->LockCPUTopology      = pmLockCPUTopology;
+	callbacks->GetHibernate         = pmCPUGetHibernate;
+	callbacks->LCPUtoProcessor      = pmLCPUtoProcessor;
+	callbacks->ThreadBind           = thread_bind;
+	callbacks->GetSavedRunCount     = pmGetSavedRunCount;
+	callbacks->topoParms            = &topoParms;
+    } else {
+	panic("Version mis-match between Kernel and CPU PM");
     }
 
     if (cpuFuncs != NULL) {

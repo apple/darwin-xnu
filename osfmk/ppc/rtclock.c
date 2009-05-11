@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -65,9 +65,6 @@ static uint32_t			rtclock_sec_divisor;
 static mach_timebase_info_data_t	rtclock_timebase_const;
 
 static boolean_t		rtclock_timebase_initialized;
-
-/* XXX this should really be in a header somewhere */
-extern clock_timer_func_t	rtclock_timer_expire;
 
 decl_simple_lock_data(static,rtclock_lock)
 
@@ -213,18 +210,6 @@ clock_timebase_info(
 	rtclock_timebase_initialized = TRUE;
 	UNLOCK_RTC(s);
 }	
-
-void
-clock_set_timer_func(
-	clock_timer_func_t		func)
-{
-	spl_t		s;
-
-	LOCK_RTC(s);
-	if (rtclock_timer_expire == NULL)
-		rtclock_timer_expire = func;
-	UNLOCK_RTC(s);
-}
 
 void
 clock_interval_to_absolutetime_interval(

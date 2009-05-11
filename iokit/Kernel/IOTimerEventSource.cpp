@@ -299,7 +299,7 @@ IOReturn IOTimerEventSource::wakeAtTime(AbsoluteTime inAbstime)
         return kIOReturnNoResources;
 
     abstime = inAbstime;
-    if ( enabled && AbsoluteTime_to_scalar(&abstime) && workLoop )
+    if ( enabled && AbsoluteTime_to_scalar(&inAbstime) && AbsoluteTime_to_scalar(&abstime) && workLoop )
     {
         if (reserved)
         {
@@ -308,14 +308,14 @@ IOReturn IOTimerEventSource::wakeAtTime(AbsoluteTime inAbstime)
             reserved->workLoop = workLoop;
             reserved->calloutGeneration++;
             if (thread_call_enter1_delayed((thread_call_t) calloutEntry, 
-                    (void *) reserved->calloutGeneration, abstime))
+                    (void *) reserved->calloutGeneration, inAbstime))
             {
                 release();
                 workLoop->release();
             }
         }
         else
-            thread_call_enter_delayed((thread_call_t) calloutEntry, abstime);
+            thread_call_enter_delayed((thread_call_t) calloutEntry, inAbstime);
     }
 
     return kIOReturnSuccess;

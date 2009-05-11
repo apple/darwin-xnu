@@ -36,6 +36,8 @@
 #include <kern/locks.h>
 #include <net/kext_net.h>
 
+#include <libkern/libkern.h>
+
 #include <string.h>
 
 static struct socket_filter_list	sock_filter_head;
@@ -327,8 +329,7 @@ sflt_detach_private(
 			lck_mtx_unlock(sock_filter_lock);
 			return;
 		}
-	}
-	else {
+	} else {
 		/*
 		 * Clear the removing flag. We will perform the detach here or
 		 * request a delayed detach.  Since we do an extra ref release
@@ -344,9 +345,19 @@ sflt_detach_private(
 	if (entry->sfe_socket->so_filteruse != 0) {
 		entry->sfe_flags |= SFEF_DETACHUSEZERO;
 		lck_mtx_unlock(sock_filter_lock);
+
+		if (unregistering) {
+#if DEBUG
+			printf("sflt_detach_private unregistering SFEF_DETACHUSEZERO "
+				"so%p so_filteruse %u so_usecount %d\n",
+				entry->sfe_socket, entry->sfe_socket->so_filteruse, 
+				entry->sfe_socket->so_usecount);
+#endif
+			socket_unlock(entry->sfe_socket, 0);	
+		}
+
 		return;
-	}
-	else {
+	} else {
 		/*
 		 * Check if we are removing the last attached filter and
 		 * the parent filter is being unregistered.

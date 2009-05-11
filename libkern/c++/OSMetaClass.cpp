@@ -652,6 +652,7 @@ static void _OSMetaClassConsiderUnloads(__unused thread_call_param_t p0,
             classes->release();
 
             if (0 == checkClass) {
+                record_kext_unload(ki->id);
                 OSRuntimeUnloadCPP(ki, 0);	// call destructors
                 ret = kmod_destroy(host_priv_self(), ki->id);
                 didUnload = true;

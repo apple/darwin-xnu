@@ -2543,24 +2543,33 @@ exec_handle_sugid(struct image_params *imgp)
 	kauth_cred_t		cred = vfs_context_ucred(imgp->ip_vfs_context);
 	proc_t			p = vfs_context_proc(imgp->ip_vfs_context);
 	int			i;
-	int			is_member = 0;
+	int			leave_sugid_clear = 0;
 	int			error = 0;
 	struct vnode	*dev_null = NULLVP;
 #if CONFIG_MACF
-	kauth_cred_t	my_cred;
-#endif
-
-#if CONFIG_MACF
 	int			mac_transition;
-	mac_transition = mac_cred_check_label_update_execve(imgp->ip_vfs_context, imgp->ip_vp,
-	    imgp->ip_scriptlabelp, imgp->ip_execlabelp, p);
+
+	/*
+	 * Determine whether a call to update the MAC label will result in the
+	 * credential changing.
+	 *
+	 * Note:	MAC policies which do not actually end up modifying
+	 *		the label subsequently are strongly encouraged to
+	 *		return 0 for this check, since a non-zero answer will
+	 *		slow down the exec fast path for normal binaries.
+	 */
+	mac_transition = mac_cred_check_label_update_execve(
+							imgp->ip_vfs_context,
+							imgp->ip_vp,
+							imgp->ip_scriptlabelp,
+							imgp->ip_execlabelp, p);
 #endif
 
 	OSBitAndAtomic(~((uint32_t)P_SUGID), (UInt32 *)&p->p_flag);
 
 	/*
 	 * Order of the following is important; group checks must go last,
-	 * as we use the success of the 'is_member' check combined with the
+	 * as we use the success of the 'ismember' check combined with the
 	 * failure of the explicit match to indicate that we will be setting
 	 * the egid of the process even though the new process did not
 	 * require VSUID/VSGID bits in order for it to set the new group as
@@ -2574,12 +2583,14 @@ exec_handle_sugid(struct image_params *imgp)
 	 */
 	if (((imgp->ip_origvattr->va_mode & VSUID) != 0 &&
 	     kauth_cred_getuid(cred) != imgp->ip_origvattr->va_uid) ||
-#if CONFIG_MACF
-		mac_transition ||	/* A policy wants to transition */
-#endif
 	    ((imgp->ip_origvattr->va_mode & VSGID) != 0 &&
-		 ((kauth_cred_ismember_gid(cred, imgp->ip_origvattr->va_gid, &is_member) || !is_member) ||
+		 ((kauth_cred_ismember_gid(cred, imgp->ip_origvattr->va_gid, &leave_sugid_clear) || !leave_sugid_clear) ||
 		 (cred->cr_gid != imgp->ip_origvattr->va_gid)))) {
+
+#if CONFIG_MACF
+/* label for MAC transition and neither VSUID nor VSGID */
+handle_mac_transition:
+#endif
 
 		/*
 		 * Replace the credential with a copy of itself if euid or
@@ -2606,28 +2617,36 @@ exec_handle_sugid(struct image_params *imgp)
 
 #if CONFIG_MACF
 		/* 
-		 * XXXMAC: In FreeBSD, we set P_SUGID on a MAC transition
-		 * to protect against debuggers being attached by an 
-		 * insufficiently privileged process onto the result of
-		 * a transition to a more privileged credential.  This is
-		 * too conservative on FreeBSD, but we need to do
-		 * something similar here, or risk vulnerability.
-		 *
-		 * Before we make the call into the MAC policies, get a new
+		 * If a policy has indicated that it will transition the label,
+		 * before making the call into the MAC policies, get a new
 		 * duplicate credential, so they can modify it without
 		 * modifying any others sharing it.
 		 */
-		if (mac_transition && !imgp->ip_no_trans) { 
-			kauth_proc_label_update_execve(p,
-				imgp->ip_vfs_context,
-				imgp->ip_vp, 
-				imgp->ip_scriptlabelp, imgp->ip_execlabelp);
+		if (mac_transition) { 
+			kauth_cred_t	my_cred;
+			if (kauth_proc_label_update_execve(p,
+						imgp->ip_vfs_context,
+						imgp->ip_vp, 
+						imgp->ip_scriptlabelp,
+						imgp->ip_execlabelp)) {
+				/*
+				 * If updating the MAC label resulted in a
+				 * disjoint credential, flag that we need to
+				 * set the P_SUGID bit.  This protects
+				 * against debuggers being attached by an
+				 * insufficiently privileged process onto the
+				 * result of a transition to a more privileged
+				 * credential.
+				 */
+				leave_sugid_clear = 0;
+			}
 
 			my_cred = kauth_cred_proc_ref(p);
 			mac_task_label_update_cred(my_cred, p->task);
 			kauth_cred_unref(&my_cred);
 		}
-#endif
+#endif	/* CONFIG_MACF */
+
 		/*
 		 * Have mach reset the task and thread ports.
 		 * We don't want anyone who had the ports before
@@ -2640,13 +2659,15 @@ exec_handle_sugid(struct image_params *imgp)
 		}
 
 		/*
-		 * If 'is_member' is non-zero, then we passed the VSUID and
-		 * MACF checks, and successfully determined that the previous
-		 * cred was a member of the VSGID group, but that it was not
-		 * the default at the time of the execve.  So we don't set the
-		 * P_SUGID on the basis of simply running this code.
+		 * If 'leave_sugid_clear' is non-zero, then we passed the
+		 * VSUID and MACF checks, and successfully determined that
+		 * the previous cred was a member of the VSGID group, but
+		 * that it was not the default at the time of the execve,
+		 * and that the post-labelling credential was not disjoint.
+		 * So we don't set the P_SUGID on the basis of simply
+		 * running this code.
 		 */
-		if (!is_member)
+		if (!leave_sugid_clear)
 			OSBitOrAtomic(P_SUGID, (UInt32 *)&p->p_flag);
 
 		/* Cache the vnode for /dev/null the first time around */
@@ -2713,6 +2734,21 @@ exec_handle_sugid(struct image_params *imgp)
 			dev_null = NULLVP;
 		}
 	}
+#if CONFIG_MACF
+	else {
+		/*
+		 * We are here because we were told that the MAC label will
+		 * be transitioned, and the binary is not VSUID or VSGID; to
+		 * deal with this case, we could either duplicate a lot of
+		 * code, or we can indicate we want to default the P_SUGID
+		 * bit clear and jump back up.
+		 */
+		if (mac_transition) {
+			leave_sugid_clear = 1;
+			goto handle_mac_transition;
+		}
+	}
+#endif	/* CONFIG_MACF */
 
 	/*
 	 * Implement the semantic where the effective user and group become

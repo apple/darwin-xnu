@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -313,6 +313,7 @@ in_pcblookup_local_and_cleanup(
 }
 
 #ifdef __APPLE_API_PRIVATE
+static void
 in_pcb_conflict_post_msg(u_int16_t port)
 {
 	/* 
@@ -569,77 +570,6 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 	return (0);
 }
 
-#if CONFIG_FORCE_OUT_IFP
-/*
- * pdp_context_route_locked is losely based on rtalloc_ign_locked with
- * the hope that it can be used anywhere rtalloc_ign_locked is.
- */
-__private_extern__ void
-pdp_context_route_locked(ifnet_t ifp, struct route *ro)
-{
-	struct in_ifaddr	*ia;
-	struct rtentry		*rt;
-
-	if ((rt = ro->ro_rt) != NULL) {
-		if (rt->rt_ifp == ifp && rt->rt_flags & RTF_UP)
-			return;
-
-		rtfree_locked(rt);
-		ro->ro_rt = NULL;
-	}
-
-	if (ifp == NULL)
-		return;
-
-	/* Find the first IP address, we will use a fake route off of that */
-	TAILQ_FOREACH(ia, &in_ifaddrhead, ia_link) {
-		if (ia->ia_ifp == ifp)
-			break;
-	}
-
-	/* Hrmm no IP addresses here :( */
-	if (ia == NULL)
-		return;
-
-	rt = ia->ia_route;
-	if (rt == NULL) {
-		struct sockaddr *ifa = ia->ia_ifa.ifa_addr;
-
-		/* Allocate and set up a fake route */
-		if ((rt = rte_alloc()) == NULL)
-			return;
-
-		bzero(rt, sizeof(*rt));
-		rt->rt_flags = RTF_UP | RTF_STATIC;
-		if (rt_setgate(rt, ifa, ifa) != 0) {
-			rte_free(rt);
-			return;
-		}
-		/*
-		 * Explicitly zero the key so that:
-		 *   rt_tables[rt_key(rt)->sa_family] == rt_tables[0] == NULL
-		 */
-		bzero(rt_key(rt), ifa->sa_len);
-
-		rtsetifa(rt, &ia->ia_ifa);
-		rt->rt_ifp = rt->rt_ifa->ifa_ifp;
-
-		/* Take a reference for the ia pointer to this */
-		ia->ia_route = rt;
-		rtref(rt);
-
-		/*
-		 * One more rtentry floating around that is not
-		 * linked to the routing table.
-		 */
-		(void) OSIncrementAtomic((SInt32 *)&rttrash);
-	}
-	rt->generation_id = route_generation;
-	rtref(rt); /* increment the reference count */
-	ro->ro_rt = rt;
-}
-#endif
-
 /*
  *   Transform old in_pcbconnect() into an inner subroutine for new
  *   in_pcbconnect(): Do some validity-checking on the remote
@@ -691,8 +621,11 @@ in_pcbladdr(struct inpcb *inp, struct sockaddr *nam,
 	}
 	if (inp->inp_laddr.s_addr == INADDR_ANY) {
 		struct route *ro;
+		unsigned int ifscope;
 
 		ia = (struct in_ifaddr *)0;
+		ifscope = (inp->inp_flags & INP_BOUND_IF) ?
+		    inp->inp_boundif : IFSCOPE_NONE;
 		/*
 		 * If route is known or can be allocated now,
 		 * our src addr is taken from the i/f, else punt.
@@ -718,14 +651,7 @@ in_pcbladdr(struct inpcb *inp, struct sockaddr *nam,
 			ro->ro_dst.sa_len = sizeof(struct sockaddr_in);
 			((struct sockaddr_in *) &ro->ro_dst)->sin_addr =
 				sin->sin_addr;
-#if CONFIG_FORCE_OUT_IFP			
-			/* If the socket has requested a specific interface, use that address */
-			if (inp->pdp_ifp != NULL) {
-				pdp_context_route_locked(inp->pdp_ifp, ro);
-			}
-			else 
-#endif /* CONFIG_FORCE_OUT_IFP */
-				rtalloc_ign_locked(ro, 0UL);
+			rtalloc_scoped_ign_locked(ro, 0UL, ifscope);
 		}
 		/*
 		 * If we found a route, use the address
@@ -744,7 +670,8 @@ in_pcbladdr(struct inpcb *inp, struct sockaddr *nam,
 			sin->sin_port = 0;
 			ia = ifatoia(ifa_ifwithdstaddr(sintosa(sin)));
 			if (ia == 0) {
-				ia = ifatoia(ifa_ifwithnet(sintosa(sin)));
+				ia = ifatoia(ifa_ifwithnet_scoped(sintosa(sin),
+				    ifscope));
 			}
 			sin->sin_port = fport;
 			if (ia == 0) {
@@ -963,7 +890,6 @@ in_pcbdispose(struct inpcb *inp)
 		so->so_saved_pcb = (caddr_t) inp;
 		so->so_pcb = 0; 
 		inp->inp_socket = 0;
-		inp->reserved[0] = (u_int32_t)so;
 #if CONFIG_MACF_NET
 		mac_inpcb_label_destroy(inp);
 #endif
@@ -1699,7 +1625,6 @@ in_pcb_detach_port(
 	in_pcbremlists(inp);
 	
 	inp->inp_socket = 0;
-	inp->reserved[0] = (u_int32_t) so;
 	zfree(pcbinfo->ipi_zone, inp);
     	pcbinfo->nat_dummy_socket.so_pcb = (caddr_t)pcbinfo->nat_dummy_pcb; /* restores dummypcb */
 }

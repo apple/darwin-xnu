@@ -3266,13 +3266,10 @@ _splsoftclock
 _spltty
 _splvm
 _splx
-_sprintf
 _sscanf
 _stack_privilege
-_strcat
 _strchr
 _strcmp
-_strcpy
 _strlen
 _strncat
 _strncmp

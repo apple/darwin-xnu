@@ -438,6 +438,25 @@ hfs_vnop_link(struct vnop_link_args *ap)
 	}
 	tdcp = VTOC(tdvp);
 	cp = VTOC(vp);
+	
+	/*
+	 * Make sure we don't race the src or dst parent directories with rmdir.
+	 * Note that we should only have a src parent directory cnode lock 
+	 * if we're dealing with a directory hardlink here.
+	 */
+	if (fdcp) {
+		if (fdcp->c_flag & (C_NOEXISTS | C_DELETED)) {
+			error = ENOENT;
+			goto out;
+		}
+	}
+	
+	if (tdcp->c_flag & (C_NOEXISTS | C_DELETED)) {
+		error = ENOENT;
+		goto out;
+	}
+	
+	/* Check src for errors: too many links, immutable, race with unlink */
 	if (cp->c_linkcount >= HFS_LINK_MAX) {
 		error = EMLINK;
 		goto out;
