@@ -4986,15 +4986,21 @@ out:
  * - Neither the node nor the directory are immutable.
  * - The user is not the superuser.
  *
- * Deletion is not permitted if the directory is sticky and the caller is not owner of the
- * node or directory.
+ * Deletion is not permitted if the directory is sticky and the caller is
+ * not owner of the node or directory.
  *
- * If either the node grants DELETE, or the directory grants DELETE_CHILD, the node may be
- * deleted.  If neither denies the permission, and the caller has Posix write access to the
- * directory, then the node may be deleted.
+ * If either the node grants DELETE, or the directory grants DELETE_CHILD,
+ * the node may be deleted.  If neither denies the permission, and the
+ * caller has Posix write access to the directory, then the node may be
+ * deleted.
+ *
+ * As an optimization, we cache whether or not delete child is permitted
+ * on directories without the sticky bit set.
  */
-static int
-vnode_authorize_delete(vauth_ctx vcp)
+int
+vnode_authorize_delete(vauth_ctx vcp, boolean_t cached_delete_child);
+/*static*/ int
+vnode_authorize_delete(vauth_ctx vcp, boolean_t cached_delete_child)
 {
 	struct vnode_attr	*vap = vcp->vap;
 	struct vnode_attr	*dvap = vcp->dvap;
@@ -5004,7 +5010,7 @@ vnode_authorize_delete(vauth_ctx vcp)
 
 	/* check the ACL on the directory */
 	delete_child_denied = 0;
-	if (VATTR_IS_NOT(dvap, va_acl, NULL)) {
+	if (!cached_delete_child && VATTR_IS_NOT(dvap, va_acl, NULL)) {
 		eval.ae_requested = KAUTH_VNODE_DELETE_CHILD;
 		eval.ae_acl = &dvap->va_acl->acl_ace[0];
 		eval.ae_count = dvap->va_acl->acl_entrycount;
@@ -5070,15 +5076,20 @@ vnode_authorize_delete(vauth_ctx vcp)
 		return(EACCES);
 	}
 
-	/* enforce sticky bit behaviour */
-	if ((dvap->va_mode & S_ISTXT) && !vauth_file_owner(vcp) && !vauth_dir_owner(vcp)) {
+	/*
+	 * enforce sticky bit behaviour; the cached_delete_child property will
+	 * be false and the dvap contents valis for sticky bit directories;
+	 * this makes us check the directory each time, but it's unavoidable,
+	 * as sticky bit is an exception to caching.
+	 */
+	if (!cached_delete_child && (dvap->va_mode & S_ISTXT) && !vauth_file_owner(vcp) && !vauth_dir_owner(vcp)) {
 		KAUTH_DEBUG("%p    DENIED - sticky bit rules (user %d  file %d  dir %d)",
 		    vcp->vp, cred->cr_uid, vap->va_uid, dvap->va_uid);
 		return(EACCES);
 	}
 
 	/* check the directory */
-	if ((error = vnode_authorize_posix(vcp, VWRITE, 1 /* on_dir */)) != 0) {
+	if (!cached_delete_child && (error = vnode_authorize_posix(vcp, VWRITE, 1 /* on_dir */)) != 0) {
 		KAUTH_DEBUG("%p    ALLOWED - granted by posix permisssions", vcp->vp);
 		return(error);
 	}
@@ -5476,7 +5487,7 @@ vnode_authorize_callback_int(__unused kauth_cred_t unused_cred, __unused void *i
 	int			result;
 	int			*errorp;
 	int			noimmutable;
-	boolean_t		parent_authorized_for_delete = FALSE;
+	boolean_t		parent_authorized_for_delete_child = FALSE;
 	boolean_t		found_deny = FALSE;
 	boolean_t		parent_ref= FALSE;
 
@@ -5541,8 +5552,8 @@ vnode_authorize_callback_int(__unused kauth_cred_t unused_cred, __unused void *i
 		 * can skip a whole bunch of work... we will still have to
 		 * authorize that this specific child can be removed
 		 */
-		if (vnode_cache_is_authorized(dvp, ctx, KAUTH_VNODE_DELETE) == TRUE)
-		        parent_authorized_for_delete = TRUE;
+		if (vnode_cache_is_authorized(dvp, ctx, KAUTH_VNODE_DELETE_CHILD) == TRUE)
+		        parent_authorized_for_delete_child = TRUE;
 	} else {
 		dvp = NULL;
 	}
@@ -5589,7 +5600,7 @@ vnode_authorize_callback_int(__unused kauth_cred_t unused_cred, __unused void *i
 		KAUTH_DEBUG("%p    ERROR - failed to get vnode attributes - %d", vp, result);
 		goto out;
 	}
-	if (dvp && parent_authorized_for_delete == FALSE) {
+	if (dvp && parent_authorized_for_delete_child == FALSE) {
 		VATTR_WANTED(&dva, va_mode);
 		VATTR_WANTED(&dva, va_uid);
 		VATTR_WANTED(&dva, va_gid);
@@ -5645,7 +5656,7 @@ vnode_authorize_callback_int(__unused kauth_cred_t unused_cred, __unused void *i
 	if ((result = vnode_authorize_checkimmutable(vp, &va, rights, noimmutable)) != 0)
 		goto out;
 	if ((rights & KAUTH_VNODE_DELETE) &&
-	    parent_authorized_for_delete == FALSE &&
+	    parent_authorized_for_delete_child == FALSE &&
 	    ((result = vnode_authorize_checkimmutable(dvp, &dva, KAUTH_VNODE_DELETE_CHILD, 0)) != 0))
 		goto out;
 
@@ -5658,13 +5669,14 @@ vnode_authorize_callback_int(__unused kauth_cred_t unused_cred, __unused void *i
 		goto out;
 
 	/*
-	 * If we're not the superuser, authorize based on file properties.
+	 * If we're not the superuser, authorize based on file properties;
+	 * note that even if parent_authorized_for_delete_child is TRUE, we
+	 * need to check on the node itself.
 	 */
 	if (!vfs_context_issuser(ctx)) {
 		/* process delete rights */
 		if ((rights & KAUTH_VNODE_DELETE) &&
-		    parent_authorized_for_delete == FALSE &&
-		    ((result = vnode_authorize_delete(vcp)) != 0))
+		    ((result = vnode_authorize_delete(vcp, parent_authorized_for_delete_child)) != 0))
 		    goto out;
 
 		/* process remaining rights */
@@ -5715,12 +5727,20 @@ out:
 		        vnode_cache_authorized_action(vp, ctx, KAUTH_VNODE_SEARCHBYANYONE);
 		}
 	}
-	if ((rights & KAUTH_VNODE_DELETE) && parent_authorized_for_delete == FALSE) {
+	if ((rights & KAUTH_VNODE_DELETE) && parent_authorized_for_delete_child == FALSE) {
 	        /*
-		 * parent was successfully and newly authorized for deletions
-		 * add it to the cache
+		 * parent was successfully and newly authorized for content deletions
+		 * add it to the cache, but only if it doesn't have the sticky
+		 * bit set on it.  This same  check is done earlier guarding
+		 * fetching of dva, and if we jumped to out without having done
+		 * this, we will have returned already because of a non-zero
+		 * 'result' value.
 		 */
-	        vnode_cache_authorized_action(dvp, ctx, KAUTH_VNODE_DELETE);
+		if (VATTR_IS_SUPPORTED(&dva, va_mode) &&
+		    !(dva.va_mode & (S_ISVTX))) {
+		    	/* OK to cache delete rights */
+			vnode_cache_authorized_action(dvp, ctx, KAUTH_VNODE_DELETE_CHILD);
+		}
 	}
 	if (parent_ref)
 		vnode_put(vp);

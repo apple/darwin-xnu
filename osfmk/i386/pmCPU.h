@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -37,7 +37,7 @@
  * This value should be changed each time that pmDsipatch_t or pmCallBacks_t
  * changes.
  */
-#define PM_DISPATCH_VERSION	15
+#define PM_DISPATCH_VERSION	16
 
 /*
  * Dispatch table for functions that get installed when the power
@@ -68,6 +68,7 @@ typedef struct
     void		(*pmTimerStateSave)(void);
     void		(*pmTimerStateRestore)(void);
     kern_return_t	(*exitHalt)(x86_lcpu_t *lcpu);
+    kern_return_t	(*exitHaltToOff)(x86_lcpu_t *lcpu);
     void		(*markAllCPUsOff)(void);
     void		(*pmSetRunCount)(uint32_t count);
     boolean_t		(*pmIsCPUUnAvailable)(x86_lcpu_t *lcpu);
@@ -112,6 +113,7 @@ void pmCPUHalt(uint32_t reason);
 void pmTimerSave(void);
 void pmTimerRestore(void);
 kern_return_t pmCPUExitHalt(int cpu);
+kern_return_t pmCPUExitHaltToOff(int cpu);
 
 #define PM_HALT_NORMAL		0		/* normal halt path */
 #define PM_HALT_DEBUG		1		/* debug code wants to halt */

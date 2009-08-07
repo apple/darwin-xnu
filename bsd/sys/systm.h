@@ -230,6 +230,8 @@ void	get_procrustime(struct time_value *tv);
 void	load_init_program(struct proc *p);
 void __pthread_testcancel(int presyscall);
 void syscall_exit_funnelcheck(void);
+void throttle_info_get_last_io_time(mount_t mp, struct timeval *tv);
+void update_last_io_time(mount_t mp);
 #endif /* BSD_KERNEL_PRIVATE */
 
 

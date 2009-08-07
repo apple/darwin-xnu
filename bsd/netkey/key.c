@@ -781,6 +781,8 @@ key_checkrequest(isr, saidx, sav)
  * OUT:	NULL:	not found.
  *	others:	found and return the pointer.
  */
+u_int32_t sah_search_calls = 0;
+u_int32_t sah_search_count = 0;
 struct secasvar *
 key_allocsa_policy(saidx)
 	struct secasindex *saidx;
@@ -794,7 +796,9 @@ key_allocsa_policy(saidx)
 	u_int16_t	dstport;
 	
 	lck_mtx_lock(sadb_mutex);
+	sah_search_calls++;
 	LIST_FOREACH(sah, &sahtree, chain) {
+	        sah_search_count++;
 		if (sah->state == SADB_SASTATE_DEAD)
 			continue;
 		if (key_cmpsaidx(&sah->saidx, saidx, CMP_MODE | CMP_REQID))
@@ -4630,7 +4634,9 @@ key_bbcmp(p1, p2, bits)
  * and do to remove or to expire.
  * XXX: year 2038 problem may remain.
  */
-
+int key_timehandler_debug = 0;
+u_int32_t spd_count = 0, sah_count = 0, dead_sah_count = 0, empty_sah_count = 0, larval_sav_count = 0, mature_sav_count = 0, dying_sav_count = 0, dead_sav_count = 0;
+u_int64_t total_sav_count = 0;
 void
 key_timehandler(void)
 {
@@ -4671,6 +4677,7 @@ key_timehandler(void)
 			     sp != NULL;
 			     sp = nextsp) {
 
+			        spd_count++;
 				nextsp = LIST_NEXT(sp, chain);
 
 				if (sp->state == IPSEC_SPSTATE_DEAD) {
@@ -4706,11 +4713,22 @@ key_timehandler(void)
 			 sah != NULL;
 			 sah = nextsah) {
 	
+		        sah_count++;
 			nextsah = LIST_NEXT(sah, chain);
 	
 			/* if sah has been dead, then delete it and process next sah. */
 			if (sah->state == SADB_SASTATE_DEAD) {
 				key_delsah(sah);
+				dead_sah_count++;
+				continue;
+			}
+
+			if (LIST_FIRST(&sah->savtree[SADB_SASTATE_LARVAL]) == NULL &&
+			    LIST_FIRST(&sah->savtree[SADB_SASTATE_MATURE]) == NULL && 
+			    LIST_FIRST(&sah->savtree[SADB_SASTATE_DYING]) == NULL && 
+			    LIST_FIRST(&sah->savtree[SADB_SASTATE_DEAD]) == NULL) {
+			        key_delsah(sah);
+				empty_sah_count++;
 				continue;
 			}
 	
@@ -4719,6 +4737,8 @@ key_timehandler(void)
 				 sav != NULL;
 				 sav = nextsav) {
 	
+			        larval_sav_count++;
+				total_sav_count++;
 				nextsav = LIST_NEXT(sav, chain);
 	
 				if (tv.tv_sec - sav->created > key_larval_lifetime) {
@@ -4755,6 +4775,8 @@ key_timehandler(void)
 				 sav != NULL;
 				 sav = nextsav) {
 	
+			        mature_sav_count++;
+				total_sav_count++;
 				nextsav = LIST_NEXT(sav, chain);
 	
 				/* we don't need to check. */
@@ -4816,6 +4838,8 @@ key_timehandler(void)
 				 sav != NULL;
 				 sav = nextsav) {
 	
+			        dying_sav_count++;
+				total_sav_count++;
 				nextsav = LIST_NEXT(sav, chain);
 	
 				/* we don't need to check. */
@@ -4869,6 +4893,8 @@ key_timehandler(void)
 				 sav != NULL;
 				 sav = nextsav) {
 	
+			        dead_sav_count++;
+				total_sav_count++;
 				nextsav = LIST_NEXT(sav, chain);
 	
 				/* sanity check */
@@ -4890,6 +4916,32 @@ key_timehandler(void)
 		}
    }
 
+         if (++key_timehandler_debug >= 300) {
+	          if (key_debug_level) {
+		           printf("%s: total stats for %u calls\n", __FUNCTION__, key_timehandler_debug);
+		           printf("%s: walked %u SPDs\n", __FUNCTION__, spd_count);
+			   printf("%s: walked %llu SAs: LARVAL SAs %u, MATURE SAs %u, DYING SAs %u, DEAD SAs %u\n", __FUNCTION__,
+				  total_sav_count, larval_sav_count, mature_sav_count, dying_sav_count, dead_sav_count);
+			   printf("%s: walked %u SAHs: DEAD SAHs %u, EMPTY SAHs %u\n", __FUNCTION__,
+				  sah_count, dead_sah_count, empty_sah_count);
+			   if (sah_search_calls) {
+			           printf("%s: SAH search cost %d iters per call\n", __FUNCTION__,
+					  (sah_search_count/sah_search_calls));
+			   }
+		  }
+		  spd_count = 0;
+		  sah_count = 0;
+		  dead_sah_count = 0;
+		  empty_sah_count = 0;
+		  larval_sav_count = 0;
+		  mature_sav_count = 0;
+		  dying_sav_count = 0;
+		  dead_sav_count = 0;
+		  total_sav_count = 0;
+		  sah_search_count = 0;
+		  sah_search_calls = 0;
+		  key_timehandler_debug = 0;
+	 }
 #ifndef IPSEC_NONBLOCK_ACQUIRE
 	/* ACQ tree */
     {

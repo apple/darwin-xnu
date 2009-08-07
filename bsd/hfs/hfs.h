@@ -46,6 +46,7 @@
 #include <sys/quota.h>
 #include <sys/dirent.h>
 #include <sys/event.h>
+#include <kern/thread_call.h>
 
 #include <kern/locks.h>
 
@@ -272,7 +273,33 @@ typedef struct hfsmount {
 	/* Resize variables: */
 	u_int32_t		hfs_resize_filesmoved;
 	u_int32_t		hfs_resize_totalfiles;
+
+	/*
+	 * About the sync counters:
+	 * hfs_sync_scheduled  keeps track whether a timer was scheduled but we
+	 *                     haven't started processing the callback (i.e. we
+	 *                     haven't begun the flush).  This will be non-zero
+	 *                     even if the callback has been invoked, before we
+	 *                    start the flush.
+	 * hfs_sync_incomplete keeps track of the number of callbacks that have
+	 *                     not completed yet (including callbacks not yet
+	 *                     invoked).  We cannot safely unmount until this
+	 *                     drops to zero.
+	 *
+	 * In both cases, we use counters, not flags, so that we can avoid
+	 * taking locks.
+	 */
+	int32_t		hfs_sync_scheduled;
+	int32_t		hfs_sync_incomplete;
+	u_int64_t       hfs_last_sync_request_time;
+	u_int64_t       hfs_last_sync_time;
+	uint32_t        hfs_active_threads;
+	thread_call_t   hfs_syncer;	      // removeable devices get sync'ed by this guy
+
 } hfsmount_t;
+
+#define HFS_META_DELAY     (100)
+#define HFS_MILLISEC_SCALE (1000*1000)
 
 typedef hfsmount_t  ExtendedVCB;
 
@@ -689,6 +716,7 @@ extern int  hfs_virtualmetafile(struct cnode *);
 
 extern int hfs_start_transaction(struct hfsmount *hfsmp);
 extern int hfs_end_transaction(struct hfsmount *hfsmp);
+extern void hfs_sync_ejectable(struct hfsmount *hfsmp);
 
 
 /*****************************************************************************

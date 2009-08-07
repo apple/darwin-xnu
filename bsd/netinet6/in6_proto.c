@@ -378,6 +378,11 @@ int	ip6_rr_prune = 5;	/* router renumbering prefix
 				 * walk list every 5 sec.    */
 int	ip6_v6only = 0;		/* Mapped addresses on by default -  Radar 3347718 */
 
+int	ip6_neighborgcthresh = 2048;	/* Threshold # of NDP entries for GC */
+int	ip6_maxifprefixes = 16;		/* Max acceptable prefixes via RA per IF */
+int	ip6_maxifdefrouters = 16;	/* Max acceptable def routers via RA */
+int	ip6_maxdynroutes = 4096;	/* Max # of routes created via redirect */
+
 u_int32_t ip6_id = 0UL;
 int	ip6_keepfaith = 0;
 time_t	ip6_log_time = (time_t)0L;
@@ -515,6 +520,14 @@ SYSCTL_STRUCT(_net_inet6_ip6, IPV6CTL_RIP6STATS, rip6stats, CTLFLAG_RD,
 	&rip6stat, rip6stat, "");
 SYSCTL_STRUCT(_net_inet6_ip6, OID_AUTO, mrt6stat, CTLFLAG_RD,
         &mrt6stat, mrt6stat, "");
+SYSCTL_INT(_net_inet6_ip6, IPV6CTL_NEIGHBORGCTHRESH,
+	neighborgcthresh, CTLFLAG_RW,	&ip6_neighborgcthresh,	0, "");
+SYSCTL_INT(_net_inet6_ip6, IPV6CTL_MAXIFPREFIXES,
+	maxifprefixes, CTLFLAG_RW,	&ip6_maxifprefixes,	0, "");
+SYSCTL_INT(_net_inet6_ip6, IPV6CTL_MAXIFDEFROUTERS,
+	maxifdefrouters, CTLFLAG_RW,	&ip6_maxifdefrouters,	0, "");
+SYSCTL_INT(_net_inet6_ip6, IPV6CTL_MAXDYNROUTES,
+	maxdynroutes, CTLFLAG_RW,	&ip6_maxdynroutes,	0, "");
 
 
 /* net.inet6.icmp6 */

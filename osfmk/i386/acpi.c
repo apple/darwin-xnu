@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -136,9 +136,23 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	acpi_hibernate_callback_data_t data;
 	boolean_t did_hibernate;
 #endif
+	unsigned int	cpu;
+	kern_return_t	rc;
+	unsigned int	my_cpu;
 
 	kprintf("acpi_sleep_kernel hib=%d\n",
 			current_cpu_datap()->cpu_hibernate);
+
+	/* Geta ll CPUs to be in the "off" state */
+	my_cpu = cpu_number();
+	for (cpu = 0; cpu < real_ncpus; cpu += 1) {
+	    	if (cpu == my_cpu)
+			continue;
+		rc = pmCPUExitHaltToOff(cpu);
+		if (rc != KERN_SUCCESS)
+		    panic("Error %d trying to transition CPU %d to OFF",
+			  rc, cpu);
+	}
 
 	/* shutdown local APIC before passing control to BIOS */
 	lapic_shutdown();

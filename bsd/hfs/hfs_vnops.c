@@ -367,6 +367,11 @@ hfs_vnop_close(ap)
 	}
 	
 	hfs_unlock(cp);
+
+	if (ap->a_fflag & FWASWRITTEN) {
+		hfs_sync_ejectable(hfsmp);
+	}
+
 	return (0);
 }
 
@@ -2619,6 +2624,16 @@ hfs_vnop_rename(ap)
 skip_rm:
 	/*
 	 * All done with tvp and fvp
+	 *
+	 * We also jump to this point if there was no destination observed during lookup and namei.
+	 * However, because only iocounts are held at the VFS layer, there is nothing preventing a 
+	 * competing thread from racing us and creating a file or dir at the destination of this rename 
+	 * operation.  If this occurs, it may cause us to get a spurious EEXIST out of the cat_rename 
+	 * call below.  To preserve rename's atomicity, we need to signal VFS to re-drive the 
+	 * namei/lookup and restart the rename operation.  EEXIST is an allowable errno to be bubbled 
+	 * out of the rename syscall, but not for this reason, since it is a synonym errno for ENOTEMPTY.
+	 * To signal VFS, we return ERECYCLE (which is also used for lookup restarts). This errno
+	 * will be swallowed and it will restart the operation.
 	 */
 
 	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_EXCLUSIVE_LOCK);
@@ -2626,6 +2641,9 @@ skip_rm:
 	hfs_systemfile_unlock(hfsmp, lockflags);
 
 	if (error) {
+		if (error == EEXIST) {
+			error = ERECYCLE;
+		}
 		goto out;
 	}
 

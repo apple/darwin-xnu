@@ -58,6 +58,8 @@
 #include <netat/asp.h>
 #include <netat/debug.h>
 
+__private_extern__ int atp_resp_seqno2big = 0;
+
 static void atp_trans_complete(struct atp_trans *);
 void atp_x_done_locked(void *);
 void atp_treq_event(void *);
@@ -139,8 +141,8 @@ gbuf_t   *m;
 	    case ATP_CMD_TRESP:
 	    {   
 		register struct atp_trans *trp;
-		register int    seqno;
-	    register at_ddp_t       *ddp;
+		register unsigned int    seqno;
+		register at_ddp_t       *ddp;
 
 		/*
 		 * we just got a response, find the trans record
@@ -155,10 +157,20 @@ gbuf_t   *m;
 		 *	If we can't find one then ignore the message
 		 */
 		seqno = athp->bitmap;
+		if (seqno > 7) {
+			atp_resp_seqno2big++;
+			ddp = AT_DDP_HDR(m);
+			dPrintf(D_M_ATP_LOW, (D_L_INPUT|D_L_ERROR),
+				("atp_rput: dropping TRESP seqno too big, tid=%d,loc=%d,rem=%d.%d,seqno=%u\n",
+				 UAS_VALUE_NTOH(athp->tid),
+				 ddp->dst_socket, ddp->src_node, ddp->src_socket, seqno));
+			gbuf_freem(m);
+			return;
+		}
 		if (trp == NULL) {
 	        ddp = AT_DDP_HDR(m);
 		    dPrintf(D_M_ATP_LOW, (D_L_INPUT|D_L_ERROR),
-		("atp_rput: dropping TRESP, no trp,tid=%d,loc=%d,rem=%d.%d,seqno=%d\n",
+		("atp_rput: dropping TRESP, no trp,tid=%d,loc=%d,rem=%d.%d,seqno=%u\n",
 			    UAS_VALUE_NTOH(athp->tid),
 			    ddp->dst_socket, ddp->src_node, ddp->src_socket, seqno));
 		    gbuf_freem(m);
@@ -184,7 +196,7 @@ gbuf_t   *m;
 		if (!(trp->tr_bitmap&atp_mask[seqno]) || trp->tr_rcv[seqno]) {
 	        ddp = AT_DDP_HDR(m);
 		    dPrintf(D_M_ATP_LOW, (D_L_INPUT|D_L_ERROR),
-		("atp_rput: dropping TRESP, duplicate,tid=%d,loc=%d,rem=%d.%d,seqno=%d\n",
+		("atp_rput: dropping TRESP, duplicate,tid=%d,loc=%d,rem=%d.%d,seqno=%u\n",
 			    UAS_VALUE_NTOH(athp->tid),
 			    ddp->dst_socket, ddp->src_node, ddp->src_socket, seqno));
 		    gbuf_freem(m);

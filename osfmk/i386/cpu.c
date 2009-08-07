@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -141,9 +141,13 @@ cpu_exit_wait(
 {
     	cpu_data_t	*cdp = cpu_datap(cpu);
 
+	/*
+	 * Wait until the CPU indicates that it has stopped.
+	 */
 	simple_lock(&x86_topo_lock);
 	while ((cdp->lcpu.state != LCPU_HALT)
-	       && (cdp->lcpu.state != LCPU_OFF)) {
+	       && (cdp->lcpu.state != LCPU_OFF)
+	       && !cdp->lcpu.stopped) {
 	    simple_unlock(&x86_topo_lock);
 	    cpu_pause();
 	    simple_lock(&x86_topo_lock);

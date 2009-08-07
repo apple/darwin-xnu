@@ -600,6 +600,7 @@ void IOSleep(int);
 
 struct _throttle_io_info_t {
 	struct timeval	last_normal_IO_timestamp;
+	struct timeval  last_IO_timestamp;
 	SInt32 numthreads_throttling;
 };
 
@@ -613,6 +614,32 @@ SYSCTL_INT(_debug, OID_AUTO, lowpri_IO_initial_window_msecs, CTLFLAG_RW, &lowpri
 SYSCTL_INT(_debug, OID_AUTO, lowpri_IO_window_inc, CTLFLAG_RW, &lowpri_IO_window_msecs_inc, LOWPRI_INITIAL_WINDOW_MSECS, "");
 SYSCTL_INT(_debug, OID_AUTO, lowpri_max_window_msecs, CTLFLAG_RW, &lowpri_max_window_msecs, LOWPRI_INITIAL_WINDOW_MSECS, "");
 SYSCTL_INT(_debug, OID_AUTO, lowpri_max_waiting_msecs, CTLFLAG_RW, &lowpri_max_waiting_msecs, LOWPRI_INITIAL_WINDOW_MSECS, "");
+
+void
+throttle_info_get_last_io_time(mount_t mp, struct timeval *tv)
+{
+	size_t devbsdunit;
+		
+	devbsdunit = mp->mnt_devbsdunit;
+
+	if (devbsdunit < LOWPRI_MAX_NUM_DEV) {
+		*tv = _throttle_io_info[devbsdunit].last_IO_timestamp;
+	} else {
+		memset(tv, 0, sizeof(*tv));
+	}
+}
+
+void
+update_last_io_time(mount_t mp)
+{
+	size_t devbsdunit;
+		
+	devbsdunit = mp->mnt_devbsdunit;
+
+	if (devbsdunit < LOWPRI_MAX_NUM_DEV) {
+		microuptime(&_throttle_io_info[devbsdunit].last_IO_timestamp);
+	}
+}
 
 int throttle_io_will_be_throttled(int lowpri_window_msecs, size_t devbsdunit)
 {
@@ -784,6 +811,18 @@ spec_strategy(struct vnop_strategy_args *ap)
 			}
 		}
 	}
+
+	if ((bflags & B_READ) == 0) {
+		size_t devbsdunit;
+
+		if (buf_vnode(bp)->v_mount != NULL)
+			devbsdunit = buf_vnode(bp)->v_mount->mnt_devbsdunit;
+		else
+			devbsdunit = LOWPRI_MAX_NUM_DEV - 1;
+		
+		microuptime(&_throttle_io_info[devbsdunit].last_IO_timestamp);
+	}
+
         (*bdevsw[major(bdev)].d_strategy)(bp);
 
         return (0);

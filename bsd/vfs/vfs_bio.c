@@ -3154,6 +3154,10 @@ buf_biodone(buf_t bp)
 		fslog_io_error(bp);
 	}
 
+	if (bp->b_vp && bp->b_vp->v_mount && (bp->b_flags & B_READ) == 0) {
+		update_last_io_time(bp->b_vp->v_mount);
+	}
+
         if (kdebug_enable) {
 	        int    code = DKIO_DONE;
 

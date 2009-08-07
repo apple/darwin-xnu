@@ -119,6 +119,7 @@ extern lck_mtx_t *nd6_mutex;
 
 static void nd6_slowtimo(void *ignored_arg);
 
+
 void
 nd6_init()
 {
@@ -415,10 +416,10 @@ nd6_timer(
 	struct in6_ifaddr *ia6, *nia6;
 	struct in6_addrlifetime *lt6;
 	struct timeval timenow;
+	int count = 0;
 
 	getmicrotime(&timenow);
 	
-
 
 	ln = llinfo_nd6.ln_next;
 	while (ln && ln != &llinfo_nd6) {
@@ -439,9 +440,34 @@ nd6_timer(
 		ndi = &nd_ifinfo[ifp->if_index];
 		dst = (struct sockaddr_in6 *)rt_key(rt);
 
+		count++;
+
 		if (ln->ln_expire > timenow.tv_sec) {
-			ln = next;
-			continue;
+
+			/* Radar 6871508 Check if we have too many cache entries.
+			 * In that case purge 20% of the table to make space
+			 * for the new entries. 
+			 * This is a bit crude but keeps the deletion in timer
+			 * thread only. 
+			 */
+
+			if ((ip6_neighborgcthresh >= 0 &&
+		    		nd6_inuse >= ip6_neighborgcthresh) &&
+				((count % 5) == 0))  {
+
+				if (ln->ln_state > ND6_LLINFO_INCOMPLETE) 
+					ln->ln_state = ND6_LLINFO_STALE;
+				else
+					ln->ln_state = ND6_LLINFO_PURGE;
+				ln->ln_expire = timenow.tv_sec;
+
+				/* fallthrough and call nd6_free() */
+			}
+
+			else {
+				ln = next;
+				continue;
+			}
 		}
 
 		/* sanity check */
@@ -499,6 +525,7 @@ nd6_timer(
 			break;
 
 		case ND6_LLINFO_STALE:
+		case ND6_LLINFO_PURGE:
 			/* Garbage Collection(RFC 2461 5.3) */
 			if (ln->ln_expire)
 				next = nd6_free(rt);

@@ -55,6 +55,7 @@ struct	llinfo_nd6 {
 };
 #endif /* KERNEL_PRIVATE */
 
+#define ND6_LLINFO_PURGE	-3
 #define ND6_LLINFO_NOSTATE	-2
 /*
  * We don't need the WAITDELETE state any more, but we keep the definition
@@ -86,6 +87,9 @@ struct nd_ifinfo {
 	u_int8_t randomseed0[8]; /* upper 64 bits of MD5 digest */
 	u_int8_t randomseed1[8]; /* lower 64 bits (usually the EUI64 IFID) */
 	u_int8_t randomid[8];	/* current random ID */
+	/* keep track of routers and prefixes on this link */
+	int32_t nprefixes;
+	int32_t ndefrouters;
 };
 
 #define ND6_IFF_PERFORMNUD	0x1

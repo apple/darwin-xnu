@@ -545,9 +545,14 @@ struct in6_pktinfo {
 
 #define IPV6CTL_MAXFRAGS        41      /* max fragments */
 
+#define IPV6CTL_NEIGHBORGCTHRESH 46
+#define IPV6CTL_MAXIFPREFIXES	47
+#define IPV6CTL_MAXIFDEFROUTERS 48
+#define IPV6CTL_MAXDYNROUTES	49
+
 /* New entries should be added here from current IPV6CTL_MAXID value. */
 /* to define items, should talk with KAME guys first, for *BSD compatibility */
-#define IPV6CTL_MAXID		42
+#define IPV6CTL_MAXID		50
 
 #ifdef KERNEL_PRIVATE
 #define CTL_IPV6PROTO_NAMES { \

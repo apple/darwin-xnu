@@ -2347,6 +2347,46 @@ hfs_virtualmetafile(struct cnode *cp)
 }
 
 
+
+//
+// Fire off a timed callback to sync the disk if the
+// volume is on ejectable media.
+//
+ __private_extern__
+void
+hfs_sync_ejectable(struct hfsmount *hfsmp)
+{
+	if (hfsmp->hfs_syncer)	{
+		uint32_t secs, usecs;
+		uint64_t now;
+
+		clock_get_calendar_microtime(&secs, &usecs);
+		now = ((uint64_t)secs * 1000000) + usecs;
+
+		if (hfsmp->hfs_sync_scheduled == 0) {
+			uint64_t deadline;
+
+			hfsmp->hfs_last_sync_request_time = now;
+
+			clock_interval_to_deadline(HFS_META_DELAY, HFS_MILLISEC_SCALE, &deadline);
+
+			/*
+			 * Increment hfs_sync_scheduled on the assumption that we're the
+			 * first thread to schedule the timer.  If some other thread beat
+			 * us, then we'll decrement it.  If we *were* the first to
+			 * schedule the timer, then we need to keep track that the
+			 * callback is waiting to complete.
+			 */
+			OSIncrementAtomic((volatile SInt32 *)&hfsmp->hfs_sync_scheduled);
+			if (thread_call_enter_delayed(hfsmp->hfs_syncer, deadline))
+				OSDecrementAtomic((volatile SInt32 *)&hfsmp->hfs_sync_scheduled);
+			else
+				OSIncrementAtomic((volatile SInt32 *)&hfsmp->hfs_sync_incomplete);
+		}		
+	}
+}
+
+
 __private_extern__
 int
 hfs_start_transaction(struct hfsmount *hfsmp)
@@ -2374,6 +2414,7 @@ hfs_start_transaction(struct hfsmount *hfsmp)
 
     if (hfsmp->jnl == NULL || journal_owner(hfsmp->jnl) != thread) {
 	lck_rw_lock_shared(&hfsmp->hfs_global_lock);
+	OSAddAtomic(1, (SInt32 *)&hfsmp->hfs_active_threads);
 	unlock_on_err = 1;
     }
 
@@ -2399,6 +2440,7 @@ hfs_start_transaction(struct hfsmount *hfsmp)
 out:
     if (ret != 0 && unlock_on_err) {
 	lck_rw_unlock_shared(&hfsmp->hfs_global_lock);
+	OSAddAtomic(-1, (SInt32 *)&hfsmp->hfs_active_threads);
     }
 
     return ret;
@@ -2424,7 +2466,9 @@ hfs_end_transaction(struct hfsmount *hfsmp)
     }
 
     if (need_unlock) {
+	OSAddAtomic(-1, (SInt32 *)&hfsmp->hfs_active_threads);
 	lck_rw_unlock_shared(&hfsmp->hfs_global_lock);
+	hfs_sync_ejectable(hfsmp);
     }
 
     return ret;

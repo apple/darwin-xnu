@@ -857,4 +857,41 @@ kern_return_t IOBSDGetPlatformUUID( uuid_t uuid, mach_timespec_t timeout )
     return KERN_SUCCESS;
 }
 
+
+int IOBSDIsMediaEjectable( const char *cdev_name )
+{
+    int ret = 0;
+    OSDictionary *dictionary;
+    OSString *dev_name;
+
+    if (strncmp(cdev_name, "/dev/", 5) == 0) {
+	    cdev_name += 5;
+    }
+
+    dictionary = IOService::serviceMatching( "IOMedia" );
+    if( dictionary ) {
+	dev_name = OSString::withCString( cdev_name );
+	if( dev_name ) {
+	    IOService *service;
+	    mach_timespec_t tv = { 5, 0 };    // wait up to "timeout" seconds for the device
+
+	    dictionary->setObject( kIOBSDNameKey, dev_name );
+	    dictionary->retain();
+	    service = IOService::waitForService( dictionary, &tv );
+	    if( service ) {
+		OSBoolean *ejectable = (OSBoolean *) service->getProperty( "Ejectable" );
+
+		if( ejectable ) {
+			ret = (int)ejectable->getValue();
+		}
+
+	    }
+	    dev_name->release();
+	}
+	dictionary->release();
+    }
+
+    return ret;
+}
+
 } /* extern "C" */

@@ -1836,12 +1836,20 @@ fail_change_next_allocation:
 	}
 
 	case HFS_GET_MOUNT_TIME:
-	    return copyout(&hfsmp->hfs_mount_time, CAST_USER_ADDR_T(ap->a_data), sizeof(hfsmp->hfs_mount_time));
-	    break;
+	    if (is64bit) {
+	    	*(user_time_t *)(ap->a_data) = (user_time_t) hfsmp->hfs_mount_time;
+	    } else {
+	    	*(time_t *)(ap->a_data) = (time_t) hfsmp->hfs_mount_time;
+	    }
+		return 0;
 
 	case HFS_GET_LAST_MTIME:
-	    return copyout(&hfsmp->hfs_last_mounted_mtime, CAST_USER_ADDR_T(ap->a_data), sizeof(hfsmp->hfs_last_mounted_mtime));
-	    break;
+	    if (is64bit) {
+	    	*(user_time_t *)(ap->a_data) = (user_time_t) hfsmp->hfs_last_mounted_mtime;
+	    } else {
+	    	*(time_t *)(ap->a_data) = (time_t) hfsmp->hfs_last_mounted_mtime;
+	    }
+		return 0;
 
 	case HFS_SET_BOOT_INFO:
 		if (!vnode_isvroot(vp))

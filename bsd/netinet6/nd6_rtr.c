@@ -631,6 +631,7 @@ defrtrlist_del(
 	struct nd_defrouter *dr, int nd6locked)
 {
 	struct nd_defrouter *deldr = NULL;
+	struct nd_ifinfo *ndi = &nd_ifinfo[dr->ifp->if_index];
 	struct nd_prefix *pr;
 
 	/*
@@ -666,6 +667,12 @@ defrtrlist_del(
 	 */
 	if (deldr)
 		defrouter_select();
+
+	ndi->ndefrouters--;
+	if (ndi->ndefrouters < 0) {
+		log(LOG_WARNING, "defrtrlist_del: negative count on %s\n",
+		    if_name(dr->ifp));
+	}
 
 	if (nd6locked == 0)
 		lck_mtx_unlock(nd6_mutex);
@@ -760,6 +767,7 @@ defrtrlist_update(
 	struct nd_defrouter *new)
 {
 	struct nd_defrouter *dr, *n;
+	struct nd_ifinfo *ndi = &nd_ifinfo[new->ifp->if_index];
 
 	lck_mtx_lock(nd6_mutex);
 	if ((dr = defrouter_lookup(&new->rtaddr, new->ifp)) != NULL) {
@@ -783,6 +791,12 @@ defrtrlist_update(
 		return(NULL);
 	}
 
+	if (ip6_maxifdefrouters >= 0 &&
+	    ndi->ndefrouters >= ip6_maxifdefrouters) {
+		lck_mtx_unlock(nd6_mutex);
+		return (NULL);
+	}
+
 	n = (struct nd_defrouter *)_MALLOC(sizeof(*n), M_IP6NDP, M_NOWAIT);
 	if (n == NULL) {
 		lck_mtx_unlock(nd6_mutex);
@@ -799,6 +813,8 @@ defrtrlist_update(
 	TAILQ_INSERT_TAIL(&nd_defrouter, n, dr_entry);
 	if (TAILQ_FIRST(&nd_defrouter) == n)
 		defrouter_select();
+	
+	ndi->ndefrouters++;
 		
 	lck_mtx_unlock(nd6_mutex);
 	return(n);
@@ -905,6 +921,40 @@ ndpr_rele(struct nd_prefix *pr, boolean_t locked)
 		lck_mtx_unlock(nd6_mutex);
 }
 
+static void
+purge_detached(struct ifnet *ifp)
+{
+	struct nd_prefix *pr, *pr_next;
+	struct in6_ifaddr *ia;
+	struct ifaddr *ifa, *ifa_next;
+	
+	lck_mtx_lock(nd6_mutex);
+
+	for (pr = nd_prefix.lh_first; pr; pr = pr_next) {
+		pr_next = pr->ndpr_next;
+		if (pr->ndpr_ifp != ifp ||
+		    IN6_IS_ADDR_LINKLOCAL(&pr->ndpr_prefix.sin6_addr) ||
+		    ((pr->ndpr_stateflags & NDPRF_DETACHED) == 0 &&
+		    !LIST_EMPTY(&pr->ndpr_advrtrs)))
+			continue;
+
+		for (ifa = ifp->if_addrlist.tqh_first; ifa; ifa = ifa_next) {
+			ifa_next = ifa->ifa_list.tqe_next;
+			if (ifa->ifa_addr->sa_family != AF_INET6)
+				continue;
+			ia = (struct in6_ifaddr *)ifa;
+			if ((ia->ia6_flags & IN6_IFF_AUTOCONF) ==
+			    IN6_IFF_AUTOCONF && ia->ia6_ndpr == pr) {
+				in6_purgeaddr(ifa, 1);
+			}
+		}
+		if (pr->ndpr_refcnt == 0)
+			prelist_remove(pr, 1);
+	}
+
+	lck_mtx_unlock(nd6_mutex);
+}
+
 int
 nd6_prelist_add(
 	struct nd_prefix *pr,
@@ -913,6 +963,14 @@ nd6_prelist_add(
 {
 	struct nd_prefix *new = NULL;
 	int i;
+	struct nd_ifinfo *ndi = &nd_ifinfo[pr->ndpr_ifp->if_index];
+
+	if (ip6_maxifprefixes >= 0) {
+		if (ndi->nprefixes >= ip6_maxifprefixes / 2)
+			purge_detached(pr->ndpr_ifp);
+		if (ndi->nprefixes >= ip6_maxifprefixes)
+			return(ENOMEM);
+	}
 
 	new = (struct nd_prefix *)_MALLOC(sizeof(*new), M_IP6NDP, M_NOWAIT);
 	if (new == NULL)
@@ -953,6 +1011,9 @@ nd6_prelist_add(
 	if (dr) {
 		pfxrtr_add(new, dr);
 	}
+
+	ndi->nprefixes++;
+
 	lck_mtx_unlock(nd6_mutex);
 
 	return 0;
@@ -964,6 +1025,7 @@ prelist_remove(
 {
 	struct nd_pfxrouter *pfr, *next;
 	int e;
+	struct nd_ifinfo *ndi = &nd_ifinfo[pr->ndpr_ifp->if_index];
 
 	/* make sure to invalidate the prefix until it is really freed. */
 	pr->ndpr_vltime = 0;
@@ -999,6 +1061,12 @@ prelist_remove(
 		next = pfr->pfr_next;
 
 		FREE(pfr, M_IP6NDP);
+	}
+
+	ndi->nprefixes--;
+	if (ndi->nprefixes < 0) {
+		log(LOG_WARNING, "prelist_remove: negative count on %s\n",
+		    if_name(pr->ndpr_ifp));
 	}
 
 	FREE(pr, M_IP6NDP);

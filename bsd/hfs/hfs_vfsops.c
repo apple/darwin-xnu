@@ -827,6 +827,99 @@ hfs_reload(struct mount *mountp)
 	return (0);
 }
 
+int hfs_last_io_wait_time = 125000;
+SYSCTL_INT (_kern, OID_AUTO, hfs_last_io_wait_time, CTLFLAG_RW, &hfs_last_io_wait_time, 0, "number of usecs to wait after an i/o before syncing ejectable media");
+
+static void
+hfs_syncer(void *arg0, void *unused)
+{
+#pragma unused(unused)
+
+    struct hfsmount *hfsmp = arg0;
+    uint32_t secs, usecs, delay = HFS_META_DELAY;
+    uint64_t now;
+    struct timeval nowtv, last_io;
+
+    clock_get_calendar_microtime(&secs, &usecs);
+    now = ((uint64_t)secs * 1000000LL) + usecs;
+    //
+    // If we have put off the last sync for more than
+    // 5 seconds, force it so that we don't let too
+    // much i/o queue up (since flushing the journal
+    // causes the i/o queue to drain)
+    //
+    if ((now - hfsmp->hfs_last_sync_time) >= 5000000LL) {
+	    goto doit;
+    }
+
+    //
+    // Find out when the last i/o was done to this device (read or write).  
+    //
+    throttle_info_get_last_io_time(hfsmp->hfs_mp, &last_io);
+    microuptime(&nowtv);
+    timevalsub(&nowtv, &last_io);
+
+    //
+    // If the last i/o was too recent, defer this sync until later.
+    // The limit chosen (125 milli-seconds) was picked based on
+    // some experiments copying data to an SD card and seems to
+    // prevent us from issuing too many syncs.
+    //
+    if (nowtv.tv_sec >= 0 && nowtv.tv_usec > 0 && nowtv.tv_usec < hfs_last_io_wait_time) {
+	    delay /= 2;
+	    goto resched;
+    }
+    
+    //
+    // If there's pending i/o, also skip the sync.
+    //
+    if (hfsmp->hfs_devvp && hfsmp->hfs_devvp->v_numoutput > 0) {
+	    goto resched;
+    }
+
+		
+    //
+    // Only flush the journal if we have not sync'ed recently
+    // and the last sync request time was more than 100 milli
+    // seconds ago and there is no one in the middle of a
+    // transaction right now.  Else we defer the sync and
+    // reschedule it for later.
+    //
+    if (  ((now - hfsmp->hfs_last_sync_time) >= 100000LL)
+       && ((now - hfsmp->hfs_last_sync_request_time) >= 100000LL)
+       && (hfsmp->hfs_active_threads == 0)
+       && (hfsmp->hfs_global_lock_nesting == 0)) {
+
+    doit:
+	    OSAddAtomic(1, (SInt32 *)&hfsmp->hfs_active_threads);
+	    if (hfsmp->jnl) {
+		    journal_flush(hfsmp->jnl);
+	    }
+	    OSAddAtomic(-1, (SInt32 *)&hfsmp->hfs_active_threads);
+		   
+	    clock_get_calendar_microtime(&secs, &usecs);
+	    hfsmp->hfs_last_sync_time = ((int64_t)secs * 1000000) + usecs;
+	    
+    } else if (hfsmp->hfs_active_threads == 0) {
+	    uint64_t deadline;
+
+    resched:
+	    clock_interval_to_deadline(delay, HFS_MILLISEC_SCALE, &deadline);
+	    thread_call_enter_delayed(hfsmp->hfs_syncer, deadline);
+	    return;
+    }
+	    
+    //
+    // NOTE: we decrement these *after* we're done the journal_flush() since
+    // it can take a significant amount of time and so we don't want more
+    // callbacks scheduled until we're done this one.
+    //
+    OSDecrementAtomic((volatile SInt32 *)&hfsmp->hfs_sync_scheduled);
+    OSDecrementAtomic((volatile SInt32 *)&hfsmp->hfs_sync_incomplete);
+    wakeup((caddr_t)&hfsmp->hfs_sync_incomplete);
+}
+
+extern int IOBSDIsMediaEjectable( const char *cdev_name );
 
 /*
  * Common code for mount and mountroot
@@ -855,11 +948,17 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 	u_int32_t iswritable;
 	daddr64_t mdb_offset;
 	int isvirtual = 0;
+	int isroot = 0;
 
 	ronly = vfs_isrdonly(mp);
 	dev = vnode_specrdev(devvp);
 	cred = p ? vfs_context_ucred(context) : NOCRED;
 	mntwrapper = 0;
+
+	if (args == NULL) {
+		/* only hfs_mountroot passes us NULL as the 'args' argument */
+		isroot = 1;	
+	}
 
 	bp = NULL;
 	hfsmp = NULL;
@@ -1379,6 +1478,18 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 		}
 	}
 
+	/* ejectability checks will time out when the device is root_device, so skip them */
+	if (isroot == 0) {
+		if ((hfsmp->hfs_flags & HFS_VIRTUAL_DEVICE) == 0 && 
+				IOBSDIsMediaEjectable(mp->mnt_vfsstat.f_mntfromname)) {
+			hfsmp->hfs_syncer = thread_call_allocate(hfs_syncer, hfsmp);
+			if (hfsmp->hfs_syncer == NULL) {
+				printf("hfs: failed to allocate syncer thread callback for %s (%s)\n",
+						mp->mnt_vfsstat.f_mntfromname, mp->mnt_vfsstat.f_mntonname);
+			}
+		}
+	}
+
 	/*
 	 * Start looking for free space to drop below this level and generate a
 	 * warning immediately if needed:
@@ -1451,6 +1562,38 @@ hfs_unmount(struct mount *mp, int mntflags, vfs_context_t context)
 	if (hfsmp->hfs_flags & HFS_METADATA_ZONE)
 		(void) hfs_recording_suspend(hfsmp);
 
+	/*
+	 * Cancel any pending timers for this volume.  Then wait for any timers
+	 * which have fired, but whose callbacks have not yet completed.
+	 */
+	if (hfsmp->hfs_syncer)
+	{
+		struct timespec ts = {0, 100000000};	/* 0.1 seconds */
+		
+		/*
+		 * Cancel any timers that have been scheduled, but have not
+		 * fired yet.  NOTE: The kernel considers a timer complete as
+		 * soon as it starts your callback, so the kernel does not
+		 * keep track of the number of callbacks in progress.
+		 */
+		if (thread_call_cancel(hfsmp->hfs_syncer))
+			OSDecrementAtomic((volatile SInt32 *)&hfsmp->hfs_sync_incomplete);
+		thread_call_free(hfsmp->hfs_syncer);
+		hfsmp->hfs_syncer = NULL;
+		
+		/*
+		 * This waits for all of the callbacks that were entered before
+		 * we did thread_call_cancel above, but have not completed yet.
+		 */
+		while(hfsmp->hfs_sync_incomplete > 0)
+		{
+			msleep((caddr_t)&hfsmp->hfs_sync_incomplete, NULL, PWAIT, "hfs_unmount", &ts);
+		}
+		
+		if (hfsmp->hfs_sync_incomplete < 0)
+			printf("hfs_unmount: pm_sync_incomplete underflow (%d)!\n", hfsmp->hfs_sync_incomplete);
+	}
+	
 	/*
 	 * Flush out the b-trees, volume bitmap and Volume Header
 	 */
@@ -1929,6 +2072,15 @@ hfs_sync(struct mount *mp, int waitfor, vfs_context_t context)
 
 	if (hfsmp->jnl) {
 	    journal_flush(hfsmp->jnl);
+	}
+
+	{
+		uint32_t secs, usecs;
+		uint64_t now;
+
+		clock_get_calendar_microtime(&secs, &usecs);
+		now = ((uint64_t)secs * 1000000LL) + usecs;
+		hfsmp->hfs_last_sync_time = now;
 	}
 
 	lck_rw_unlock_shared(&hfsmp->hfs_insync);	

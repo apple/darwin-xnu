@@ -5120,10 +5120,11 @@ auth_exit:
         /*
          * We may encounter a race in the VNOP where the destination didn't 
          * exist when we did the namei, but it does by the time we go and 
-         * try to create the entry. In this case, we should re-drive this rename
-         * call from the top again.
-         */
-        if (error == EEXIST) {
+		 * try to create the entry. In this case, we should re-drive this rename
+		 * call from the top again.  Currently, only HFS bubbles out ERECYCLE,
+		 * but other filesystem susceptible to this race could return it, too.
+		 */
+        if (error == ERECYCLE) {
             do_retry = 1;
         }
 

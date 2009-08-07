@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -350,6 +350,19 @@ pmCPUExitHalt(int cpu)
 	&& pmDispatch != NULL
 	&& pmDispatch->exitHalt != NULL)
 	rc = pmDispatch->exitHalt(cpu_to_lcpu(cpu));
+
+    return(rc);
+}
+
+kern_return_t
+pmCPUExitHaltToOff(int cpu)
+{
+    kern_return_t	rc	= KERN_INVALID_ARGUMENT;
+
+    if (pmInitDone
+	&& pmDispatch != NULL
+	&& pmDispatch->exitHaltToOff != NULL)
+	rc = pmDispatch->exitHaltToOff(cpu_to_lcpu(cpu));
 
     return(rc);
 }
